@@ -228,7 +228,7 @@ Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in
 
 Rootless Podman Quadlet. Each instance: separate repo clone, own image (`mtgc:<instance>`), data volume, env file, port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}`/`{{PORT}}` placeholders).
+Key files: `Containerfile` (multi-stage build), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}`/`{{PORT}}` placeholders). macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` has the shared API key; setup.sh copies it to new instances automatically
 - `~/.config/mtgc/<instance>.env` — per-instance env file
@@ -242,7 +242,7 @@ Key files: `Containerfile` (multi-stage build), `deploy/setup.sh`, `deploy/deplo
 
 **Always validate new features in isolated containers before creating PRs.** This uses the standard deployment scripts with demo data pre-loaded. Do not run the application locally or use `mtg` commands directly on the host.
 
-### Setup
+### Setup (Linux)
 
 From the repo clone with your feature branch checked out:
 
@@ -258,12 +258,27 @@ Discover the assigned port:
 podman port systemd-mtgc-<instance> 8081/tcp
 ```
 
+### Setup (macOS)
+
+```bash
+bash deploy/mac-setup.sh <instance> --init   # Build image + init data + start container
+```
+
+The script auto-starts the container and prints the URL. Discover the port:
+
+```bash
+podman port mtgc-<instance> 8081/tcp
+```
+
 ### Validate
 
 The server uses HTTPS with a self-signed cert. Use `curl -ks` for all requests.
 
 ```bash
+# Linux:
 PORT=$(podman port systemd-mtgc-<instance> 8081/tcp | grep -oP ':\K[0-9]+' | head -1)
+# macOS:
+PORT=$(podman port mtgc-<instance> 8081/tcp | cut -d: -f2 | head -1)
 
 # 1. Verify new page loads (HTTP 200 + non-empty body)
 curl -ks -o /dev/null -w "%{http_code} %{size_download}" "https://localhost:${PORT}/<your-page>"
@@ -279,7 +294,10 @@ curl -ks -X POST "https://localhost:${PORT}/api/<your-endpoint>" \
 Check logs if anything fails:
 
 ```bash
+# Linux:
 journalctl --user -u mtgc-<instance> -f
+# macOS:
+podman logs -f mtgc-<instance>
 ```
 
 ### Visual Validation
@@ -305,7 +323,10 @@ uv run shot-scraper "https://localhost:${PORT}/sealed" \
 ### Teardown
 
 ```bash
-bash deploy/teardown.sh <instance> --purge   # Stop + remove container, volume, env, and image
+# Linux:
+bash deploy/teardown.sh <instance> --purge       # Stop + remove container, volume, env, and image
+# macOS:
+bash deploy/mac-teardown.sh <instance> --purge   # Stop + remove container, volume, env, and image
 ```
 
 ### Notes
