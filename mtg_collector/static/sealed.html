@@ -1556,14 +1556,14 @@ function renderTable() {
     const added = entry.added_at ? entry.added_at.slice(0, 10) : '';
 
     html += `<tr data-id="${entry.id}">`;
+    html += '<td></td>';
     const thumbHtml = entry.image_url
       ? `<img class="table-thumb" src="${entry.image_url}" alt="" loading="lazy">`
       : '';
-    html += `<td>${thumbHtml}</td>`;
     for (const col of visCols) {
       switch (col.key) {
         case 'qty':      html += `<td>${entry.quantity}</td>`; break;
-        case 'name':     html += `<td>${esc(entry.set_name || entry.set_code || '')}</td>`; break;
+        case 'name':     html += `<td>${thumbHtml}${esc(entry.set_name || entry.set_code || '')}</td>`; break;
         case 'set':      html += `<td>${esc(formatCategory(entry))}</td>`; break;
         case 'cost':     html += `<td>${cost}</td>`; break;
         case 'market':   html += `<td>${market}</td>`; break;
