@@ -91,6 +91,15 @@ def register(subparsers):
         help="Only fetch prices for products in this set",
     )
 
+    import_sealed_parser = data_sub.add_parser(
+        "import-sealed-products",
+        help="Import sealed products from TCGCSV (supplements MTGJSON catalog)",
+    )
+    import_sealed_parser.add_argument(
+        "--set-code",
+        help="Only import products for this set code",
+    )
+
     parser.set_defaults(func=run)
 
 
@@ -116,8 +125,12 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         fetch_sealed_prices(db_path, set_code=getattr(args, "set_code", None))
+    elif args.data_command == "import-sealed-products":
+        from mtg_collector.db.connection import get_db_path
+        db_path = get_db_path(getattr(args, "db_path", None))
+        import_sealed_products(db_path, set_code=getattr(args, "set_code", None))
     else:
-        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices} [options]")
+        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products} [options]")
         sys.exit(1)
 
 
@@ -181,7 +194,7 @@ def import_mtgjson(db_path: str):
     conn.execute("DELETE FROM mtgjson_booster_sheets")
     conn.execute("DELETE FROM mtgjson_printings")
     conn.execute("DELETE FROM mtgjson_uuid_map")
-    conn.execute("DELETE FROM sealed_products")
+    conn.execute("DELETE FROM sealed_products WHERE source = 'mtgjson'")
 
     imported_at = now_iso()
     printing_rows = []
@@ -245,6 +258,7 @@ def import_mtgjson(db_path: str):
                 purchase_urls.get("cardKingdom"),
                 json.dumps(contents) if contents else None,
                 imported_at,
+                "mtgjson",
             ))
 
         # Booster data
@@ -320,8 +334,8 @@ def import_mtgjson(db_path: str):
         "INSERT OR IGNORE INTO sealed_products "
         "(uuid, name, set_code, category, subtype, tcgplayer_product_id, "
         "card_count, product_size, release_date, purchase_url_tcgplayer, "
-        "purchase_url_cardkingdom, contents_json, imported_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "purchase_url_cardkingdom, contents_json, imported_at, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         sealed_rows,
     )
 
@@ -570,6 +584,7 @@ def check_prices(db_path: str, sample: int = 10):
 
 TCGCSV_GROUPS_URL = "https://tcgcsv.com/tcgplayer/1/groups"
 TCGCSV_PRICES_URL = "https://tcgcsv.com/tcgplayer/1/{group_id}/prices"
+TCGCSV_PRODUCTS_URL = "https://tcgcsv.com/tcgplayer/1/{group_id}/products"
 
 
 def fetch_sealed_prices(db_path: str, set_code: str = None, conn: sqlite3.Connection = None):
@@ -692,3 +707,206 @@ def fetch_sealed_prices(db_path: str, set_code: str = None, conn: sqlite3.Connec
         conn.close()
 
     return {"groups_fetched": groups_fetched, "prices_for_today": row_count}
+
+
+# -- TCGCSV sealed product import ------------------------------------------
+
+# Ordered pattern list: first match wins.  (pattern, category, subtype)
+SEALED_CATEGORY_PATTERNS = [
+    ("collector booster display", "booster_box", "collector"),
+    ("collector booster box", "booster_box", "collector"),
+    ("play booster display", "booster_box", "play"),
+    ("play booster box", "booster_box", "play"),
+    ("draft booster display", "booster_box", "draft"),
+    ("draft booster box", "booster_box", "draft"),
+    ("set booster display", "booster_box", "set"),
+    ("set booster box", "booster_box", "set"),
+    ("booster display", "booster_box", None),
+    ("booster box", "booster_box", None),
+    ("display case", "booster_case", None),
+    ("display master case", "booster_case", None),
+    ("box case", "booster_case", None),
+    ("bundle case", "booster_case", None),
+    ("bundle", "bundle", None),
+    ("fat pack", "bundle", None),
+    ("commander deck", "deck", "commander"),
+    ("starter kit", "deck", "starter"),
+    ("challenger deck", "deck", "challenger"),
+    ("theme deck", "deck", "theme"),
+    ("prerelease pack", "limited_aid_tool", None),
+    ("prerelease kit", "limited_aid_tool", None),
+    ("draft night", "limited_aid_tool", None),
+    ("omega pack", "booster_pack", "omega"),
+    ("sleeved booster", "booster_pack", "sleeved"),
+    ("collector booster", "booster_pack", "collector"),
+    ("play booster", "booster_pack", "play"),
+    ("draft booster", "booster_pack", "draft"),
+    ("set booster", "booster_pack", "set"),
+    ("booster pack", "booster_pack", None),
+    ("booster", "booster_pack", None),
+]
+
+
+def infer_sealed_category(name: str):
+    """Infer (category, subtype) from a product name via ordered pattern matching."""
+    lower = name.lower()
+    for pattern, category, subtype in SEALED_CATEGORY_PATTERNS:
+        if pattern in lower:
+            return category, subtype
+    return "unknown", None
+
+
+def import_sealed_products(db_path: str, set_code: str = None):
+    """Import sealed products from TCGCSV to supplement MTGJSON catalog."""
+    import uuid as uuid_mod
+
+    from mtg_collector.db.schema import init_db
+
+    t0 = time.time()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = OFF")
+    init_db(conn)
+
+    # Fixed namespace for deterministic UUID generation from tcgplayer product IDs
+    TCGCSV_UUID_NAMESPACE = uuid_mod.UUID("a3b2c1d0-1234-5678-9abc-def012345678")
+
+    # Step 1: Fetch and cache TCGCSV groups (reuse pattern from fetch_sealed_prices)
+    print("Fetching TCGCSV groups...")
+    req = urllib.request.Request(TCGCSV_GROUPS_URL, headers={"User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(req) as resp:
+        groups_data = json.loads(resp.read())
+
+    groups = groups_data.get("results", [])
+    print(f"  {len(groups)} groups from TCGCSV")
+
+    for g in groups:
+        abbr = g.get("abbreviation", "")
+        mapped_set_code = abbr.lower() if abbr else None
+        conn.execute(
+            """INSERT OR REPLACE INTO tcgplayer_groups
+               (group_id, set_code, name, abbreviation, published_on, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (g["groupId"], mapped_set_code, g["name"], abbr, g.get("publishedOn"), now_iso()),
+        )
+    conn.commit()
+
+    # Step 2: Determine which groups to scan
+    if set_code:
+        # Single set: find its group
+        row = conn.execute(
+            "SELECT group_id, name FROM tcgplayer_groups WHERE set_code = ?",
+            (set_code.lower(),),
+        ).fetchone()
+        if not row:
+            print(f"No TCGCSV group found for set code '{set_code}'")
+            conn.close()
+            return
+        groups_to_scan = [(row["group_id"], set_code.lower(), row["name"])]
+    else:
+        # All groups that map to sets already in our DB (sets table or sealed_products)
+        known_sets = set()
+        for r in conn.execute("SELECT set_code FROM sets").fetchall():
+            known_sets.add(r["set_code"])
+        for r in conn.execute("SELECT DISTINCT set_code FROM sealed_products").fetchall():
+            known_sets.add(r["set_code"])
+
+        group_rows = conn.execute(
+            "SELECT group_id, set_code, name FROM tcgplayer_groups WHERE set_code IS NOT NULL"
+        ).fetchall()
+        groups_to_scan = [
+            (r["group_id"], r["set_code"], r["name"])
+            for r in group_rows
+            if r["set_code"] in known_sets
+        ]
+
+    print(f"  {len(groups_to_scan)} groups to scan for sealed products")
+
+    if not groups_to_scan:
+        print("No groups to scan.")
+        conn.close()
+        return
+
+    # Step 3: Build set of existing tcgplayer_product_ids for dedup
+    existing_pids = set()
+    for r in conn.execute("SELECT tcgplayer_product_id FROM sealed_products WHERE tcgplayer_product_id IS NOT NULL"):
+        existing_pids.add(r["tcgplayer_product_id"])
+
+    imported_at = now_iso()
+    total_inserted = 0
+    total_skipped_cards = 0
+    total_skipped_existing = 0
+
+    for gid, sc, group_name in groups_to_scan:
+        url = TCGCSV_PRODUCTS_URL.format(group_id=gid)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+            with urllib.request.urlopen(req) as resp:
+                product_data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            print(f"  Group {gid} ({group_name}): HTTP {e.code}, skipping")
+            time.sleep(0.1)
+            continue
+
+        results = product_data.get("results", [])
+        group_inserted = 0
+
+        for product in results:
+            pid = str(product.get("productId", ""))
+
+            # Skip products already in DB
+            if pid in existing_pids:
+                total_skipped_existing += 1
+                continue
+
+            # Filter out individual cards: skip if extendedData has Rarity or Number
+            ext_data = product.get("extendedData", [])
+            is_card = False
+            for ed in ext_data:
+                if ed.get("name") in ("Rarity", "Number"):
+                    is_card = True
+                    break
+            if is_card:
+                total_skipped_cards += 1
+                continue
+
+            product_name = product.get("name", "Unknown")
+
+            # Generate deterministic UUID from tcgplayer product ID
+            product_uuid = str(uuid_mod.uuid5(TCGCSV_UUID_NAMESPACE, pid))
+
+            # Infer category and subtype from product name
+            category, subtype = infer_sealed_category(product_name)
+
+            # Ensure the set exists
+            conn.execute(
+                "INSERT OR IGNORE INTO sets (set_code, set_name) VALUES (?, ?)",
+                (sc, group_name),
+            )
+
+            # Build TCGPlayer URL
+            tcg_url = f"https://www.tcgplayer.com/product/{pid}"
+
+            conn.execute(
+                "INSERT OR IGNORE INTO sealed_products "
+                "(uuid, name, set_code, category, subtype, tcgplayer_product_id, "
+                "purchase_url_tcgplayer, imported_at, source) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'tcgcsv')",
+                (product_uuid, product_name, sc, category, subtype, pid,
+                 tcg_url, imported_at),
+            )
+
+            existing_pids.add(pid)
+            group_inserted += 1
+
+        total_inserted += group_inserted
+        time.sleep(0.1)  # rate limit courtesy
+
+    conn.commit()
+    conn.close()
+
+    elapsed = time.time() - t0
+    print(f"  Inserted: {total_inserted} new sealed products")
+    print(f"  Skipped: {total_skipped_existing} already existed, {total_skipped_cards} were individual cards")
+    print(f"  Elapsed: {elapsed:.1f}s")

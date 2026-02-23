@@ -114,6 +114,7 @@ class SealedProduct:
     purchase_url_cardkingdom: Optional[str] = None
     contents_json: Optional[str] = None
     imported_at: Optional[str] = None
+    source: str = "mtgjson"
 
 
 @dataclass
@@ -1351,6 +1352,12 @@ class SealedProductRepository:
         return self.conn.execute("SELECT COUNT(*) FROM sealed_products").fetchone()[0]
 
     def _row_to_product(self, row: sqlite3.Row) -> SealedProduct:
+        source = "mtgjson"
+        try:
+            source = row["source"]
+        except (IndexError, KeyError):
+            pass
+
         return SealedProduct(
             uuid=row["uuid"],
             name=row["name"],
@@ -1365,6 +1372,7 @@ class SealedProductRepository:
             purchase_url_cardkingdom=row["purchase_url_cardkingdom"],
             contents_json=row["contents_json"],
             imported_at=row["imported_at"],
+            source=source,
         )
 
 

@@ -7,11 +7,13 @@ To run: uv run pytest tests/test_sealed_products.py -v
 import json
 import sqlite3
 import tempfile
+import uuid as uuid_mod
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from mtg_collector.cli.data_cmd import infer_sealed_category
 from mtg_collector.db.connection import close_connection, get_connection
 from mtg_collector.db.models import (
     SealedCollectionEntry,
@@ -933,3 +935,412 @@ class TestSealedCollectionRepository:
         assert row["low_price"] == 100.0
         assert row["mid_price"] == 150.0
         assert row["high_price"] == 200.0
+
+
+# =============================================================================
+# Category Inference Tests
+# =============================================================================
+
+
+class TestCategoryInference:
+    """Test infer_sealed_category() pattern matching."""
+
+    def test_collector_booster_box(self):
+        assert infer_sealed_category("Duskmourn Collector Booster Box") == ("booster_box", "collector")
+
+    def test_collector_booster_display(self):
+        assert infer_sealed_category("Foundations Collector Booster Display") == ("booster_box", "collector")
+
+    def test_play_booster_box(self):
+        assert infer_sealed_category("Aetherdrift Play Booster Box") == ("booster_box", "play")
+
+    def test_play_booster_display(self):
+        assert infer_sealed_category("Aetherdrift Play Booster Display") == ("booster_box", "play")
+
+    def test_draft_booster_box(self):
+        assert infer_sealed_category("Innistrad Draft Booster Box") == ("booster_box", "draft")
+
+    def test_set_booster_box(self):
+        assert infer_sealed_category("Midnight Hunt Set Booster Box") == ("booster_box", "set")
+
+    def test_generic_booster_box(self):
+        assert infer_sealed_category("Alpha Booster Box") == ("booster_box", None)
+
+    def test_bundle(self):
+        assert infer_sealed_category("Duskmourn Bundle") == ("bundle", None)
+
+    def test_fat_pack(self):
+        assert infer_sealed_category("Magic 2015 Fat Pack") == ("bundle", None)
+
+    def test_commander_deck(self):
+        assert infer_sealed_category("Bloomburrow Commander Deck") == ("deck", "commander")
+
+    def test_starter_kit(self):
+        assert infer_sealed_category("2025 Starter Kit") == ("deck", "starter")
+
+    def test_challenger_deck(self):
+        assert infer_sealed_category("2024 Challenger Deck") == ("deck", "challenger")
+
+    def test_omega_pack(self):
+        assert infer_sealed_category("Aetherdrift Omega Pack") == ("booster_pack", "omega")
+
+    def test_sleeved_booster(self):
+        assert infer_sealed_category("Duskmourn Sleeved Booster") == ("booster_pack", "sleeved")
+
+    def test_collector_booster_pack(self):
+        assert infer_sealed_category("Foundations Collector Booster") == ("booster_pack", "collector")
+
+    def test_play_booster_pack(self):
+        assert infer_sealed_category("Foundations Play Booster") == ("booster_pack", "play")
+
+    def test_draft_booster_pack(self):
+        assert infer_sealed_category("Innistrad Draft Booster") == ("booster_pack", "draft")
+
+    def test_set_booster_pack(self):
+        assert infer_sealed_category("Midnight Hunt Set Booster") == ("booster_pack", "set")
+
+    def test_generic_booster_pack(self):
+        assert infer_sealed_category("Alpha Booster Pack") == ("booster_pack", None)
+
+    def test_generic_booster(self):
+        assert infer_sealed_category("Alpha Booster") == ("booster_pack", None)
+
+    def test_prerelease_pack(self):
+        assert infer_sealed_category("Duskmourn Prerelease Pack") == ("limited_aid_tool", None)
+
+    def test_prerelease_kit(self):
+        assert infer_sealed_category("Duskmourn Prerelease Kit") == ("limited_aid_tool", None)
+
+    def test_display_case(self):
+        assert infer_sealed_category("Foundations Display Case") == ("booster_case", None)
+
+    def test_unknown(self):
+        assert infer_sealed_category("Mystery Product XYZ") == ("unknown", None)
+
+    def test_case_insensitive(self):
+        assert infer_sealed_category("COLLECTOR BOOSTER BOX") == ("booster_box", "collector")
+
+    def test_most_specific_wins(self):
+        """'collector booster box' should match booster_box/collector, not booster_pack/collector."""
+        cat, sub = infer_sealed_category("Test Set Collector Booster Box")
+        assert cat == "booster_box"
+        assert sub == "collector"
+
+    def test_pattern_ordering_box_before_pack(self):
+        """'collector booster display' should match booster_box, not booster_pack."""
+        cat, sub = infer_sealed_category("Collector Booster Display")
+        assert cat == "booster_box"
+        assert sub == "collector"
+
+
+# =============================================================================
+# UUID Generation Tests
+# =============================================================================
+
+
+class TestTcgcsvUuidGeneration:
+    """Test deterministic UUID generation from TCGPlayer product IDs."""
+
+    TCGCSV_UUID_NAMESPACE = uuid_mod.UUID("a3b2c1d0-1234-5678-9abc-def012345678")
+
+    def test_deterministic(self):
+        """Same product ID always produces the same UUID."""
+        uuid1 = str(uuid_mod.uuid5(self.TCGCSV_UUID_NAMESPACE, "656321"))
+        uuid2 = str(uuid_mod.uuid5(self.TCGCSV_UUID_NAMESPACE, "656321"))
+        assert uuid1 == uuid2
+
+    def test_different_ids_produce_different_uuids(self):
+        uuid1 = str(uuid_mod.uuid5(self.TCGCSV_UUID_NAMESPACE, "656321"))
+        uuid2 = str(uuid_mod.uuid5(self.TCGCSV_UUID_NAMESPACE, "656322"))
+        assert uuid1 != uuid2
+
+    def test_is_valid_uuid(self):
+        result = str(uuid_mod.uuid5(self.TCGCSV_UUID_NAMESPACE, "12345"))
+        parsed = uuid_mod.UUID(result)
+        assert parsed.version == 5
+
+
+# =============================================================================
+# Card Filtering Tests
+# =============================================================================
+
+
+class TestCardFiltering:
+    """Test the logic for distinguishing sealed products from individual cards."""
+
+    def test_card_has_rarity(self):
+        """Products with 'Rarity' in extendedData are individual cards."""
+        ext_data = [{"name": "Rarity", "value": "R"}, {"name": "CardType", "value": "Something"}]
+        is_card = any(ed.get("name") in ("Rarity", "Number") for ed in ext_data)
+        assert is_card is True
+
+    def test_card_has_number(self):
+        """Products with 'Number' in extendedData are individual cards."""
+        ext_data = [{"name": "Number", "value": "42"}]
+        is_card = any(ed.get("name") in ("Rarity", "Number") for ed in ext_data)
+        assert is_card is True
+
+    def test_sealed_product_no_rarity_or_number(self):
+        """Sealed products don't have Rarity or Number in extendedData."""
+        ext_data = [{"name": "SubType", "value": "Normal"}]
+        is_card = any(ed.get("name") in ("Rarity", "Number") for ed in ext_data)
+        assert is_card is False
+
+    def test_empty_extended_data(self):
+        """Products with empty extendedData are not cards."""
+        ext_data = []
+        is_card = any(ed.get("name") in ("Rarity", "Number") for ed in ext_data)
+        assert is_card is False
+
+
+# =============================================================================
+# Migration v19 → v20 Tests
+# =============================================================================
+
+
+class TestMigrationV19ToV20:
+    def test_migration_adds_source_column(self):
+        """Create a v19 DB, run init_db, verify source column is added."""
+        close_connection()
+        with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+            db_path = f.name
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        # Build a minimal v19 schema with sealed_products but no source column
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS cards (
+                oracle_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sets (
+                set_code TEXT PRIMARY KEY,
+                set_name TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS printings (
+                scryfall_id TEXT PRIMARY KEY,
+                oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+                set_code TEXT NOT NULL REFERENCES sets(set_code),
+                collector_number TEXT,
+                rarity TEXT,
+                promo INTEGER DEFAULT 0,
+                artist TEXT
+            );
+            CREATE TABLE IF NOT EXISTS collection (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scryfall_id TEXT NOT NULL REFERENCES printings(scryfall_id),
+                finish TEXT NOT NULL CHECK(finish IN ('nonfoil', 'foil', 'etched')),
+                condition TEXT NOT NULL DEFAULT 'Near Mint',
+                language TEXT NOT NULL DEFAULT 'English',
+                purchase_price REAL,
+                acquired_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_image TEXT,
+                notes TEXT,
+                tags TEXT,
+                tradelist INTEGER DEFAULT 0,
+                is_alter INTEGER DEFAULT 0,
+                proxy INTEGER DEFAULT 0,
+                signed INTEGER DEFAULT 0,
+                misprint INTEGER DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'owned',
+                sale_price REAL,
+                order_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                source TEXT NOT NULL,
+                price_type TEXT NOT NULL,
+                price REAL NOT NULL,
+                observed_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sealed_products (
+                uuid TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                set_code TEXT NOT NULL,
+                category TEXT NOT NULL,
+                subtype TEXT,
+                tcgplayer_product_id TEXT,
+                card_count INTEGER,
+                product_size INTEGER,
+                release_date TEXT,
+                purchase_url_tcgplayer TEXT,
+                purchase_url_cardkingdom TEXT,
+                contents_json TEXT,
+                imported_at TEXT NOT NULL,
+                FOREIGN KEY (set_code) REFERENCES sets(set_code)
+            );
+            CREATE TABLE IF NOT EXISTS sealed_collection (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sealed_product_uuid TEXT NOT NULL REFERENCES sealed_products(uuid),
+                quantity INTEGER NOT NULL DEFAULT 1,
+                condition TEXT NOT NULL DEFAULT 'Near Mint',
+                purchase_price REAL,
+                purchase_date TEXT,
+                source TEXT,
+                seller_name TEXT,
+                notes TEXT,
+                status TEXT NOT NULL DEFAULT 'owned',
+                sale_price REAL,
+                added_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sealed_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tcgplayer_product_id TEXT NOT NULL,
+                low_price REAL,
+                mid_price REAL,
+                high_price REAL,
+                market_price REAL,
+                direct_low_price REAL,
+                observed_at TEXT NOT NULL,
+                UNIQUE(tcgplayer_product_id, observed_at)
+            );
+            CREATE TABLE IF NOT EXISTS tcgplayer_groups (
+                group_id INTEGER PRIMARY KEY,
+                set_code TEXT,
+                name TEXT NOT NULL,
+                abbreviation TEXT,
+                published_on TEXT,
+                fetched_at TEXT NOT NULL
+            );
+            CREATE VIEW IF NOT EXISTS sealed_collection_view AS
+            SELECT sc.id, sp.name FROM sealed_collection sc
+            JOIN sealed_products sp ON sc.sealed_product_uuid = sp.uuid;
+            CREATE VIEW IF NOT EXISTS latest_sealed_prices AS
+            SELECT tcgplayer_product_id, low_price, mid_price, high_price,
+                   market_price, direct_low_price, observed_at
+            FROM sealed_prices
+            WHERE observed_at = (SELECT MAX(observed_at) FROM sealed_prices);
+        """)
+
+        # Insert a pre-existing sealed product (should get source='mtgjson' default)
+        conn.execute("INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test')")
+        conn.execute(
+            "INSERT INTO sealed_products (uuid, name, set_code, category, imported_at) "
+            "VALUES ('old-uuid', 'Old Product', 'tst', 'booster_box', '2025-01-01')"
+        )
+        conn.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (19, '2025-01-01T00:00:00Z')"
+        )
+        conn.commit()
+        conn.close()
+
+        # Now init_db should migrate v19 -> v20
+        conn2 = get_connection(db_path)
+        init_db(conn2)
+
+        assert get_current_version(conn2) == SCHEMA_VERSION
+
+        # Verify source column exists
+        cursor = conn2.execute("PRAGMA table_info(sealed_products)")
+        columns = [row[1] for row in cursor.fetchall()]
+        assert "source" in columns
+
+        # Verify existing row got default 'mtgjson'
+        row = conn2.execute(
+            "SELECT source FROM sealed_products WHERE uuid = 'old-uuid'"
+        ).fetchone()
+        assert row[0] == "mtgjson"
+
+        close_connection()
+        Path(db_path).unlink(missing_ok=True)
+
+
+# =============================================================================
+# MTGJSON Re-import Preserves TCGCSV Products
+# =============================================================================
+
+
+class TestMtgjsonReimportPreservesTcgcsv:
+    def test_tcgcsv_products_survive_reimport(self, test_db, mock_allprintings_with_sealed):
+        """MTGJSON re-import only deletes source='mtgjson', preserving TCGCSV products."""
+        db_path, conn = test_db
+
+        # First import from MTGJSON
+        _run_import(db_path, mock_allprintings_with_sealed)
+
+        # Manually insert a TCGCSV-sourced product
+        conn2 = sqlite3.connect(db_path)
+        conn2.execute(
+            "INSERT OR IGNORE INTO sets (set_code, set_name) VALUES ('tst', 'Test Set')"
+        )
+        conn2.execute(
+            "INSERT INTO sealed_products "
+            "(uuid, name, set_code, category, tcgplayer_product_id, imported_at, source) "
+            "VALUES ('tcgcsv-uuid-001', 'Test Omega Pack', 'tst', 'booster_pack', '999999', '2025-01-01', 'tcgcsv')"
+        )
+        conn2.commit()
+
+        # Verify TCGCSV product exists
+        count = conn2.execute(
+            "SELECT COUNT(*) FROM sealed_products WHERE source = 'tcgcsv'"
+        ).fetchone()[0]
+        assert count == 1
+
+        # Re-import MTGJSON data
+        _run_import(db_path, mock_allprintings_with_sealed)
+
+        # TCGCSV product should survive
+        count = conn2.execute(
+            "SELECT COUNT(*) FROM sealed_products WHERE source = 'tcgcsv'"
+        ).fetchone()[0]
+        assert count == 1
+
+        # MTGJSON products should still be there too (re-imported)
+        mtgjson_count = conn2.execute(
+            "SELECT COUNT(*) FROM sealed_products WHERE source = 'mtgjson'"
+        ).fetchone()[0]
+        assert mtgjson_count == 4  # from fixture
+
+        conn2.close()
+
+
+# =============================================================================
+# Source Field in SealedProduct Dataclass
+# =============================================================================
+
+
+class TestSealedProductSource:
+    def test_source_field_default(self, test_db, mock_allprintings_with_sealed):
+        """MTGJSON-imported products have source='mtgjson'."""
+        db_path, conn = test_db
+        _run_import(db_path, mock_allprintings_with_sealed)
+
+        conn2 = sqlite3.connect(db_path)
+        conn2.row_factory = sqlite3.Row
+        repo = SealedProductRepository(conn2)
+
+        product = repo.get("sealed-uuid-001")
+        assert product is not None
+        assert product.source == "mtgjson"
+        conn2.close()
+
+    def test_source_field_tcgcsv(self, test_db):
+        """Manually inserted TCGCSV product has source='tcgcsv'."""
+        db_path, conn = test_db
+
+        conn.execute(
+            "INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test Set')"
+        )
+        conn.execute(
+            "INSERT INTO sealed_products "
+            "(uuid, name, set_code, category, imported_at, source) "
+            "VALUES ('tcgcsv-uuid', 'Omega Pack', 'tst', 'booster_pack', '2025-01-01', 'tcgcsv')"
+        )
+        conn.commit()
+
+        repo = SealedProductRepository(conn)
+        product = repo.get("tcgcsv-uuid")
+        assert product is not None
+        assert product.source == "tcgcsv"
