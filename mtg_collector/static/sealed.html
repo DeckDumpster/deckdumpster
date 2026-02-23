@@ -415,6 +415,7 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 }
 .sealed-table tr:hover { background: rgba(15, 52, 96, 0.2); }
 .sealed-table tr { cursor: pointer; }
+.sealed-table .col-image { width: 48px; padding: 4px 0; }
 .sealed-table .table-thumb {
   width: 40px;
   height: 40px;
@@ -1006,11 +1007,12 @@ let allSets = [];
 let selectedSets = new Map(); // code -> name
 let sortKey = 'added_at';
 let sortDir = -1; // -1 = desc
-let viewMode = localStorage.getItem('sealedViewMode') || 'grid';
+let viewMode = localStorage.getItem('sealedViewMode') || 'table';
 
 // ─── Column config ──────────────────────────────────────────────────────────
 const ALL_COLUMNS = [
   { key: 'qty',      label: 'Qty',      sort: 'quantity',       defaultOn: true },
+  { key: 'image',    label: '',          sort: null,             defaultOn: true },
   { key: 'name',     label: 'Set',       sort: 'set_name',       defaultOn: true },
   { key: 'set',      label: 'Type',      sort: 'category',       defaultOn: true },
   { key: 'cost',     label: 'Cost',      sort: 'purchase_price', defaultOn: true },
@@ -1543,6 +1545,10 @@ function renderTable() {
   let html = '<table class="sealed-table"><thead><tr>';
   html += `<th class="col-config-th${drawerOpen ? ' active' : ''}" id="col-config-th" title="Configure columns">${colIcon}</th>`;
   for (const col of visCols) {
+    if (col.sort === null) {
+      html += `<th class="col-image" data-col="${col.key}"></th>`;
+      continue;
+    }
     const dataKey = COL_SORT_MAP[col.key] || col.key;
     const isActive = sortKey === dataKey;
     const arrow = isActive ? `<span class="sort-arrow">${sortDir === 1 ? '\u25B2' : '\u25BC'}</span>` : '';
@@ -1563,7 +1569,8 @@ function renderTable() {
     for (const col of visCols) {
       switch (col.key) {
         case 'qty':      html += `<td>${entry.quantity}</td>`; break;
-        case 'name':     html += `<td>${thumbHtml}${esc(entry.set_name || entry.set_code || '')}</td>`; break;
+        case 'image':    html += `<td class="col-image">${thumbHtml}</td>`; break;
+        case 'name':     html += `<td>${esc(entry.set_name || entry.set_code || '')}</td>`; break;
         case 'set':      html += `<td>${esc(formatCategory(entry))}</td>`; break;
         case 'cost':     html += `<td>${cost}</td>`; break;
         case 'market':   html += `<td>${market}</td>`; break;

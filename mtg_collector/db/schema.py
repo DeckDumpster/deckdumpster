@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -281,6 +281,7 @@ CREATE TABLE IF NOT EXISTS sealed_products (
     purchase_url_cardkingdom TEXT,
     contents_json TEXT,
     imported_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'mtgjson',
     FOREIGN KEY (set_code) REFERENCES sets(set_code)
 );
 CREATE INDEX IF NOT EXISTS idx_sealed_products_set ON sealed_products(set_code);
@@ -464,6 +465,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v17_to_v18(conn)
         if current < 19:
             _migrate_v18_to_v19(conn)
+        if current < 20:
+            _migrate_v19_to_v20(conn)
 
     # Record schema version
     conn.execute(
@@ -1230,6 +1233,17 @@ def _migrate_v18_to_v19(conn: sqlite3.Connection):
         FROM sealed_prices
         WHERE observed_at = (SELECT MAX(observed_at) FROM sealed_prices)
     """)
+
+
+def _migrate_v19_to_v20(conn: sqlite3.Connection):
+    """Add source column to sealed_products to distinguish MTGJSON vs TCGCSV products."""
+    cursor = conn.execute("PRAGMA table_info(sealed_products)")
+    columns = [row[1] for row in cursor.fetchall()]
+
+    if "source" not in columns:
+        conn.execute(
+            "ALTER TABLE sealed_products ADD COLUMN source TEXT NOT NULL DEFAULT 'mtgjson'"
+        )
 
 
 def drop_all_tables(conn: sqlite3.Connection):
