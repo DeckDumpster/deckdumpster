@@ -25,6 +25,8 @@ moxfield_collection.csv
 # Screenshots
 screenshots/
 
+# Plans (Claude Code working files)
+plans/
 # Claude
 .claude/*
 !.claude/settings.json
