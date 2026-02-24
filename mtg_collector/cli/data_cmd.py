@@ -295,7 +295,7 @@ def import_mtgjson(db_path: str):
     print(f"  Inserting {len(printing_rows)} printings ...")
     conn.executemany(
         "INSERT OR IGNORE INTO mtgjson_printings "
-        "(uuid, scryfall_id, name, set_code, number, rarity, border_color, "
+        "(uuid, printing_id, name, set_code, number, rarity, border_color, "
         "is_full_art, frame_effects, ck_url, ck_url_foil, imported_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         printing_rows,
@@ -517,7 +517,7 @@ def check_prices(db_path: str, sample: int = 10):
     cards = conn.execute("""
         SELECT p.set_code, p.collector_number, c.finish
         FROM collection c
-        JOIN printings p ON c.scryfall_id = p.scryfall_id
+        JOIN printings p ON c.printing_id = p.printing_id
         ORDER BY RANDOM()
         LIMIT ?
     """, (sample,)).fetchall()

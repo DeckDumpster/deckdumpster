@@ -1,8 +1,8 @@
 """
 Tests for ID-based card ingestion (ingest-ids / resolve_and_add_ids).
 
-Tests the Scryfall lookup + DB insertion pipeline.
-Does NOT use Claude — only Scryfall API and local SQLite.
+Tests the local DB lookup + collection insertion pipeline.
+Does NOT use Claude — only local SQLite (pre-populated via bulk import).
 
 Test categories:
   1. Valid quads: cards resolve and get added correctly
@@ -33,7 +33,7 @@ from mtg_collector.services.scryfall import ScryfallAPI, ensure_set_cached
 from mtg_collector.cli.ingest_ids import resolve_and_add_ids, RARITY_MAP
 from mtg_collector.utils import normalize_condition
 
-# Pre-populated database with Scryfall cache
+# Pre-populated database with card cache
 CACHE_DB = Path(__file__).parent / "fixtures" / "scryfall-cache.sqlite"
 
 
@@ -43,7 +43,7 @@ CACHE_DB = Path(__file__).parent / "fixtures" / "scryfall-cache.sqlite"
 
 @pytest.fixture
 def test_db():
-    """Create a temporary database, optionally pre-loaded with Scryfall cache."""
+    """Create a temporary database, optionally pre-loaded with card cache."""
     close_connection()
     with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
         db_path = f.name
@@ -102,7 +102,7 @@ def cached_repos(repos, scryfall):
 class TestValidIngestion:
     """Test that valid quads resolve and get added to the collection."""
 
-    def test_single_card(self, cached_repos, scryfall):
+    def test_single_card(self, cached_repos):
         """A single valid quad should add one card."""
         entries = [{
             "rarity_code": "C",
@@ -114,12 +114,8 @@ class TestValidIngestion:
 
         added, failed = resolve_and_add_ids(
             entries=entries,
-            scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint",
             source="test",
         )
@@ -133,7 +129,7 @@ class TestValidIngestion:
         assert collection[0]["name"] == "Germinating Wurm"
         assert collection[0]["finish"] == "nonfoil"
 
-    def test_multiple_cards(self, cached_repos, scryfall):
+    def test_multiple_cards(self, cached_repos):
         """Multiple valid quads should all be added."""
         entries = [
             {"rarity_code": "C", "rarity": "common", "collector_number": "0092", "set_code": "eoe", "foil": False},
@@ -143,12 +139,8 @@ class TestValidIngestion:
 
         added, failed = resolve_and_add_ids(
             entries=entries,
-            scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint",
             source="test",
         )
@@ -163,7 +155,7 @@ class TestValidIngestion:
         assert "Mightform Harmonizer" in names
         assert "Systems Override" in names
 
-    def test_source_image_stored(self, cached_repos, scryfall):
+    def test_source_image_stored(self, cached_repos):
         """source_image should be stored and retrievable from collection entries."""
         entries = [{
             "rarity_code": "C",
@@ -175,12 +167,8 @@ class TestValidIngestion:
 
         added, failed = resolve_and_add_ids(
             entries=entries,
-            scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint",
             source="test",
             source_image="/photos/test.jpg",
@@ -192,7 +180,7 @@ class TestValidIngestion:
         entry = cached_repos["collection_repo"].get(1)
         assert entry.source_image == "/photos/test.jpg"
 
-    def test_leading_zeros_stripped(self, cached_repos, scryfall):
+    def test_leading_zeros_stripped(self, cached_repos):
         """Collector numbers with leading zeros should still resolve."""
         entries = [{
             "rarity_code": "C",
@@ -204,12 +192,8 @@ class TestValidIngestion:
 
         added, failed = resolve_and_add_ids(
             entries=entries,
-            scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint",
             source="test",
         )
@@ -225,7 +209,7 @@ class TestValidIngestion:
 class TestFoilHandling:
     """Test that foil flag propagates correctly."""
 
-    def test_nonfoil_card(self, cached_repos, scryfall):
+    def test_nonfoil_card(self, cached_repos):
         entries = [{
             "rarity_code": "C",
             "rarity": "common",
@@ -235,19 +219,16 @@ class TestFoilHandling:
         }]
 
         resolve_and_add_ids(
-            entries=entries, scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
+            entries=entries,
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint", source="test",
         )
 
         collection = cached_repos["collection_repo"].list_all()
         assert collection[0]["finish"] == "nonfoil"
 
-    def test_foil_card(self, cached_repos, scryfall):
+    def test_foil_card(self, cached_repos):
         entries = [{
             "rarity_code": "C",
             "rarity": "common",
@@ -257,12 +238,9 @@ class TestFoilHandling:
         }]
 
         resolve_and_add_ids(
-            entries=entries, scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
+            entries=entries,
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint", source="test",
         )
 
@@ -277,7 +255,7 @@ class TestFoilHandling:
 class TestInvalidInputs:
     """Test that invalid inputs fail cleanly without adding any cards."""
 
-    def test_invalid_collector_number(self, cached_repos, scryfall):
+    def test_invalid_collector_number(self, cached_repos):
         """A non-existent collector number should fail."""
         entries = [{
             "rarity_code": "C",
@@ -288,12 +266,9 @@ class TestInvalidInputs:
         }]
 
         added, failed = resolve_and_add_ids(
-            entries=entries, scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
+            entries=entries,
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint", source="test",
         )
 
@@ -301,7 +276,7 @@ class TestInvalidInputs:
         assert len(failed) == 1
         assert cached_repos["collection_repo"].count() == 0
 
-    def test_mixed_valid_and_invalid(self, cached_repos, scryfall):
+    def test_mixed_valid_and_invalid(self, cached_repos):
         """If one card fails, the failure is reported but valid cards still count."""
         entries = [
             {"rarity_code": "C", "rarity": "common", "collector_number": "0187", "set_code": "eoe", "foil": False},
@@ -309,12 +284,9 @@ class TestInvalidInputs:
         ]
 
         added, failed = resolve_and_add_ids(
-            entries=entries, scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
+            entries=entries,
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint", source="test",
         )
 
@@ -323,7 +295,7 @@ class TestInvalidInputs:
         assert added == 1
         assert len(failed) == 1
 
-    def test_rarity_mismatch_still_adds(self, cached_repos, scryfall):
+    def test_rarity_mismatch_still_adds(self, cached_repos):
         """Wrong rarity code should warn but still add the card."""
         # Card 187 in EOE is common, but we say it's rare
         entries = [{
@@ -335,12 +307,9 @@ class TestInvalidInputs:
         }]
 
         added, failed = resolve_and_add_ids(
-            entries=entries, scryfall=scryfall,
-            card_repo=cached_repos["card_repo"],
-            set_repo=cached_repos["set_repo"],
+            entries=entries,
             printing_repo=cached_repos["printing_repo"],
             collection_repo=cached_repos["collection_repo"],
-            conn=cached_repos["conn"],
             condition="Near Mint", source="test",
         )
 
@@ -353,7 +322,7 @@ class TestInvalidInputs:
 # =============================================================================
 
 class TestCLIParsing:
-    """Test CLI argument validation without needing Scryfall."""
+    """Test CLI argument validation (no DB needed)."""
 
     def test_too_few_id_fields(self, test_db):
         """--id with fewer than 3 values should exit with error."""

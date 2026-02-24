@@ -53,7 +53,7 @@ class BaseImporter(ABC):
     @abstractmethod
     def row_to_lookup(self, row: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str], int]:
         """
-        Convert a row to Scryfall lookup parameters.
+        Convert a row to card lookup parameters.
 
         Args:
             row: Parsed row dict
@@ -64,13 +64,13 @@ class BaseImporter(ABC):
         pass
 
     @abstractmethod
-    def row_to_entry(self, row: Dict[str, Any], scryfall_id: str) -> CollectionEntry:
+    def row_to_entry(self, row: Dict[str, Any], printing_id: str) -> CollectionEntry:
         """
         Convert a row to a CollectionEntry.
 
         Args:
             row: Parsed row dict
-            scryfall_id: Resolved Scryfall ID
+            printing_id: Resolved printing ID
 
         Returns:
             CollectionEntry ready to insert
@@ -112,18 +112,18 @@ class BaseImporter(ABC):
                     result.cards_skipped += 1
                     continue
 
-                scryfall_id = self._resolve_card(
+                printing_id = self._resolve_card(
                     card_repo, printing_repo, name, set_code, collector_number,
                 )
 
-                if not scryfall_id:
+                if not printing_id:
                     result.errors.append(f"Could not find: {name} ({set_code or 'any set'})")
                     result.cards_skipped += 1
                     continue
 
                 if not dry_run:
                     for _ in range(quantity):
-                        entry = self.row_to_entry(row, scryfall_id)
+                        entry = self.row_to_entry(row, printing_id)
                         collection_repo.add(entry)
 
                 result.cards_added += quantity
@@ -145,14 +145,14 @@ class BaseImporter(ABC):
         set_code: Optional[str],
         collector_number: Optional[str],
     ) -> Optional[str]:
-        """Resolve a card using the local database. Returns scryfall_id or None."""
+        """Resolve a card using the local database. Returns printing_id or None."""
         # Strategy 1: If set_code + collector_number, look up printing and validate name
         if set_code and collector_number:
             printing = printing_repo.get_by_set_cn(set_code, collector_number)
             if printing:
                 card = card_repo.get(printing.oracle_id)
                 if card and self._name_matches(name, card.name):
-                    return printing.scryfall_id
+                    return printing.printing_id
                 # Name mismatch — fall through to name-based lookup
 
         # Strategy 2: Name-based lookup
@@ -168,9 +168,9 @@ class BaseImporter(ABC):
         if set_code:
             for p in printings:
                 if p.set_code.lower() == set_code.lower():
-                    return p.scryfall_id
+                    return p.printing_id
 
-        return printings[0].scryfall_id
+        return printings[0].printing_id
 
     @staticmethod
     def _name_matches(search_name: str, db_name: str) -> bool:

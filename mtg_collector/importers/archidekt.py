@@ -31,7 +31,7 @@ class ArchidektImporter(BaseImporter):
 
     def row_to_lookup(self, row: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str], int]:
         """Convert Archidekt row to lookup parameters."""
-        # Archidekt provides scryfall_uuid which is the best identifier
+        # Archidekt provides printing UUID which is the best identifier
         # But we also need name for error messages
         name = row.get("card_name", "").strip() or row.get("english_card_name", "").strip()
         set_code = row.get("set_code", "").strip() or None
@@ -53,7 +53,7 @@ class ArchidektImporter(BaseImporter):
 
         return name, set_code, collector_number, quantity + foil_quantity
 
-    def row_to_entry(self, row: Dict[str, Any], scryfall_id: str) -> CollectionEntry:
+    def row_to_entry(self, row: Dict[str, Any], printing_id: str) -> CollectionEntry:
         """Convert Archidekt row to CollectionEntry."""
         # Archidekt tracks foil separately - we need to handle this
         # For simplicity, we'll create entries based on which quantity pool we're drawing from
@@ -72,7 +72,7 @@ class ArchidektImporter(BaseImporter):
 
         return CollectionEntry(
             id=None,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             finish=finish,
             condition="Near Mint",  # Archidekt doesn't track condition
             language=language,
@@ -89,8 +89,8 @@ class ArchidektImporter(BaseImporter):
         )
 
     def _resolve_card(self, card_repo, printing_repo, name, set_code, collector_number):
-        """Override to use scryfall_uuid if available."""
-        # Check if we have the scryfall_uuid from the current row context
+        """Override to use printing UUID if available."""
+        # Check if we have the printing UUID from the current row context
         # This is a bit of a hack since we don't have direct access to the row here
         # The base class will handle this via set_code/collector_number
         return super()._resolve_card(card_repo, printing_repo, name, set_code, collector_number)

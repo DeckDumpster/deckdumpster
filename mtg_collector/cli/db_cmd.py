@@ -69,9 +69,9 @@ def run_recache(args):
 
     # Step 1: Find non-English printings referenced by collection
     cursor = conn.execute("""
-        SELECT DISTINCT p.scryfall_id, p.set_code, p.collector_number, p.raw_json
+        SELECT DISTINCT p.printing_id, p.set_code, p.collector_number, p.raw_json
         FROM collection c
-        JOIN printings p ON c.scryfall_id = p.scryfall_id
+        JOIN printings p ON c.printing_id = p.printing_id
         WHERE p.raw_json IS NOT NULL
           AND json_extract(p.raw_json, '$.lang') != 'en'
     """)
@@ -82,7 +82,7 @@ def run_recache(args):
         conn.execute("PRAGMA foreign_keys = OFF")
         fixed = 0
         for row in non_english:
-            old_id = row["scryfall_id"]
+            old_id = row["printing_id"]
             set_code = row["set_code"]
             cn = row["collector_number"]
             old_lang = json.loads(row["raw_json"]).get("lang", "?")
@@ -100,14 +100,14 @@ def run_recache(args):
                 continue
 
             # Delete the old non-English printing first (unique constraint on set_code+cn)
-            conn.execute("DELETE FROM printings WHERE scryfall_id = ?", (old_id,))
+            conn.execute("DELETE FROM printings WHERE printing_id = ?", (old_id,))
 
             # Cache the English printing
             cache_scryfall_data(api, card_repo, set_repo, printing_repo, en_data)
 
             # Update collection entries to point to English printing
             conn.execute(
-                "UPDATE collection SET scryfall_id = ? WHERE scryfall_id = ?",
+                "UPDATE collection SET printing_id = ? WHERE printing_id = ?",
                 (new_id, old_id),
             )
 
@@ -122,7 +122,7 @@ def run_recache(args):
     # Step 2: Delete all printings not referenced by collection (cache cleanup)
     cursor = conn.execute("""
         DELETE FROM printings
-        WHERE scryfall_id NOT IN (SELECT DISTINCT scryfall_id FROM collection)
+        WHERE printing_id NOT IN (SELECT DISTINCT printing_id FROM collection)
     """)
     print(f"Cleaned {cursor.rowcount} cached printing(s) not in collection")
 
@@ -146,25 +146,25 @@ def run_refresh(args):
     api = ScryfallAPI()
 
     # Get all printings
-    cursor = conn.execute("SELECT scryfall_id FROM printings")
-    scryfall_ids = [row[0] for row in cursor]
+    cursor = conn.execute("SELECT printing_id FROM printings")
+    printing_ids = [row[0] for row in cursor]
 
-    if not scryfall_ids:
+    if not printing_ids:
         print("No printings cached. Nothing to refresh.")
         return
 
-    print(f"Refreshing {len(scryfall_ids)} printing(s)...")
+    print(f"Refreshing {len(printing_ids)} printing(s)...")
 
     refreshed = 0
     errors = 0
 
-    for scryfall_id in scryfall_ids:
-        data = api.get_card_by_id(scryfall_id)
+    for printing_id in printing_ids:
+        data = api.get_card_by_id(printing_id)
         if data:
             cache_scryfall_data(api, card_repo, set_repo, printing_repo, data)
             refreshed += 1
         else:
-            print(f"  Failed to fetch: {scryfall_id}")
+            print(f"  Failed to fetch: {printing_id}")
             errors += 1
 
     conn.commit()

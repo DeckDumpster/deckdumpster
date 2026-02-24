@@ -748,7 +748,7 @@ async function loadSheets() {
 
         const sources = (_settings.price_sources || 'tcg,ck').split(',');
         let badges = `<span class="badge pull-rate">${pullPct}%</span>`;
-        if (sources.includes('tcg') && card.scryfall_id) {
+        if (sources.includes('tcg') && card.printing_id) {
           const sfUrl = `https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}`;
           const tcgPrice = card.tcg_price ? ` $${parseFloat(card.tcg_price).toFixed(2)}` : '';
           badges += `<a class="badge link" href="${sfUrl}" target="_blank" rel="noopener">SF${tcgPrice}</a>`;

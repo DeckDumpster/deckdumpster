@@ -37,7 +37,7 @@ def run(args):
         print(f"No collection entry found with ID: {args.id}")
         return
 
-    printing = printing_repo.get(entry.scryfall_id)
+    printing = printing_repo.get(entry.printing_id)
     card = card_repo.get(printing.oracle_id) if printing else None
     set_info = set_repo.get(printing.set_code) if printing else None
 
@@ -107,5 +107,5 @@ def run(args):
             print(f"  {h['changed_at']}  {from_s} → {h['to_status']}{note_s}")
 
     print()
-    print(f"Scryfall ID:     {entry.scryfall_id}")
+    print(f"Printing ID:     {entry.printing_id}")
     print("=" * 60)

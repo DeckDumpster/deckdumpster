@@ -1458,28 +1458,28 @@ let multiSelectMode = false;
 let groupByOrder = false;
 let selectedCards = new Set();
 let lastSelectedIdx = null;
-let wishlistMap = {};  // wishlist_id → {id, oracle_id, scryfall_id, name, set_code, collector_number, ...}
-let wishlistByScryfall = {};  // scryfall_id → entry (only for printing-specific wants)
-let wishlistByOracle = {};  // oracle_id → entry (only for card-level wants where scryfall_id is null)
+let wishlistMap = {};  // wishlist_id → {id, oracle_id, printing_id, name, set_code, collector_number, ...}
+let wishlistByPrinting = {};  // printing_id → entry (only for printing-specific wants)
+let wishlistByOracle = {};  // oracle_id → entry (only for card-level wants where printing_id is null)
 
 function _addWishlistEntry(e) {
   wishlistMap[e.id] = e;
-  if (e.scryfall_id) wishlistByScryfall[e.scryfall_id] = e;
+  if (e.printing_id) wishlistByPrinting[e.printing_id] = e;
   else wishlistByOracle[e.oracle_id] = e;
 }
 function _removeWishlistEntry(e) {
   delete wishlistMap[e.id];
-  if (e.scryfall_id) delete wishlistByScryfall[e.scryfall_id];
+  if (e.printing_id) delete wishlistByPrinting[e.printing_id];
   else delete wishlistByOracle[e.oracle_id];
 }
 
-// If entry has scryfall_id, only that printing is wanted; otherwise all printings of the oracle_id
+// If entry has printing_id, only that printing is wanted; otherwise all printings of the oracle_id
 function isCardWanted(card) {
-  if (wishlistByScryfall[card.scryfall_id]) return true;
+  if (wishlistByPrinting[card.printing_id]) return true;
   return !!wishlistByOracle[card.oracle_id];
 }
 function getWishlistEntry(card) {
-  return wishlistByScryfall[card.scryfall_id] || wishlistByOracle[card.oracle_id] || null;
+  return wishlistByPrinting[card.printing_id] || wishlistByOracle[card.oracle_id] || null;
 }
 
 // Grid size slider
@@ -1703,7 +1703,7 @@ document.getElementById('sel-delete-btn').addEventListener('click', async () => 
   const allIds = [];
   for (const c of selectedCardData) {
     try {
-      const res = await fetch(`/api/collection/copies?scryfall_id=${encodeURIComponent(c.scryfall_id)}`);
+      const res = await fetch(`/api/collection/copies?printing_id=${encodeURIComponent(c.printing_id)}`);
       const copies = await res.json();
       for (const copy of copies) {
         if (copy.status === 'owned' || copy.status === 'ordered') {
@@ -1915,7 +1915,7 @@ function showCardModal(card) {
 
   // Lazy-load copies for owned/ordered cards
   if (card.qty > 0) {
-    const copiesParams = new URLSearchParams({ scryfall_id: card.scryfall_id });
+    const copiesParams = new URLSearchParams({ printing_id: card.printing_id });
     if (card.finish) copiesParams.set('finish', card.finish);
     if (card.condition) copiesParams.set('condition', card.condition);
     fetch(`/api/collection/copies?${copiesParams}`)
@@ -1987,7 +1987,7 @@ function showCardModal(card) {
       const result = await res.json();
       if (result.id) {
         const entry = {
-          id: result.id, oracle_id: card.oracle_id, scryfall_id: result.scryfall_id,
+          id: result.id, oracle_id: card.oracle_id, printing_id: result.printing_id,
           name: card.name, set_code: card.set_code, collector_number: card.collector_number,
         };
         _addWishlistEntry(entry);
@@ -2014,7 +2014,7 @@ async function loadModalCopies(card) {
   const container = document.getElementById('copies-container');
   if (!container) return;
   try {
-    const res = await fetch(`/api/collection/copies?scryfall_id=${encodeURIComponent(card.scryfall_id)}`);
+    const res = await fetch(`/api/collection/copies?printing_id=${encodeURIComponent(card.printing_id)}`);
     const copies = await res.json();
     if (!copies.length) {
       container.innerHTML = '';
@@ -2173,7 +2173,7 @@ function buildPriceBadges(card) {
 function buildCardBadges(card) {
   let html = '';
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
-  if (sources.includes('tcg') && card.scryfall_id) {
+  if (sources.includes('tcg') && card.printing_id) {
     const sfPrice = card.tcg_price ? ` $${parseFloat(card.tcg_price).toFixed(2)}` : '';
     html += `<a class="badge link" href="https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}" target="_blank" rel="noopener" onclick="event.stopPropagation()">SF${sfPrice}</a>`;
   }
@@ -3134,7 +3134,7 @@ async function loadWishlist() {
   const res = await fetch('/api/wishlist?fulfilled=false');
   const entries = await res.json();
   wishlistMap = {};
-  wishlistByScryfall = {};
+  wishlistByPrinting = {};
   wishlistByOracle = {};
   for (const e of entries) _addWishlistEntry(e);
   updateWishlistCount();
@@ -3157,7 +3157,7 @@ function renderWishlistPanel() {
   list.innerHTML = entries.map(e => {
     const setLabel = e.set_code ? ` <span class="wl-set">${e.set_code.toUpperCase()}</span>` : '';
     const cnLabel = e.collector_number ? ` <span class="wl-set">#${e.collector_number}</span>` : '';
-    return `<div class="wl-entry" data-wl-id="${e.id}" data-scryfall-id="${e.scryfall_id || ''}" style="cursor:pointer">
+    return `<div class="wl-entry" data-wl-id="${e.id}" data-printing-id="${e.printing_id || ''}" style="cursor:pointer">
       <span class="wl-name">${(e.name || '').split(' // ')[0]}${setLabel}${cnLabel}</span>
       <button class="wl-remove" title="Remove">&times;</button>
     </div>`;
@@ -3198,15 +3198,15 @@ document.getElementById('wishlist-panel-list').addEventListener('click', async (
   }
 
   // Click on entry name — open card modal
-  const scryfallId = entryEl.dataset.scryfallId;
-  if (!scryfallId) return;
-  const card = allCards.find(c => c.scryfall_id === scryfallId);
+  const printingId = entryEl.dataset.printingId;
+  if (!printingId) return;
+  const card = allCards.find(c => c.printing_id === printingId);
   if (card) {
     toggleWishlistPanel(false);
     showCardModal(card);
   } else {
     // Card not in current view — fetch from API
-    const res = await fetch(`/api/card/${scryfallId}`);
+    const res = await fetch(`/api/card/${printingId}`);
     if (res.ok) {
       const cardData = await res.json();
       toggleWishlistPanel(false);
@@ -3235,7 +3235,7 @@ document.getElementById('wl-clear-all').addEventListener('click', async () => {
     await fetch(`/api/wishlist/${e.id}`, { method: 'DELETE' });
   }
   wishlistMap = {};
-  wishlistByScryfall = {};
+  wishlistByPrinting = {};
   wishlistByOracle = {};
   updateWishlistCount();
   renderWishlistPanel();

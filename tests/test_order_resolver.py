@@ -1,13 +1,11 @@
 """
-Tests for order resolution and commit (uses fixture DB, no live Scryfall).
+Tests for order resolution and commit (local lookups only).
 
 To run: pytest tests/test_order_resolver.py -v
 """
 
 import os
-import shutil
 import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -29,25 +27,59 @@ from mtg_collector.services.order_resolver import (
     ResolvedOrder,
     ResolvedItem,
 )
-from mtg_collector.services.scryfall import ScryfallAPI
 
-CACHE_DB = Path(__file__).parent / "fixtures" / "scryfall-cache.sqlite"
+# Minimal test card data inserted directly into the DB
+_TEST_CARD = {
+    "oracle_id": "test-oracle-001",
+    "name": "Test Card Alpha",
+}
+_TEST_SET = {
+    "set_code": "tst",
+    "set_name": "Test Set",
+}
+_TEST_PRINTING = {
+    "printing_id": "test-printing-001",
+    "oracle_id": "test-oracle-001",
+    "set_code": "tst",
+    "collector_number": "1",
+    "rarity": "common",
+}
+
+
+def _seed_test_data(conn):
+    """Insert minimal card/set/printing rows for tests that need a real printing_id."""
+    conn.execute(
+        "INSERT OR IGNORE INTO cards (oracle_id, name) VALUES (?, ?)",
+        (_TEST_CARD["oracle_id"], _TEST_CARD["name"]),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO sets (set_code, set_name) VALUES (?, ?)",
+        (_TEST_SET["set_code"], _TEST_SET["set_name"]),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO printings (printing_id, oracle_id, set_code, collector_number, rarity) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            _TEST_PRINTING["printing_id"],
+            _TEST_PRINTING["oracle_id"],
+            _TEST_PRINTING["set_code"],
+            _TEST_PRINTING["collector_number"],
+            _TEST_PRINTING["rarity"],
+        ),
+    )
+    conn.commit()
 
 
 @pytest.fixture
 def test_db():
-    """Create a temporary database pre-loaded with Scryfall cache."""
+    """Create a temporary database with test card data."""
     close_connection()
     with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
         db_path = f.name
 
-    if CACHE_DB.exists():
-        shutil.copy2(str(CACHE_DB), db_path)
-        conn = get_connection(db_path)
-        init_db(conn)
-    else:
-        conn = get_connection(db_path)
-        init_db(conn)
+    conn = get_connection(db_path)
+    init_db(conn)
+    _seed_test_data(conn)
 
     yield db_path, conn
 
@@ -113,15 +145,8 @@ class TestOrderRepository:
 
         oid = order_repo.add(Order(id=None, order_number="CNT-1", source="tcgplayer"))
 
-        # Need a real scryfall_id from the cache DB
-        cursor = conn.execute("SELECT scryfall_id FROM printings LIMIT 1")
-        row = cursor.fetchone()
-        if not row:
-            pytest.skip("No printings in cache DB")
-        sid = row["scryfall_id"]
-
         collection_repo.add(CollectionEntry(
-            id=None, scryfall_id=sid, finish="nonfoil",
+            id=None, printing_id=_TEST_PRINTING["printing_id"], finish="nonfoil",
             status="ordered", order_id=oid,
         ))
         conn.commit()
@@ -138,14 +163,8 @@ class TestOrderRepository:
 
         oid = order_repo.add(Order(id=None, order_number="RCV-1", source="tcgplayer"))
 
-        cursor = conn.execute("SELECT scryfall_id FROM printings LIMIT 1")
-        row = cursor.fetchone()
-        if not row:
-            pytest.skip("No printings in cache DB")
-        sid = row["scryfall_id"]
-
         cid = collection_repo.add(CollectionEntry(
-            id=None, scryfall_id=sid, finish="nonfoil",
+            id=None, printing_id=_TEST_PRINTING["printing_id"], finish="nonfoil",
             status="ordered", order_id=oid,
         ))
         conn.commit()
@@ -164,12 +183,7 @@ class TestCommitOrders:
         collection_repo = repos["collection_repo"]
         conn = repos["conn"]
 
-        # Get a real scryfall_id
-        cursor = conn.execute("SELECT scryfall_id FROM printings LIMIT 1")
-        row = cursor.fetchone()
-        if not row:
-            pytest.skip("No printings in cache DB")
-        sid = row["scryfall_id"]
+        sid = _TEST_PRINTING["printing_id"]
 
         parsed = ParsedOrder(
             order_number="COMMIT-1",
@@ -185,7 +199,7 @@ class TestCommitOrders:
         )
         resolved_item = ResolvedItem(
             parsed=item,
-            scryfall_id=sid,
+            printing_id=sid,
             card_name="Test Card",
         )
         resolved_order = ResolvedOrder(parsed=parsed, items=[resolved_item])
@@ -204,15 +218,11 @@ class TestCommitOrders:
         collection_repo = repos["collection_repo"]
         conn = repos["conn"]
 
-        cursor = conn.execute("SELECT scryfall_id FROM printings LIMIT 1")
-        row = cursor.fetchone()
-        if not row:
-            pytest.skip("No printings in cache DB")
-        sid = row["scryfall_id"]
+        sid = _TEST_PRINTING["printing_id"]
 
         # Create an existing unlinked ordered card
         collection_repo.add(CollectionEntry(
-            id=None, scryfall_id=sid, finish="nonfoil",
+            id=None, printing_id=sid, finish="nonfoil",
             status="ordered", order_id=None,
         ))
         conn.commit()
@@ -220,7 +230,7 @@ class TestCommitOrders:
         # Now commit an order with the same card
         parsed = ParsedOrder(order_number="LINK-1", source="tcgplayer", seller_name="Seller")
         item = ParsedOrderItem(card_name="Card", condition="Near Mint", quantity=1)
-        resolved_item = ResolvedItem(parsed=item, scryfall_id=sid, card_name="Card")
+        resolved_item = ResolvedItem(parsed=item, printing_id=sid, card_name="Card")
         resolved_order = ResolvedOrder(parsed=parsed, items=[resolved_item])
 
         summary = commit_orders(
@@ -240,7 +250,7 @@ class TestCommitOrders:
         item = ParsedOrderItem(card_name="Nonexistent Card", condition="Near Mint")
         resolved_item = ResolvedItem(
             parsed=item,
-            scryfall_id=None,
+            printing_id=None,
             error="Card not found",
         )
         resolved_order = ResolvedOrder(parsed=parsed, items=[resolved_item])
@@ -261,13 +271,8 @@ class TestCollectionEntryOrderId:
 
         oid = order_repo.add(Order(id=None, order_number="OID-1", source="tcgplayer"))
 
-        cursor = conn.execute("SELECT scryfall_id FROM printings LIMIT 1")
-        row = cursor.fetchone()
-        if not row:
-            pytest.skip("No printings in cache DB")
-
         cid = collection_repo.add(CollectionEntry(
-            id=None, scryfall_id=row["scryfall_id"], finish="nonfoil",
+            id=None, printing_id=_TEST_PRINTING["printing_id"], finish="nonfoil",
             order_id=oid,
         ))
         conn.commit()
@@ -280,13 +285,8 @@ class TestCollectionEntryOrderId:
         collection_repo = repos["collection_repo"]
         conn = repos["conn"]
 
-        cursor = conn.execute("SELECT scryfall_id FROM printings LIMIT 1")
-        row = cursor.fetchone()
-        if not row:
-            pytest.skip("No printings in cache DB")
-
         cid = collection_repo.add(CollectionEntry(
-            id=None, scryfall_id=row["scryfall_id"], finish="nonfoil",
+            id=None, printing_id=_TEST_PRINTING["printing_id"], finish="nonfoil",
         ))
         conn.commit()
 
