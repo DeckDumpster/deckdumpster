@@ -17,48 +17,8 @@ from pathlib import Path
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse
 
-import requests
-
 from mtg_collector.db.connection import get_db_path
 from mtg_collector.services.pack_generator import PackGenerator
-
-# In-memory price cache: scryfall_id -> (timestamp, prices_dict)
-_price_cache: dict[str, tuple[float, dict]] = {}
-_PRICE_TTL = 86400  # 24 hours
-
-
-def _fetch_prices(scryfall_ids: list[str]) -> dict[str, dict]:
-    """Fetch prices from Scryfall collection endpoint, using cache."""
-    now = time.time()
-    result = {}
-    to_fetch = []
-
-    for sid in scryfall_ids:
-        if not sid:
-            continue
-        cached = _price_cache.get(sid)
-        if cached and now - cached[0] < _PRICE_TTL:
-            result[sid] = cached[1]
-        else:
-            to_fetch.append(sid)
-
-    # Scryfall collection endpoint accepts max 75 identifiers per request
-    for i in range(0, len(to_fetch), 75):
-        batch = to_fetch[i:i + 75]
-        resp = requests.post(
-            "https://api.scryfall.com/cards/collection",
-            json={"identifiers": [{"id": sid} for sid in batch]},
-            headers={"User-Agent": "MTGCollectionTool/2.0"},
-        )
-        resp.raise_for_status()
-        for card in resp.json().get("data", []):
-            prices = card.get("prices", {})
-            _price_cache[card["id"]] = (now, prices)
-            result[card["id"]] = prices
-        if i + 75 < len(to_fetch):
-            time.sleep(0.1)  # rate limit
-
-    return result
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
@@ -344,7 +304,7 @@ def _extract_ocr_name(ocr_fragments, fragment_indices):
 
 
 def _format_candidates(raw_cards):
-    """Format raw Scryfall card dicts into the candidate shape the client expects."""
+    """Format raw card dicts into the candidate shape the client expects."""
     formatted = []
     for c in raw_cards:
         image_uri = None
@@ -359,7 +319,7 @@ def _format_candidates(raw_cards):
         price = prices.get("usd") or prices.get("usd_foil")
 
         formatted.append({
-            "scryfall_id": c["id"],
+            "printing_id": c["id"],
             "name": c.get("name", "???"),
             "set_code": c.get("set", "???"),
             "set_name": c.get("set_name", ""),
@@ -379,7 +339,7 @@ def _format_candidates(raw_cards):
 
 
 def _local_name_search(conn, name, set_code=None, limit=20):
-    """Search local DB for cards by name, return Scryfall-format dicts for _format_candidates."""
+    """Search local DB for cards by name, return card dicts for _format_candidates."""
     from mtg_collector.db.models import CardRepository, PrintingRepository
 
     card_repo = CardRepository(conn)
@@ -392,7 +352,7 @@ def _local_name_search(conn, name, set_code=None, limit=20):
         for p in printings:
             if set_code and p.set_code != set_code.lower():
                 continue
-            data = p.get_scryfall_data()
+            data = p.get_card_data()
             if data:
                 results.append(data)
     return results
@@ -404,7 +364,7 @@ def _log_ingest(msg):
 
 
 def _scryfall_rate_limit():
-    """Enforce 100ms spacing between Scryfall requests across all worker threads."""
+    """Enforce 100ms spacing between bulk import requests."""
     global _scryfall_last_request
     with _scryfall_rate_lock:
         now = time.time()
@@ -415,7 +375,7 @@ def _scryfall_rate_limit():
 
 
 def _process_image_core(conn, image_id, img, log_fn):
-    """Process a single image: OCR -> Claude -> Scryfall. Returns final status string.
+    """Process a single image: OCR -> Claude -> DB lookup. Returns final status string.
 
     Used by both the SSE endpoint and background workers.
     log_fn(event_type, data_dict) is called for progress events.
@@ -531,7 +491,7 @@ def _process_image_core(conn, image_id, img, log_fn):
     all_crops = []
 
     def _resolve_candidate(card_info) -> list:
-        """Resolve one agent card_info to a list of raw Scryfall card dicts."""
+        """Resolve one agent card_info to a list of raw card dicts."""
         set_code, cn_or_query = _build_scryfall_query(card_info, {})
         candidates = []
         if set_code and cn_or_query:
@@ -541,7 +501,7 @@ def _process_image_core(conn, image_id, img, log_fn):
             if not printing:
                 printing = printing_repo.get_by_set_cn(set_code, cn_raw)
             if printing:
-                card_data = printing.get_scryfall_data()
+                card_data = printing.get_card_data()
                 if card_data:
                     candidates = [card_data]
                     # If the set+CN lookup returned a different card name than
@@ -579,7 +539,7 @@ def _process_image_core(conn, image_id, img, log_fn):
                 candidates = _local_name_search(conn, cn_or_query)
 
         # Resolve extra candidates (same physical card, different printing guesses)
-        # and merge into this slot's results, deduplicating by Scryfall ID.
+        # and merge into this slot's results, deduplicating by printing ID.
         seen_ids = {c.get("id") for c in candidates}
         for extra_info in _group_extras.get(ci, []):
             for r in _resolve_candidate(extra_info):
@@ -633,15 +593,15 @@ def _auto_ingest_single_candidates(conn, img, disambiguated, scryfall_matches):
             continue
 
         c = candidates[0]
-        scryfall_id = c["scryfall_id"]
+        printing_id = c["printing_id"]
 
-        printing = printing_repo.get(scryfall_id)
+        printing = printing_repo.get(printing_id)
         if not printing:
             continue
 
         entry = CollectionEntry(
             id=None,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             finish="nonfoil",
             condition="Near Mint",
             source="ocr_ingest",
@@ -655,10 +615,10 @@ def _auto_ingest_single_candidates(conn, img, disambiguated, scryfall_matches):
             (entry_id, md5, img["stored_name"], card_idx, now_iso()),
         )
 
-        disambiguated[card_idx] = scryfall_id
+        disambiguated[card_idx] = printing_id
         conn.commit()
 
-        _log_ingest(f"Auto-confirmed: {printing.scryfall_id} ({c.get('set_code', '???').upper()} #{c.get('collector_number', '???')})")
+        _log_ingest(f"Auto-confirmed: {printing.printing_id} ({c.get('set_code', '???').upper()} #{c.get('collector_number', '???')})")
         auto_count += 1
 
     return auto_count
@@ -866,8 +826,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path == "/api/wishlist":
             self._api_wishlist_list(params)
         elif path.startswith("/api/card/"):
-            scryfall_id = path[len("/api/card/"):]
-            self._api_card(scryfall_id)
+            printing_id = path[len("/api/card/"):]
+            self._api_card(printing_id)
         elif path.startswith("/api/set-browse/"):
             set_code = path[len("/api/set-browse/"):]
             self._api_set_browse(set_code, params)
@@ -1198,21 +1158,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             seed = int(seed)
         result = self.generator.generate_pack(set_code, product, seed=seed)
 
-        # Attach TCG prices from Scryfall
-        scryfall_ids = [c["scryfall_id"] for c in result["cards"] if c.get("scryfall_id")]
-        prices = _fetch_prices(scryfall_ids)
+        # Attach prices from local DB
         for card in result["cards"]:
-            card_prices = prices.get(card.get("scryfall_id"), {})
-            if card.get("foil"):
-                card["tcg_price"] = card_prices.get("usd_foil") or card_prices.get("usd")
-            else:
-                card["tcg_price"] = card_prices.get("usd") or card_prices.get("usd_foil")
-
-            # Attach CK price from SQLite
             foil = card.get("foil", False)
             price_type = "foil" if foil else "normal"
             sc = card.get("set_code", "").lower()
             cn = card.get("collector_number", "")
+            card["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
             card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
 
         self._send_json(result)
@@ -1241,16 +1193,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
 
-        # When including unowned cards, ensure each selected set is fully cached
-        if include_unowned and filter_sets:
-            from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
-            from mtg_collector.services.scryfall import ScryfallAPI, ensure_set_cached
-            api = ScryfallAPI()
-            card_repo = CardRepository(conn)
-            set_repo = SetRepository(conn)
-            printing_repo = PrintingRepository(conn)
-            for sc in filter_sets:
-                ensure_set_cached(api, sc, card_repo, set_repo, printing_repo, conn)
+        # When including unowned cards, sets must already be cached via `mtg cache all`
 
         where_clauses = []
         sql_params = []
@@ -1379,8 +1322,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if filter_wanted:
             wanted_join = """
                     JOIN wishlist w ON (
-                        w.scryfall_id = p.scryfall_id
-                        OR (w.scryfall_id IS NULL AND w.oracle_id = card.oracle_id)
+                        w.printing_id = p.printing_id
+                        OR (w.printing_id IS NULL AND w.oracle_id = card.oracle_id)
                     ) AND w.fulfilled_at IS NULL"""
 
         if include_unowned:
@@ -1394,13 +1337,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 join_status_sql = ""
                 join_params = []
             if include_unowned == "full":
-                # Full set: one row per (scryfall_id, finish) via json_each
+                # Full set: one row per (printing_id, finish) via json_each
                 query = f"""
                     SELECT
                         card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                         card.colors, card.color_identity,
                         p.set_code, s.set_name, p.collector_number, p.rarity,
-                        p.scryfall_id, p.image_uri, p.artist,
+                        p.printing_id, p.image_uri, p.artist,
                         p.frame_effects, p.border_color, p.full_art, p.promo,
                         p.promo_types, p.finishes,
                         COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
@@ -1422,22 +1365,22 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     JOIN cards card ON p.oracle_id = card.oracle_id
                     JOIN sets s ON p.set_code = s.set_code
                     CROSS JOIN json_each(p.finishes) AS f
-                    LEFT JOIN collection c ON p.scryfall_id = c.scryfall_id AND c.finish = f.value{join_status_sql}
+                    LEFT JOIN collection c ON p.printing_id = c.printing_id AND c.finish = f.value{join_status_sql}
                     LEFT JOIN orders o ON c.order_id = o.id
                     LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                     LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
                     WHERE {where_sql}
-                    GROUP BY p.scryfall_id, f.value
+                    GROUP BY p.printing_id, f.value
                     ORDER BY {sort_col} {order_dir}, card.name ASC
                 """
             else:
-                # Base set: one row per scryfall_id
+                # Base set: one row per printing_id
                 query = f"""
                     SELECT
                         card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                         card.colors, card.color_identity,
                         p.set_code, s.set_name, p.collector_number, p.rarity,
-                        p.scryfall_id, p.image_uri, p.artist,
+                        p.printing_id, p.image_uri, p.artist,
                         p.frame_effects, p.border_color, p.full_art, p.promo,
                         p.promo_types, p.finishes,
                         COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
@@ -1457,12 +1400,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     FROM printings p
                     JOIN cards card ON p.oracle_id = card.oracle_id
                     JOIN sets s ON p.set_code = s.set_code
-                    LEFT JOIN collection c ON p.scryfall_id = c.scryfall_id{join_status_sql}
+                    LEFT JOIN collection c ON p.printing_id = c.printing_id{join_status_sql}
                     LEFT JOIN orders o ON c.order_id = o.id
                     LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                     LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
                     WHERE {where_sql}
-                    GROUP BY p.scryfall_id
+                    GROUP BY p.printing_id
                     ORDER BY {sort_col} {order_dir}, card.name ASC
                 """
             sql_params = join_params + sql_params
@@ -1472,7 +1415,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
                     p.set_code, s.set_name, p.collector_number, p.rarity,
-                    p.scryfall_id, p.image_uri, p.artist,
+                    p.printing_id, p.image_uri, p.artist,
                     p.frame_effects, p.border_color, p.full_art, p.promo,
                     p.promo_types, p.finishes,
                     COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
@@ -1489,14 +1432,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     GROUP_CONCAT(DISTINCT ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at) as ingest_lineage_raw
                 FROM collection c
-                JOIN printings p ON c.scryfall_id = p.scryfall_id
+                JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 LEFT JOIN orders o ON c.order_id = o.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                 LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
                 WHERE {where_sql}
-                GROUP BY p.scryfall_id, c.finish, c.condition, c.status, c.order_id
+                GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
                 ORDER BY {sort_col} {order_dir}, card.name ASC
             """
 
@@ -1524,7 +1467,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "set_name": row["set_name"],
                 "collector_number": row["collector_number"],
                 "rarity": row["rarity"],
-                "scryfall_id": row["scryfall_id"],
+                "printing_id": row["printing_id"],
                 "image_uri": row["image_uri"],
                 "artist": row["artist"],
                 "frame_effects": row["frame_effects"],
@@ -1578,13 +1521,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             cn = card["collector_number"]
             card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
             card["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
-            card["ck_url"] = self.generator.get_ck_url(card["scryfall_id"], foil) if self.generator else ""
+            card["ck_url"] = self.generator.get_ck_url(card["printing_id"], foil) if self.generator else ""
 
         conn.close()
         self._send_json(results)
 
-    def _api_card(self, scryfall_id: str):
-        """Return full card data for a single printing by scryfall_id."""
+    def _api_card(self, printing_id: str):
+        """Return full card data for a single printing by printing_id."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
 
@@ -1594,7 +1537,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                 card.colors, card.color_identity,
                 p.set_code, s.set_name, p.collector_number, p.rarity,
-                p.scryfall_id, p.image_uri, p.artist,
+                p.printing_id, p.image_uri, p.artist,
                 p.frame_effects, p.border_color, p.full_art, p.promo,
                 p.promo_types, p.finishes,
                 COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
@@ -1604,9 +1547,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             FROM printings p
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
-            WHERE p.scryfall_id = ?
+            WHERE p.printing_id = ?
             """,
-            (scryfall_id,),
+            (printing_id,),
         ).fetchone()
 
         if not row:
@@ -1634,7 +1577,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "set_name": row["set_name"],
             "collector_number": row["collector_number"],
             "rarity": row["rarity"],
-            "scryfall_id": row["scryfall_id"],
+            "printing_id": row["printing_id"],
             "image_uri": row["image_uri"],
             "artist": row["artist"],
             "frame_effects": row["frame_effects"],
@@ -1651,7 +1594,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         cn = row["collector_number"]
         result["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", "normal")
         result["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", "normal")
-        result["ck_url"] = self.generator.get_ck_url(scryfall_id, False) if self.generator else ""
+        result["ck_url"] = self.generator.get_ck_url(printing_id, False) if self.generator else ""
 
         conn.close()
         self._send_json(result)
@@ -1825,7 +1768,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 sid = disambiguated[idx] if idx < len(disambiguated) else None
                 resolved = None
                 if sid and sid != "skipped" and idx < len(scryfall_matches):
-                    resolved = next((c for c in scryfall_matches[idx] if c.get("scryfall_id") == sid), None)
+                    resolved = next((c for c in scryfall_matches[idx] if c.get("printing_id") == sid), None)
                 if resolved:
                     entry = {
                         "name": resolved.get("name", card.get("name", "")),
@@ -2082,7 +2025,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True})
 
     def _api_ingest2_process_sse(self, image_id):
-        """SSE endpoint: process one image through OCR -> Claude -> Scryfall, DB-backed."""
+        """SSE endpoint: process one image through OCR -> Claude -> DB lookup, DB-backed."""
         conn = self._ingest2_db()
         img = self._ingest2_load_image(conn, image_id)
         if not img:
@@ -2140,7 +2083,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.close()
 
     def _process_image2_sse(self, conn, image_id, img, send_event):
-        """Process a single image: OCR -> Claude -> Scryfall, streaming SSE events. DB-backed."""
+        """Process a single image: OCR -> Claude -> DB lookup, streaming SSE events. DB-backed."""
         ocr_fragments, claude_cards, all_matches, all_crops, disambiguated, agent_trace, api_usage = _process_image_core(
             conn, image_id, img, send_event,
         )
@@ -2202,16 +2145,16 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # Auto-confirm single-candidate cards
             if len(candidates) == 1:
                 c = candidates[0]
-                scryfall_id = c["scryfall_id"]
+                printing_id = c["printing_id"]
 
                 printing_repo = PrintingRepository(conn)
                 collection_repo = CollectionRepository(conn)
 
-                printing = printing_repo.get(scryfall_id)
+                printing = printing_repo.get(printing_id)
                 if printing:
                     entry = CollectionEntry(
                         id=None,
-                        scryfall_id=scryfall_id,
+                        printing_id=printing_id,
                         finish="nonfoil",
                         condition="Near Mint",
                         source="ocr_ingest",
@@ -2225,11 +2168,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                         (entry_id, md5, img["stored_name"], card_idx, now_iso()),
                     )
 
-                    disambiguated[card_idx] = scryfall_id
+                    disambiguated[card_idx] = printing_id
                     self._ingest2_update_image(conn, image_id, disambiguated=json.dumps(disambiguated))
                     conn.commit()
 
-                    _log_ingest(f"Auto-confirmed: {scryfall_id} ({c.get('set_code', '???').upper()} #{c.get('collector_number', '???')})")
+                    _log_ingest(f"Auto-confirmed: {printing_id} ({c.get('set_code', '???').upper()} #{c.get('collector_number', '???')})")
                     auto_confirmed += 1
                     continue
 
@@ -2281,7 +2224,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         image_id = data["image_id"]
         card_idx = data["card_idx"]
-        scryfall_id = data["scryfall_id"]
+        printing_id = data["printing_id"]
         finish = data.get("finish", "nonfoil")
 
         conn = self._ingest2_db()
@@ -2294,15 +2237,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         printing_repo = PrintingRepository(conn)
         collection_repo = CollectionRepository(conn)
 
-        printing = printing_repo.get(scryfall_id)
+        printing = printing_repo.get(printing_id)
         if not printing:
             conn.close()
-            self._send_json({"error": f"Printing {scryfall_id} not in local cache"}, 404)
+            self._send_json({"error": f"Printing {printing_id} not in local cache"}, 404)
             return
 
         entry = CollectionEntry(
             id=None,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             finish=finish,
             condition="Near Mint",
             source="ocr_ingest",
@@ -2319,7 +2262,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Update disambiguated
         disambiguated = json.loads(img["disambiguated"]) if img.get("disambiguated") else []
         if card_idx < len(disambiguated):
-            disambiguated[card_idx] = scryfall_id
+            disambiguated[card_idx] = printing_id
         self._ingest2_update_image(conn, image_id, disambiguated=json.dumps(disambiguated))
 
         # Check if all cards done
@@ -2350,7 +2293,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         image_id = data["image_id"]
-        scryfall_id = data["scryfall_id"]
+        printing_id = data["printing_id"]
         finish = data.get("finish", "nonfoil")
 
         conn = self._ingest2_db()
@@ -2377,18 +2320,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         printing_repo = PrintingRepository(conn)
         collection_repo = CollectionRepository(conn)
 
-        printing = printing_repo.get(scryfall_id)
+        printing = printing_repo.get(printing_id)
         if not printing:
             conn.close()
-            self._send_json({"error": f"Printing {scryfall_id} not in local cache"}, 404)
+            self._send_json({"error": f"Printing {printing_id} not in local cache"}, 404)
             return
 
-        card_data = printing.get_scryfall_data()
+        card_data = printing.get_card_data()
 
         # Create collection entry
         entry = CollectionEntry(
             id=None,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             finish=finish,
             condition="Near Mint",
             source="ocr_ingest",
@@ -2404,7 +2347,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         )
 
         # Update disambiguated and prepend to scryfall_matches
-        disambiguated[card_idx] = scryfall_id
+        disambiguated[card_idx] = printing_id
         scryfall_matches[card_idx] = _format_candidates([card_data]) if card_data else []
 
         # Check if all done
@@ -2549,7 +2492,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         image_id = data["image_id"]
         card_idx = data["card_idx"]
-        scryfall_id = data["scryfall_id"]
+        printing_id = data["printing_id"]
         finish = data.get("finish", "nonfoil")
 
         conn = self._ingest2_db()
@@ -2577,18 +2520,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         printing_repo = PrintingRepository(conn)
         collection_repo = CollectionRepository(conn)
 
-        printing = printing_repo.get(scryfall_id)
+        printing = printing_repo.get(printing_id)
         if not printing:
             conn.close()
-            self._send_json({"error": f"Printing {scryfall_id} not in local cache"}, 404)
+            self._send_json({"error": f"Printing {printing_id} not in local cache"}, 404)
             return
 
-        card_data = printing.get_scryfall_data()
+        card_data = printing.get_card_data()
 
         # Create new collection entry
         entry = CollectionEntry(
             id=None,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             finish=finish,
             condition="Near Mint",
             source="ocr_ingest",
@@ -2607,13 +2550,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Update disambiguated
         disambiguated = json.loads(img["disambiguated"]) if img.get("disambiguated") else []
         if card_idx < len(disambiguated):
-            disambiguated[card_idx] = scryfall_id
+            disambiguated[card_idx] = printing_id
 
         # Ensure corrected card is in scryfall_matches so recent detail can display it
         scryfall_matches = json.loads(img["scryfall_matches"]) if img.get("scryfall_matches") else []
         if card_idx < len(scryfall_matches):
-            existing_ids = {c["scryfall_id"] for c in scryfall_matches[card_idx]}
-            if scryfall_id not in existing_ids:
+            existing_ids = {c["printing_id"] for c in scryfall_matches[card_idx]}
+            if printing_id not in existing_ids:
                 formatted = _format_candidates([card_data]) if card_data else []
                 scryfall_matches[card_idx] = formatted + scryfall_matches[card_idx]
 
@@ -2698,7 +2641,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 if not printing:
                     printing = printing_repo.get_by_set_cn(set_code, cn_raw)
                 if printing:
-                    card_data = printing.get_scryfall_data()
+                    card_data = printing.get_card_data()
                     if card_data:
                         candidates = [card_data]
 
@@ -2872,12 +2815,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _api_order_resolve(self):
-        """Resolve parsed orders against Scryfall."""
+        """Resolve parsed orders against local card database."""
         from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
         from mtg_collector.db.schema import init_db
         from mtg_collector.services.order_parser import ParsedOrder, ParsedOrderItem
         from mtg_collector.services.order_resolver import resolve_orders
-        from mtg_collector.services.scryfall import ScryfallAPI
 
         data = self._read_json_body()
         if data is None:
@@ -2915,12 +2857,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.row_factory = sqlite3.Row
         init_db(conn)
 
-        scryfall = ScryfallAPI()
         card_repo = CardRepository(conn)
         set_repo = SetRepository(conn)
         printing_repo = PrintingRepository(conn)
 
-        resolved = resolve_orders(orders, scryfall, card_repo, set_repo, printing_repo, conn)
+        resolved = resolve_orders(orders, card_repo, set_repo, printing_repo)
 
         # Serialize
         result = []
@@ -2933,7 +2874,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     "set_hint": item.parsed.set_hint,
                     "set_code": item.set_code,
                     "collector_number": item.collector_number,
-                    "scryfall_id": item.scryfall_id,
+                    "printing_id": item.printing_id,
                     "image_uri": item.image_uri,
                     "condition": item.parsed.condition,
                     "foil": item.parsed.foil,
@@ -2942,7 +2883,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     "treatment": item.parsed.treatment,
                     "rarity_hint": item.parsed.rarity_hint,
                     "error": item.error,
-                    "resolved": item.scryfall_id is not None,
+                    "resolved": item.printing_id is not None,
                 })
             result.append({
                 "order_number": ro.parsed.order_number,
@@ -3011,7 +2952,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 )
                 ri = ResolvedItem(
                     parsed=parsed_item,
-                    scryfall_id=item_d.get("scryfall_id"),
+                    printing_id=item_d.get("printing_id"),
                     card_name=item_d.get("card_name"),
                     set_code=item_d.get("set_code"),
                     collector_number=item_d.get("collector_number"),
@@ -3039,9 +2980,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Return individual collection rows for a printing, with order data."""
         from mtg_collector.db.models import CollectionRepository
         from mtg_collector.db.schema import init_db
-        scryfall_id = params.get("scryfall_id", [""])[0]
-        if not scryfall_id:
-            self._send_json({"error": "scryfall_id required"}, 400)
+        printing_id = params.get("printing_id", [""])[0]
+        if not printing_id:
+            self._send_json({"error": "printing_id required"}, 400)
             return
         finish = params.get("finish", [""])[0] or None
         condition = params.get("condition", [""])[0] or None
@@ -3050,7 +2991,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.row_factory = sqlite3.Row
         init_db(conn)
         repo = CollectionRepository(conn)
-        copies = repo.get_copies(scryfall_id, finish=finish, condition=condition, status=status)
+        copies = repo.get_copies(printing_id, finish=finish, condition=condition, status=status)
         conn.close()
         self._send_json(copies)
 
@@ -3087,14 +3028,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_corners_detect(self):
         """Upload a photo, run Claude Vision corner detection, resolve cards."""
         from mtg_collector.cli.ingest_ids import RARITY_MAP, lookup_card
-        from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
+        from mtg_collector.db.models import PrintingRepository, SetRepository
         from mtg_collector.db.schema import init_db
         from mtg_collector.services.claude import ClaudeVision
-        from mtg_collector.services.scryfall import (
-            ScryfallAPI,
-            cache_scryfall_data,
-            ensure_set_cached,
-        )
 
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
@@ -3156,13 +3092,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"cards": [], "skipped": [], "errors": ["No card corners detected"], "image_key": image_key})
             return
 
-        # Resolve each detection to a Scryfall card
-        scryfall = ScryfallAPI()
+        # Resolve each detection using local DB
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         init_db(conn)
 
-        card_repo = CardRepository(conn)
         set_repo = SetRepository(conn)
         printing_repo = PrintingRepository(conn)
 
@@ -3172,15 +3106,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         for d in detections:
             raw = d["set"]
             if raw.lower() not in unique_sets:
-                normalized = scryfall.normalize_set_code(raw)
+                normalized = set_repo.normalize_code(raw)
                 if not normalized:
-                    errors.append(f"Unknown set code: {raw}")
+                    errors.append(f"Unknown set code: {raw} (run `mtg cache all` to populate)")
                     continue
                 unique_sets[raw.lower()] = normalized
-
-        # Cache each unique set
-        for set_code in set(unique_sets.values()):
-            ensure_set_cached(scryfall, set_code, card_repo, set_repo, printing_repo, conn)
 
         # Resolve cards
         resolved_cards = []
@@ -3198,12 +3128,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 rarity_code = "C"
             rarity_expected = RARITY_MAP[rarity_code]
 
-            card_data = lookup_card(set_code, cn_raw, cn_stripped, rarity_expected, printing_repo, scryfall)
+            card_data = lookup_card(set_code, cn_raw, cn_stripped, rarity_expected, printing_repo)
             if not card_data:
-                errors.append(f"Card not found: {rarity_code} {cn_raw} {set_code.upper()}")
+                errors.append(f"Card not found: {rarity_code} {cn_raw} {set_code.upper()} (run `mtg cache all` to populate)")
                 continue
-
-            cache_scryfall_data(scryfall, card_repo, set_repo, printing_repo, card_data)
 
             # Extract image URI
             image_uri = None
@@ -3215,7 +3143,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     image_uri = face["image_uris"].get("small") or face["image_uris"].get("normal")
 
             resolved_cards.append({
-                "scryfall_id": card_data["id"],
+                "printing_id": card_data["id"],
                 "name": card_data.get("name", "Unknown"),
                 "image_uri": image_uri,
                 "set_code": set_code,
@@ -3278,11 +3206,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         added = []
         for i, card in enumerate(cards):
-            scryfall_id = card.get("scryfall_id")
-            if not scryfall_id:
+            printing_id = card.get("printing_id")
+            if not printing_id:
                 continue
 
-            printing = printing_repo.get(scryfall_id)
+            printing = printing_repo.get(printing_id)
             if not printing:
                 continue
 
@@ -3292,7 +3220,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
             entry = CollectionEntry(
                 id=None,
-                scryfall_id=scryfall_id,
+                printing_id=printing_id,
                 finish=finish,
                 condition=condition,
                 source="corner_ingest",
@@ -3315,7 +3243,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             added.append({
                 "entry_id": entry_id,
                 "name": name,
-                "scryfall_id": scryfall_id,
+                "printing_id": printing_id,
             })
 
             _log_ingest(f"Corner commit: {name} ({printing.set_code.upper()} #{printing.collector_number}) -> collection ID {entry_id}")
@@ -3329,13 +3257,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_ingest_ids_resolve(self):
         from mtg_collector.cli.ingest_ids import RARITY_MAP, lookup_card
-        from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
+        from mtg_collector.db.models import PrintingRepository, SetRepository
         from mtg_collector.db.schema import init_db
-        from mtg_collector.services.scryfall import (
-            ScryfallAPI,
-            cache_scryfall_data,
-            ensure_set_cached,
-        )
 
         data = self._read_json_body()
         if data is None:
@@ -3348,8 +3271,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         init_db(conn)
-        scryfall = ScryfallAPI()
-        card_repo = CardRepository(conn)
         set_repo = SetRepository(conn)
         printing_repo = PrintingRepository(conn)
 
@@ -3359,16 +3280,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         for e in entries:
             raw = e.get("set_code", "").strip()
             if raw.lower() not in set_map:
-                normalized = scryfall.normalize_set_code(raw)
+                normalized = set_repo.normalize_code(raw)
                 if normalized:
                     set_map[raw.lower()] = normalized
                 else:
                     set_errors.append({"set_code": raw, "error": f"Unknown set code '{raw}'"})
                     set_map[raw.lower()] = None
-
-        # Pre-cache valid sets
-        for sc in set(v for v in set_map.values() if v):
-            ensure_set_cached(scryfall, sc, card_repo, set_repo, printing_repo, conn)
 
         resolved = []
         failed = []
@@ -3388,13 +3305,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             cn_stripped = cn_raw.lstrip("0") or "0"
             rarity = RARITY_MAP[rarity_code]
 
-            card_data = lookup_card(set_code, cn_raw, cn_stripped, rarity, printing_repo, scryfall)
+            card_data = lookup_card(set_code, cn_raw, cn_stripped, rarity, printing_repo)
             if not card_data:
                 failed.append({"index": idx, "rarity_code": rarity_code, "collector_number": cn_raw,
-                              "set_code": raw_set, "foil": e.get("foil", False), "error": "Card not found"})
+                              "set_code": raw_set, "foil": e.get("foil", False), "error": "Card not found (run `mtg cache all` to populate)"})
                 continue
-
-            cache_scryfall_data(scryfall, card_repo, set_repo, printing_repo, card_data)
 
             actual_rarity = card_data.get("rarity", "")
             image_uris = card_data.get("image_uris") or {}
@@ -3410,7 +3325,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "set_code": set_code,
                 "set_name": card_data.get("set_name", ""),
                 "foil": e.get("foil", False),
-                "scryfall_id": card_data["id"],
+                "printing_id": card_data["id"],
                 "card_name": card_data.get("name", "Unknown"),
                 "image_uri": image_uri,
                 "actual_rarity": actual_rarity,
@@ -3444,14 +3359,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         added = 0
         for card in cards:
-            scryfall_id = card.get("scryfall_id")
-            if not scryfall_id:
+            printing_id = card.get("printing_id")
+            if not printing_id:
                 continue
-            printing = printing_repo.get(scryfall_id)
+            printing = printing_repo.get(printing_id)
             if not printing:
                 continue
             finish = normalize_finish("foil" if card.get("foil") else "nonfoil")
-            entry = CollectionEntry(id=None, scryfall_id=scryfall_id, finish=finish,
+            entry = CollectionEntry(id=None, printing_id=printing_id, finish=finish,
                                    condition=condition, source=source)
             collection_repo.add(entry)
             added += 1
@@ -3551,9 +3466,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             qty = row.get("quantity", 1)
             total += 1
 
-            scryfall_id = importer._resolve_card(card_repo, printing_repo, name, set_code, cn)
-            if scryfall_id:
-                printing = printing_repo.get(scryfall_id)
+            printing_id = importer._resolve_card(card_repo, printing_repo, name, set_code, cn)
+            if printing_id:
+                printing = printing_repo.get(printing_id)
                 card = card_repo.get(printing.oracle_id) if printing else None
                 s = set_repo.get(printing.set_code) if printing else None
                 image_uri = printing.image_uri or "" if printing else ""
@@ -3565,7 +3480,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     "set_name": s.set_name if s else "",
                     "collector_number": printing.collector_number if printing else cn,
                     "quantity": qty,
-                    "scryfall_id": scryfall_id,
+                    "printing_id": printing_id,
                     "image_uri": image_uri,
                     "resolved": True,
                     "error": None,
@@ -3579,7 +3494,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     "set_code": set_code,
                     "collector_number": cn,
                     "quantity": qty,
-                    "scryfall_id": None,
+                    "printing_id": None,
                     "image_uri": "",
                     "resolved": False,
                     "error": f"Could not find: {name} ({set_code or 'any set'})",
@@ -3618,13 +3533,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         added = 0
         errors = []
         for card in cards:
-            scryfall_id = card.get("scryfall_id")
+            printing_id = card.get("printing_id")
             raw = card.get("raw", {})
             qty = card.get("quantity", 1)
-            if not scryfall_id:
+            if not printing_id:
                 continue
             try:
-                entry = importer.row_to_entry(raw, scryfall_id)
+                entry = importer.row_to_entry(raw, printing_id)
                 for _ in range(qty):
                     collection_repo.add(entry)
                     added += 1
@@ -3647,6 +3562,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return None
 
     def _api_shorten(self, params):
+        import requests
+
         url = params.get("url", [""])[0]
         shorteners = [
             ("https://da.gd/s", {"url": url}),
@@ -3693,12 +3610,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         from mtg_collector.db.models import (
             CardRepository,
             PrintingRepository,
-            SetRepository,
             WishlistEntry,
             WishlistRepository,
         )
         from mtg_collector.db.schema import init_db
-        from mtg_collector.services.scryfall import ScryfallAPI, cache_scryfall_data
         from mtg_collector.utils import now_iso
 
         name = data.get("name", "").strip()
@@ -3711,29 +3626,33 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         init_db(conn)
 
         card_repo = CardRepository(conn)
-        set_repo = SetRepository(conn)
         printing_repo = PrintingRepository(conn)
-        scryfall = ScryfallAPI()
 
-        set_code = data.get("set_code")
-        cn = data.get("collector_number")
-        results = scryfall.search_card(name, set_code=set_code, collector_number=cn)
-        if not results:
+        card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
+        if not card:
             conn.close()
-            self._send_json({"error": f"No card found matching '{name}'"}, 404)
+            self._send_json({"error": f"No card found matching '{name}' (run `mtg cache all` to populate)"}, 404)
             return
 
-        card_data = results[0]
-        cache_scryfall_data(scryfall, card_repo, set_repo, printing_repo, card_data)
+        oracle_id = card.oracle_id
+        set_code = data.get("set_code")
+        printing_id = None
 
-        oracle_id = card_data["oracle_id"]
-        scryfall_id = card_data["id"] if set_code else None
+        if set_code:
+            cn = data.get("collector_number")
+            printings = printing_repo.get_by_oracle_id(oracle_id)
+            for p in printings:
+                if p.set_code == set_code.lower():
+                    if cn and p.collector_number != cn:
+                        continue
+                    printing_id = p.printing_id
+                    break
 
         repo = WishlistRepository(conn)
         entry = WishlistEntry(
             id=None,
             oracle_id=oracle_id,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             max_price=data.get("max_price"),
             priority=data.get("priority", 0),
             notes=data.get("notes"),
@@ -3744,19 +3663,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
 
-        self._send_json({"id": new_id, "name": card_data["name"], "oracle_id": oracle_id, "scryfall_id": scryfall_id})
+        self._send_json({"id": new_id, "name": card.name, "oracle_id": oracle_id, "printing_id": printing_id})
 
     def _api_wishlist_bulk_add(self, data: dict):
         """Bulk-add cards to the wishlist."""
         from mtg_collector.db.models import (
             CardRepository,
             PrintingRepository,
-            SetRepository,
             WishlistEntry,
             WishlistRepository,
         )
         from mtg_collector.db.schema import init_db
-        from mtg_collector.services.scryfall import ScryfallAPI, cache_scryfall_data
         from mtg_collector.utils import now_iso
 
         cards = data.get("cards", [])
@@ -3769,10 +3686,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         init_db(conn)
 
         card_repo = CardRepository(conn)
-        set_repo = SetRepository(conn)
         printing_repo = PrintingRepository(conn)
         wishlist_repo = WishlistRepository(conn)
-        scryfall = ScryfallAPI()
 
         added = []
         errors = []
@@ -3785,24 +3700,30 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             set_code = item.get("set_code")
             cn = item.get("collector_number")
             try:
-                results = scryfall.search_card(name, set_code=set_code, collector_number=cn)
-                if not results:
+                card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
+                if not card:
                     errors.append({"name": name, "error": f"No card found matching '{name}'"})
                     continue
-                card_data = results[0]
-                cache_scryfall_data(scryfall, card_repo, set_repo, printing_repo, card_data)
-                oracle_id = card_data["oracle_id"]
-                scryfall_id = card_data["id"] if set_code else None
+                oracle_id = card.oracle_id
+                printing_id = None
+                if set_code:
+                    printings = printing_repo.get_by_oracle_id(oracle_id)
+                    for p in printings:
+                        if p.set_code == set_code.lower():
+                            if cn and p.collector_number != cn:
+                                continue
+                            printing_id = p.printing_id
+                            break
                 entry = WishlistEntry(
                     id=None,
                     oracle_id=oracle_id,
-                    scryfall_id=scryfall_id,
+                    printing_id=printing_id,
                     priority=item.get("priority", 0),
                     added_at=now_iso(),
                     source="server",
                 )
                 new_id = wishlist_repo.add(entry)
-                added.append({"id": new_id, "name": card_data["name"], "oracle_id": oracle_id, "scryfall_id": scryfall_id})
+                added.append({"id": new_id, "name": card.name, "oracle_id": oracle_id, "printing_id": printing_id})
             except Exception as exc:
                 errors.append({"name": name, "error": str(exc)})
 
@@ -3850,9 +3771,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_set_browse(self, set_code: str, params: dict):
         """Browse all printings in a set with owned/wanted annotations."""
-        from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
+        from mtg_collector.db.models import SetRepository
         from mtg_collector.db.schema import init_db
-        from mtg_collector.services.scryfall import ScryfallAPI, ensure_set_cached
 
         set_code = set_code.lower()
 
@@ -3860,32 +3780,26 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.row_factory = sqlite3.Row
         init_db(conn)
 
-        card_repo = CardRepository(conn)
         set_repo = SetRepository(conn)
-        printing_repo = PrintingRepository(conn)
 
-        # Ensure the set is cached
+        # Check if set is cached locally
         if not set_repo.is_cards_cached(set_code):
-            scryfall = ScryfallAPI()
-            cached = ensure_set_cached(scryfall, set_code, card_repo, set_repo, printing_repo, conn)
-            if not cached:
-                conn.close()
-                self._send_json({"error": f"Could not fetch set '{set_code}'"}, 404)
-                return
-            conn.commit()
+            conn.close()
+            self._send_json({"error": f"Set '{set_code}' not cached (run `mtg cache all` to populate)"}, 404)
+            return
 
         query = """
-            SELECT p.scryfall_id, p.collector_number, p.rarity, p.image_uri, p.artist,
+            SELECT p.printing_id, p.collector_number, p.rarity, p.image_uri, p.artist,
                    p.frame_effects, p.border_color, p.full_art, p.promo, p.promo_types, p.finishes,
                    card.name, card.type_line, card.mana_cost, card.colors, card.color_identity,
                    c.id as collection_id, c.status, c.finish as owned_finish, c.condition,
                    w.id as wishlist_id, w.priority
             FROM printings p
             JOIN cards card ON p.oracle_id = card.oracle_id
-            LEFT JOIN collection c ON p.scryfall_id = c.scryfall_id AND c.status = 'owned'
+            LEFT JOIN collection c ON p.printing_id = c.printing_id AND c.status = 'owned'
             LEFT JOIN wishlist w ON (
-                w.scryfall_id = p.scryfall_id
-                OR (w.scryfall_id IS NULL AND w.oracle_id = p.oracle_id)
+                w.printing_id = p.printing_id
+                OR (w.printing_id IS NULL AND w.oracle_id = p.oracle_id)
             ) AND w.fulfilled_at IS NULL
             WHERE p.set_code = ?
             ORDER BY CAST(p.collector_number AS INTEGER), p.collector_number
@@ -3896,7 +3810,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         results = []
         for row in rows:
             results.append({
-                "scryfall_id": row["scryfall_id"],
+                "printing_id": row["printing_id"],
                 "collector_number": row["collector_number"],
                 "rarity": row["rarity"],
                 "image_uri": row["image_uri"],
@@ -3924,13 +3838,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(results)
 
     def _api_collection_copies(self, params: dict):
-        """Return per-copy data for a card (by scryfall_id + optional filters)."""
+        """Return per-copy data for a card (by printing_id + optional filters)."""
         from mtg_collector.db.models import CollectionRepository
         from mtg_collector.db.schema import init_db
 
-        scryfall_id = params.get("scryfall_id", [""])[0]
-        if not scryfall_id:
-            self._send_json({"error": "scryfall_id required"}, 400)
+        printing_id = params.get("printing_id", [""])[0]
+        if not printing_id:
+            self._send_json({"error": "printing_id required"}, 400)
             return
 
         finish = params.get("finish", [""])[0] or None
@@ -3942,7 +3856,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         init_db(conn)
 
         repo = CollectionRepository(conn)
-        copies = repo.get_copies(scryfall_id, finish=finish, condition=condition, status=status)
+        copies = repo.get_copies(printing_id, finish=finish, condition=condition, status=status)
         conn.close()
         self._send_json(copies)
 

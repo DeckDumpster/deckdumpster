@@ -3,7 +3,6 @@
 from mtg_collector.db import (
     CardRepository,
     PrintingRepository,
-    SetRepository,
     WishlistRepository,
     get_connection,
     init_db,
@@ -70,31 +69,38 @@ def run(args):
 def _add(args, conn, wishlist_repo):
     """Add a card to the wishlist."""
     from mtg_collector.db.models import WishlistEntry
-    from mtg_collector.services.scryfall import ScryfallAPI, cache_scryfall_data
 
     card_repo = CardRepository(conn)
-    set_repo = SetRepository(conn)
     printing_repo = PrintingRepository(conn)
-    scryfall = ScryfallAPI()
 
-    results = scryfall.search_card(args.name, set_code=args.set_code, collector_number=args.cn)
-    if not results:
-        print(f"No card found matching '{args.name}'")
+    card = card_repo.get_by_name(args.name) or card_repo.search_by_name(args.name)
+    if not card:
+        print(f"No card found matching '{args.name}' (run `mtg cache all` to populate)")
         return
 
-    card_data = results[0]
-    cache_scryfall_data(scryfall, card_repo, set_repo, printing_repo, card_data)
-    conn.commit()
+    oracle_id = card.oracle_id
+    printing_id = None
+    set_info = ""
 
-    oracle_id = card_data["oracle_id"]
-    scryfall_id = None
     if args.set_code:
-        scryfall_id = card_data["id"]
+        # Find a specific printing in that set
+        printings = printing_repo.get_by_oracle_id(oracle_id)
+        set_code = args.set_code.lower()
+        for p in printings:
+            if p.set_code == set_code:
+                if args.cn and p.collector_number != args.cn:
+                    continue
+                printing_id = p.printing_id
+                set_info = f" ({p.set_code.upper()} #{p.collector_number})"
+                break
+        if not printing_id:
+            print(f"No printing found for '{args.name}' in set '{args.set_code}'")
+            return
 
     entry = WishlistEntry(
         id=None,
         oracle_id=oracle_id,
-        scryfall_id=scryfall_id,
+        printing_id=printing_id,
         max_price=args.max_price,
         priority=args.priority,
         notes=args.notes,
@@ -104,10 +110,7 @@ def _add(args, conn, wishlist_repo):
     new_id = wishlist_repo.add(entry)
     conn.commit()
 
-    set_info = ""
-    if scryfall_id:
-        set_info = f" ({card_data['set'].upper()} #{card_data['collector_number']})"
-    print(f"Added to wishlist: #{new_id} {card_data['name']}{set_info}")
+    print(f"Added to wishlist: #{new_id} {card.name}{set_info}")
 
 
 def _list(args, wishlist_repo):
