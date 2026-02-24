@@ -8,11 +8,12 @@
 #   podman machine init && podman machine start
 #
 # Usage:
-#   bash deploy/mac-setup.sh <instance> [--init]
+#   bash deploy/mac-setup.sh <instance> [--init] [--test]
 #
 # Examples:
 #   bash deploy/mac-setup.sh feature-xyz
 #   bash deploy/mac-setup.sh test --init      # build + initialize data volume with demo data
+#   bash deploy/mac-setup.sh ui-test --test   # fast setup from pre-built fixture (~seconds)
 #
 # Container naming:
 #   Image:     mtgc:<instance>
@@ -25,17 +26,20 @@ set -euo pipefail
 # --- Parse arguments ---
 
 INIT=false
+TEST=false
 POSITIONAL=()
 for arg in "$@"; do
     case $arg in
         --init) INIT=true ;;
+        --test) TEST=true ;;
         *) POSITIONAL+=("$arg") ;;
     esac
 done
 
 if [ ${#POSITIONAL[@]} -lt 1 ]; then
-    echo "Usage: bash deploy/mac-setup.sh <instance> [--init]"
+    echo "Usage: bash deploy/mac-setup.sh <instance> [--init] [--test]"
     echo "Example: bash deploy/mac-setup.sh test --init"
+    echo "         bash deploy/mac-setup.sh ui-test --test   # fast setup from pre-built fixture"
     exit 1
 fi
 
@@ -88,7 +92,15 @@ podman build -t "mtgc:${INSTANCE}" -f "$REPO_DIR/Containerfile" "$REPO_DIR"
 
 # --- Optional: initialize data volume ---
 
-if [ "$INIT" = "true" ]; then
+if [ "$TEST" = "true" ]; then
+    echo "==> Initializing data volume ($VOLUME_NAME) from pre-built fixture..."
+    podman run --rm \
+        -v "${VOLUME_NAME}:/data" \
+        -e MTGC_HOME=/data \
+        --entrypoint mtg \
+        "localhost/mtgc:${INSTANCE}" \
+        setup --demo --from-fixture /app/test-data.sqlite
+elif [ "$INIT" = "true" ]; then
     echo "==> Initializing data volume ($VOLUME_NAME) with demo dataset..."
     echo "    This downloads ~600 MB of MTGJSON data and caches Scryfall cards."
     echo "    May take 15-30 minutes on first run."
