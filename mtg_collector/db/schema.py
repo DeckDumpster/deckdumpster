@@ -1381,6 +1381,7 @@ def _migrate_v21_to_v22(conn: sqlite3.Connection):
     conn.commit()
 
 
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
