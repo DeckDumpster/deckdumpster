@@ -51,19 +51,19 @@ Each module has `register(subparsers)` and `run(args)`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `crack_pack_server.py` | 4088 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
-| `data_cmd.py` | 518 | MTGJSON + price data import/export commands |
+| `crack_pack_server.py` | 4543 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
+| `data_cmd.py` | 915 | MTGJSON + price data import/export commands |
 | `ingest_ocr.py` | 411 | CLI image-based card ingestion via EasyOCR + Claude |
 | `ingest_corners.py` | 340 | CLI corner-photo card ingestion via Claude Vision |
-| `ingest_ids.py` | 286 | Manual card entry by rarity/collector-number/set |
 | `demo_data.py` | 300 | Load demo collection for testing |
+| `ingest_ids.py` | 286 | Manual card entry by rarity/collector-number/set |
 
 ### `mtg_collector/db/` — SQLite layer
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `models.py` | 1251 | Dataclasses + repository classes (CRUD for every table) |
-| `schema.py` | 1076 | Schema DDL, all migrations, `init_db()` |
+| `models.py` | 1574 | Dataclasses + repository classes (CRUD for every table) |
+| `schema.py` | 1279 | Schema DDL, all migrations, `init_db()` |
 
 Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`.
 
@@ -82,7 +82,8 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `collection.html` | 3187 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
+| `collection.html` | 3302 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
+| `sealed.html` | 2116 |  |
 | `correct.html` | 1048 | Fix misidentified cards in ingest pipeline |
 | `crack_pack.html` | 1007 | Booster pack simulator with rarity borders and badge system |
 | `explore_sheets.html` | 824 | Browse MTGJSON booster sheet layouts |
@@ -94,7 +95,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 | `import_csv.html` | 492 | CSV import web UI |
 | `process.html` | 406 | OCR processing + Claude identification |
 | `upload.html` | 395 | Photo upload for image ingest |
-| `index.html` | 308 | Homepage / navigation |
+| `index.html` | 309 | Homepage / navigation |
 
 ### `mtg_collector/importers/` and `exporters/`
 
@@ -111,9 +112,10 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 
 | File | Lines | What it covers |
 |------|------:|---------|
+| `test_sealed_products.py` | 1346 |  |
 | `test_import.py` | 620 | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
 | `test_price_import.py` | 526 | MTGJSON price import pipeline |
-| `test_mtgjson_import.py` | 516 | MTGJSON AllPrintings import |
+| `test_mtgjson_import.py` | 515 | MTGJSON AllPrintings import |
 | `test_ingest_ids.py` | 423 | Manual card entry + `resolve_and_add_ids()` |
 | `test_order_parser.py` | 368 | Order parsing (TCGPlayer HTML/text, Card Kingdom) |
 | `test_order_resolver.py` | 302 | Order resolution to Scryfall cards |
@@ -124,10 +126,13 @@ Claude Vision agent loop that drives a headless browser through UX flows. Each s
 
 | File | Purpose |
 |------|---------|
-| `harness.py` | `UIHarness` — Playwright + Claude Vision agent loop with auto-screenshots |
-| `conftest.py` | Fixtures: headless Chromium, container port discovery, screenshot dir |
-| `test_scenarios.py` | Parametrized test runner that discovers and executes YAML scenarios |
-| `scenarios/*.yaml` | One file per UX scenario (goal + metadata) |
+| `test_sealed_products.py` | 1346 |  |
+| `test_import.py` | 620 |  |
+| `test_price_import.py` | 526 |  |
+| `test_mtgjson_import.py` | 515 |  |
+| `test_ingest_ids.py` | 423 |  |
+| `test_order_parser.py` | 368 |  |
+| `test_order_resolver.py` | 302 |  |
 
 ## Data Model
 
@@ -225,7 +230,7 @@ Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in
 
 Rootless Podman Quadlet. Each instance: separate repo clone, own image (`mtgc:<instance>`), data volume, env file, port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}`/`{{PORT}}` placeholders). All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases.
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}`/`{{PORT}}` placeholders). All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` has the shared API key; setup.sh copies it to new instances automatically
 - `~/.config/mtgc/<instance>.env` — per-instance env file
@@ -239,7 +244,7 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
 
 **Always validate new features in isolated containers before creating PRs.** This uses the standard deployment scripts with demo data pre-loaded. Do not run the application locally or use `mtg` commands directly on the host.
 
-### Setup
+### Setup (Linux)
 
 From the repo clone with your feature branch checked out:
 
@@ -261,12 +266,27 @@ Discover the assigned port:
 podman port systemd-mtgc-<instance> 8081/tcp
 ```
 
+### Setup (macOS)
+
+```bash
+bash deploy/mac-setup.sh <instance> --init   # Build image + init data + start container
+```
+
+The script auto-starts the container and prints the URL. Discover the port:
+
+```bash
+podman port mtgc-<instance> 8081/tcp
+```
+
 ### Validate
 
 The server uses HTTPS with a self-signed cert. Use `curl -ks` for all requests.
 
 ```bash
+# Linux:
 PORT=$(podman port systemd-mtgc-<instance> 8081/tcp | grep -oP ':\K[0-9]+' | head -1)
+# macOS:
+PORT=$(podman port mtgc-<instance> 8081/tcp | cut -d: -f2 | head -1)
 
 # 1. Verify new page loads (HTTP 200 + non-empty body)
 curl -ks -o /dev/null -w "%{http_code} %{size_download}" "https://localhost:${PORT}/<your-page>"
@@ -282,7 +302,10 @@ curl -ks -X POST "https://localhost:${PORT}/api/<your-endpoint>" \
 Check logs if anything fails:
 
 ```bash
+# Linux:
 journalctl --user -u mtgc-<instance> -f
+# macOS:
+podman logs -f mtgc-<instance>
 ```
 
 ### Visual Validation
@@ -308,7 +331,10 @@ uv run shot-scraper "https://localhost:${PORT}/sealed" \
 ### Teardown
 
 ```bash
-bash deploy/teardown.sh <instance> --purge   # Stop + remove container, volume, env, and image
+# Linux:
+bash deploy/teardown.sh <instance> --purge       # Stop + remove container, volume, env, and image
+# macOS:
+bash deploy/mac-teardown.sh <instance> --purge   # Stop + remove container, volume, env, and image
 ```
 
 ### Notes

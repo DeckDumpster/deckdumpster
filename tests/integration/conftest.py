@@ -35,21 +35,38 @@ def instance_name(request):
     return request.config.getoption("--instance")
 
 
+def _discover_container(instance_name):
+    """Try both container name patterns: systemd-mtgc-{name} (Linux) and mtgc-{name} (macOS)."""
+    for candidate in [f"systemd-mtgc-{instance_name}", f"mtgc-{instance_name}"]:
+        try:
+            subprocess.run(
+                ["podman", "container", "exists", candidate],
+                capture_output=True, check=True,
+            )
+            return candidate
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+    return None
+
+
 @pytest.fixture(scope="session")
 def base_url(instance_name):
     """Discover the HTTPS base URL for the running container instance."""
-    container_name = f"systemd-mtgc-{instance_name}"
+    container_name = _discover_container(instance_name)
+    if container_name is None:
+        pytest.skip(
+            f"No container found for instance '{instance_name}'. "
+            f"Start it with: bash deploy/setup.sh {instance_name} --init && "
+            f"systemctl --user start mtgc-{instance_name}"
+        )
+
     try:
         result = subprocess.run(
             ["podman", "port", container_name, "8081/tcp"],
             capture_output=True, text=True, check=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
-        pytest.skip(
-            f"Container '{container_name}' not running. "
-            f"Start it with: bash deploy/setup.sh {instance_name} --init && "
-            f"systemctl --user start mtgc-{instance_name}"
-        )
+        pytest.skip(f"Could not query port for '{container_name}'")
 
     port_line = result.stdout.strip()
     if not port_line:
