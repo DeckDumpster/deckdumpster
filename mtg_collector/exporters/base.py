@@ -48,7 +48,7 @@ class BaseExporter(ABC):
         """
         query = """
             SELECT
-                c.id, c.scryfall_id, c.finish, c.condition, c.language,
+                c.id, c.printing_id, c.finish, c.condition, c.language,
                 c.purchase_price, c.acquired_at, c.source, c.notes, c.tags,
                 c.tradelist, c.is_alter, c.proxy, c.signed, c.misprint,
                 c.status, c.sale_price,
@@ -56,7 +56,7 @@ class BaseExporter(ABC):
                 card.oracle_id, card.name, card.type_line, card.mana_cost,
                 s.set_name
             FROM collection c
-            JOIN printings p ON c.scryfall_id = p.scryfall_id
+            JOIN printings p ON c.printing_id = p.printing_id
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
             WHERE 1=1

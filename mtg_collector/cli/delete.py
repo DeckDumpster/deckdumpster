@@ -36,7 +36,7 @@ def run(args):
         """
         SELECT c.name, p.set_code, p.collector_number
         FROM collection col
-        JOIN printings p ON col.scryfall_id = p.scryfall_id
+        JOIN printings p ON col.printing_id = p.printing_id
         JOIN cards c ON p.oracle_id = c.oracle_id
         WHERE col.id = ?
         """,
@@ -47,7 +47,7 @@ def run(args):
     if row:
         card_desc = f"{row[0]} ({row[1].upper()} #{row[2]})"
     else:
-        card_desc = f"Scryfall ID: {entry.scryfall_id}"
+        card_desc = f"Printing ID: {entry.printing_id}"
 
     if not args.yes:
         print(f"About to delete: {card_desc}")

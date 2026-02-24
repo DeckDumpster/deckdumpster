@@ -75,7 +75,7 @@ USING OCR DATA TO SEARCH
 The most reliable indicators of a card are its name, set code, and collector number.
 For older cards without a set code or collector number, artist and flavor text are
 the best tools to narrow potential printings. If a date is present
-Card text can be used also, but older card rules text wording may not match Scryfall.
+Card text can be used also, but older card rules text wording may not match the card database.
 
 DISAMBIGUATION RULE — this is critical:
 If you cannot distinguish between printings of a card, you MUST return one entry for EVERY
@@ -99,7 +99,7 @@ The DISAMBIGUATION RULE applies in these cases: Return all reasonable candidates
   are nearly identical.
 * Similarly, distinguishing between Alpha and Beta can be difficult even for humans: Both
   black-bordered with identical wordings across most cards.
-* OCR gives you text printed on the card. Scryfall's data contains modern wordings of rules
+* OCR gives you text printed on the card. The card database contains modern wordings of rules
   text on cards (aka Oracle text). These can be very different, so have caution when doing
   rules text matching.
 * Sometimes photos contain cards that are clearly visible in the foreground, and others that are
@@ -146,10 +146,10 @@ TOOLS = [
     {
         "name": "query_local_db",
         "description": (
-            "Run a read-only SELECT query against the local Scryfall SQLite cache.\n\n"
+            "Run a read-only SELECT query against the local card database.\n\n"
             "Schema:\n"
             "  cards(oracle_id, name, type_line, mana_cost, cmc, oracle_text)\n"
-            "  printings(scryfall_id, oracle_id, set_code, collector_number, rarity, artist, finishes, full_art, promo)\n"
+            "  printings(printing_id, oracle_id, set_code, collector_number, rarity, artist, finishes, full_art, promo)\n"
             "  sets(set_code, set_name, set_type, released_at)\n\n"
             "IMPORTANT: The local cache is incomplete — only cards from sets the user has explicitly "
             "cached are present. Empty results mean the card is not cached locally, not that it "

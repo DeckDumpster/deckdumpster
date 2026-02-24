@@ -494,7 +494,7 @@ async function commitCards() {
   const payload = {
     image_key: currentImageKey,
     cards: currentCards.map(c => ({
-      scryfall_id: c.scryfall_id,
+      printing_id: c.printing_id,
       foil: c.foil,
       condition: c.condition || 'Near Mint',
     })),

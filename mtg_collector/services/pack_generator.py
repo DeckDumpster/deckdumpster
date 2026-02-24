@@ -139,12 +139,12 @@ class PackGenerator:
             if card is None:
                 continue
 
-            scryfall_id = card["scryfall_id"] or ""
+            printing_id = card["printing_id"] or ""
             image_uri = ""
-            if scryfall_id:
+            if printing_id:
                 image_uri = (
                     f"https://cards.scryfall.io/normal/front/"
-                    f"{scryfall_id[0]}/{scryfall_id[1]}/{scryfall_id}.jpg"
+                    f"{printing_id[0]}/{printing_id[1]}/{printing_id}.jpg"
                 )
 
             ck_url = (card["ck_url_foil"] if is_foil else card["ck_url"]) or ""
@@ -159,7 +159,7 @@ class PackGenerator:
                 "set_code": card["set_code"],
                 "collector_number": card["number"],
                 "rarity": card["rarity"] or "",
-                "scryfall_id": scryfall_id,
+                "printing_id": printing_id,
                 "image_uri": image_uri,
                 "sheet_name": sheet_name,
                 "foil": is_foil,
@@ -230,7 +230,7 @@ class PackGenerator:
         for sheet_name in all_sheet_names:
             sheet_cards = conn.execute(
                 "SELECT bs.uuid, bs.weight, bs.is_foil, "
-                "p.scryfall_id, p.name, p.set_code, p.number, p.rarity, "
+                "p.printing_id, p.name, p.set_code, p.number, p.rarity, "
                 "p.border_color, p.is_full_art, p.frame_effects, p.ck_url, p.ck_url_foil "
                 "FROM mtgjson_booster_sheets bs "
                 "JOIN mtgjson_printings p ON bs.uuid = p.uuid "
@@ -246,12 +246,12 @@ class PackGenerator:
 
             cards = []
             for c in sheet_cards:
-                scryfall_id = c["scryfall_id"] or ""
+                printing_id = c["printing_id"] or ""
                 image_uri = ""
-                if scryfall_id:
+                if printing_id:
                     image_uri = (
                         f"https://cards.scryfall.io/normal/front/"
-                        f"{scryfall_id[0]}/{scryfall_id[1]}/{scryfall_id}.jpg"
+                        f"{printing_id[0]}/{printing_id[1]}/{printing_id}.jpg"
                     )
 
                 ck_url = (c["ck_url_foil"] if is_foil else c["ck_url"]) or ""
@@ -266,7 +266,7 @@ class PackGenerator:
                     "set_code": c["set_code"],
                     "collector_number": c["number"],
                     "rarity": c["rarity"] or "",
-                    "scryfall_id": scryfall_id,
+                    "printing_id": printing_id,
                     "image_uri": image_uri,
                     "weight": c["weight"],
                     "pull_rate": c["weight"] / sheet_total_weight if sheet_total_weight else 0,
@@ -303,12 +303,12 @@ class PackGenerator:
             "sheets": sheet_data,
         }
 
-    def get_ck_url(self, scryfall_id: str, foil: bool = False) -> str:
-        """Get Card Kingdom product URL for a card by Scryfall ID."""
+    def get_ck_url(self, printing_id: str, foil: bool = False) -> str:
+        """Get Card Kingdom product URL for a card by printing ID."""
         conn = self._connect()
         row = conn.execute(
-            "SELECT ck_url, ck_url_foil FROM mtgjson_printings WHERE scryfall_id = ?",
-            (scryfall_id,),
+            "SELECT ck_url, ck_url_foil FROM mtgjson_printings WHERE printing_id = ?",
+            (printing_id,),
         ).fetchone()
         conn.close()
         if not row:
@@ -318,12 +318,12 @@ class PackGenerator:
             ck_url = row["ck_url"] or ""
         return ck_url
 
-    def get_uuid_for_scryfall_id(self, scryfall_id: str) -> str | None:
-        """Look up MTGJSON uuid for a Scryfall ID."""
+    def get_uuid_for_printing_id(self, printing_id: str) -> str | None:
+        """Look up MTGJSON uuid for a printing ID."""
         conn = self._connect()
         row = conn.execute(
-            "SELECT uuid FROM mtgjson_printings WHERE scryfall_id = ?",
-            (scryfall_id,),
+            "SELECT uuid FROM mtgjson_printings WHERE printing_id = ?",
+            (printing_id,),
         ).fetchone()
         conn.close()
         return row["uuid"] if row else None

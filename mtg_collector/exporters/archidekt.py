@@ -40,7 +40,7 @@ class ArchidektExporter(BaseExporter):
         if not entries:
             return 0
 
-        # Aggregate by (scryfall_id, language) - Archidekt uses scryfall_uuid as unique identifier
+        # Aggregate by (printing_id, language) - Archidekt uses scryfall_uuid as unique identifier
         aggregated = defaultdict(lambda: {
             "quantity": 0,
             "foil_quantity": 0,
@@ -48,7 +48,7 @@ class ArchidektExporter(BaseExporter):
         })
 
         for entry in entries:
-            key = (entry["scryfall_id"], entry["language"])
+            key = (entry["printing_id"], entry["language"])
             aggregated[key]["entry"] = entry
 
             if entry["finish"] in ("foil", "etched"):
@@ -61,7 +61,7 @@ class ArchidektExporter(BaseExporter):
             writer.writeheader()
 
             for key, agg in aggregated.items():
-                scryfall_id, language = key
+                printing_id, language = key
                 entry = agg["entry"]
 
                 # Map language to Archidekt format
@@ -69,7 +69,7 @@ class ArchidektExporter(BaseExporter):
 
                 row = {
                     "export_type": "collection",
-                    "scryfall_uuid": scryfall_id,
+                    "scryfall_uuid": printing_id,
                     "set_code": entry["set_code"].upper(),
                     "quantity": agg["quantity"],
                     "foil_quantity": agg["foil_quantity"],

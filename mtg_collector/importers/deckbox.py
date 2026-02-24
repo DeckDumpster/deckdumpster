@@ -51,7 +51,7 @@ class DeckboxImporter(BaseImporter):
         # We'll search by name and collector number
         return name, None, collector_number, quantity
 
-    def row_to_entry(self, row: Dict[str, Any], scryfall_id: str) -> CollectionEntry:
+    def row_to_entry(self, row: Dict[str, Any], printing_id: str) -> CollectionEntry:
         """Convert Deckbox row to CollectionEntry."""
         # Determine finish
         foil_val = row.get("Foil", "").strip().lower()
@@ -90,7 +90,7 @@ class DeckboxImporter(BaseImporter):
 
         return CollectionEntry(
             id=None,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             finish=finish,
             condition=condition,
             language=language,

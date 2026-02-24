@@ -65,7 +65,7 @@ def run(args):
         """
         SELECT p.set_code, s.set_name, COUNT(*) as cnt
         FROM collection c
-        JOIN printings p ON c.scryfall_id = p.scryfall_id
+        JOIN printings p ON c.printing_id = p.printing_id
         JOIN sets s ON p.set_code = s.set_code
         GROUP BY p.set_code
         ORDER BY cnt DESC

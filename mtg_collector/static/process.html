@@ -346,7 +346,7 @@ async function processImage(id, isBatch) {
   });
 
   es.addEventListener('matches_ready', e => {
-    addLog('Scryfall matches ready', 'done');
+    addLog('Card matches ready', 'done');
   });
 
   es.addEventListener('error', e => {
