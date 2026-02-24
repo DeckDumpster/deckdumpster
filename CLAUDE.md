@@ -31,8 +31,10 @@ mtg setup --skip-cache --skip-data                     # Fast start if data is a
 mtg crack-pack-server                                  # Start web UI on port 8080
 
 # Deployment — rootless Podman, per-instance isolation
-bash deploy/setup.sh my-feature          # Create instance (auto-port, inherits API key)
-bash deploy/setup.sh my-feature --init   # Create instance + initialize data with demo dataset
+bash deploy/seed.sh                      # One-time: create reusable seed data volume (~15-30 min)
+bash deploy/seed.sh --force              # Recreate seed volume (after schema changes)
+bash deploy/setup.sh my-feature --init   # Create instance + clone seed volume (~seconds)
+bash deploy/setup.sh my-feature          # Create instance without data (auto-port, inherits API key)
 bash deploy/deploy.sh my-feature         # Rebuild image + restart
 bash deploy/teardown.sh my-feature       # Stop + remove (add --purge to delete data)
 systemctl --user start mtgc-my-feature   # Start instance
@@ -223,7 +225,7 @@ Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in
 
 Rootless Podman Quadlet. Each instance: separate repo clone, own image (`mtgc:<instance>`), data volume, env file, port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}`/`{{PORT}}` placeholders).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}`/`{{PORT}}` placeholders). All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases.
 
 - `~/.config/mtgc/default.env` has the shared API key; setup.sh copies it to new instances automatically
 - `~/.config/mtgc/<instance>.env` — per-instance env file
@@ -242,10 +244,16 @@ Key files: `Containerfile` (multi-stage build), `deploy/setup.sh`, `deploy/deplo
 From the repo clone with your feature branch checked out:
 
 ```bash
-bash deploy/setup.sh <instance> --init     # Build image + initialize data volume (~15-30 min first time)
-systemctl --user start mtgc-<instance>     # Start the service
+# 1. Ensure the seed volume exists (fast no-op if already created)
+bash deploy/seed.sh
+
+# 2. Create instance — clones seed volume in seconds
+bash deploy/setup.sh <instance> --init
+systemctl --user start mtgc-<instance>
 sleep 5                                     # Wait for server startup
 ```
+
+`seed.sh` is idempotent — it exits immediately if `mtgc-seed-data` already exists. Run `seed.sh --force` to recreate it after schema migrations. `setup.sh --init` clones the seed volume via `podman volume export | import`, which takes seconds instead of the 15-30 minutes a fresh `mtg setup --demo` would take.
 
 Discover the assigned port:
 
@@ -306,7 +314,9 @@ bash deploy/teardown.sh <instance> --purge   # Stop + remove container, volume, 
 ### Notes
 
 - Instance name should match your branch/feature (e.g., `issue44`, `my-feature`)
-- `--init` runs `mtg setup --demo` inside the volume: initializes the DB, caches Scryfall data, downloads MTGJSON data files (AllPrintings.json + AllPricesToday.json), and loads ~50 demo cards
+- **Always run `bash deploy/seed.sh` before `setup.sh --init`.** It's a fast no-op if the seed volume already exists, and ensures `--init` clones data in seconds instead of downloading ~600 MB.
+- `--init` clones the `mtgc-seed-data` volume (DB, Scryfall cache, MTGJSON data, ~50 demo cards). If no seed volume exists, it falls back to the slow `mtg setup --demo` path.
+- After schema migrations, recreate the seed volume with `bash deploy/seed.sh --force`.
 - Data persists on the volume across container restarts. Only `--purge` removes it.
 - If the Scryfall bulk cache step fails (FK constraint at ~75k cards), the remaining steps still complete and the server will start. Demo data may be partial.
 

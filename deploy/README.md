@@ -31,6 +31,16 @@ systemctl --user start mtgc-prod
 podman exec -it systemd-mtgc-prod mtg setup
 ```
 
+## Seed volume (one-time, speeds up all future instances)
+
+Create a reusable seed data volume so `--init` clones it in seconds instead of downloading ~600 MB:
+
+```bash
+cd /path/to/efj-mtgc
+bash deploy/seed.sh           # ~15-30 min first time
+bash deploy/seed.sh --force   # recreate after schema changes
+```
+
 ## Feature / test instances
 
 Each instance runs from its own checkout on any branch. Port is auto-assigned if omitted.
@@ -39,9 +49,8 @@ Each instance runs from its own checkout on any branch. Port is auto-assigned if
 git clone https://github.com/thaen/efj-mtgc.git ~/workspace/mtgc-feature-xyz
 cd ~/workspace/mtgc-feature-xyz
 git checkout feature-xyz
-bash deploy/setup.sh feature-xyz
+bash deploy/setup.sh feature-xyz --init     # clones seed volume (~seconds)
 systemctl --user start mtgc-feature-xyz
-podman exec -it systemd-mtgc-feature-xyz mtg setup
 
 # ... develop and test ...
 
@@ -54,7 +63,8 @@ bash deploy/teardown.sh feature-xyz --purge  # removes everything
 
 | Script | Purpose |
 |---|---|
-| `setup.sh <name> [port]` | Create instance. Port auto-assigned if omitted. Copies API key from `~/.config/mtgc/default.env` |
+| `seed.sh [--force]` | Create reusable seed data volume. Run once, all future `--init` clones from it |
+| `setup.sh <name> [port] [--init]` | Create instance. `--init` clones seed volume (or falls back to slow setup). Port auto-assigned if omitted |
 | `deploy.sh <name>` | Rebuild image and restart one instance |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 
