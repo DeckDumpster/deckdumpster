@@ -35,5 +35,5 @@ Replace 11 occurrences of `conn = sqlite3.connect(self.db_path); conn.row_factor
 ## 5. Extract `_add_to_collection()` helper
 Combines CollectionEntry creation + lineage INSERT. Used in 5 places.
 
-## 6. Extract shared Scryfall resolution function
-3 endpoints repeat the same try-stripped-CN / try-raw-CN / try-name-search pattern (~20 lines each).
+## ~~6. Extract shared Scryfall resolution function~~ (DONE — removed in Issue #75)
+Scryfall runtime lookups eliminated. All resolution now uses local DB via repository methods.

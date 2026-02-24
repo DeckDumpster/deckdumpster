@@ -336,7 +336,7 @@ parseBtn.addEventListener('click', async () => {
     detectedFormat = parsedData.format;
     const totalRows = parsedData.total_rows;
 
-    results.innerHTML = `<div class="status-msg info"><span class="spinner"></span>Parsed ${totalRows} rows. Resolving via Scryfall...</div>`;
+    results.innerHTML = `<div class="status-msg info"><span class="spinner"></span>Parsed ${totalRows} rows. Resolving cards...</div>`;
 
     // Step 2: Resolve
     const resolveRes = await fetch('/api/import/resolve', {

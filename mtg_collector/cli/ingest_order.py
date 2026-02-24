@@ -13,7 +13,6 @@ from mtg_collector.db import (
 )
 from mtg_collector.services.order_parser import detect_order_format, parse_order
 from mtg_collector.services.order_resolver import commit_orders, resolve_orders
-from mtg_collector.services.scryfall import ScryfallAPI
 
 
 def register(subparsers):
@@ -22,7 +21,7 @@ def register(subparsers):
         "ingest-order",
         help="Import cards from order data (TCGPlayer, Card Kingdom)",
         description=(
-            "Parse order data from files or stdin, resolve cards via Scryfall, "
+            "Parse order data from files or stdin, resolve cards via local DB, "
             "and add them to the collection linked to order records.\n\n"
             "Examples:\n"
             "  mtg ingest-order order.html\n"
@@ -113,22 +112,21 @@ def run(args):
     conn = get_connection(args.db_path)
     init_db(conn)
 
-    scryfall = ScryfallAPI()
     card_repo = CardRepository(conn)
     set_repo = SetRepository(conn)
     printing_repo = PrintingRepository(conn)
     collection_repo = CollectionRepository(conn)
     order_repo = OrderRepository(conn)
 
-    print("Resolving cards via Scryfall...")
-    resolved = resolve_orders(orders, scryfall, card_repo, set_repo, printing_repo, conn)
+    print("Resolving cards in local database...")
+    resolved = resolve_orders(orders, card_repo, set_repo, printing_repo)
 
     # Show resolution results
     resolved_count = 0
     failed_count = 0
     for ro in resolved:
         for item in ro.items:
-            if item.scryfall_id:
+            if item.printing_id:
                 resolved_count += item.parsed.quantity
             else:
                 failed_count += item.parsed.quantity
@@ -143,7 +141,7 @@ def run(args):
             seller = ro.parsed.seller_name or "Unknown"
             print(f"\n  {seller}:")
             for item in ro.items:
-                if item.scryfall_id:
+                if item.printing_id:
                     print(f"    {item.parsed.quantity}x {item.card_name} ({item.set_code} #{item.collector_number})")
         return
 

@@ -496,7 +496,7 @@ function renderCandidates(idx, candidates) {
   for (const c of candidates) {
     const row = document.createElement('div');
     row.className = 'candidate-row';
-    row.dataset.scryfallId = c.scryfall_id;
+    row.dataset.printingId = c.printing_id;
     row.dataset.parentIdx = idx;
 
     const setCode = keyruneSetCode(c.set_code);
@@ -552,7 +552,7 @@ async function confirmCard(idx) {
     body: JSON.stringify({
       image_id: imageId,
       card_idx: cardIdx,
-      scryfall_id: candidate.scryfall_id,
+      printing_id: candidate.printing_id,
       finish,
     }),
   });

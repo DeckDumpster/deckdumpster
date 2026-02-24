@@ -1,6 +1,6 @@
 ## Project Overview
 
-MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gathering collections. Cards enter via Claude Vision (corner photos), OCR (full card photos), manual ID entry, or order ingestion (TCGPlayer/Card Kingdom). Card data is sourced from Scryfall, stored in SQLite. Web UI for collection browsing, virtual booster pack generation, image-based card ingestion, and order import. Import/export to Moxfield, Archidekt, Deckbox.
+MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gathering collections. Cards enter via Claude Vision (corner photos), OCR (full card photos), manual ID entry, or order ingestion (TCGPlayer/Card Kingdom). Card data lives in a local SQLite database (populated via `mtg setup` / `mtg cache all` from Scryfall bulk data). All runtime lookups use the local DB — no network calls. Web UI for collection browsing, virtual booster pack generation, image-based card ingestion, and order import. Import/export to Moxfield, Archidekt, Deckbox.
 
 ## Development notes
 
@@ -11,7 +11,7 @@ MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gath
 - **NEVER add fallback logic.** Errors should propagate to the user.
 - No fallback content, no silent defaults, no swallowed exceptions.
 - As few error paths as possible. Let it crash visibly.
-- Tests use pre-populated `tests/fixtures/scryfall-cache.sqlite` for offline testing. Corner identification tests require `ANTHROPIC_API_KEY`.
+- Tests use pre-populated `tests/fixtures/test-cards.sqlite` for offline testing. Corner identification tests require `ANTHROPIC_API_KEY`.
 - Aggressively limit modality. Defaults are good enough for everyone.
 
 ## Commands
@@ -75,9 +75,10 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 |------|------:|---------|
 | `agent.py` | 528 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
 | `claude.py` | 504 | Claude Vision API: corner reading, card identification |
-| `scryfall.py` | 450 | `ScryfallAPI` class, caching, `cache_scryfall_data()`, `ensure_set_cached()` |
+| `bulk_import.py` | 350 | `ScryfallBulkClient` class (bulk cache only), `cache_card_data()`, `ensure_set_populated()` |
+| `scryfall.py` | 10 | Compatibility wrapper re-exporting from `bulk_import.py` |
 | `order_parser.py` | 414 | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
-| `order_resolver.py` | 353 | Resolve parsed orders to Scryfall cards, treatment-aware matching |
+| `order_resolver.py` | 353 | Resolve parsed orders to local DB cards, treatment-aware matching |
 | `pack_generator.py` | 329 | MTGJSON-based booster pack simulation from SQLite |
 
 ### `mtg_collector/static/` — Web UI (single-file HTML pages)
@@ -90,7 +91,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 | `crack_pack.html` | 1007 | Booster pack simulator with rarity borders and badge system |
 | `explore_sheets.html` | 824 | Browse MTGJSON booster sheet layouts |
 | `ingest_ids.html` | 680 | Manual card entry web UI |
-| `disambiguate.html` | 634 | Resolve ambiguous Scryfall matches |
+| `disambiguate.html` | 634 | Resolve ambiguous card matches |
 | `ingest_corners.html` | 561 | Corner photo ingest web UI |
 | `recent.html` | 507 | Recently ingested images gallery |
 | `ingest_order.html` | 494 | Order ingestion web UI |
@@ -120,7 +121,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 | `test_mtgjson_import.py` | 515 | MTGJSON AllPrintings import |
 | `test_ingest_ids.py` | 423 | Manual card entry + `resolve_and_add_ids()` |
 | `test_order_parser.py` | 368 | Order parsing (TCGPlayer HTML/text, Card Kingdom) |
-| `test_order_resolver.py` | 302 | Order resolution to Scryfall cards |
+| `test_order_resolver.py` | 302 | Order resolution to local DB cards |
 
 ### UI scenario tests (`tests/ui/`)
 
@@ -142,8 +143,8 @@ Claude Vision agent loop that drives a headless browser through UX flows. Each s
 
 ```
 cards (oracle_id PK)          — Abstract card identity (name, colors, mana cost)
-  └─ printings (scryfall_id PK, FK oracle_id, FK set_code)  — Specific printing (art, rarity, image)
-       └─ collection (id PK, FK scryfall_id, FK? order_id)  — One row per physical card owned
+  └─ printings (printing_id PK, FK oracle_id, FK set_code)  — Specific printing (art, rarity, image)
+       └─ collection (id PK, FK printing_id, FK? order_id)  — One row per physical card owned
             └─ orders (id PK)  — Purchase order (TCGPlayer/CK seller, totals, shipping)
 
 sets (set_code PK)            — Set metadata, cards_fetched_at for cache status
@@ -158,8 +159,8 @@ This is the fundamental chain: **card** → **printing** → **collection entry*
 
 - Card by name: `cards.name` (indexed)
 - Printing by set+CN: `printings(set_code, collector_number)` (unique)
-- Collection by Scryfall ID: `collection.scryfall_id` (indexed)
-- Prices join to printings via `(set_code, collector_number)` — **not** by scryfall_id
+- Collection by printing ID: `collection.printing_id` (indexed)
+- Prices join to printings via `(set_code, collector_number)` — **not** by printing_id
 
 ### Price data pipeline
 
@@ -173,7 +174,7 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `ingest_lineage` — Maps collection entries back to source images.
 - `status_log` — Append-only audit of collection status changes.
 - `settings` — Key-value config (e.g. `price_sources`, `image_display`).
-- Schema v17 with auto-migrations in `schema.py`.
+- Schema v21 with auto-migrations in `schema.py`.
 
 Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` env).
 
@@ -201,9 +202,9 @@ Only search queries and include-unowned toggle trigger server fetches. All other
 
 All runtime card lookups MUST use the local database, never the Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. Scryfall API is only used during `mtg setup` / `mtg cache` to populate the local DB.
 
-### Scryfall API rate limiting
+### Bulk data import
 
-100ms between requests (via `ScryfallAPI._rate_limit()`). Bulk caching uses the Scryfall bulk data endpoint (3 HTTP requests total for ~80k cards).
+Scryfall bulk data is used only during `mtg setup` / `mtg cache all` to populate the local DB. `ScryfallBulkClient` in `services/bulk_import.py` handles this with 100ms rate limiting. 3 HTTP requests total for ~80k cards.
 
 ### Web server architecture
 
@@ -211,7 +212,7 @@ All runtime card lookups MUST use the local database, never the Scryfall API. Se
 
 ### Order ingestion
 
-`order_parser.py` auto-detects format (tcg_html, tcg_text, ck_text) → `ParsedOrder`. `order_resolver.py` maps vendor set names to Scryfall codes via `SET_NAME_MAP` + DB lookup, then resolves to specific printings with treatment-aware matching. Idempotent — duplicate order_number + seller_name skipped.
+`order_parser.py` auto-detects format (tcg_html, tcg_text, ck_text) → `ParsedOrder`. `order_resolver.py` maps vendor set names to DB set codes via `SET_NAME_MAP` + DB lookup, then resolves to specific printings with treatment-aware matching. Idempotent — duplicate order_number + seller_name skipped.
 
 ### Agentic OCR (`services/agent.py`)
 
@@ -224,9 +225,9 @@ Exponential backoff at 3s, 6s, 12s, 24s intervals. Bails immediately on 400 erro
 ### Card ingestion via `resolve_and_add_ids()`
 
 Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in `cli/ingest_ids.py`:
-1. Look up printing in local DB, fall back to Scryfall API by set + collector number
-2. Cache Scryfall response (card, set, printing) in SQLite
-3. Create collection entry with finish, condition, source metadata
+1. Look up printing in local DB by set + collector number
+2. Create collection entry with finish, condition, source metadata
+3. If card not found, fail with error telling user to run `mtg cache all`
 
 ## Deployment
 

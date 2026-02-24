@@ -1,5 +1,5 @@
 """
-Tests for CSV import (local DB only, no Scryfall API calls).
+Tests for CSV import (local DB only).
 
 To run: pytest tests/test_import.py -v
 """
@@ -34,10 +34,10 @@ ORACLE_ALPHA = "aaaa-aaaa-aaaa-aaaa"
 ORACLE_BETA = "bbbb-bbbb-bbbb-bbbb"
 ORACLE_DFC = "cccc-cccc-cccc-cccc"
 
-SCRYFALL_ALPHA_TST = "1111-1111-1111-1111"
-SCRYFALL_BETA_TST = "2222-2222-2222-2222"
-SCRYFALL_ALPHA_TS2 = "3333-3333-3333-3333"
-SCRYFALL_DFC_TST = "4444-4444-4444-4444"
+PRINTING_ALPHA_TST = "1111-1111-1111-1111"
+PRINTING_BETA_TST = "2222-2222-2222-2222"
+PRINTING_ALPHA_TS2 = "3333-3333-3333-3333"
+PRINTING_DFC_TST = "4444-4444-4444-4444"
 
 
 def _insert_test_data(conn):
@@ -71,33 +71,33 @@ def _insert_test_data(conn):
 
     # Printings — set tst: Alpha (001), Beta (002), DFC (003)
     conn.execute(
-        "INSERT INTO printings (scryfall_id, oracle_id, set_code, collector_number, rarity, "
+        "INSERT INTO printings (printing_id, oracle_id, set_code, collector_number, rarity, "
         "frame_effects, border_color, full_art, promo, promo_types, finishes, artist, image_uri) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (SCRYFALL_ALPHA_TST, ORACLE_ALPHA, "tst", "001", "rare",
+        (PRINTING_ALPHA_TST, ORACLE_ALPHA, "tst", "001", "rare",
          "[]", "black", 0, 0, "[]", '["nonfoil","foil"]', "Artist A", None),
     )
     conn.execute(
-        "INSERT INTO printings (scryfall_id, oracle_id, set_code, collector_number, rarity, "
+        "INSERT INTO printings (printing_id, oracle_id, set_code, collector_number, rarity, "
         "frame_effects, border_color, full_art, promo, promo_types, finishes, artist, image_uri) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (SCRYFALL_BETA_TST, ORACLE_BETA, "tst", "002", "common",
+        (PRINTING_BETA_TST, ORACLE_BETA, "tst", "002", "common",
          "[]", "black", 0, 0, "[]", '["nonfoil"]', "Artist B", None),
     )
     conn.execute(
-        "INSERT INTO printings (scryfall_id, oracle_id, set_code, collector_number, rarity, "
+        "INSERT INTO printings (printing_id, oracle_id, set_code, collector_number, rarity, "
         "frame_effects, border_color, full_art, promo, promo_types, finishes, artist, image_uri) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (SCRYFALL_DFC_TST, ORACLE_DFC, "tst", "003", "mythic",
+        (PRINTING_DFC_TST, ORACLE_DFC, "tst", "003", "mythic",
          "[]", "black", 0, 0, "[]", '["nonfoil"]', "Artist C", None),
     )
 
     # Printings — set ts2: Alpha (050) — same oracle_id, different set
     conn.execute(
-        "INSERT INTO printings (scryfall_id, oracle_id, set_code, collector_number, rarity, "
+        "INSERT INTO printings (printing_id, oracle_id, set_code, collector_number, rarity, "
         "frame_effects, border_color, full_art, promo, promo_types, finishes, artist, image_uri) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (SCRYFALL_ALPHA_TS2, ORACLE_ALPHA, "ts2", "050", "rare",
+        (PRINTING_ALPHA_TS2, ORACLE_ALPHA, "ts2", "050", "rare",
          "[]", "black", 0, 0, "[]", '["nonfoil"]', "Artist A", None),
     )
 
@@ -160,12 +160,12 @@ class TestResolveCard:
     """Unit tests for BaseImporter._resolve_card (local DB only)."""
 
     def test_resolve_by_set_cn(self, repos, importer):
-        """Correct name + set + cn → returns correct scryfall_id."""
+        """Correct name + set + cn → returns correct printing_id."""
         sid = importer._resolve_card(
             repos["card_repo"], repos["printing_repo"],
             "Test Card Alpha", "tst", "001",
         )
-        assert sid == SCRYFALL_ALPHA_TST
+        assert sid == PRINTING_ALPHA_TST
 
     def test_resolve_by_name_only(self, repos, importer):
         """Name only (no set/cn) → finds card by name."""
@@ -173,7 +173,7 @@ class TestResolveCard:
             repos["card_repo"], repos["printing_repo"],
             "Test Card Beta", None, None,
         )
-        assert sid == SCRYFALL_BETA_TST
+        assert sid == PRINTING_BETA_TST
 
     def test_resolve_by_name_prefers_matching_set(self, repos, importer):
         """Name + set_code (no cn) → prefers printing from that set."""
@@ -181,7 +181,7 @@ class TestResolveCard:
             repos["card_repo"], repos["printing_repo"],
             "Test Card Alpha", "ts2", None,
         )
-        assert sid == SCRYFALL_ALPHA_TS2
+        assert sid == PRINTING_ALPHA_TS2
 
     def test_wrong_set_cn_falls_back_to_name(self, repos, importer):
         """THE DOCTOR DOOM TEST: name="Test Card Alpha" but set/cn point to Beta.
@@ -192,7 +192,7 @@ class TestResolveCard:
             repos["card_repo"], repos["printing_repo"],
             "Test Card Alpha", "tst", "002",  # 002 is Beta, not Alpha
         )
-        assert sid == SCRYFALL_ALPHA_TST
+        assert sid == PRINTING_ALPHA_TST
 
     def test_dfc_name_match(self, repos, importer):
         """Searching "Front Face" matches "Front Face // Back Face"."""
@@ -200,7 +200,7 @@ class TestResolveCard:
             repos["card_repo"], repos["printing_repo"],
             "Front Face", None, None,
         )
-        assert sid == SCRYFALL_DFC_TST
+        assert sid == PRINTING_DFC_TST
 
     def test_not_found_returns_none(self, repos, importer):
         """Card not in DB → returns None."""
@@ -301,10 +301,10 @@ class TestImportFile:
             assert result.cards_added == 2
             assert result.cards_skipped == 0
 
-            # Verify they resolved to different scryfall_ids
+            # Verify they resolved to different printing_ids
             entries = repos["collection_repo"].list_all()
-            scryfall_ids = {e["scryfall_id"] for e in entries}
-            assert len(scryfall_ids) == 2
+            printing_ids = {e["printing_id"] for e in entries}
+            assert len(printing_ids) == 2
         finally:
             os.unlink(csv_path)
 
@@ -596,8 +596,8 @@ class TestWebImportResolve:
         data = resp.json()
         assert data["summary"]["resolved"] == 2
         assert data["summary"]["failed"] == 0
-        assert data["resolved"][0]["scryfall_id"] == SCRYFALL_ALPHA_TST
-        assert data["resolved"][1]["scryfall_id"] == SCRYFALL_BETA_TST
+        assert data["resolved"][0]["printing_id"] == PRINTING_ALPHA_TST
+        assert data["resolved"][1]["printing_id"] == PRINTING_BETA_TST
 
     def test_resolve_wrong_set_cn_via_web_api(self, container_url):
         """Web UI Doctor Doom test: wrong set/cn falls back to name."""
@@ -617,4 +617,4 @@ class TestWebImportResolve:
         data = resp.json()
         assert data["summary"]["resolved"] == 1
         # Must resolve to Alpha, not Beta (whose set/cn was provided)
-        assert data["resolved"][0]["scryfall_id"] == SCRYFALL_ALPHA_TST
+        assert data["resolved"][0]["printing_id"] == PRINTING_ALPHA_TST

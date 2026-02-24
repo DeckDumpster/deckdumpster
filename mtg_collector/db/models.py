@@ -33,7 +33,7 @@ class Set:
 @dataclass
 class Printing:
     """Specific card printing."""
-    scryfall_id: str
+    printing_id: str
     oracle_id: str
     set_code: str
     collector_number: str
@@ -46,10 +46,10 @@ class Printing:
     finishes: List[str] = field(default_factory=list)
     artist: Optional[str] = None
     image_uri: Optional[str] = None
-    raw_json: Optional[str] = None  # Full Scryfall API response as JSON string
+    raw_json: Optional[str] = None  # Full card data as JSON string (cached from bulk import)
 
-    def get_scryfall_data(self) -> Optional[Dict]:
-        """Parse and return the full Scryfall API response as a dict."""
+    def get_card_data(self) -> Optional[Dict]:
+        """Parse and return the full card data as a dict."""
         if self.raw_json:
             import json
             return json.loads(self.raw_json)
@@ -78,7 +78,7 @@ class Order:
 class CollectionEntry:
     """A physical card in the user's collection."""
     id: Optional[int]
-    scryfall_id: str
+    printing_id: str
     finish: str
     condition: str = "Near Mint"
     language: str = "English"
@@ -139,7 +139,7 @@ class WishlistEntry:
     """A card the user wants to acquire."""
     id: Optional[int]
     oracle_id: str
-    scryfall_id: Optional[str] = None
+    printing_id: Optional[str] = None
     max_price: Optional[float] = None
     priority: int = 0
     notes: Optional[str] = None
@@ -394,6 +394,36 @@ class SetRepository:
             (now_iso(), set_code),
         )
 
+    def normalize_code(self, raw: str) -> Optional[str]:
+        """Normalize a set code or name to a valid set code using the local DB.
+
+        Tries exact code match, then case-insensitive code, then name match.
+        Returns lowercase set code, or None if not found.
+        """
+        raw = raw.strip()
+        raw_lower = raw.lower()
+
+        # Exact code match
+        s = self.get(raw_lower)
+        if s:
+            return s.set_code
+
+        # Case-insensitive code match (try as-is in case DB has different casing)
+        cursor = self.conn.execute(
+            "SELECT set_code FROM sets WHERE set_code COLLATE NOCASE = ? LIMIT 1",
+            (raw,),
+        )
+        row = cursor.fetchone()
+        if row:
+            return row["set_code"]
+
+        # Name match (exact then partial)
+        s = self.get_by_name(raw)
+        if s:
+            return s.set_code
+
+        return None
+
 
 class PrintingRepository:
     """CRUD operations for printings table."""
@@ -406,11 +436,11 @@ class PrintingRepository:
         self.conn.execute(
             """
             INSERT INTO printings
-            (scryfall_id, oracle_id, set_code, collector_number, rarity,
+            (printing_id, oracle_id, set_code, collector_number, rarity,
              frame_effects, border_color, full_art, promo, promo_types,
              finishes, artist, image_uri, raw_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(scryfall_id) DO UPDATE SET
+            ON CONFLICT(printing_id) DO UPDATE SET
                 oracle_id = excluded.oracle_id,
                 set_code = excluded.set_code,
                 collector_number = excluded.collector_number,
@@ -426,7 +456,7 @@ class PrintingRepository:
                 raw_json = excluded.raw_json
             """,
             (
-                p.scryfall_id,
+                p.printing_id,
                 p.oracle_id,
                 p.set_code,
                 p.collector_number,
@@ -443,10 +473,10 @@ class PrintingRepository:
             ),
         )
 
-    def get(self, scryfall_id: str) -> Optional[Printing]:
-        """Get a printing by scryfall_id."""
+    def get(self, printing_id: str) -> Optional[Printing]:
+        """Get a printing by printing_id."""
         cursor = self.conn.execute(
-            "SELECT * FROM printings WHERE scryfall_id = ?", (scryfall_id,)
+            "SELECT * FROM printings WHERE printing_id = ?", (printing_id,)
         )
         row = cursor.fetchone()
         if row is None:
@@ -474,10 +504,10 @@ class PrintingRepository:
         )
         return [self._row_to_printing(row) for row in cursor]
 
-    def exists(self, scryfall_id: str) -> bool:
+    def exists(self, printing_id: str) -> bool:
         """Check if a printing exists."""
         cursor = self.conn.execute(
-            "SELECT 1 FROM printings WHERE scryfall_id = ?", (scryfall_id,)
+            "SELECT 1 FROM printings WHERE printing_id = ?", (printing_id,)
         )
         return cursor.fetchone() is not None
 
@@ -490,7 +520,7 @@ class PrintingRepository:
             pass
 
         return Printing(
-            scryfall_id=row["scryfall_id"],
+            printing_id=row["printing_id"],
             oracle_id=row["oracle_id"],
             set_code=row["set_code"],
             collector_number=row["collector_number"],
@@ -521,13 +551,13 @@ class CollectionRepository:
         cursor = self.conn.execute(
             """
             INSERT INTO collection
-            (scryfall_id, finish, condition, language, purchase_price,
+            (printing_id, finish, condition, language, purchase_price,
              acquired_at, source, source_image, notes, tags, tradelist,
              is_alter, proxy, signed, misprint, status, sale_price, order_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                entry.scryfall_id,
+                entry.printing_id,
                 entry.finish,
                 entry.condition,
                 entry.language,
@@ -578,7 +608,7 @@ class CollectionRepository:
         cursor = self.conn.execute(
             """
             UPDATE collection SET
-                scryfall_id = ?,
+                printing_id = ?,
                 finish = ?,
                 condition = ?,
                 language = ?,
@@ -599,7 +629,7 @@ class CollectionRepository:
             WHERE id = ?
             """,
             (
-                entry.scryfall_id,
+                entry.printing_id,
                 entry.finish,
                 entry.condition,
                 entry.language,
@@ -655,7 +685,7 @@ class CollectionRepository:
         """
         query = """
             SELECT
-                c.id, c.scryfall_id, c.finish, c.condition, c.language,
+                c.id, c.printing_id, c.finish, c.condition, c.language,
                 c.purchase_price, c.acquired_at, c.source, c.notes, c.tags,
                 c.tradelist, c.is_alter, c.proxy, c.signed, c.misprint,
                 c.status, c.sale_price,
@@ -663,7 +693,7 @@ class CollectionRepository:
                 card.name, card.type_line, card.mana_cost,
                 s.set_name
             FROM collection c
-            JOIN printings p ON c.scryfall_id = p.scryfall_id
+            JOIN printings p ON c.printing_id = p.printing_id
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
             WHERE 1=1
@@ -707,22 +737,22 @@ class CollectionRepository:
 
     def get_copies(
         self,
-        scryfall_id: str,
+        printing_id: str,
         finish: Optional[str] = None,
         condition: Optional[str] = None,
         status: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Return individual (unaggregated) collection rows for a printing, joined with order data."""
         query = """
-            SELECT c.id, c.scryfall_id, c.finish, c.condition, c.language,
+            SELECT c.id, c.printing_id, c.finish, c.condition, c.language,
                    c.purchase_price, c.acquired_at, c.source, c.status, c.order_id,
                    o.seller_name as order_seller, o.order_number as order_number,
                    o.order_date as order_date
             FROM collection c
             LEFT JOIN orders o ON c.order_id = o.id
-            WHERE c.scryfall_id = ?
+            WHERE c.printing_id = ?
         """
-        params: list = [scryfall_id]
+        params: list = [printing_id]
         if finish:
             query += " AND c.finish = ?"
             params.append(finish)
@@ -787,7 +817,7 @@ class CollectionRepository:
 
         # Unique printings
         cursor = self.conn.execute(
-            "SELECT COUNT(DISTINCT scryfall_id) FROM collection"
+            "SELECT COUNT(DISTINCT printing_id) FROM collection"
         )
         stats["unique_printings"] = cursor.fetchone()[0]
 
@@ -796,7 +826,7 @@ class CollectionRepository:
             """
             SELECT COUNT(DISTINCT p.oracle_id)
             FROM collection c
-            JOIN printings p ON c.scryfall_id = p.scryfall_id
+            JOIN printings p ON c.printing_id = p.printing_id
             """
         )
         stats["unique_cards"] = cursor.fetchone()[0]
@@ -831,7 +861,7 @@ class CollectionRepository:
 
     def get_copies(
         self,
-        scryfall_id: str,
+        printing_id: str,
         finish: Optional[str] = None,
         condition: Optional[str] = None,
         status: Optional[str] = None,
@@ -839,7 +869,7 @@ class CollectionRepository:
         """Return individual collection rows for a card, joined with order and lineage info."""
         query = """
             SELECT
-                c.id, c.scryfall_id, c.finish, c.condition, c.language,
+                c.id, c.printing_id, c.finish, c.condition, c.language,
                 c.purchase_price, c.acquired_at, c.source, c.source_image,
                 c.notes, c.tags, c.status, c.sale_price, c.order_id,
                 o.order_number, o.source AS order_source, o.seller_name,
@@ -850,9 +880,9 @@ class CollectionRepository:
             LEFT JOIN orders o ON c.order_id = o.id
             LEFT JOIN ingest_lineage il ON il.collection_id = c.id
             LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
-            WHERE c.scryfall_id = ?
+            WHERE c.printing_id = ?
         """
-        params: List[Any] = [scryfall_id]
+        params: List[Any] = [printing_id]
 
         if finish:
             query += " AND c.finish = ?"
@@ -968,7 +998,7 @@ class CollectionRepository:
 
         return CollectionEntry(
             id=row["id"],
-            scryfall_id=row["scryfall_id"],
+            printing_id=row["printing_id"],
             finish=row["finish"],
             condition=row["condition"],
             language=row["language"],
@@ -1068,7 +1098,7 @@ class OrderRepository:
             SELECT c.*, card.name, p.set_code, p.collector_number, p.rarity,
                    p.image_uri, s.set_name
             FROM collection c
-            JOIN printings p ON c.scryfall_id = p.scryfall_id
+            JOIN printings p ON c.printing_id = p.printing_id
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
             WHERE c.order_id = ?
@@ -1149,12 +1179,12 @@ class WishlistRepository:
         cursor = self.conn.execute(
             """
             INSERT INTO wishlist
-            (oracle_id, scryfall_id, max_price, priority, notes, added_at, source, fulfilled_at)
+            (oracle_id, printing_id, max_price, priority, notes, added_at, source, fulfilled_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry.oracle_id,
-                entry.scryfall_id,
+                entry.printing_id,
                 entry.max_price,
                 entry.priority,
                 entry.notes,
@@ -1182,13 +1212,13 @@ class WishlistRepository:
         cursor = self.conn.execute(
             """
             UPDATE wishlist SET
-                oracle_id = ?, scryfall_id = ?, max_price = ?,
+                oracle_id = ?, printing_id = ?, max_price = ?,
                 priority = ?, notes = ?, source = ?, fulfilled_at = ?
             WHERE id = ?
             """,
             (
                 entry.oracle_id,
-                entry.scryfall_id,
+                entry.printing_id,
                 entry.max_price,
                 entry.priority,
                 entry.notes,
@@ -1224,13 +1254,13 @@ class WishlistRepository:
         """List wishlist entries with card info joined."""
         query = """
             SELECT
-                w.id, w.oracle_id, w.scryfall_id, w.max_price,
+                w.id, w.oracle_id, w.printing_id, w.max_price,
                 w.priority, w.notes, w.added_at, w.source, w.fulfilled_at,
                 card.name, card.type_line, card.mana_cost,
                 p.set_code, p.collector_number, p.image_uri
             FROM wishlist w
             JOIN cards card ON w.oracle_id = card.oracle_id
-            LEFT JOIN printings p ON w.scryfall_id = p.scryfall_id
+            LEFT JOIN printings p ON w.printing_id = p.printing_id
             WHERE 1=1
         """
         params = []
@@ -1277,7 +1307,7 @@ class WishlistRepository:
         return WishlistEntry(
             id=row["id"],
             oracle_id=row["oracle_id"],
-            scryfall_id=row["scryfall_id"],
+            printing_id=row["printing_id"],
             max_price=row["max_price"],
             priority=row["priority"],
             notes=row["notes"],

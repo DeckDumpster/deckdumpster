@@ -117,14 +117,14 @@ class DecklistImporter(BaseImporter):
 
         return name, set_code, collector_number, quantity
 
-    def row_to_entry(self, row: Dict[str, Any], scryfall_id: str) -> CollectionEntry:
+    def row_to_entry(self, row: Dict[str, Any], printing_id: str) -> CollectionEntry:
         """Convert deck list row to CollectionEntry."""
         foil_val = row.get("Foil", "").strip().lower()
         finish = "foil" if foil_val in ("foil", "yes", "true", "1") else "nonfoil"
 
         return CollectionEntry(
             id=None,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             finish=finish,
             condition="Near Mint",
             language="English",

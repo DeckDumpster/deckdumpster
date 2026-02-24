@@ -3,7 +3,6 @@
 import sys
 
 from mtg_collector.db import (
-    CardRepository,
     CollectionRepository,
     PrintingRepository,
     SetRepository,
@@ -11,18 +10,13 @@ from mtg_collector.db import (
     init_db,
 )
 from mtg_collector.db.models import CollectionEntry
-from mtg_collector.services.scryfall import (
-    ScryfallAPI,
-    cache_scryfall_data,
-    ensure_set_cached,
-)
 from mtg_collector.utils import normalize_condition, normalize_finish, store_source_image
 
 RARITY_MAP = {"C": "common", "U": "uncommon", "R": "rare", "M": "mythic", "P": "promo", "L": "common", "T": "token"}
 
 
-def lookup_card(set_code, cn_raw, cn_stripped, rarity_expected, printing_repo, scryfall):
-    """Look up a card by set/CN, with promo/token set fallback."""
+def lookup_card(set_code, cn_raw, cn_stripped, rarity_expected, printing_repo):
+    """Look up a card by set/CN in the local DB, with promo/token set fallback."""
     card_data = None
 
     # Promo cards: try p{set_code} set with {cn}p collector number first
@@ -32,11 +26,7 @@ def lookup_card(set_code, cn_raw, cn_stripped, rarity_expected, printing_repo, s
         if not printing:
             printing = printing_repo.get_by_set_cn(promo_set, cn_stripped)
         if printing and printing.raw_json:
-            card_data = printing.get_scryfall_data()
-        if not card_data:
-            card_data = scryfall.get_card_by_set_cn(promo_set, f"{cn_stripped}p")
-        if not card_data:
-            card_data = scryfall.get_card_by_set_cn(promo_set, cn_stripped)
+            card_data = printing.get_card_data()
 
     # Token cards: try t{set_code} set
     if rarity_expected == "token":
@@ -45,11 +35,7 @@ def lookup_card(set_code, cn_raw, cn_stripped, rarity_expected, printing_repo, s
         if not printing:
             printing = printing_repo.get_by_set_cn(token_set, cn_raw)
         if printing and printing.raw_json:
-            card_data = printing.get_scryfall_data()
-        if not card_data:
-            card_data = scryfall.get_card_by_set_cn(token_set, cn_stripped)
-        if not card_data:
-            card_data = scryfall.get_card_by_set_cn(token_set, cn_raw)
+            card_data = printing.get_card_data()
 
     # Regular lookup (also fallback for promo/token)
     if not card_data:
@@ -57,24 +43,15 @@ def lookup_card(set_code, cn_raw, cn_stripped, rarity_expected, printing_repo, s
         if not printing:
             printing = printing_repo.get_by_set_cn(set_code, cn_raw)
         if printing and printing.raw_json:
-            card_data = printing.get_scryfall_data()
-
-    if not card_data:
-        card_data = scryfall.get_card_by_set_cn(set_code, cn_stripped)
-        if not card_data:
-            card_data = scryfall.get_card_by_set_cn(set_code, cn_raw)
+            card_data = printing.get_card_data()
 
     return card_data
 
 
 def resolve_and_add_ids(
     entries,
-    scryfall,
-    card_repo,
-    set_repo,
     printing_repo,
     collection_repo,
-    conn,
     condition,
     source,
     source_image=None,
@@ -86,9 +63,7 @@ def resolve_and_add_ids(
         entries: list of dicts, each with keys:
             rarity_code (str), rarity (str), collector_number (str),
             set_code (str, normalized), foil (bool)
-        scryfall: ScryfallAPI instance
-        card_repo, set_repo, printing_repo, collection_repo: DB repositories
-        conn: DB connection
+        printing_repo, collection_repo: DB repositories
         condition: normalized condition string
         source: source identifier
 
@@ -111,39 +86,36 @@ def resolve_and_add_ids(
 
         card_data = lookup_card(
             set_code, cn_raw, cn_stripped, rarity_expected,
-            printing_repo, scryfall,
+            printing_repo,
         )
 
         if not card_data:
-            print(f"  FAILED: {label} — card not found")
+            print(f"  FAILED: {label} — card not found (run `mtg cache all` to populate)")
             failed.append(label)
             continue
 
         # Warn on rarity mismatch (promos use a separate boolean, not a rarity string;
-        # tokens are labeled "common" by Scryfall which is expected)
+        # tokens are labeled "common" which is expected)
         actual_rarity = card_data.get("rarity", "")
         if rarity_expected == "promo":
             if not card_data.get("promo", False):
                 print(
                     f"  Warning: {label} — expected promo, "
-                    f"Scryfall reports non-promo '{actual_rarity}'"
+                    f"DB reports non-promo '{actual_rarity}'"
                 )
         elif rarity_expected == "token":
-            pass  # Scryfall labels tokens as "common", no mismatch to warn about
+            pass  # Tokens are labeled "common", no mismatch to warn about
         elif actual_rarity != rarity_expected:
             print(
                 f"  Warning: {label} — expected rarity '{rarity_expected}', "
-                f"Scryfall reports '{actual_rarity}'"
+                f"DB reports '{actual_rarity}'"
             )
-
-        # Cache Scryfall data
-        cache_scryfall_data(scryfall, card_repo, set_repo, printing_repo, card_data)
 
         # Create collection entry
         finish = normalize_finish("foil" if is_foil else "nonfoil")
         collection_entry = CollectionEntry(
             id=None,
-            scryfall_id=card_data["id"],
+            printing_id=card_data["id"],
             finish=finish,
             condition=condition,
             source=source,
@@ -227,45 +199,33 @@ def run(args):
             "is_foil": is_foil,
         })
 
-    # Initialize services
-    scryfall = ScryfallAPI()
+    # Initialize database
+    conn = get_connection(args.db_path)
+    init_db(conn)
+
+    set_repo = SetRepository(conn)
+    printing_repo = PrintingRepository(conn)
+    collection_repo = CollectionRepository(conn)
 
     # Normalize and validate set codes
     unique_sets = {}
     for entry in parsed_ids:
         raw = entry["set_code_raw"]
         if raw.lower() not in unique_sets:
-            normalized = scryfall.normalize_set_code(raw)
+            normalized = set_repo.normalize_code(raw)
             if not normalized:
-                print(f"Error: Unknown set code '{raw}'")
+                print(f"Error: Unknown set code '{raw}' (run `mtg cache all` to populate)")
                 sys.exit(1)
             unique_sets[raw.lower()] = normalized
         entry["set_code"] = unique_sets[raw.lower()]
         entry["foil"] = entry.pop("is_foil")
 
-    # Initialize database
-    conn = get_connection(args.db_path)
-    init_db(conn)
-
-    card_repo = CardRepository(conn)
-    set_repo = SetRepository(conn)
-    printing_repo = PrintingRepository(conn)
-    collection_repo = CollectionRepository(conn)
-
-    # Cache each unique set once
-    for set_code in set(unique_sets.values()):
-        ensure_set_cached(scryfall, set_code, card_repo, set_repo, printing_repo, conn)
-
     condition = normalize_condition(args.condition)
 
     added, failed = resolve_and_add_ids(
         entries=parsed_ids,
-        scryfall=scryfall,
-        card_repo=card_repo,
-        set_repo=set_repo,
         printing_repo=printing_repo,
         collection_repo=collection_repo,
-        conn=conn,
         condition=condition,
         source=args.source,
         source_image=store_source_image(args.source_image) if args.source_image else None,

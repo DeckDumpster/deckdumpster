@@ -239,7 +239,7 @@ class TestImportMtgjson:
         assert row["border_color"] == "borderless"
         assert row["is_full_art"] == 1
         assert json.loads(row["frame_effects"]) == ["extendedart"]
-        assert row["scryfall_id"] == "scry-r01"
+        assert row["printing_id"] == "scry-r01"
         assert row["ck_url"] == "https://ck.com/lotus"
         assert row["ck_url_foil"] == "https://ck.com/lotus-foil"
         conn.close()
@@ -300,7 +300,7 @@ class TestPackGeneratorSQL:
             assert "set_code" in card
             assert "collector_number" in card
             assert "rarity" in card
-            assert "scryfall_id" in card
+            assert "printing_id" in card
             assert "image_uri" in card
             assert "sheet_name" in card
             assert "foil" in card
@@ -342,14 +342,14 @@ class TestPackGeneratorSQL:
         assert gen.get_ck_url("scry-r01", foil=True) == "https://ck.com/lotus-foil"
         assert gen.get_ck_url("nonexistent") == ""
 
-    def test_get_uuid_for_scryfall_id(self, test_db, mock_allprintings):
+    def test_get_uuid_for_printing_id(self, test_db, mock_allprintings):
         db_path, _ = test_db
         _run_import(db_path, mock_allprintings)
 
         gen = PackGenerator(db_path)
-        assert gen.get_uuid_for_scryfall_id("scry-c01") == "uuid-c01"
-        assert gen.get_uuid_for_scryfall_id("scry-r01") == "uuid-r01"
-        assert gen.get_uuid_for_scryfall_id("nonexistent") is None
+        assert gen.get_uuid_for_printing_id("scry-c01") == "uuid-c01"
+        assert gen.get_uuid_for_printing_id("scry-r01") == "uuid-r01"
+        assert gen.get_uuid_for_printing_id("nonexistent") is None
 
     def test_get_sheet_data(self, test_db, mock_allprintings):
         """get_sheet_data returns correct structure."""

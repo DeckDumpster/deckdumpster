@@ -1,4 +1,4 @@
-"""Order resolution: match parsed order items to Scryfall cards."""
+"""Order resolution: match parsed order items to local DB cards."""
 
 import re
 from dataclasses import dataclass, field
@@ -6,11 +6,10 @@ from typing import Dict, List, Optional
 
 from mtg_collector.db.models import CollectionEntry, Order
 from mtg_collector.services.order_parser import ParsedOrder, ParsedOrderItem
-from mtg_collector.services.scryfall import ScryfallAPI, cache_scryfall_data
 from mtg_collector.utils import normalize_condition, normalize_finish, now_iso
 
-# Vendor set name → Scryfall set code
-# Covers common TCGPlayer set names that don't directly match Scryfall
+# Vendor set name → DB set code
+# Covers common TCGPlayer set names that don't directly match DB codes
 SET_NAME_MAP = {
     "FINAL FANTASY": "fin",
     "FINAL FANTASY: THROUGH THE AGES": "fca",
@@ -22,10 +21,10 @@ NON_MTG_PREFIXES = ("SV", "ME:", "INTO THE INKLANDS")
 
 @dataclass
 class ResolvedItem:
-    """A parsed order item matched to a Scryfall card."""
+    """A parsed order item matched to a local DB card."""
     parsed: ParsedOrderItem
-    scryfall_id: Optional[str] = None
-    card_name: Optional[str] = None  # resolved name from Scryfall
+    printing_id: Optional[str] = None
+    card_name: Optional[str] = None  # resolved name from DB
     set_code: Optional[str] = None
     collector_number: Optional[str] = None
     image_uri: Optional[str] = None
@@ -42,19 +41,17 @@ class ResolvedOrder:
 
 def resolve_orders(
     orders: List[ParsedOrder],
-    scryfall: ScryfallAPI,
     card_repo,
     set_repo,
     printing_repo,
-    conn,
 ) -> List[ResolvedOrder]:
-    """Resolve parsed orders by matching items to Scryfall cards."""
+    """Resolve parsed orders by matching items to cards in the local DB."""
     resolved = []
     for order in orders:
         resolved_order = ResolvedOrder(parsed=order)
         for item in order.items:
             resolved_item = _resolve_item(
-                item, scryfall, card_repo, set_repo, printing_repo, conn
+                item, card_repo, set_repo, printing_repo
             )
             resolved_order.items.append(resolved_item)
         resolved.append(resolved_order)
@@ -62,7 +59,7 @@ def resolve_orders(
 
 
 def _resolve_set_code(set_hint: Optional[str], set_repo) -> Optional[str]:
-    """Map a vendor set name to a Scryfall set code using local DB only."""
+    """Map a vendor set name to a set code using local DB."""
     if not set_hint:
         return None
 
@@ -132,7 +129,7 @@ def _find_card_local(
     def _make_result(p):
         return ResolvedItem(
             parsed=None,  # caller sets this
-            scryfall_id=p.scryfall_id,
+            printing_id=p.printing_id,
             card_name=card.name,
             set_code=p.set_code,
             collector_number=p.collector_number,
@@ -157,17 +154,11 @@ def _find_card_local(
 
 def _resolve_item(
     item: ParsedOrderItem,
-    scryfall: ScryfallAPI,
     card_repo,
     set_repo,
     printing_repo,
-    conn,
 ) -> ResolvedItem:
-    """Resolve a single order item to a Scryfall card.
-
-    Uses local DB lookups first (microseconds). Only falls back to
-    Scryfall API if card is not found locally.
-    """
+    """Resolve a single order item to a card using local DB only."""
     resolved = ResolvedItem(parsed=item)
 
     # Skip non-MTG products immediately
@@ -201,48 +192,7 @@ def _resolve_item(
             result.parsed = item
             return result
 
-    # Fall back to Scryfall API (card not in local cache)
-    results = scryfall.search_card(card_name, set_code=set_code)
-
-    if not results:
-        results = scryfall.search_card(card_name)
-
-    if not results:
-        resolved.error = f"Card not found: {card_name}"
-        return resolved
-
-    # Pick the best match
-    card_data = results[0]
-
-    if set_code:
-        for r in results:
-            if r.get("set") == set_code:
-                card_data = r
-                break
-
-    if card_data.get("object") != "card":
-        resolved.error = f"Not an MTG card: {card_name}"
-        return resolved
-
-    # Cache the card data locally
-    if "oracle_id" in card_data:
-        cache_scryfall_data(scryfall, card_repo, set_repo, printing_repo, card_data)
-        conn.commit()
-
-    image_uri = None
-    if "image_uris" in card_data:
-        image_uri = card_data["image_uris"].get("small") or card_data["image_uris"].get("normal")
-    elif "card_faces" in card_data and card_data["card_faces"]:
-        face = card_data["card_faces"][0]
-        if "image_uris" in face:
-            image_uri = face["image_uris"].get("small") or face["image_uris"].get("normal")
-
-    resolved.scryfall_id = card_data["id"]
-    resolved.card_name = card_data.get("name", card_name)
-    resolved.set_code = card_data.get("set")
-    resolved.collector_number = card_data.get("collector_number")
-    resolved.image_uri = image_uri
-
+    resolved.error = f"Card not found: {card_name} (run `mtg cache all` to populate)"
     return resolved
 
 
@@ -302,14 +252,14 @@ def commit_orders(
         summary["orders_created"] += 1
 
         for item in resolved.items:
-            if not item.scryfall_id:
+            if not item.printing_id:
                 summary["errors"].append(item.error or f"Unresolved: {item.parsed.card_name}")
                 continue
 
             for _ in range(item.parsed.quantity):
-                # Check for existing unlinked ordered card with same scryfall_id
+                # Check for existing unlinked ordered card with same printing_id
                 existing = _find_existing_unlinked(
-                    conn, item.scryfall_id, status
+                    conn, item.printing_id, status
                 )
 
                 if existing:
@@ -325,7 +275,7 @@ def commit_orders(
                     condition = normalize_condition(item.parsed.condition)
                     entry = CollectionEntry(
                         id=None,
-                        scryfall_id=item.scryfall_id,
+                        printing_id=item.printing_id,
                         finish=finish,
                         condition=condition,
                         purchase_price=item.parsed.price,
@@ -342,12 +292,12 @@ def commit_orders(
 
 
 def _find_existing_unlinked(
-    conn, scryfall_id: str, status: str
+    conn, printing_id: str, status: str
 ) -> Optional[int]:
-    """Find an existing collection entry with matching scryfall_id, status, and no order_id."""
+    """Find an existing collection entry with matching printing_id, status, and no order_id."""
     cursor = conn.execute(
-        "SELECT id FROM collection WHERE scryfall_id = ? AND status = ? AND order_id IS NULL LIMIT 1",
-        (scryfall_id, status),
+        "SELECT id FROM collection WHERE printing_id = ? AND status = ? AND order_id IS NULL LIMIT 1",
+        (printing_id, status),
     )
     row = cursor.fetchone()
     return row["id"] if row else None

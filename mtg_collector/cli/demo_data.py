@@ -168,17 +168,17 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
 
     ts = now_iso()
 
-    # Build scryfall_id lookup for all demo cards
+    # Build printing_id lookup for all demo cards
     resolved = []
     missing = []
     for i, (set_code, cn, finish, condition, status) in enumerate(DEMO_CARDS):
         cursor = conn.execute(
-            "SELECT scryfall_id FROM printings WHERE set_code = ? AND collector_number = ?",
+            "SELECT printing_id FROM printings WHERE set_code = ? AND collector_number = ?",
             (set_code, cn),
         )
         row = cursor.fetchone()
         if row:
-            resolved.append((i, row["scryfall_id"], finish, condition, status))
+            resolved.append((i, row["printing_id"], finish, condition, status))
         else:
             missing.append(f"  {set_code.upper()} #{cn}")
 
@@ -220,13 +220,13 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
 
     # Create collection entries
     added = 0
-    for card_idx, scryfall_id, finish, condition, status in resolved:
+    for card_idx, printing_id, finish, condition, status in resolved:
         order_id = order_card_map.get(card_idx)
         source = "order_import" if order_id else "demo"
 
         entry = CollectionEntry(
             id=None,
-            scryfall_id=scryfall_id,
+            printing_id=printing_id,
             finish=finish,
             condition=condition,
             status=status,
@@ -264,7 +264,7 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
     wishlist_added = 0
     for set_code, cn, notes, priority, max_price in DEMO_WISHLIST:
         cursor = conn.execute(
-            "SELECT oracle_id, scryfall_id FROM printings WHERE set_code = ? AND collector_number = ?",
+            "SELECT oracle_id, printing_id FROM printings WHERE set_code = ? AND collector_number = ?",
             (set_code, cn),
         )
         row = cursor.fetchone()
@@ -274,7 +274,7 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
         entry = WishlistEntry(
             id=None,
             oracle_id=row["oracle_id"],
-            scryfall_id=row["scryfall_id"],
+            printing_id=row["printing_id"],
             max_price=max_price,
             priority=priority,
             notes=notes,

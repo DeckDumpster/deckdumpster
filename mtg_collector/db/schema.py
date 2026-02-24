@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -26,9 +26,9 @@ CREATE TABLE IF NOT EXISTS sets (
     cards_fetched_at TEXT  -- NULL = card list not cached, otherwise ISO timestamp
 );
 
--- Specific printings (cached from Scryfall)
+-- Specific printings
 CREATE TABLE IF NOT EXISTS printings (
-    scryfall_id TEXT PRIMARY KEY,
+    printing_id TEXT PRIMARY KEY,  -- Externally-defined ID (Scryfall printing UUID)
     oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
     set_code TEXT NOT NULL REFERENCES sets(set_code),
     collector_number TEXT NOT NULL,
@@ -66,7 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
 -- User's collection (one row per physical card owned)
 CREATE TABLE IF NOT EXISTS collection (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    scryfall_id TEXT NOT NULL REFERENCES printings(scryfall_id),
+    printing_id TEXT NOT NULL REFERENCES printings(printing_id),
     finish TEXT NOT NULL CHECK(finish IN ('nonfoil', 'foil', 'etched')),
     condition TEXT NOT NULL DEFAULT 'Near Mint'
         CHECK(condition IN ('Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged')),
@@ -103,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_status_log_collection ON status_log(collection_id
 CREATE TABLE IF NOT EXISTS wishlist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
-    scryfall_id TEXT REFERENCES printings(scryfall_id),  -- NULL = "any printing"
+    printing_id TEXT REFERENCES printings(printing_id),  -- NULL = "any printing"
     max_price REAL,
     priority INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS wishlist (
     fulfilled_at TEXT  -- set when the want is satisfied
 );
 CREATE INDEX IF NOT EXISTS idx_wishlist_oracle ON wishlist(oracle_id);
-CREATE INDEX IF NOT EXISTS idx_wishlist_scryfall ON wishlist(scryfall_id);
+CREATE INDEX IF NOT EXISTS idx_wishlist_printing ON wishlist(printing_id);
 
 -- Ingest cache: OCR + Claude results by image MD5
 CREATE TABLE IF NOT EXISTS ingest_cache (
@@ -218,7 +218,7 @@ WHERE observed_at = (SELECT MAX(observed_at) FROM prices);
 -- MTGJSON card printings (imported from AllPrintings.json)
 CREATE TABLE IF NOT EXISTS mtgjson_printings (
     uuid            TEXT PRIMARY KEY,
-    scryfall_id     TEXT,
+    printing_id     TEXT,
     name            TEXT NOT NULL,
     set_code        TEXT NOT NULL,
     number          TEXT NOT NULL,
@@ -230,7 +230,7 @@ CREATE TABLE IF NOT EXISTS mtgjson_printings (
     ck_url_foil     TEXT,
     imported_at     TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_mtgjson_scryfall ON mtgjson_printings(scryfall_id);
+CREATE INDEX IF NOT EXISTS idx_mtgjson_printing ON mtgjson_printings(printing_id);
 CREATE INDEX IF NOT EXISTS idx_mtgjson_set ON mtgjson_printings(set_code);
 
 -- MTGJSON booster sheet entries (uuid/weight per sheet)
@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS mtgjson_booster_configs (
 CREATE INDEX IF NOT EXISTS idx_config_set_product ON mtgjson_booster_configs(set_code, product);
 
 -- Indexes for common queries
-CREATE INDEX IF NOT EXISTS idx_collection_scryfall ON collection(scryfall_id);
+CREATE INDEX IF NOT EXISTS idx_collection_printing ON collection(printing_id);
 CREATE INDEX IF NOT EXISTS idx_collection_source ON collection(source);
 CREATE INDEX IF NOT EXISTS idx_collection_status ON collection(status);
 CREATE INDEX IF NOT EXISTS idx_printings_oracle ON printings(oracle_id);
@@ -381,11 +381,11 @@ SELECT
     c.tradelist,
     c.status,
     c.sale_price,
-    c.scryfall_id,
+    c.printing_id,
     p.oracle_id,
     c.order_id
 FROM collection c
-JOIN printings p ON c.scryfall_id = p.scryfall_id
+JOIN printings p ON c.printing_id = p.printing_id
 JOIN cards card ON p.oracle_id = card.oracle_id
 JOIN sets s ON p.set_code = s.set_code;
 """
@@ -467,6 +467,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v18_to_v19(conn)
         if current < 20:
             _migrate_v19_to_v20(conn)
+        if current < 21:
+            _migrate_v20_to_v21(conn)
 
     # Record schema version
     conn.execute(
@@ -1244,6 +1246,95 @@ def _migrate_v19_to_v20(conn: sqlite3.Connection):
         conn.execute(
             "ALTER TABLE sealed_products ADD COLUMN source TEXT NOT NULL DEFAULT 'mtgjson'"
         )
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Check if a column exists in a table."""
+    cursor = conn.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cursor.fetchall())
+
+
+def _migrate_v20_to_v21(conn: sqlite3.Connection):
+    """Rename scryfall_id → printing_id in printings, collection, wishlist, mtgjson_printings."""
+    # SQLite validates ALL views when ALTER TABLE RENAME COLUMN is executed.
+    # Drop all views first, do the renames, then restore them.
+    views = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE type='view'"
+    ).fetchall()
+    for v in views:
+        conn.execute(f"DROP VIEW IF EXISTS {v[0]}")
+
+    # SQLite 3.25+ supports ALTER TABLE RENAME COLUMN
+    # Guard each rename — column may already be named printing_id or table may not exist
+    for table in ("printings", "collection", "wishlist", "mtgjson_printings"):
+        if _has_column(conn, table, "scryfall_id"):
+            conn.execute(f"ALTER TABLE {table} RENAME COLUMN scryfall_id TO printing_id")
+
+    # Restore non-collection views (collection_view is recreated below with updated columns)
+    for v in views:
+        if v[0] != "collection_view" and v["sql"]:
+            try:
+                conn.execute(v["sql"])
+            except Exception:
+                pass  # View may reference columns that don't exist in test schemas
+
+    # Recreate indexes with new names
+    conn.execute("DROP INDEX IF EXISTS idx_collection_scryfall")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_collection_printing ON collection(printing_id)")
+    if _has_column(conn, "wishlist", "printing_id"):
+        conn.execute("DROP INDEX IF EXISTS idx_wishlist_scryfall")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_wishlist_printing ON wishlist(printing_id)")
+    if _has_column(conn, "mtgjson_printings", "printing_id"):
+        conn.execute("DROP INDEX IF EXISTS idx_mtgjson_scryfall")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_mtgjson_printing ON mtgjson_printings(printing_id)")
+
+    # Recreate collection_view with updated column name
+    conn.execute("DROP VIEW IF EXISTS collection_view")
+    conn.execute("""
+        CREATE VIEW IF NOT EXISTS collection_view AS
+        SELECT
+            c.id,
+            c.printing_id,
+            c.finish,
+            c.condition,
+            c.language,
+            c.purchase_price,
+            c.acquired_at,
+            c.source,
+            c.source_image,
+            c.notes,
+            c.tags,
+            c.tradelist,
+            c.is_alter,
+            c.proxy,
+            c.signed,
+            c.misprint,
+            c.status,
+            c.sale_price,
+            c.order_id,
+            p.oracle_id,
+            p.set_code,
+            p.collector_number,
+            p.rarity,
+            p.frame_effects,
+            p.border_color,
+            p.full_art,
+            p.promo,
+            p.promo_types,
+            p.finishes,
+            p.artist,
+            p.image_uri,
+            card.name,
+            card.type_line,
+            card.mana_cost,
+            card.cmc,
+            card.oracle_text,
+            card.colors,
+            card.color_identity
+        FROM collection c
+        JOIN printings p ON c.printing_id = p.printing_id
+        JOIN cards card ON p.oracle_id = card.oracle_id
+    """)
 
 
 def drop_all_tables(conn: sqlite3.Connection):

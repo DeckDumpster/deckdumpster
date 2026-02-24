@@ -645,9 +645,9 @@ function renderPicks() {
 
 function syncPickState() {
   document.querySelectorAll('.card-slot').forEach(slot => {
-    const id = slot.dataset.scryfallId;
+    const id = slot.dataset.printingId;
     const idx = parseInt(slot.dataset.index);
-    const isPicked = picks.some(p => p.scryfall_id === id && p._packIndex === idx);
+    const isPicked = picks.some(p => p.printing_id === id && p._packIndex === idx);
     slot.classList.toggle('picked', isPicked);
   });
 }
@@ -657,7 +657,7 @@ function syncPickState() {
 function buildCardBadges(card, packSetCode) {
   let html = '';
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
-  if (sources.includes('tcg') && card.scryfall_id) {
+  if (sources.includes('tcg') && card.printing_id) {
     const sfPrice = card.tcg_price ? ` $${parseFloat(card.tcg_price).toFixed(2)}` : '';
     html += `<a class="badge link" href="https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}" target="_blank" rel="noopener" onclick="event.stopPropagation()">SF${sfPrice}</a>`;
   }
@@ -923,7 +923,7 @@ async function openPack(seed, hashRevealed) {
     // If restoring from hash, use revealed set; otherwise use surprise mode
     const faceDown = revealedSet ? !revealedSet.has(i) : isSurprise;
     div.className = 'card-slot' + (faceDown ? ' face-down' : '');
-    div.dataset.scryfallId = card.scryfall_id;
+    div.dataset.printingId = card.printing_id;
     div.dataset.index = i;
 
     const rarityColor = getRarityColor(card.rarity);
@@ -963,7 +963,7 @@ async function openPack(seed, hashRevealed) {
 }
 
 function togglePick(card, packIndex) {
-  const existing = picks.findIndex(p => p.scryfall_id === card.scryfall_id && p._packIndex === packIndex);
+  const existing = picks.findIndex(p => p.printing_id === card.printing_id && p._packIndex === packIndex);
   if (existing >= 0) {
     picks.splice(existing, 1);
   } else {

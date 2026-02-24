@@ -14,17 +14,12 @@ from mtg_collector.db import (
 from mtg_collector.db.models import CollectionEntry
 from mtg_collector.services.claude import ClaudeVision
 from mtg_collector.services.ocr import run_ocr
-from mtg_collector.services.scryfall import (
-    ScryfallAPI,
-    cache_scryfall_data,
-    ensure_set_cached,
-)
 from mtg_collector.utils import normalize_condition, normalize_finish, store_source_image
 
 
 def _build_scryfall_query(card_info, hints):
     """
-    Build a Scryfall search query from extracted card fields + user hints.
+    Build a card search query from extracted card fields + user hints.
 
     Returns (set_code, collector_number) tuple for direct lookup, or
     (None, query_string) for search API.
@@ -71,11 +66,11 @@ def _build_scryfall_query(card_info, hints):
     return None, " ".join(parts)
 
 
-def _resolve_card(card_info, hints, scryfall, printing_repo):
+def _resolve_card(card_info, hints, card_repo, printing_repo):
     """
-    Resolve a single card from extracted OCR data to a Scryfall card dict.
+    Resolve a single card from extracted OCR data using local DB lookups.
 
-    Returns the Scryfall card data dict, or None if not found.
+    Returns the card data dict (from printing.raw_json), or None if not found.
     If direct lookup fails, presents candidates to the user for selection.
     """
     set_code, cn_or_query = _build_scryfall_query(card_info, hints)
@@ -85,45 +80,41 @@ def _resolve_card(card_info, hints, scryfall, printing_repo):
         cn_raw = cn_or_query
         cn_stripped = cn_raw.lstrip("0") or "0"
 
-        # Try local cache first
         printing = printing_repo.get_by_set_cn(set_code, cn_stripped)
         if not printing:
             printing = printing_repo.get_by_set_cn(set_code, cn_raw)
         if printing and printing.raw_json:
-            return printing.get_scryfall_data()
+            return printing.get_card_data()
 
-        # Try Scryfall API
-        card_data = scryfall.get_card_by_set_cn(set_code, cn_stripped)
-        if not card_data:
-            card_data = scryfall.get_card_by_set_cn(set_code, cn_raw)
-        if card_data:
-            return card_data
-
-    # No direct match — gather candidates and let user pick
+    # No direct match — search by name in local DB
     name = card_info.get("name")
+    if not name:
+        return None
+
+    card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
+    if not card:
+        return None
+
+    # Find printings of this card
+    printings = printing_repo.get_by_oracle_id(card.oracle_id)
+    if not printings:
+        return None
+
+    # If we have a set hint, prefer a printing from that set
     search_set = card_info.get("set_code") or hints.get("set")
-    candidates = []
+    if search_set:
+        search_set = search_set.lower()
+        for p in printings:
+            if p.set_code == search_set and p.raw_json:
+                return p.get_card_data()
 
-    if name:
-        candidates = scryfall.search_card(name, set_code=search_set)
-
-    # Last resort: raw query if we built one
-    if not candidates and cn_or_query and not set_code:
-        try:
-            url = f"{scryfall.BASE_URL}/cards/search"
-            params = {"q": cn_or_query, "unique": "prints"}
-            response = scryfall._request_with_retry("GET", url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            if data.get("object") == "list" and data.get("data"):
-                candidates = data["data"]
-        except Exception:
-            pass
+    # Build candidate list from printings with raw_json
+    candidates = [p.get_card_data() for p in printings if p.raw_json]
+    candidates = [c for c in candidates if c]  # filter None
 
     if not candidates:
         return None
 
-    # Single exact match — still confirm with user
     if len(candidates) == 1:
         return candidates[0]
 
@@ -318,17 +309,6 @@ def run(args):
         print(f"    {i}. {name} ({sc} #{cn})")
     print()
 
-    # Step 3: Resolve via Scryfall
-    scryfall = ScryfallAPI()
-
-    # Normalize set code if provided
-    if args.set_code:
-        normalized_set = scryfall.normalize_set_code(args.set_code)
-        if not normalized_set:
-            print(f"Error: Unknown set code '{args.set_code}'")
-            sys.exit(1)
-        hints["set"] = normalized_set
-
     # Initialize database
     conn = get_connection(args.db_path)
     init_db(conn)
@@ -338,24 +318,26 @@ def run(args):
     printing_repo = PrintingRepository(conn)
     collection_repo = CollectionRepository(conn)
 
-    # Cache set if known
-    if hints.get("set"):
-        ensure_set_cached(scryfall, hints["set"], card_repo, set_repo, printing_repo, conn)
+    # Normalize set code if provided
+    if args.set_code:
+        normalized_set = set_repo.normalize_code(args.set_code)
+        if not normalized_set:
+            print(f"Error: Unknown set code '{args.set_code}' (run `mtg cache all` to populate)")
+            sys.exit(1)
+        hints["set"] = normalized_set
 
-    print("Resolving cards via Scryfall...")
+    print("Resolving cards in local database...")
     resolved = []
     failed = []
 
     for i, card_info in enumerate(extracted, 1):
         name = card_info.get("name", "???")
-        card_data = _resolve_card(card_info, hints, scryfall, printing_repo)
+        card_data = _resolve_card(card_info, hints, card_repo, printing_repo)
 
         if not card_data:
-            print(f"  FAILED: Card {i} ({name}) — not found on Scryfall")
+            print(f"  FAILED: Card {i} ({name}) — not found in database (run `mtg cache all` to populate)")
             failed.append(f"Card {i}: {name}")
             continue
-
-        cache_scryfall_data(scryfall, card_repo, set_repo, printing_repo, card_data)
 
         resolved.append({
             "card_data": card_data,
@@ -393,7 +375,7 @@ def run(args):
         finish = normalize_finish("foil" if r["foil"] else "nonfoil")
         entry = CollectionEntry(
             id=None,
-            scryfall_id=r["card_data"]["id"],
+            printing_id=r["card_data"]["id"],
             finish=finish,
             condition=condition,
             source=args.source,

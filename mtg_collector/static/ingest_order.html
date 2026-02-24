@@ -366,7 +366,7 @@ parseBtn.addEventListener('click', async () => {
     }
 
     const totalItems = parsedOrders.reduce((s, o) => s + o.items.length, 0);
-    results.innerHTML = `<div class="status-msg info"><span class="spinner"></span>Parsed ${parsedOrders.length} order(s), ${totalItems} items. Resolving via Scryfall...</div>`;
+    results.innerHTML = `<div class="status-msg info"><span class="spinner"></span>Parsed ${parsedOrders.length} order(s), ${totalItems} items. Resolving cards...</div>`;
 
     // Auto-resolve
     const res2 = await fetch('/api/order/resolve', {
