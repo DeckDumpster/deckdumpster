@@ -15,6 +15,7 @@ dist/
 # Output files
 moxfield_collection.csv
 *.sqlite
+!tests/fixtures/*.sqlite
 
 # IDE
 .idea/

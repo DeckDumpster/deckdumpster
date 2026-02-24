@@ -32,6 +32,9 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/mtg_collector /app/mtg_collector
 
+# Pre-built test fixture for fast --test container setup (no network needed)
+COPY tests/fixtures/test-data.sqlite /app/test-data.sqlite
+
 ENV PATH="/app/.venv/bin:$PATH"
 ENV MTGC_HOME=/data
 

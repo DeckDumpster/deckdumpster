@@ -9,12 +9,13 @@
 #   loginctl enable-linger $USER
 #
 # Usage:
-#   bash deploy/setup.sh <instance> [port] [--init]
+#   bash deploy/setup.sh <instance> [port] [--init] [--test]
 #
 # Examples:
 #   bash deploy/setup.sh prod 8081        # explicit port
 #   bash deploy/setup.sh feature-xyz      # auto-assigns next free port
 #   bash deploy/setup.sh test --init      # build + initialize data volume with demo data
+#   bash deploy/setup.sh ui-test --test   # fast setup from pre-built fixture (~seconds)
 #
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
@@ -29,18 +30,21 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # --- Parse arguments ---
 
 INIT=false
+TEST=false
 POSITIONAL=()
 for arg in "$@"; do
     case $arg in
         --init) INIT=true ;;
+        --test) TEST=true ;;
         *) POSITIONAL+=("$arg") ;;
     esac
 done
 
 if [ ${#POSITIONAL[@]} -lt 1 ]; then
-    echo "Usage: bash deploy/setup.sh <instance> [port] [--init]"
+    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test]"
     echo "Example: bash deploy/setup.sh prod 8081"
     echo "         bash deploy/setup.sh test --init    # build + init data with demo dataset"
+    echo "         bash deploy/setup.sh ui-test --test # fast setup from pre-built fixture"
     exit 1
 fi
 
@@ -149,7 +153,16 @@ systemctl --user daemon-reload
 
 # --- Optional: initialize data volume ---
 
-if [ "$INIT" = "true" ]; then
+if [ "$TEST" = "true" ]; then
+    VOLUME_NAME="${SERVICE_NAME}-data"
+    echo "==> Initializing data volume ($VOLUME_NAME) from pre-built fixture..."
+    podman run --rm \
+        -v "${VOLUME_NAME}:/data:Z" \
+        -e MTGC_HOME=/data \
+        --entrypoint mtg \
+        "localhost/mtgc:${INSTANCE}" \
+        setup --demo --from-fixture /app/test-data.sqlite
+elif [ "$INIT" = "true" ]; then
     VOLUME_NAME="${SERVICE_NAME}-data"
     SEED_VOLUME="mtgc-seed-data"
     if podman volume exists "$SEED_VOLUME" 2>/dev/null; then

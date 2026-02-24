@@ -27,13 +27,15 @@ uv run pytest tests/ui/ -v --instance <instance>       # Run all UI scenarios
 
 mtg setup                                              # Init DB + cache Scryfall + fetch MTGJSON
 mtg setup --demo                                       # Full setup + load demo data (~50 cards)
-mtg setup --skip-cache --skip-data                     # Fast start if data is already loaded. 
+mtg setup --demo --from-fixture tests/fixtures/test-data.sqlite  # Fast setup from pre-built fixture
+mtg setup --skip-cache --skip-data                     # Fast start if data is already loaded.
 mtg crack-pack-server                                  # Start web UI on port 8080
 
 # Deployment — rootless Podman, per-instance isolation
 bash deploy/seed.sh                      # One-time: create reusable seed data volume (~15-30 min)
 bash deploy/seed.sh --force              # Recreate seed volume (after schema changes)
 bash deploy/setup.sh my-feature --init   # Create instance + clone seed volume (~seconds)
+bash deploy/setup.sh my-feature --test   # Fast setup from pre-built fixture (~seconds, no network)
 bash deploy/setup.sh my-feature          # Create instance without data (auto-port, inherits API key)
 bash deploy/deploy.sh my-feature         # Rebuild image + restart
 bash deploy/teardown.sh my-feature       # Stop + remove (add --purge to delete data)
@@ -250,16 +252,19 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
 From the repo clone with your feature branch checked out:
 
 ```bash
-# 1. Ensure the seed volume exists (fast no-op if already created)
-bash deploy/seed.sh
+# Fast path: pre-built fixture, no network needed (~seconds)
+bash deploy/setup.sh <instance> --test
+systemctl --user start mtgc-<instance>
+sleep 5
 
-# 2. Create instance — clones seed volume in seconds
+# Full path: clone seed volume (requires seed.sh first)
+bash deploy/seed.sh
 bash deploy/setup.sh <instance> --init
 systemctl --user start mtgc-<instance>
 sleep 5                                     # Wait for server startup
 ```
 
-`seed.sh` is idempotent — it exits immediately if `mtgc-seed-data` already exists. Run `seed.sh --force` to recreate it after schema migrations. `setup.sh --init` clones the seed volume via `podman volume export | import`, which takes seconds instead of the 15-30 minutes a fresh `mtg setup --demo` would take.
+`--test` uses a pre-built fixture DB baked into the container image — no seed volume or network required. `--init` clones the seed volume (run `seed.sh` first). Both load demo data (~50 cards + sealed products).
 
 Discover the assigned port:
 
@@ -269,8 +274,19 @@ podman port systemd-mtgc-<instance> 8081/tcp
 
 ### Setup (macOS)
 
+Prerequisites (one-time):
+
 ```bash
-bash deploy/mac-setup.sh <instance> --init   # Build image + init data + start container
+brew install podman
+podman machine init
+podman machine start    # Also needed after each reboot
+```
+
+Then create an instance:
+
+```bash
+bash deploy/mac-setup.sh <instance> --test   # Fast: pre-built fixture (~seconds)
+bash deploy/mac-setup.sh <instance> --init   # Full: download + init data (~15-30 min)
 ```
 
 The script auto-starts the container and prints the URL. Discover the port:
@@ -341,11 +357,12 @@ bash deploy/mac-teardown.sh <instance> --purge   # Stop + remove container, volu
 ### Notes
 
 - Instance name should match your branch/feature (e.g., `issue44`, `my-feature`)
-- **Always run `bash deploy/seed.sh` before `setup.sh --init`.** It's a fast no-op if the seed volume already exists, and ensures `--init` clones data in seconds instead of downloading ~600 MB.
+- **For UI tests, prefer `--test`** — uses a pre-built fixture DB (~27 MB, 11 sets) baked into the image. No seed volume or network needed. Starts in seconds.
+- **For full data, use `--init`** — clones the seed volume. Run `bash deploy/seed.sh` first (fast no-op if it exists).
+- `--test` uses `tests/fixtures/test-data.sqlite` (regenerate with `uv run python scripts/build_test_fixture.py`).
 - `--init` clones the `mtgc-seed-data` volume (DB, Scryfall cache, MTGJSON data, ~50 demo cards). If no seed volume exists, it falls back to the slow `mtg setup --demo` path.
-- After schema migrations, recreate the seed volume with `bash deploy/seed.sh --force`.
+- After schema migrations, recreate the seed volume with `bash deploy/seed.sh --force` and regenerate the test fixture.
 - Data persists on the volume across container restarts. Only `--purge` removes it.
-- If the Scryfall bulk cache step fails (FK constraint at ~75k cards), the remaining steps still complete and the server will start. Demo data may be partial.
 
 ## UI Scenario Tests
 
