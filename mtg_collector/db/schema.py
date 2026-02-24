@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -209,11 +209,17 @@ CREATE TABLE IF NOT EXISTS price_fetch_log (
     rows_inserted INTEGER
 );
 
--- Latest prices view (global max — correct because imports are atomic)
-CREATE VIEW IF NOT EXISTS latest_prices AS
-SELECT set_code, collector_number, source, price_type, price, observed_at
-FROM prices
-WHERE observed_at = (SELECT MAX(observed_at) FROM prices);
+-- Latest prices (materialized from prices table after each import)
+CREATE TABLE IF NOT EXISTS latest_prices (
+    set_code TEXT NOT NULL,
+    collector_number TEXT NOT NULL,
+    source TEXT NOT NULL,
+    price_type TEXT NOT NULL,
+    price REAL NOT NULL,
+    observed_at TEXT NOT NULL,
+    PRIMARY KEY (set_code, collector_number, source, price_type)
+);
+CREATE INDEX IF NOT EXISTS idx_latest_prices_card ON latest_prices(set_code, collector_number);
 
 -- MTGJSON card printings (imported from AllPrintings.json)
 CREATE TABLE IF NOT EXISTS mtgjson_printings (
@@ -391,6 +397,20 @@ JOIN sets s ON p.set_code = s.set_code;
 """
 
 
+def refresh_latest_prices(conn: sqlite3.Connection) -> int:
+    """Repopulate the latest_prices table from the prices table.
+
+    Call this after inserting new price data.  Returns the number of rows written.
+    """
+    conn.execute("DELETE FROM latest_prices")
+    cursor = conn.execute(
+        "INSERT INTO latest_prices (set_code, collector_number, source, price_type, price, observed_at) "
+        "SELECT set_code, collector_number, source, price_type, price, observed_at "
+        "FROM prices WHERE observed_at = (SELECT MAX(observed_at) FROM prices)"
+    )
+    return cursor.rowcount
+
+
 def get_current_version(conn: sqlite3.Connection) -> int:
     """Get the current schema version, or 0 if not initialized."""
     try:
@@ -469,6 +489,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v19_to_v20(conn)
         if current < 21:
             _migrate_v20_to_v21(conn)
+        if current < 22:
+            _migrate_v21_to_v22(conn)
 
     # Record schema version
     conn.execute(
@@ -1337,13 +1359,36 @@ def _migrate_v20_to_v21(conn: sqlite3.Connection):
     """)
 
 
+def _migrate_v21_to_v22(conn: sqlite3.Connection):
+    """Materialize latest_prices: replace VIEW with TABLE for fast lookups."""
+    conn.execute("DROP VIEW IF EXISTS latest_prices")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS latest_prices (
+            set_code TEXT NOT NULL,
+            collector_number TEXT NOT NULL,
+            source TEXT NOT NULL,
+            price_type TEXT NOT NULL,
+            price REAL NOT NULL,
+            observed_at TEXT NOT NULL,
+            PRIMARY KEY (set_code, collector_number, source, price_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_latest_prices_card ON latest_prices(set_code, collector_number);
+    """)
+    # Populate from existing price data
+    has_prices = conn.execute("SELECT 1 FROM prices LIMIT 1").fetchone()
+    if has_prices:
+        refresh_latest_prices(conn)
+    conn.commit()
+
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
         DROP VIEW IF EXISTS latest_sealed_prices;
         DROP VIEW IF EXISTS sealed_collection_view;
         DROP VIEW IF EXISTS collection_view;
-        DROP VIEW IF EXISTS latest_prices;
+        DROP TABLE IF EXISTS latest_prices;
         DROP TABLE IF EXISTS tcgplayer_groups;
         DROP TABLE IF EXISTS sealed_prices;
         DROP TABLE IF EXISTS sealed_collection;

@@ -490,6 +490,12 @@ def import_prices(db_path: str):
 
     conn.commit()
 
+    # Refresh materialized latest_prices table
+    from mtg_collector.db.schema import refresh_latest_prices
+
+    n = refresh_latest_prices(conn)
+    conn.commit()
+
     # Log the fetch
     dates_list = sorted(dates_seen)
     conn.execute(
@@ -503,6 +509,7 @@ def import_prices(db_path: str):
     print(f"  Dates imported: {', '.join(dates_list) if dates_list else 'none'}")
     print(f"  UUIDs: {uuid_total} total, {uuid_mapped} mapped, {uuid_unmapped} unmapped")
     print(f"  Price rows: {len(price_rows)} (INSERT OR IGNORE)")
+    print(f"  Latest prices: {n} rows refreshed")
     print(f"  Elapsed: {elapsed:.1f}s")
 
     conn.close()

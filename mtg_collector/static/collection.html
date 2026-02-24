@@ -2722,6 +2722,10 @@ function isOrderedOnlyFilter() {
 }
 
 function render() {
+  // Clean up virtual scroll when switching away from grid
+  if (_gridScrollCleanup && (groupByOrder || currentView === 'table' || isOrderedOnlyFilter())) {
+    _gridScrollCleanup(); _gridScrollCleanup = null;
+  }
   if (groupByOrder) renderOrderGrouped();
   else if (currentView === 'table') renderTable();
   else if (isOrderedOnlyFilter()) renderOrderGrouped();
@@ -2996,65 +3000,113 @@ function renderTable() {
   });
 }
 
+// Virtual-scroll state for grid view
+let _gridScrollCleanup = null;
+
+function _buildCardHtml(card, idx) {
+  const isUnowned = !card.owned;
+  const isWanted = isUnowned && isCardWanted(card);
+  const isOrdered = card.status === 'ordered';
+  const cls = 'sheet-card' + (isUnowned ? ' unowned' : '') + (isWanted ? ' wanted' : '') + (isOrdered ? ' ordered' : '');
+  const rarityColor = getRarityColor(card.rarity);
+  const foilClass = (!isUnowned && (card.finish === 'foil' || card.finish === 'etched')) ? ' foil' : '';
+  const qtyBadge = !isUnowned && card.qty > 1 ? `<span class="qty-badge">${card.qty}x</span>` : '';
+  const wantedBadge = isWanted ? '<span class="wanted-badge">Want</span>' : '';
+  const orderedBadge = isOrdered ? '<span class="ordered-badge" title="Ordered"></span>' : '';
+  const selectCb = multiSelectMode ? `<input type="checkbox" class="select-checkbox" data-idx="${idx}" ${selectedCards.has(idx) ? 'checked' : ''}>` : '';
+  return `<div class="${cls}" data-idx="${idx}"><div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111"><img src="${card.image_uri || ''}" alt="${card.name}" loading="lazy">${qtyBadge}${wantedBadge}${orderedBadge}${selectCb}</div></div>`;
+}
+
 function renderGrid() {
+  // Clean up previous scroll listener
+  if (_gridScrollCleanup) { _gridScrollCleanup(); _gridScrollCleanup = null; }
+
   if (allCards.length === 0) {
     main.innerHTML = '<div class="empty-state">No cards found</div>';
     return;
   }
 
-  // Sort bar
-  const bar = document.createElement('div');
-  bar.className = 'sort-bar';
+  // Sort bar (batch innerHTML)
+  let sortBarHtml = '';
   for (const col of ALL_COLUMNS) {
-    const btn = document.createElement('span');
-    btn.className = 'sort-btn' + (col.key === sortColumn ? ' active' : '');
+    const active = col.key === sortColumn ? ' active' : '';
     const arrow = col.key === sortColumn ? ` ${sortOrder === 'asc' ? '\u25B2' : '\u25BC'}` : '';
-    btn.textContent = col.label + arrow;
-    btn.addEventListener('click', () => handleSortClick(col.key));
-    bar.appendChild(btn);
+    sortBarHtml += `<span class="sort-btn${active}" data-sort="${col.key}">${col.label}${arrow}</span>`;
   }
 
-  const grid = document.createElement('div');
-  grid.className = 'card-grid';
+  // Grid dimensions for virtual scrolling
+  const cardWidth = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--grid-card-width')) || 264;
+  const gap = 10;
+  const viewportWidth = main.clientWidth || window.innerWidth;
+  const cols = Math.max(1, Math.floor((viewportWidth + gap) / (cardWidth + gap)));
+  const cardHeight = Math.round(cardWidth * (680 / 488)) + gap; // aspect ratio + gap
+  const totalRows = Math.ceil(allCards.length / cols);
+  const totalHeight = totalRows * cardHeight;
+  const bufferRows = 3;
 
-  for (let idx = 0; idx < allCards.length; idx++) {
-    const card = allCards[idx];
-    const isUnowned = !card.owned;
-    const isWanted = isUnowned && isCardWanted(card);
-    const cardEl = document.createElement('div');
-    const isOrdered = card.status === 'ordered';
-    cardEl.className = 'sheet-card' + (isUnowned ? ' unowned' : '') + (isWanted ? ' wanted' : '') + (isOrdered ? ' ordered' : '');
+  // Create container with full height spacer for scroll
+  main.innerHTML = `<div class="sort-bar" id="grid-sort-bar">${sortBarHtml}</div><div class="card-grid" id="vgrid" style="position:relative;height:${totalHeight}px;"></div>`;
 
-    const rarityColor = getRarityColor(card.rarity);
-    const foilClass = (!isUnowned && (card.finish === 'foil' || card.finish === 'etched')) ? ' foil' : '';
-    const qtyBadge = !isUnowned && card.qty > 1 ? `<span class="qty-badge">${card.qty}x</span>` : '';
-    const wantedBadge = isWanted ? '<span class="wanted-badge">Want</span>' : '';
-    const orderedBadge = card.status === 'ordered' ? '<span class="ordered-badge" title="Ordered"></span>' : '';
-    const selectCb = multiSelectMode ? `<input type="checkbox" class="select-checkbox" data-idx="${idx}" ${selectedCards.has(idx) ? 'checked' : ''}>` : '';
+  const gridEl = document.getElementById('vgrid');
+  let renderedRange = [-1, -1]; // track what's currently rendered
 
-    cardEl.innerHTML = `
-      <div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111">
-        <img src="${card.image_uri || ''}" alt="${card.name}" loading="lazy">
-        ${qtyBadge}
-        ${wantedBadge}
-        ${orderedBadge}
-        ${selectCb}
-      </div>
-    `;
-    cardEl.addEventListener('click', (e) => {
-      if (e.target.classList.contains('select-checkbox')) {
-        toggleCardSelection(idx, e.shiftKey);
-        if (e.shiftKey) render();
-        return;
-      }
-      showCardModal(card);
-    });
-    grid.appendChild(cardEl);
+  function renderVisible() {
+    const scrollTop = window.scrollY - (gridEl.getBoundingClientRect().top + window.scrollY);
+    const viewportHeight = window.innerHeight;
+    const firstRow = Math.max(0, Math.floor(scrollTop / cardHeight) - bufferRows);
+    const lastRow = Math.min(totalRows - 1, Math.ceil((scrollTop + viewportHeight) / cardHeight) + bufferRows);
+
+    if (firstRow === renderedRange[0] && lastRow === renderedRange[1]) return;
+    renderedRange = [firstRow, lastRow];
+
+    const startIdx = firstRow * cols;
+    const endIdx = Math.min(allCards.length, (lastRow + 1) * cols);
+    let html = '';
+    for (let idx = startIdx; idx < endIdx; idx++) {
+      html += _buildCardHtml(allCards[idx], idx);
+    }
+
+    // Position cards absolutely within the grid
+    gridEl.innerHTML = html;
+    const cards = gridEl.children;
+    for (let i = 0; i < cards.length; i++) {
+      const idx = startIdx + i;
+      const row = Math.floor(idx / cols);
+      const col = idx % cols;
+      cards[i].style.cssText = `position:absolute;top:${row * cardHeight}px;left:${col * (cardWidth + gap)}px;width:${cardWidth}px;`;
+    }
   }
 
-  main.innerHTML = '';
-  main.appendChild(bar);
-  main.appendChild(grid);
+  renderVisible();
+
+  // Scroll listener with requestAnimationFrame throttle
+  let ticking = false;
+  function onScroll() {
+    if (!ticking) {
+      ticking = true;
+      requestAnimationFrame(() => { renderVisible(); ticking = false; });
+    }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  _gridScrollCleanup = () => window.removeEventListener('scroll', onScroll);
+
+  // Delegated event listeners on sort bar
+  document.getElementById('grid-sort-bar').addEventListener('click', (e) => {
+    const btn = e.target.closest('.sort-btn');
+    if (btn) handleSortClick(btn.dataset.sort);
+  });
+
+  // Delegated event listener on grid
+  gridEl.addEventListener('click', (e) => {
+    if (e.target.classList.contains('select-checkbox')) {
+      const idx = parseInt(e.target.dataset.idx);
+      toggleCardSelection(idx, e.shiftKey);
+      if (e.shiftKey) render();
+      return;
+    }
+    const cardEl = e.target.closest('.sheet-card');
+    if (cardEl) showCardModal(allCards[parseInt(cardEl.dataset.idx)]);
+  });
 }
 
 // --- Event listeners ---

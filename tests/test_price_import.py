@@ -168,11 +168,11 @@ class TestSchemaV15:
         assert "prices" in table_names
         assert "price_fetch_log" in table_names
 
-        views = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         ).fetchall()
-        view_names = [r[0] for r in views]
-        assert "latest_prices" in view_names
+        table_names = [r[0] for r in tables]
+        assert "latest_prices" in table_names
 
     def test_schema_version_is_current(self, test_db):
         _, conn = test_db
@@ -313,9 +313,11 @@ class TestImportPrices:
         conn2.close()
 
 
-class TestLatestPricesView:
+class TestLatestPricesTable:
     def test_returns_only_latest(self, test_db):
-        """Insert 2 dates, view returns only latest."""
+        """Insert 2 dates, refresh_latest_prices returns only latest."""
+        from mtg_collector.db.schema import refresh_latest_prices
+
         _, conn = test_db
         conn.executemany(
             "INSERT INTO prices (set_code, collector_number, source, price_type, price, observed_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -325,6 +327,8 @@ class TestLatestPricesView:
                 ("neo", "2", "tcgplayer", "normal", 2.00, "2024-01-15"),
             ],
         )
+        conn.commit()
+        refresh_latest_prices(conn)
         conn.commit()
 
         rows = conn.execute("SELECT * FROM latest_prices ORDER BY set_code, collector_number").fetchall()
@@ -516,11 +520,11 @@ class TestMigrationV14ToV15:
         assert "prices" in table_names
         assert "price_fetch_log" in table_names
 
-        views = conn2.execute(
-            "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name"
+        tables = conn2.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         ).fetchall()
-        view_names = [r[0] for r in views]
-        assert "latest_prices" in view_names
+        table_names = [r[0] for r in tables]
+        assert "latest_prices" in table_names
 
         close_connection()
         Path(db_path).unlink(missing_ok=True)
