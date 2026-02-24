@@ -5,7 +5,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Install dependencies first (layer caching)
+# Install dependencies first (layer caching).
+# Build with: podman build -v ~/.cache/uv:/root/.cache/uv:z ...
+# to reuse the host's uv cache and avoid re-downloading ~3 GB of wheels.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 

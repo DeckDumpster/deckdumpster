@@ -38,8 +38,10 @@ if [ ! -f "$QUADLET_FILE" ]; then
     echo "==> Starting $SERVICE_NAME..."
     systemctl --user start "$SERVICE_NAME"
 else
-    echo "==> Building container image (mtgc:$INSTANCE)..."
-    podman build -t "mtgc:${INSTANCE}" -f Containerfile .
+    echo "==> Building container image (mtgc:latest)..."
+    podman build -t mtgc:latest -f Containerfile \
+        -v "${HOME}/.cache/uv:/root/.cache/uv:z" .
+    podman tag mtgc:latest "mtgc:${INSTANCE}"
 
     echo "==> Reloading systemd (picks up Quadlet changes)..."
     systemctl --user daemon-reload

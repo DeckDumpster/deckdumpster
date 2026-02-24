@@ -107,8 +107,10 @@ fi
 
 # --- Build container image ---
 
-echo "==> Building container image (mtgc:$INSTANCE)..."
-podman build -t "mtgc:${INSTANCE}" -f "$REPO_DIR/Containerfile" "$REPO_DIR"
+echo "==> Building container image (mtgc:latest)..."
+podman build -t mtgc:latest -f "$REPO_DIR/Containerfile" \
+    -v "${HOME}/.cache/uv:/root/.cache/uv:z" "$REPO_DIR"
+podman tag mtgc:latest "mtgc:${INSTANCE}"
 
 # --- Generate and install Quadlet ---
 
@@ -149,15 +151,24 @@ systemctl --user daemon-reload
 
 if [ "$INIT" = "true" ]; then
     VOLUME_NAME="${SERVICE_NAME}-data"
-    echo "==> Initializing data volume ($VOLUME_NAME) with demo dataset..."
-    echo "    This downloads ~600 MB of MTGJSON data and caches Scryfall cards."
-    echo "    May take 15-30 minutes on first run."
-    podman run --rm \
-        -v "${VOLUME_NAME}:/data:Z" \
-        -e MTGC_HOME=/data \
-        --entrypoint mtg \
-        "localhost/mtgc:${INSTANCE}" \
-        setup --demo
+    SEED_VOLUME="mtgc-seed-data"
+    if podman volume exists "$SEED_VOLUME" 2>/dev/null; then
+        echo "==> Cloning seed volume to $VOLUME_NAME..."
+        podman volume create "$VOLUME_NAME" >/dev/null 2>&1 || true
+        podman volume export "$SEED_VOLUME" | podman volume import "$VOLUME_NAME" -
+        echo "    Done (cloned from seed volume)."
+    else
+        echo "==> No seed volume found — running full setup (slow)..."
+        echo "    TIP: Run 'bash deploy/seed.sh' once to create a reusable seed volume."
+        echo "    This downloads ~600 MB of MTGJSON data and caches Scryfall cards."
+        echo "    May take 15-30 minutes on first run."
+        podman run --rm \
+            -v "${VOLUME_NAME}:/data:Z" \
+            -e MTGC_HOME=/data \
+            --entrypoint mtg \
+            "localhost/mtgc:${INSTANCE}" \
+            setup --demo
+    fi
 fi
 
 echo ""
