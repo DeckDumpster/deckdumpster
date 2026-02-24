@@ -2,12 +2,24 @@
 
 Rootless Podman Quadlet deployment. No sudo required (after initial podman install). Each instance is a separate repo clone with its own image, data, and config.
 
-## Prerequisites (one-time, needs sudo)
+## Prerequisites
+
+### Linux (one-time, needs sudo)
 
 ```bash
 sudo apt install podman
 loginctl enable-linger $USER
 ```
+
+### macOS (one-time)
+
+```bash
+brew install podman
+podman machine init
+podman machine start
+```
+
+The Podman machine (a lightweight Linux VM) persists across reboots but must be started after each reboot with `podman machine start`. Use the `deploy/mac-*.sh` scripts instead of `setup.sh`/`deploy.sh`/`teardown.sh` (no systemd on macOS).
 
 ## One-time: set up default env
 
@@ -49,6 +61,12 @@ Each instance runs from its own checkout on any branch. Port is auto-assigned if
 git clone https://github.com/thaen/efj-mtgc.git ~/workspace/mtgc-feature-xyz
 cd ~/workspace/mtgc-feature-xyz
 git checkout feature-xyz
+
+# Fast path: pre-built fixture, no seed volume or network needed (~seconds)
+bash deploy/setup.sh feature-xyz --test
+systemctl --user start mtgc-feature-xyz
+
+# Full path: clone seed volume (run seed.sh first)
 bash deploy/setup.sh feature-xyz --init     # clones seed volume (~seconds)
 systemctl --user start mtgc-feature-xyz
 
@@ -64,7 +82,7 @@ bash deploy/teardown.sh feature-xyz --purge  # removes everything
 | Script | Purpose |
 |---|---|
 | `seed.sh [--force]` | Create reusable seed data volume. Run once, all future `--init` clones from it |
-| `setup.sh <name> [port] [--init]` | Create instance. `--init` clones seed volume (or falls back to slow setup). Port auto-assigned if omitted |
+| `setup.sh <name> [port] [--init] [--test]` | Create instance. `--test` uses pre-built fixture (fast, no network). `--init` clones seed volume. Port auto-assigned if omitted |
 | `deploy.sh <name>` | Rebuild image and restart one instance |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 

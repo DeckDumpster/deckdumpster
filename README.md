@@ -59,6 +59,17 @@ The `mtg setup` command handles database initialization, Scryfall bulk data cach
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - [Anthropic API key](https://console.anthropic.com/) (only needed for `ingest-corners` and OCR ingestion)
+- [Podman](https://podman.io/) for container deployment (optional, needed for `deploy/` scripts and UI tests)
+
+### Podman setup (macOS)
+
+```bash
+brew install podman
+podman machine init
+podman machine start
+```
+
+The Podman machine persists across reboots but must be started after each reboot with `podman machine start`.
 
 ## Configuration
 
@@ -259,7 +270,11 @@ UX regression tests using Claude Vision to drive a headless browser through real
 # One-time: install Chromium for Playwright
 uv run shot-scraper install
 
-# Start a test instance with demo data
+# Start a test instance (fast: pre-built fixture, no network needed)
+bash deploy/setup.sh ui-test --test
+systemctl --user start mtgc-ui-test
+
+# Or with full data (requires seed volume)
 bash deploy/setup.sh ui-test --init
 systemctl --user start mtgc-ui-test
 
