@@ -168,9 +168,13 @@ EXTRACT_ELEMENTS_JS = """
   const results = [];
   let idx = 0;
 
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
   function tag(el) {
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return;
+    if (rect.right < 0 || rect.left > vw || rect.bottom < 0 || rect.top > vh) return;
     const style = getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden') return;
 
