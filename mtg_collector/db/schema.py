@@ -1367,7 +1367,12 @@ def _migrate_v20_to_v21(conn: sqlite3.Connection):
 
 def _migrate_v21_to_v22(conn: sqlite3.Connection):
     """Materialize latest_prices: replace VIEW with TABLE for fast lookups."""
-    conn.execute("DROP VIEW IF EXISTS latest_prices")
+    # Handle both cases: may be a view (original) or already a table
+    kind = conn.execute(
+        "SELECT type FROM sqlite_master WHERE name='latest_prices'"
+    ).fetchone()
+    if kind:
+        conn.execute(f"DROP {kind[0].upper()} IF EXISTS latest_prices")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS latest_prices (
             set_code TEXT NOT NULL,
@@ -1402,6 +1407,16 @@ def _migrate_v22_to_v23(conn: sqlite3.Connection):
     new_ddl = old_ddl.replace("ingest_images", "ingest_images_new", 1).replace(old_check, new_check)
     cursor = conn.execute("PRAGMA table_info(ingest_images)")
     cols = ", ".join(r[1] for r in cursor.fetchall())
+    # Clean up orphans from previous failed attempts and broken views that
+    # block ALTER TABLE RENAME (SQLite validates all views on rename).
+    conn.execute("DROP TABLE IF EXISTS ingest_images_new")
+    for (vname,) in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='view'"
+    ).fetchall():
+        try:
+            conn.execute(f"SELECT * FROM [{vname}] LIMIT 0")
+        except Exception:
+            conn.execute(f"DROP VIEW IF EXISTS [{vname}]")
     conn.execute(new_ddl)
     conn.execute(f"INSERT INTO ingest_images_new ({cols}) SELECT {cols} FROM ingest_images")
     conn.execute("DROP TABLE ingest_images")
