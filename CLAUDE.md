@@ -74,7 +74,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `agent.py` | 564 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
+| `agent.py` | 562 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
 | `claude.py` | 504 | Claude Vision API: corner reading, card identification |
 | `order_parser.py` | 414 | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
 | `pack_generator.py` | 329 | MTGJSON-based booster pack simulation from SQLite |

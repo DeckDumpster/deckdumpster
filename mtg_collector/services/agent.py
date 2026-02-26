@@ -155,9 +155,7 @@ OUTPUT_SCHEMA = {
 }
 
 _QUERY_TOOL_NOTES = (
-    "IMPORTANT: The local cache is incomplete — only cards from sets the user has explicitly "
-    "cached are present. Empty results mean the card is not cached locally, not that it "
-    "doesn't exist. When listing candidate printings for disambiguation, JOIN sets to include "
+    "When listing candidate printings for disambiguation, JOIN sets to include "
     "set_name and released_at — this helps reason about which sets are plausible. "
     "Always use LEFT JOIN since not all sets are guaranteed to have a row.\n\n"
     "Common mistakes to avoid:\n"
