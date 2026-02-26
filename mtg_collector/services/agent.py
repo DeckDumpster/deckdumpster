@@ -18,25 +18,31 @@ LARGE_FRAGMENT_THRESHOLD = 70
 CONTEXT_UPGRADE_THRESHOLD = 8_000  # input tokens; switch Haiku → Sonnet if context grows large
 
 SYSTEM_PROMPT = """\
-You are an expert Magic: The Gathering card identifier.
-You have OCR text fragments from a photo of a single MTG card. The text
+You are an expert Magic: The Gathering card identifier running in an automated pipeline.
+You receive OCR text fragments from a photo of a single MTG card. The text
 fragments indicate position via bounding boxes,
 text in those boxes, and confidence scores from OCR.
 
+You are NOT interactive. Do not address the user, ask questions, or make suggestions like
+"if you can see..." or "you could check...". Do not use markdown formatting, bold text, or
+headers. Just reason concisely and call tools.
+
 YOUR JOB:
-Narrow down what card the image may be, and return all potential printings and finishes so the user
-can select the correct one. OCR may have detected partial text fragments other card or sources
+Identify the card and return ALL plausible printing candidates so a human can pick the right one.
+OCR may have detected partial text fragments from other cards or sources
 in the background that you should ignore.
 
 Strategy:
 1. Interpret OCR fragments to find card data. The most important indicators are name, set code, and collector number.
 2. Search to verify using query_local_db — when disambiguating printings, JOIN sets to get
-   set_name and released_at so you can reason about which sets are plausible
-3. If you still cannot determine which printing after 4 search attempts, call analyze_image —
-   it can identify border color (black/white/silver), card frame era, set icon shape, and other
-   visual details that OCR misses, especially useful for older cards. It is quite expensive.
-4. Continue searching until no further disambiguation is possible
-5. Stop calling tools and list candidate card matches.
+   set_name and released_at so you can reason about which sets are plausible.
+3. If OCR and DB queries leave multiple plausible printings, consider calling analyze_image.
+   Always search the DB first so you have context to interpret the vision results.
+   Do NOT use analyze_image to distinguish older set reprints that differ only by border color,
+   set symbol, or frame era (e.g. 3ed vs 4ed vs 5ed, Alpha vs Beta) — just return all of those.
+   It IS useful when candidates differ in ways OCR cannot capture, like full-art vs normal frame,
+   alternate art, or promo vs regular versions of newer cards.
+4. Stop calling tools and list ALL remaining candidate card matches.
 
 OCR BOUNDING BOXES
 
@@ -79,12 +85,14 @@ Card text can be used also, but older card rules text wording may not match the 
 
 DISAMBIGUATION RULE — this is critical:
 If you cannot distinguish between printings of a card, you MUST return one entry for EVERY
-plausible printing with confidence "low" or "medium". This is not a failure, this is success!
+plausible printing with confidence "low" or "medium". This is not a failure — returning
+multiple candidates IS the correct output. A human will pick the right one.
 In particular, you can NEVER tell "foil" from "nonfoil" from OCR text alone. In these
-cases, return both options and let the user decide rather than using analyze_image.
+cases, return both options.
 
 Do NOT pick one and declare confidence "high" based solely on artist name or rules text match
 unless you have other reasons to be certain (such as a high-confidence date stamp from OCR).
+If your DB query returns N plausible printings and you cannot rule any out, return all N.
 
 Example: OCR shows card name "Grizzly Bears" with artist "Jeff A. Menges" and no date.
 DB query returns many printings, all with identical features: Unlimited (2ed), Revised (3ed)
@@ -96,10 +104,10 @@ This rule applies even after calling analyze_image — if vision analysis cannot
 resolve the printing, still return all remaining plausible candidates.
 
 KNOWN HARD CASES
-The DISAMBIGUATION RULE applies in these cases: Return all reasonable candidates and let the user decie.
+The DISAMBIGUATION RULE applies in these cases: Return all reasonable candidates.
 * 3rd Edition (Revised, set code 3ed), 4th Edition (4ed), and 5th edition (5ed) are
   very similar: White-bordered, no set symbol, similar wording. 4th edition and 5th edition
-  have dates under the artist line, so high-confidence OCR can help disinguish, but 4ed and 5ed
+  have dates under the artist line, so high-confidence OCR can help distinguish, but 4ed and 5ed
   are nearly identical.
 * Similarly, distinguishing between Alpha and Beta can be difficult even for humans: Both
   black-bordered with identical wordings across most cards.
@@ -107,7 +115,7 @@ The DISAMBIGUATION RULE applies in these cases: Return all reasonable candidates
   text on cards (aka Oracle text). These can be very different, so have caution when doing
   rules text matching.
 * Sometimes photos contain cards that are clearly visible in the foreground, and others that are
-  in the background, partly visible. The user is ONLY concernd with foreground cards.
+  in the background, partly visible. Only identify foreground cards.
 """
 
 SYSTEM_CONTENT = [
@@ -146,27 +154,64 @@ OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
-TOOLS = [
-    {
+_QUERY_TOOL_NOTES = (
+    "IMPORTANT: The local cache is incomplete — only cards from sets the user has explicitly "
+    "cached are present. Empty results mean the card is not cached locally, not that it "
+    "doesn't exist. When listing candidate printings for disambiguation, JOIN sets to include "
+    "set_name and released_at — this helps reason about which sets are plausible. "
+    "Always use LEFT JOIN since not all sets are guaranteed to have a row.\n\n"
+    "Common mistakes to avoid:\n"
+    "- There is NO 'name' column on printings — name is on cards. JOIN cards to get it.\n"
+    "- There is NO 'foil' column — use finishes (JSON TEXT, e.g. '[\"nonfoil\"]')\n"
+    "- There is NO 'set_name' column on printings — set_name is on sets. JOIN sets to get it.\n"
+    "- Always qualify set_code with a table alias (e.g. p.set_code) to avoid ambiguity.\n"
+    "- Use LIKE with % for substring matching; COLLATE NOCASE for case-insensitivity\n"
+    "- Do NOT use LIMIT when fetching printings of a specific card — you need all rows to find the right printing\n"
+    "- Use LIMIT only for broad/exploratory queries (e.g. browsing sets)\n"
+    "- Only SELECT is permitted"
+)
+
+_ANALYZE_IMAGE_TOOL = {
+    "name": "analyze_image",
+    "description": (
+        "Use Claude Vision to directly analyze the full card image. "
+        "Can only be called ONCE per session. Expensive — always search the DB first.\n\n"
+        "Do NOT use this to distinguish older set reprints that differ only by border color "
+        "or frame era (e.g. 3ed vs 4ed, Alpha vs Beta) — just return all candidates.\n\n"
+        "DO use when candidates differ in ways OCR cannot capture: full-art vs normal frame, "
+        "alternate art, promo vs regular for newer cards, or when OCR text is too garbled "
+        "to identify the card name at all."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+    "cache_control": {"type": "ephemeral"},
+}
+
+_AGENT_TABLES = ("cards", "printings", "sets")
+
+
+def _build_tools(conn: sqlite3.Connection) -> list[dict]:
+    """Build tool definitions with schema DDL read from the live database."""
+    ddl_parts = []
+    for table in _AGENT_TABLES:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        if row:
+            ddl_parts.append(row[0] + ";")
+    schema_ddl = "\n\n".join(ddl_parts)
+
+    description = (
+        "Run a read-only SELECT query against the local card database.\n\n"
+        f"Schema (these are the ONLY tables and columns that exist):\n\n{schema_ddl}\n\n"
+        + _QUERY_TOOL_NOTES
+    )
+    query_tool = {
         "name": "query_local_db",
-        "description": (
-            "Run a read-only SELECT query against the local card database.\n\n"
-            "Schema:\n"
-            "  cards(oracle_id, name, type_line, mana_cost, cmc, oracle_text)\n"
-            "  printings(printing_id, oracle_id, set_code, collector_number, rarity, artist, finishes, full_art, promo)\n"
-            "  sets(set_code, set_name, set_type, released_at)\n\n"
-            "IMPORTANT: The local cache is incomplete — only cards from sets the user has explicitly "
-            "cached are present. Empty results mean the card is not cached locally, not that it "
-            "doesn't exist. When listing candidate printings for disambiguation, JOIN sets to include "
-            "set_name and released_at — this helps reason about which sets are plausible. "
-            "Always use LEFT JOIN since not all sets are guaranteed to have a row.\n\n"
-            "Notes:\n"
-            "- finishes is a JSON array stored as TEXT (e.g. '[\"nonfoil\"]', '[\"foil\"]')\n"
-            "- Use LIKE with % for substring matching; COLLATE NOCASE for case-insensitivity\n"
-            "- Do NOT use LIMIT when fetching printings of a specific card — you need all rows to find the right printing\n"
-            "- Use LIMIT only for broad/exploratory queries (e.g. browsing sets)\n"
-            "- Only SELECT is permitted"
-        ),
+        "description": description,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -177,25 +222,8 @@ TOOLS = [
             },
             "required": ["sql"],
         },
-    },
-    {
-        "name": "analyze_image",
-        "description": (
-            "Use Claude Vision to directly analyze the full card image. "
-            "Can only be called ONCE per session. "
-            "Use when OCR and DB search have not been enough to identify the card or narrow down the printing. "
-            "Especially useful for older cards: it can read border color (black border = Alpha/Beta/Unlimited/some promos; "
-            "white border = Revised through 7th edition; silver = Unsets), card frame era, set icon shape and color, "
-            "and all card text directly from the image."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-        "cache_control": {"type": "ephemeral"},
-    },
-]
+    }
+    return [query_tool, _ANALYZE_IMAGE_TOOL]
 
 
 def _trace(msg: str, status_callback, trace_lines: list[str] | None = None) -> None:
@@ -370,6 +398,7 @@ def run_agent(
     client = anthropic.Anthropic()
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
+    tools = _build_tools(conn)
 
     trace_lines: list[str] = trace_out if trace_out is not None else []
     usage: dict[str, dict[str, int]] = {
@@ -400,8 +429,9 @@ def run_agent(
             trace_lines=trace_lines,
             model=agent_model,
             max_tokens=4000,
+            temperature=0,
             system=SYSTEM_CONTENT,
-            tools=TOOLS,
+            tools=tools,
             messages=messages,
         )
 
@@ -483,10 +513,11 @@ def run_agent(
 
     FINAL_PROMPT = (
         "Output your final identification now. "
-        "List all candidate printings for the card in this image. "
-        "If you are uncertain which printing it is, include one entry per plausible printing "
-        "(same name, different set_code/collector_number), all with confidence 'low' or 'medium'. "
-        "Do not collapse uncertain printings into a single guess."
+        "Include one entry per plausible printing "
+        "(same name, different set_code/collector_number). "
+        "If you discussed N candidate printings above, you MUST return N entries. "
+        "Use confidence 'low' or 'medium' when multiple candidates remain. "
+        "Only use 'high' if a single printing is definitively identified."
     )
     # If the last response was end_turn it hasn't been appended to messages yet.
     # Add it so the conversation is complete, then ask for the final answer.
@@ -502,6 +533,7 @@ def run_agent(
         trace_lines=trace_lines,
         model=agent_model,
         max_tokens=2000,
+        temperature=0,
         system=SYSTEM_CONTENT,
         messages=messages,
         output_config={

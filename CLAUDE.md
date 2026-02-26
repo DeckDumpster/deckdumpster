@@ -53,13 +53,13 @@ Each module has `register(subparsers)` and `run(args)`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `crack_pack_server.py` | 4692 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
+| `crack_pack_server.py` | 4696 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
 | `data_cmd.py` | 922 | MTGJSON + price data import/export commands |
 | `ingest_ocr.py` | 393 | CLI image-based card ingestion via EasyOCR + Claude |
 | `ingest_corners.py` | 320 | CLI corner-photo card ingestion via Claude Vision |
 | `demo_data.py` | 300 | Load demo collection for testing |
+| `sample_ingest.py` | 260 |  |
 | `ingest_ids.py` | 246 | Manual card entry by rarity/collector-number/set |
-| `sample_ingest.py` | 234 |  |
 
 ### `mtg_collector/db/` — SQLite layer
 
@@ -74,7 +74,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `agent.py` | 532 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
+| `agent.py` | 564 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
 | `claude.py` | 504 | Claude Vision API: corner reading, card identification |
 | `order_parser.py` | 414 | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
 | `pack_generator.py` | 329 | MTGJSON-based booster pack simulation from SQLite |
@@ -87,7 +87,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 |------|------:|---------|
 | `collection.html` | 3504 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
 | `sealed.html` | 2116 |  |
-| `recent.html` | 1358 | Recently ingested images gallery |
+| `recent.html` | 1380 | Recently ingested images gallery |
 | `correct.html` | 1048 | Fix misidentified cards in ingest pipeline |
 | `crack_pack.html` | 1040 | Booster pack simulator with rarity borders and badge system |
 | `explore_sheets.html` | 824 | Browse MTGJSON booster sheet layouts |

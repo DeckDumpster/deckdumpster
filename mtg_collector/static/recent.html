@@ -630,6 +630,22 @@ function buildCardOverlays(img) {
   return { setHtml, finishHtml, titleHtml, isFoil };
 }
 
+function applyCropToImg(imgEl, crop) {
+  if (!crop || !crop.w || !crop.h) return;
+  function apply() {
+    const nw = imgEl.naturalWidth;
+    const nh = imgEl.naturalHeight;
+    if (!nw || !nh) return;
+    const top = Math.max(0, crop.y);
+    const left = Math.max(0, crop.x);
+    const right = Math.max(0, nw - crop.x - crop.w);
+    const bottom = Math.max(0, nh - crop.y - crop.h);
+    imgEl.style.objectViewBox = `inset(${top}px ${right}px ${bottom}px ${left}px)`;
+  }
+  if (imgEl.complete && imgEl.naturalWidth) apply();
+  else imgEl.addEventListener('load', apply);
+}
+
 function createCardEl(img) {
   const card = document.createElement('div');
   card.className = `img-card ${img.border_status}`;
@@ -647,6 +663,7 @@ function createCardEl(img) {
     ${finishHtml}
     ${titleHtml}
   `;
+  applyCropToImg(card.querySelector('img'), img.crop);
   card.addEventListener('click', (e) => {
     if (e.target.closest('.finish-badge')) return;
     toggleAccordion(img.id);
@@ -1098,6 +1115,11 @@ function updateCardEl(card, img) {
   // Update foil class on img
   const imgEl = card.querySelector('img');
   if (imgEl) imgEl.classList.toggle('foil', isFoil);
+
+  // Apply crop zoom if available (e.g. after processing completes)
+  if (imgEl && img.crop && !imgEl.style.objectViewBox) {
+    applyCropToImg(imgEl, img.crop);
+  }
 
   // Ensure foil-shimmer div exists
   if (!card.querySelector('.foil-shimmer')) {

@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from mtg_collector.cli.crack_pack_server import _merge_nearby_fragments
 from mtg_collector.services.agent import run_agent
 from mtg_collector.services.ocr import run_ocr_with_boxes
 
@@ -38,7 +39,9 @@ def main():
         print(f"Error: file not found: {args.image}", file=sys.stderr)
         sys.exit(1)
 
-    fragments = run_ocr_with_boxes(args.image)
+    raw_fragments = run_ocr_with_boxes(args.image)
+    fragments = _merge_nearby_fragments(raw_fragments)
+    print(f"OCR: {len(raw_fragments)} raw -> {len(fragments)} merged fragments", file=sys.stderr)
     cards, *_ = run_agent(args.image, ocr_fragments=fragments, max_calls=args.max_calls)
     print(json.dumps({"cards": cards}, indent=2))
 

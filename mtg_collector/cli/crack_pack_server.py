@@ -1726,7 +1726,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         rows = conn.execute(
             f"""SELECT id, filename, stored_name, md5, status, error_message,
                       ocr_result, claude_result, scryfall_matches, disambiguated,
-                      confirmed_finishes, created_at, updated_at
+                      confirmed_finishes, crops, created_at, updated_at
                FROM ingest_images
                {where}
                ORDER BY id DESC""",
@@ -1830,6 +1830,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
                 cards_summary.append(entry)
 
+            crops = json.loads(d["crops"]) if d.get("crops") else []
+            crop = crops[0] if crops else None
+
             result.append({
                 "id": d["id"],
                 "filename": d["filename"],
@@ -1841,6 +1844,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "done_count": done_count,
                 "pending_count": pending_count,
                 "cards": cards_summary,
+                "crop": crop,
                 "created_at": d["created_at"],
                 "updated_at": d["updated_at"],
             })
