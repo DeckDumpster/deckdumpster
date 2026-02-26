@@ -2942,10 +2942,14 @@ function renderOrderGrouped() {
 
     const grid = document.createElement('div');
     grid.className = 'card-grid';
+    const gap = 10;
+    const viewportWidth = main.clientWidth || window.innerWidth;
+    const cardWidth = Math.floor((viewportWidth - (gridCols - 1) * gap) / gridCols);
     for (const card of cards) {
       const isOrdered = card.status === 'ordered';
       const cardEl = document.createElement('div');
       cardEl.className = 'sheet-card' + (isOrdered ? ' ordered' : '');
+      cardEl.style.width = cardWidth + 'px';
       const rarityColor = getRarityColor(card.rarity);
       const foilClass = (card.finish === 'foil' || card.finish === 'etched') ? ' foil' : '';
       const qtyBadge = card.qty > 1 ? `<span class="qty-badge">${card.qty}x</span>` : '';
