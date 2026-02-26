@@ -12,6 +12,7 @@ description: >
     show Foil and Nonfoil badges in the left right corner
     Nonfoil should be Green (selected)
     have a green border
+    be zoomed to the bounding boxes returned by the agent
   Click on Foil
     Nonfoil should turn grey
     Foil should turn green, with a green border

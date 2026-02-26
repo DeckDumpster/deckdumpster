@@ -5,6 +5,7 @@ import json
 import shutil
 from pathlib import Path
 
+from mtg_collector.cli.crack_pack_server import _compute_card_crop
 from mtg_collector.db import get_connection, init_db
 from mtg_collector.db.models import CardRepository, PrintingRepository
 from mtg_collector.utils import get_mtgc_home, now_iso
@@ -20,7 +21,13 @@ SAMPLES = [
         "stored_name": "sample_mox_emerald.jpg",
         "status": "DONE",
         "confidence": "high",
-        "ocr_confidence": [0.95, 0.88],
+        "ocr_fragments": [
+            {"text": "Mox Emerald", "bbox": {"x": 143, "y": 118, "w": 285, "h": 58}, "confidence": 0.92},
+            {"text": "Mono Artifact", "bbox": {"x": 223, "y": 780, "w": 250, "h": 42}, "confidence": 0.97},
+            {"text": "Add 1 green mana", "bbox": {"x": 352, "y": 840, "w": 442, "h": 68}, "confidence": 0.94},
+            {"text": "Illus. Dan Frazier", "bbox": {"x": 255, "y": 1134, "w": 306, "h": 45}, "confidence": 0.82},
+        ],
+        "image_size": [1080, 1440],
     },
     {
         "name": "Archenemy's Charm",
@@ -30,7 +37,13 @@ SAMPLES = [
         "stored_name": "sample_archenemys_charm.jpg",
         "status": "READY_FOR_DISAMBIGUATION",
         "confidence": "medium",
-        "ocr_confidence": [0.92, 0.75],
+        "ocr_fragments": [
+            {"text": "Archenemy's Charm", "bbox": {"x": 187, "y": 191, "w": 360, "h": 45}, "confidence": 0.97},
+            {"text": "Instant", "bbox": {"x": 184, "y": 744, "w": 118, "h": 34}, "confidence": 1.00},
+            {"text": "Exile target creature or planeswalker.", "bbox": {"x": 199, "y": 841, "w": 586, "h": 51}, "confidence": 0.97},
+            {"text": "EOE EN PETER DIAMOND", "bbox": {"x": 164, "y": 1163, "w": 277, "h": 36}, "confidence": 0.93},
+        ],
+        "image_size": [1018, 1321],
     },
     {
         "name": "Arenson's Aura",
@@ -40,9 +53,15 @@ SAMPLES = [
         "stored_name": "sample_arensons_aura.jpg",
         "status": "READY_FOR_DISAMBIGUATION",
         "confidence": "high",
-        "ocr_confidence": [0.95, 0.90],
         "artist": "Nicola Leonard",
         "extra_sets": ["ptc"],  # also has a Pro Tour Collector Set printing
+        "ocr_fragments": [
+            {"text": "Arenson's Aura", "bbox": {"x": 286, "y": 465, "w": 232, "h": 40}, "confidence": 0.91},
+            {"text": "Enchantment", "bbox": {"x": 292, "y": 946, "w": 183, "h": 32}, "confidence": 0.99},
+            {"text": "Sacrifice an enchantment to", "bbox": {"x": 329, "y": 993, "w": 407, "h": 36}, "confidence": 0.98},
+            {"text": "Illus. Nicola Leonard", "bbox": {"x": 293, "y": 1246, "w": 235, "h": 29}, "confidence": 0.93},
+        ],
+        "image_size": [1080, 1920],
     },
     {
         "name": "Armed Response",
@@ -52,7 +71,13 @@ SAMPLES = [
         "stored_name": "sample_armed_response.jpg",
         "status": "DONE",
         "confidence": "high",
-        "ocr_confidence": [0.94, 0.88],
+        "ocr_fragments": [
+            {"text": "Armed Response", "bbox": {"x": 283, "y": 494, "w": 266, "h": 39}, "confidence": 0.99},
+            {"text": "Instant", "bbox": {"x": 286, "y": 961, "w": 97, "h": 30}, "confidence": 1.00},
+            {"text": "Armed Response deals damage to", "bbox": {"x": 293, "y": 1026, "w": 452, "h": 38}, "confidence": 0.98},
+            {"text": "Doug Chaffee", "bbox": {"x": 322, "y": 1261, "w": 132, "h": 23}, "confidence": 0.96},
+        ],
+        "image_size": [1080, 1920],
     },
 ]
 
@@ -176,11 +201,13 @@ def run(args):
             claude_cn = None
 
         # Build claude_result
+        ocr_result = sample["ocr_fragments"]
+        all_indices = list(range(len(ocr_result)))
         claude_entry = {
             "name": sample["name"],
             "set_code": sample["set_code"],
             "confidence": sample["confidence"],
-            "fragment_indices": [0, 1],
+            "fragment_indices": all_indices,
         }
         if claude_cn:
             claude_entry["collector_number"] = claude_cn
@@ -188,17 +215,15 @@ def run(args):
             claude_entry["artist"] = sample["artist"]
         claude_result = [claude_entry]
 
-        # Build ocr_result
-        ocr_result = [
-            {"text": sample["name"], "bbox": {"x": 50, "y": 30, "w": 200, "h": 25}, "confidence": sample["ocr_confidence"][0]},
-            {"text": sample["set_code"], "bbox": {"x": 50, "y": 60, "w": 60, "h": 20}, "confidence": sample["ocr_confidence"][1]},
-        ]
-
         # Copy fixture image to ingest_images dir
         fixture_path = FIXTURES_DIR / sample["fixture"]
         image_path = images_dir / sample["stored_name"]
         shutil.copy2(str(fixture_path), str(image_path))
         md5 = hashlib.md5(image_path.read_bytes()).hexdigest()
+
+        # Compute crop from OCR bounding boxes
+        img_w, img_h = sample.get("image_size", (None, None))
+        crops = [_compute_card_crop(ocr_result, all_indices, image_w=img_w, image_h=img_h)]
 
         # Build confirmed_finishes: for DONE cards, default to nonfoil
         if sample["status"] == "DONE" and disambiguated[0] is not None:
@@ -210,9 +235,9 @@ def run(args):
         conn.execute(
             """INSERT INTO ingest_images
                (filename, stored_name, md5, status, ocr_result, claude_result,
-                scryfall_matches, disambiguated, confirmed_finishes,
+                scryfall_matches, disambiguated, confirmed_finishes, crops,
                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 sample["stored_name"],
                 sample["stored_name"],
@@ -223,6 +248,7 @@ def run(args):
                 json.dumps([candidates]),
                 json.dumps(disambiguated),
                 json.dumps(confirmed_finishes),
+                json.dumps(crops),
                 ts,
                 ts,
             ),
