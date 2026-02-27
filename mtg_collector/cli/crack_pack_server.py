@@ -744,11 +744,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("ingest_order.html")
         elif path == "/import-csv":
             self._serve_static("import_csv.html")
+        elif path == "/edit-order":
+            self._serve_static("edit_order.html")
         elif path == "/api/orders":
             self._api_orders_list()
         elif path.startswith("/api/orders/") and path.endswith("/cards"):
             oid = path[len("/api/orders/"):-len("/cards")]
             self._api_order_cards(int(oid))
+        elif path.startswith("/api/orders/"):
+            oid = path[len("/api/orders/"):]
+            if oid.isdigit():
+                self._api_order_get(int(oid))
         elif path == "/api/settings":
             self._api_get_settings()
         elif path == "/api/prices-status":
@@ -883,6 +889,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/orders/") and path.endswith("/receive"):
             oid = path[len("/api/orders/"):-len("/receive")]
             self._api_order_receive(int(oid))
+        elif path.startswith("/api/orders/") and path.endswith("/add-card"):
+            oid = path[len("/api/orders/"):-len("/add-card")]
+            self._api_order_add_card(int(oid))
         elif path.startswith("/api/wishlist/") and path.endswith("/fulfill"):
             wid = path[len("/api/wishlist/"):-len("/fulfill")]
             self._api_wishlist_fulfill(int(wid))
@@ -951,6 +960,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_sealed_collection_update(int(entry_id), data)
+        elif path.startswith("/api/orders/"):
+            oid = path[len("/api/orders/"):]
+            if oid.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_order_update(int(oid), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/collection/"):
+            entry_id = path[len("/api/collection/"):]
+            if entry_id.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_collection_update(int(entry_id), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -2871,6 +2898,103 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         cards = repo.get_order_cards(order_id)
         conn.close()
         self._send_json(cards)
+
+    def _api_order_get(self, order_id: int):
+        """Get a single order by ID."""
+        from mtg_collector.db.models import OrderRepository
+        from mtg_collector.db.schema import init_db
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        repo = OrderRepository(conn)
+        order = repo.get(order_id)
+        conn.close()
+        if order is None:
+            self._send_json({"error": "Not found"}, 404)
+            return
+        from dataclasses import asdict
+        self._send_json(asdict(order))
+
+    def _api_order_update(self, order_id: int, data: dict):
+        """Update order metadata (partial update)."""
+        from mtg_collector.db.models import OrderRepository
+        from mtg_collector.db.schema import init_db
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        repo = OrderRepository(conn)
+        order = repo.get(order_id)
+        if order is None:
+            conn.close()
+            self._send_json({"error": "Not found"}, 404)
+            return
+        for field in ("order_number", "source", "seller_name", "order_date",
+                      "subtotal", "shipping", "tax", "total",
+                      "shipping_status", "estimated_delivery", "notes"):
+            if field in data:
+                setattr(order, field, data[field])
+        repo.update(order)
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True})
+
+    def _api_collection_update(self, entry_id: int, data: dict):
+        """Update a collection entry (partial update)."""
+        from mtg_collector.db.models import CollectionRepository
+        from mtg_collector.db.schema import init_db
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        repo = CollectionRepository(conn)
+        entry = repo.get(entry_id)
+        if entry is None:
+            conn.close()
+            self._send_json({"error": "Not found"}, 404)
+            return
+        if "printing_id" in data:
+            entry.printing_id = data["printing_id"]
+        if "condition" in data:
+            entry.condition = data["condition"]
+        if "finish" in data:
+            entry.finish = data["finish"]
+        if "purchase_price" in data:
+            entry.purchase_price = data["purchase_price"]
+        repo.update(entry)
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True})
+
+    def _api_order_add_card(self, order_id: int):
+        """Add a new card to an existing order."""
+        from mtg_collector.db.models import CollectionEntry, CollectionRepository
+        from mtg_collector.db.schema import init_db
+        from mtg_collector.utils import now_iso
+        data = self._read_json_body()
+        if data is None:
+            return
+        printing_id = data.get("printing_id")
+        if not printing_id:
+            self._send_json({"error": "printing_id is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        entry = CollectionEntry(
+            id=None,
+            printing_id=printing_id,
+            finish=data.get("finish", "nonfoil"),
+            condition=data.get("condition", "Near Mint"),
+            purchase_price=data.get("purchase_price"),
+            acquired_at=now_iso(),
+            source="order_import",
+            status="ordered",
+            order_id=order_id,
+        )
+        repo = CollectionRepository(conn)
+        new_id = repo.add(entry)
+        conn.commit()
+        conn.close()
+        self._send_json({"id": new_id})
 
     def _api_order_parse(self):
         """Parse order text into structured data."""

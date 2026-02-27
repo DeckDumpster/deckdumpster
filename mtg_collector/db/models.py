@@ -1120,6 +1120,23 @@ class OrderRepository:
 
         return len(ids)
 
+    def update(self, order: Order) -> bool:
+        """Update an order. Returns True if updated."""
+        cursor = self.conn.execute(
+            """
+            UPDATE orders SET order_number=?, source=?, seller_name=?, order_date=?,
+                subtotal=?, shipping=?, tax=?, total=?,
+                shipping_status=?, estimated_delivery=?, notes=?
+            WHERE id = ?
+            """,
+            (
+                order.order_number, order.source, order.seller_name, order.order_date,
+                order.subtotal, order.shipping, order.tax, order.total,
+                order.shipping_status, order.estimated_delivery, order.notes, order.id,
+            ),
+        )
+        return cursor.rowcount > 0
+
     def _row_to_order(self, row: sqlite3.Row) -> Order:
         return Order(
             id=row["id"],

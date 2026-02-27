@@ -1,0 +1,19 @@
+# Related:
+#   pull_requests: []
+
+description: >
+  Navigate to the collection page. The page defaults to table view. There should
+  be a banner at the top saying "5 cards awaiting delivery" with a "View Ordered"
+  button. Click "View Ordered" to filter to only ordered cards.
+
+  Click on any card image in the table to open its detail modal. In the modal,
+  look at the Copies section on the right side — each copy row shows status, finish,
+  and a pink/red "Card Kingdom" link. Click that "Card Kingdom" link. It navigates
+  to the Edit Order page at /edit-order?id=2.
+
+  On the Edit Order page, verify the left panel shows order metadata including
+  "Card Kingdom" as the seller name. The right panel shows cards in the order.
+  Click the "+ Add Card" button near the top of the right panel. A search overlay
+  appears. Type "Abrade" in the search field and wait for card results to load.
+  Click on any result card to add it. The overlay closes and the card list updates.
+  Verify that "Abrade" now appears in the card list on the right panel.
