@@ -24,7 +24,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/DeckDumpster/deckdumpster.git"
 IMAGE="dd-ci-server"
-CONTAINERFILE=".github/containers/ci-server.containerfile"
+CONTAINERFILE=".github/containers/thaen/ci-server.containerfile"
 
 # macOS host paths (map to /var/opt/* inside VM via virtiofs)
 HOST_CODE="/opt/dd-ci-code"
@@ -116,5 +116,5 @@ fi
 
 echo ""
 info "Bootstrap complete. Test with:"
-echo "    GH_TOKEN=\$(gh auth token) bash .github/ci/preflight.sh <issue> DeckDumpster/deckdumpster thaen ready_for_claude_plan"
-echo "    ANTHROPIC_API_KEY=... GH_TOKEN=\$(gh auth token) bash .github/ci/sandbox-run.sh plan <issue> DeckDumpster/deckdumpster"
+echo "    GH_TOKEN=\$(gh auth token) bash .github/ci/thaen/preflight.sh <issue> DeckDumpster/deckdumpster thaen ready_for_claude_plan"
+echo "    ANTHROPIC_API_KEY=... GH_TOKEN=\$(gh auth token) bash .github/ci/thaen/sandbox-run.sh plan <issue> DeckDumpster/deckdumpster"

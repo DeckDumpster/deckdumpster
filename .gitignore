@@ -26,7 +26,7 @@ moxfield_collection.csv
 screenshots/
 
 # CI logs
-.github/ci/logs/
+.github/ci/thaen/logs/
 
 # Plans (Claude Code working files)
 plans/

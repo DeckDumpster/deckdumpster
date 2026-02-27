@@ -22,7 +22,7 @@ if [[ "$MODE" != "plan" && "$MODE" != "implement" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 LOG_DIR="$SCRIPT_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/${MODE}-${ISSUE_NUMBER}-$(date +%Y%m%d-%H%M%S).log"
@@ -68,7 +68,7 @@ if [[ "$MODE" == "implement" ]]; then
 fi
 
 # --- Build the image ---
-CONTAINERFILE="$REPO_DIR/.github/containers/ci-server.containerfile"
+CONTAINERFILE="$REPO_DIR/.github/containers/thaen/ci-server.containerfile"
 echo "Building dd-ci-server image..."
 podman build -t dd-ci-server -f "$CONTAINERFILE" "$REPO_DIR"
 
@@ -109,7 +109,7 @@ podman run --rm \
     -e MTGC_HOME=/data \
     -e BASE_BRANCH="$BASE_BRANCH" \
     --entrypoint bash \
-    dd-ci-server /app/.github/ci/entrypoint.sh 2>&1 | tee "$LOG_FILE"
+    dd-ci-server /app/.github/ci/thaen/entrypoint.sh 2>&1 | tee "$LOG_FILE"
 CONTAINER_RC=${PIPESTATUS[0]}
 echo "Container exited with code $CONTAINER_RC"
 

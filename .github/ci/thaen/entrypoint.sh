@@ -51,7 +51,7 @@ if [ "$MODE" = "implement" ]; then
 fi
 
 # --- Build prompt from template ---
-PROMPT_FILE="/app/.github/ci/prompts/${MODE}.md"
+PROMPT_FILE="/app/.github/ci/thaen/prompts/${MODE}.md"
 PROMPT=$(ISSUE_NUMBER="$ISSUE_NUMBER" REPO_FULL_NAME="$REPO_FULL_NAME" envsubst < "$PROMPT_FILE")
 
 # --- Run Claude as non-root (refuses --dangerously-skip-permissions as root) ---
