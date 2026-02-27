@@ -9,7 +9,7 @@ You are running inside a Podman container with:
 - gh CLI (authenticated via GH_TOKEN)
 - git (configured with push access)
 
-The repo is cloned at `/workspace` on the `main` branch.
+The repo is cloned at `/app` on the `main` branch.
 
 ## Steps
 
@@ -26,11 +26,12 @@ The repo is cloned at `/workspace` on the `main` branch.
    - Any potential risks or edge cases
    - If the issue involves UI changes, include a screenshot step using the instructions below
 
-5. **Post the plan as an issue comment.** Use:
+5. **Write the plan to disk.** Write the plan to `/out/plan-comment.md`. Format the plan in markdown. The file MUST begin with exactly this line:
    ```
-   gh issue comment ${ISSUE_NUMBER} --repo ${REPO_FULL_NAME} --body '<your plan>'
+   <!-- thaen-claude-plan -->
+   ## Claude Implementation Plan
    ```
-   Format the plan in markdown. The comment MUST start with the heading `## Claude Implementation Plan` — this exact heading is used to identify the plan in the next phase.
+   The HTML comment is a machine-readable tag used for idempotent re-planning. Do not omit it.
 
 ## Taking screenshots (for UI changes)
 
@@ -53,4 +54,4 @@ Use the most representative page for the change. If you changed multiple pages i
 
 - Do NOT implement any changes. Do not modify, create, or delete any source files.
 - Do NOT commit or push anything.
-- Only read files and post the plan comment.
+- Do NOT post comments to the issue. Write the plan to `/out/plan-comment.md` only.

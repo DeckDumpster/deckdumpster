@@ -51,23 +51,8 @@ fi
 PROMPT_FILE="/app/ci/prompts/${MODE}.md"
 PROMPT=$(ISSUE_NUMBER="$ISSUE_NUMBER" REPO_FULL_NAME="$REPO_FULL_NAME" envsubst < "$PROMPT_FILE")
 
-# --- Build --agents flag for implement mode ---
-AGENTS_ARGS=()
-if [ "$MODE" = "implement" ]; then
-    SCREENSHOT_PROMPT=$(ISSUE_NUMBER="$ISSUE_NUMBER" REPO_FULL_NAME="$REPO_FULL_NAME" \
-        envsubst < /app/ci/agents/screenshot.md)
-    SCREENSHOT_PROMPT_JSON=$(printf '%s' "$SCREENSHOT_PROMPT" | \
-        python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-    AGENTS_JSON=$(cat <<AGENTEOF
-{"screenshot":{"description":"Takes screenshots of the web app UI using Playwright. Use after implementing UI changes.","prompt":${SCREENSHOT_PROMPT_JSON},"tools":["Bash","Read","Glob","Grep"],"model":"sonnet","maxTurns":15}}
-AGENTEOF
-    )
-    AGENTS_ARGS=(--agents "$AGENTS_JSON")
-fi
-
 claude --dangerously-skip-permissions \
     -p "$PROMPT" \
     --max-turns 50 \
     --verbose \
-    --output-format stream-json \
-    "${AGENTS_ARGS[@]}"
+    --output-format stream-json

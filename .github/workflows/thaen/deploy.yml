@@ -1,0 +1,55 @@
+name: Deploy (thaen)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, thaen]
+    steps:
+      - name: Pull latest code
+        run: git -C /opt/deckdumpster-code pull --ff-only origin main
+
+      - name: Sync dependencies
+        run: cd /opt/deckdumpster-code && uv sync --no-dev
+
+      - name: Restart server
+        run: launchctl kickstart -k gui/$(id -u)/com.deckdumpster.server
+
+      - name: Health check
+        run: |
+          for i in 1 2 3 4 5; do
+            if curl -sk --max-time 5 https://localhost:8080/ > /dev/null 2>&1; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i/5 — waiting..."
+            sleep 5
+          done
+          echo "Health check failed"
+          exit 1
+
+  # notify-failure:
+  #   runs-on: [self-hosted, thaen]
+  #   needs: deploy
+  #   if: failure()
+  #   steps:
+  #     - name: Send failure email
+  #       uses: dawidd6/action-send-mail@v3
+  #       with:
+  #         server_address: smtp.gmail.com
+  #         server_port: 465
+  #         secure: true
+  #         username: ${{ secrets.SMTP_USERNAME }}
+  #         password: ${{ secrets.SMTP_PASSWORD }}
+  #         subject: "DeckDumpster deploy failed — ${{ github.sha }}"
+  #         to: ethan.john+ddops@gmail.com
+  #         from: DeckDumpster CI <${{ secrets.SMTP_USERNAME }}>
+  #         body: |
+  #           Deploy to thaen failed.
+  #
+  #           Commit: ${{ github.sha }}
+  #           Ref: ${{ github.ref }}
+  #           Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

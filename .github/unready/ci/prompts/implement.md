@@ -35,11 +35,21 @@ The repo is cloned at `/workspace` on a branch called `claude/issue-${ISSUE_NUMB
    ```
    This lints only files you changed, avoiding pre-existing warnings in other files. If there are failures, fix them and re-run until tests pass and linting is clean.
 
-5. **Screenshot UI changes.** If your changes affect the UI (templates, styles, frontend logic), delegate to the `screenshot` subagent. Tell it what feature/page changed and which URL to visit (e.g., `/` for the collection page, `/decks` for the deck list). It will capture a screenshot, save it to `/tmp/after-screenshot.png`, and return a text description. Skip this step for backend-only changes. If you changed multiple pages in a similar way (e.g., adding a shared style), one screenshot of the most representative page is sufficient.
-
-6. **Commit and push.** Stage only the files you changed (use `git add` with specific file paths, not `git add -A`). If the screenshot subagent ran and `/tmp/after-screenshot.png` exists, copy it into the repo and stage it too:
+5. **Screenshot UI changes.** If your changes affect the UI (templates, styles, frontend logic), take a screenshot using `shot-scraper`. You are already inside the container — no additional container is needed. Start the server, take the screenshot, and stop the server in a **single** Bash command (shell state like `$SERVER_PID` does not persist between separate Bash tool calls):
    ```bash
-   cp /tmp/after-screenshot.png docs/screenshots/issue-${ISSUE_NUMBER}.png
+   uv run mtg crack-pack-server --port 8555 > /tmp/server.log 2>&1 & \
+   SERVER_PID=$! && \
+   for i in $(seq 1 30); do curl -ksf https://localhost:8555/ > /dev/null && break; sleep 1; done && \
+   mkdir -p docs/screenshots && \
+   uv run shot-scraper "https://localhost:8555/<TARGET_PATH>" \
+     --browser-arg '--ignore-certificate-errors' \
+     -o docs/screenshots/issue-${ISSUE_NUMBER}.png && \
+   kill $SERVER_PID 2>/dev/null
+   ```
+   Replace `<TARGET_PATH>` with the page to screenshot (e.g., `/collection`, `/sealed`, `/`). If the server fails to start, check `/tmp/server.log`. Skip this for backend-only changes. If you changed multiple pages similarly, one screenshot of the most representative page is sufficient.
+
+6. **Commit and push.** Stage only the files you changed (use `git add` with specific file paths, not `git add -A`). If you took a screenshot, stage it:
+   ```bash
    git add docs/screenshots/issue-${ISSUE_NUMBER}.png
    ```
    Commit with a descriptive message summarizing the changes. Push to the branch `claude/issue-${ISSUE_NUMBER}`.
