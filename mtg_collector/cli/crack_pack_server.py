@@ -339,28 +339,6 @@ def _format_candidates(raw_cards):
     return formatted
 
 
-def _narrow_candidates(candidates, card_info):
-    """Progressively filter candidates by artist, set_code, collector_number."""
-    if len(candidates) <= 1:
-        return candidates
-    result = candidates
-    artist = (card_info.get("artist") or "").lower()
-    if artist:
-        matched = [c for c in result if artist in (c.get("artist") or "").lower()]
-        if matched:
-            result = matched
-    sc = (card_info.get("set_code") or "").lower()
-    if sc:
-        matched = [c for c in result if (c.get("set_code") or "").lower() == sc]
-        if matched:
-            result = matched
-    cn = card_info.get("collector_number") or ""
-    if cn:
-        matched = [c for c in result if c.get("collector_number") == cn]
-        if matched:
-            result = matched
-    return result
-
 
 def _local_name_search(conn, name, set_code=None, limit=20):
     """Search local DB for cards by name, return card dicts for _format_candidates."""
@@ -404,8 +382,6 @@ def _process_image_core(conn, image_id, img, log_fn):
     Used by both the SSE endpoint and background workers.
     log_fn(event_type, data_dict) is called for progress events.
     """
-    from mtg_collector.cli.ingest_ocr import _build_scryfall_query
-    from mtg_collector.db.models import PrintingRepository
     from mtg_collector.services.agent import run_agent
     from mtg_collector.services.ocr import run_ocr_with_boxes
     from mtg_collector.utils import now_iso
@@ -465,22 +441,13 @@ def _process_image_core(conn, image_id, img, log_fn):
             raise
         elapsed = time.time() - t0
         _log_ingest(f"Agent complete: {len(claude_cards)} cards in {elapsed:.1f}s")
+        _log_ingest(f"Agent structured output: {json.dumps(claude_cards, indent=2)}")
         log_fn("claude_complete", {"cards": claude_cards})
 
     # Merge cards whose fragment bboxes heavily overlap (e.g. ghost artist-only card)
     claude_cards = _merge_overlapping_cards(claude_cards, ocr_fragments)
 
-    # Single-card assumption: all Claude entries are printing candidates for one card.
-    # Pick the highest-confidence entry as the representative.
-    _CONF = {"high": 0, "medium": 1, "low": 2}
-    all_entries = list(claude_cards)
-    if all_entries:
-        best = min(all_entries, key=lambda c: _CONF.get(c.get("confidence", "low"), 2))
-        extras = [c for c in all_entries if c is not best]
-    else:
-        best = None
-        extras = []
-    claude_cards = [best] if best else []
+    best = claude_cards[0] if claude_cards else None
 
     # Save to cache
     conn.execute(
@@ -495,55 +462,35 @@ def _process_image_core(conn, image_id, img, log_fn):
 
     # Step 3: Local DB resolution
     log_fn("status", {"message": "Resolving card..."})
-    printing_repo = PrintingRepository(conn)
-
-    def _resolve_candidate(card_info) -> list:
-        """Resolve one agent card_info to a list of raw card dicts."""
-        set_code, cn_or_query = _build_scryfall_query(card_info, {})
-        candidates = []
-        if set_code and cn_or_query:
-            cn_raw = cn_or_query
-            cn_stripped = cn_raw.lstrip("0") or "0"
-            printing = printing_repo.get_by_set_cn(set_code, cn_stripped)
-            if not printing:
-                printing = printing_repo.get_by_set_cn(set_code, cn_raw)
-            if printing:
-                card_data = printing.get_card_data()
-                if card_data:
-                    candidates = [card_data]
-                    extracted_name = card_info.get("name", "")
-                    returned_name = card_data.get("name", "")
-                    if extracted_name and extracted_name.lower() != returned_name.lower():
-                        _log_ingest(f"Name mismatch: Claude='{extracted_name}' vs DB='{returned_name}', adding name search")
-                        name_results = _local_name_search(conn, extracted_name)
-                        seen_ids = {c.get("id") for c in candidates}
-                        for r in name_results:
-                            if r.get("id") not in seen_ids:
-                                candidates.append(r)
-        if not candidates:
-            name = card_info.get("name")
-            search_set = card_info.get("set_code")
-            if name:
-                candidates = _local_name_search(conn, name, set_code=search_set)
-        return candidates
 
     all_matches = []
     all_crops = []
 
     if best:
-        candidates = _resolve_candidate(best)
-        if not candidates:
-            set_code, cn_or_query = _build_scryfall_query(best, {})
-            if cn_or_query and not set_code:
-                candidates = _local_name_search(conn, cn_or_query)
+        # Build (set_code, collector_number) pairs for all candidates,
+        # including stripped-leading-zero variants.
+        cn_pairs = []
+        for card_info in claude_cards:
+            sc = (card_info.get("set_code") or "").strip().lower()
+            cn = (card_info.get("collector_number") or "").strip()
+            if sc and cn:
+                stripped = cn.lstrip("0") or "0"
+                cn_pairs.append((sc, cn))
+                if stripped != cn:
+                    cn_pairs.append((sc, stripped))
 
-        # Resolve extra entries (different printing guesses) and merge
-        seen_ids = {c.get("id") for c in candidates}
-        for extra_info in extras:
-            for r in _resolve_candidate(extra_info):
-                if r.get("id") not in seen_ids:
-                    candidates.append(r)
-                    seen_ids.add(r.get("id"))
+        candidates = []
+        if cn_pairs:
+            placeholders = ",".join(["(?,?)"] * len(cn_pairs))
+            params = [v for pair in cn_pairs for v in pair]
+            rows = conn.execute(
+                f"""SELECT DISTINCT p.raw_json FROM printings p
+                    JOIN sets s ON p.set_code = s.set_code
+                    WHERE (p.set_code, p.collector_number) IN ({placeholders})
+                    AND s.digital = 0""",
+                params,
+            ).fetchall()
+            candidates = [json.loads(r[0]) for r in rows if r[0]]
 
         formatted = _format_candidates(candidates)
         all_matches.append(formatted)
@@ -655,15 +602,13 @@ def _process_image_background(db_path, image_id):
             and all_matches
             and all_matches[0]
         ):
-            narrowed = _narrow_candidates(all_matches[0], claude_cards[0])
-            unique_ids = {c["printing_id"] for c in narrowed}
+            # Digital sets already filtered during resolution.
+            unique_ids = {c["printing_id"] for c in all_matches[0]}
             if len(unique_ids) == 1:
-                sid = next(iter(unique_ids))
-                all_finishes = set()
-                for c in narrowed:
-                    for f in c.get("finishes", ["nonfoil"]):
-                        all_finishes.add(f)
-                finish = "nonfoil" if "nonfoil" in all_finishes else sorted(all_finishes)[0]
+                first = all_matches[0][0]
+                sid = first["printing_id"]
+                finishes = first.get("finishes", ["nonfoil"])
+                finish = "nonfoil" if "nonfoil" in finishes else finishes[0]
                 disambiguated[0] = sid
                 confirmed_finishes[0] = finish
                 final_status = "DONE"
@@ -2713,31 +2658,23 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         ocr_fragments = json.loads(img["ocr_result"]) if img.get("ocr_result") else []
 
         # Resolve corrected card list against local DB
-        from mtg_collector.cli.ingest_ocr import _build_scryfall_query
         from mtg_collector.db.models import PrintingRepository
         printing_repo = PrintingRepository(conn)
 
         all_matches = []
         all_crops = []
         for ci, card_info in enumerate(corrected_cards):
-            set_code, cn_or_query = _build_scryfall_query(card_info, {})
+            set_code = (card_info.get("set_code") or "").strip().lower()
+            cn = (card_info.get("collector_number") or "").strip()
             candidates = []
-
-            if set_code and cn_or_query:
-                cn_raw = cn_or_query
-                cn_stripped = cn_raw.lstrip("0") or "0"
-                printing = printing_repo.get_by_set_cn(set_code, cn_stripped)
+            if set_code and cn:
+                printing = printing_repo.get_by_set_cn(set_code, cn.lstrip("0") or "0")
                 if not printing:
-                    printing = printing_repo.get_by_set_cn(set_code, cn_raw)
+                    printing = printing_repo.get_by_set_cn(set_code, cn)
                 if printing:
                     card_data = printing.get_card_data()
                     if card_data:
                         candidates = [card_data]
-
-            if not candidates:
-                name = card_info.get("name")
-                if name:
-                    candidates = _local_name_search(conn, name, set_code=card_info.get("set_code"))
 
             formatted = _format_candidates(candidates)
             all_matches.append(formatted)

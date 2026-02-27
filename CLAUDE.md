@@ -53,7 +53,7 @@ Each module has `register(subparsers)` and `run(args)`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `crack_pack_server.py` | 4696 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
+| `crack_pack_server.py` | 4633 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
 | `data_cmd.py` | 922 | MTGJSON + price data import/export commands |
 | `ingest_ocr.py` | 393 | CLI image-based card ingestion via EasyOCR + Claude |
 | `ingest_corners.py` | 320 | CLI corner-photo card ingestion via Claude Vision |
@@ -65,8 +65,8 @@ Each module has `register(subparsers)` and `run(args)`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `models.py` | 1604 | Dataclasses + repository classes (CRUD for every table) |
-| `schema.py` | 1450 | Schema DDL, all migrations, `init_db()` |
+| `models.py` | 1577 | Dataclasses + repository classes (CRUD for every table) |
+| `schema.py` | 1481 | Schema DDL, all migrations, `init_db()` |
 
 Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`.
 
@@ -74,18 +74,18 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `agent.py` | 562 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
+| `agent.py` | 552 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
 | `claude.py` | 504 | Claude Vision API: corner reading, card identification |
 | `order_parser.py` | 414 | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
 | `pack_generator.py` | 329 | MTGJSON-based booster pack simulation from SQLite |
 | `order_resolver.py` | 303 | Resolve parsed orders to local DB cards, treatment-aware matching |
-| `bulk_import.py` | 263 | `ScryfallBulkClient` class (bulk cache only), `cache_card_data()`, `ensure_set_populated()` |
+| `bulk_import.py` | 264 | `ScryfallBulkClient` class (bulk cache only), `cache_card_data()`, `ensure_set_populated()` |
 
 ### `mtg_collector/static/` — Web UI (single-file HTML pages)
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `collection.html` | 3504 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
+| `collection.html` | 3508 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
 | `sealed.html` | 2116 |  |
 | `recent.html` | 1380 | Recently ingested images gallery |
 | `correct.html` | 1048 | Fix misidentified cards in ingest pipeline |

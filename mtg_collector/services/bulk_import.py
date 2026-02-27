@@ -154,6 +154,7 @@ class ScryfallBulkClient:
             set_name=data["name"],
             set_type=data.get("set_type"),
             released_at=data.get("released_at"),
+            digital=1 if data.get("digital") else 0,
         )
 
     def to_printing_model(self, data: Dict) -> Printing:

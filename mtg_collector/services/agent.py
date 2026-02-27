@@ -85,20 +85,16 @@ Card text can be used also, but older card rules text wording may not match the 
 
 DISAMBIGUATION RULE — this is critical:
 If you cannot distinguish between printings of a card, you MUST return one entry for EVERY
-plausible printing with confidence "low" or "medium". This is not a failure — returning
+plausible printing. This is not a failure — returning
 multiple candidates IS the correct output. A human will pick the right one.
 In particular, you can NEVER tell "foil" from "nonfoil" from OCR text alone. In these
 cases, return both options.
 
-Do NOT pick one and declare confidence "high" based solely on artist name or rules text match
-unless you have other reasons to be certain (such as a high-confidence date stamp from OCR).
-If your DB query returns N plausible printings and you cannot rule any out, return all N.
-
 Example: OCR shows card name "Grizzly Bears" with artist "Jeff A. Menges" and no date.
 DB query returns many printings, all with identical features: Unlimited (2ed), Revised (3ed)
 both do not have dates, and on several sets, dates are extremely small: OCR may have just missed it.
-CORRECT: return ALL the separate printings, each with confidence "low".
-WRONG: return a single entry with set_code="sum", confidence="high".
+CORRECT: return ALL the separate printings.
+WRONG: return a single entry with set_code="sum".
 
 This rule applies even after calling analyze_image — if vision analysis cannot definitively
 resolve the printing, still return all remaining plausible candidates.
@@ -137,15 +133,11 @@ OUTPUT_SCHEMA = {
                         "type": "array",
                         "items": {"type": "integer"},
                     },
-                    "confidence": {
-                        "type": "string",
-                        "enum": ["high", "medium", "low"],
-                    },
                     "notes": {"type": "string"},
                     "type": {"type": "string"},
                     "artist": {"type": "string"},
                 },
-                "required": ["name", "set_code", "collector_number", "fragment_indices", "confidence"],
+                "required": ["name", "set_code", "collector_number", "fragment_indices"],
                 "additionalProperties": False,
             },
         }
@@ -510,12 +502,9 @@ def run_agent(
     _trace(f"[FINAL] Tool calls used: {tool_call_count}/{max_calls}", status_callback, trace_lines)
 
     FINAL_PROMPT = (
-        "Output your final identification now. "
-        "Include one entry per plausible printing "
-        "(same name, different set_code/collector_number). "
-        "If you discussed N candidate printings above, you MUST return N entries. "
-        "Use confidence 'low' or 'medium' when multiple candidates remain. "
-        "Only use 'high' if a single printing is definitively identified."
+        "Output ALL IDENTIFIED CANDIDATES for the card now "
+        "Include one entry per plausible printing! "
+        "IMPORTANT: Most likely printing FIRST, then the rest. "
     )
     # If the last response was end_turn it hasn't been appended to messages yet.
     # Add it so the conversation is complete, then ask for the final answer.
@@ -559,4 +548,5 @@ def run_agent(
     )
 
     result = json.loads(final_response.content[0].text)
+    _trace(f"[FINAL OUTPUT]\n{json.dumps(result, indent=2)}", status_callback, trace_lines)
     return result["cards"], trace_lines, usage

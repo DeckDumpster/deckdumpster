@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS sets (
     set_name TEXT NOT NULL,
     set_type TEXT,
     released_at TEXT,
+    digital INTEGER NOT NULL DEFAULT 0,  -- 1 if MTGO/Arena-only set
     cards_fetched_at TEXT  -- NULL = card list not cached, otherwise ISO timestamp
 );
 
@@ -496,6 +497,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v22_to_v23(conn)
         if current < 24:
             _migrate_v23_to_v24(conn)
+        if current < 25:
+            _migrate_v24_to_v25(conn)
 
     # Record schema version
     conn.execute(
@@ -1426,10 +1429,23 @@ def _migrate_v22_to_v23(conn: sqlite3.Connection):
 
 def _migrate_v23_to_v24(conn: sqlite3.Connection):
     """Add confirmed_finishes column to ingest_images."""
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ingest_images'"
+    ).fetchone()
+    if not table_exists:
+        return
     cursor = conn.execute("PRAGMA table_info(ingest_images)")
     cols = [r[1] for r in cursor.fetchall()]
     if "confirmed_finishes" not in cols:
         conn.execute("ALTER TABLE ingest_images ADD COLUMN confirmed_finishes TEXT")
+
+
+def _migrate_v24_to_v25(conn: sqlite3.Connection):
+    """Add digital column to sets table."""
+    cursor = conn.execute("PRAGMA table_info(sets)")
+    cols = [r[1] for r in cursor.fetchall()]
+    if "digital" not in cols:
+        conn.execute("ALTER TABLE sets ADD COLUMN digital INTEGER NOT NULL DEFAULT 0")
 
 
 def drop_all_tables(conn: sqlite3.Connection):

@@ -27,6 +27,7 @@ class Set:
     set_name: str
     set_type: Optional[str] = None
     released_at: Optional[str] = None
+    digital: int = 0  # 1 if MTGO/Arena-only set
     cards_fetched_at: Optional[str] = None  # When full card list was cached
 
 
@@ -311,15 +312,16 @@ class SetRepository:
         """Insert or update a set."""
         self.conn.execute(
             """
-            INSERT INTO sets (set_code, set_name, set_type, released_at, cards_fetched_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO sets (set_code, set_name, set_type, released_at, digital, cards_fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(set_code) DO UPDATE SET
                 set_name = excluded.set_name,
                 set_type = excluded.set_type,
                 released_at = excluded.released_at,
+                digital = excluded.digital,
                 cards_fetched_at = COALESCE(excluded.cards_fetched_at, sets.cards_fetched_at)
             """,
-            (s.set_code, s.set_name, s.set_type, s.released_at, s.cards_fetched_at),
+            (s.set_code, s.set_name, s.set_type, s.released_at, s.digital, s.cards_fetched_at),
         )
 
     def get(self, set_code: str) -> Optional[Set]:
@@ -336,6 +338,7 @@ class SetRepository:
             set_name=row["set_name"],
             set_type=row["set_type"],
             released_at=row["released_at"],
+            digital=row["digital"] if "digital" in row.keys() else 0,
             cards_fetched_at=row["cards_fetched_at"],
         )
 
@@ -368,6 +371,7 @@ class SetRepository:
             set_name=row["set_name"],
             set_type=row["set_type"],
             released_at=row["released_at"],
+            digital=row["digital"] if "digital" in row.keys() else 0,
             cards_fetched_at=row["cards_fetched_at"],
         )
 
@@ -732,37 +736,6 @@ class CollectionRepository:
             query += " LIMIT ? OFFSET ?"
             params.extend([limit, offset])
 
-        cursor = self.conn.execute(query, params)
-        return [dict(row) for row in cursor]
-
-    def get_copies(
-        self,
-        printing_id: str,
-        finish: Optional[str] = None,
-        condition: Optional[str] = None,
-        status: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Return individual (unaggregated) collection rows for a printing, joined with order data."""
-        query = """
-            SELECT c.id, c.printing_id, c.finish, c.condition, c.language,
-                   c.purchase_price, c.acquired_at, c.source, c.status, c.order_id,
-                   o.seller_name as order_seller, o.order_number as order_number,
-                   o.order_date as order_date
-            FROM collection c
-            LEFT JOIN orders o ON c.order_id = o.id
-            WHERE c.printing_id = ?
-        """
-        params: list = [printing_id]
-        if finish:
-            query += " AND c.finish = ?"
-            params.append(finish)
-        if condition:
-            query += " AND c.condition = ?"
-            params.append(condition)
-        if status:
-            query += " AND c.status = ?"
-            params.append(status)
-        query += " ORDER BY c.acquired_at DESC"
         cursor = self.conn.execute(query, params)
         return [dict(row) for row in cursor]
 
