@@ -6,6 +6,7 @@ import sys
 import time
 
 import anthropic
+import httpx
 
 from mtg_collector.db.connection import get_db_path
 from mtg_collector.services.claude import ClaudeVision
@@ -385,7 +386,9 @@ def run_agent(
         max_calls = max(DEFAULT_MAX_CALLS, int(DEFAULT_MAX_CALLS * n / 10))
     agent_model = AGENT_MODEL_SONNET if n > LARGE_FRAGMENT_THRESHOLD else AGENT_MODEL_HAIKU
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(
+        timeout=httpx.Timeout(600.0, connect=10.0),
+    )
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     tools = _build_tools(conn)
