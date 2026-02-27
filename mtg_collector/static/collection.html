@@ -2010,7 +2010,10 @@ function showCardModal(card) {
         container.innerHTML = copies.map(copy => {
           const statusClass = copy.status === 'ordered' ? 'ordered' : 'owned';
           const statusLabel = copy.status === 'ordered' ? 'Ordered' : 'Owned';
-          const seller = copy.order_seller ? ` &middot; ${copy.order_seller}` : '';
+          const sellerName = copy.order_seller || copy.seller_name;
+          const seller = sellerName
+            ? ` &middot; <a href="/edit-order?id=${copy.order_id}" style="color:#e94560;font-size:0.8rem">${sellerName}</a>`
+            : '';
           const price = copy.purchase_price ? ` &middot; $${parseFloat(copy.purchase_price).toFixed(2)}` : '';
           const source = copy.source && copy.source !== 'manual' ? ` &middot; ${copy.source}` : '';
           const receiveBtn = copy.status === 'ordered'
@@ -2932,6 +2935,7 @@ function renderOrderGrouped() {
           ${orderNum ? `<span class="order-num">#${orderNum}</span>` : ''}
           ${orderDate ? `<span>${orderDate}</span>` : ''}
           <span class="order-count">${cards.length} card${cards.length !== 1 ? 's' : ''}${orderedInGroup > 0 ? ` (${orderedInGroup} ordered)` : ''}</span>
+          <a href="/edit-order?id=${orderId}" style="color:#e94560;font-size:0.8rem;text-decoration:none;margin-left:8px">Edit</a>
         </div>
         ${orderedInGroup > 0 ? `<button class="receive-all-btn" data-order-id="${orderId}">Receive All (${orderedInGroup})</button>` : '<span class="receive-all-btn received" style="pointer-events:none">Received</span>'}
       `;

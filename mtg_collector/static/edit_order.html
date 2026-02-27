@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edit Order - MTG Collection</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  background: #16213e;
+  border-bottom: 1px solid #0f3460;
+}
+header a { color: #e94560; text-decoration: none; font-weight: 600; }
+header h1 { font-size: 1.2rem; color: #e0e0e0; }
+.container {
+  display: flex;
+  flex: 1;
+  gap: 0;
+}
+.input-panel {
+  width: 400px;
+  min-width: 350px;
+  padding: 24px;
+  background: #16213e;
+  border-right: 1px solid #0f3460;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+.input-panel label {
+  font-size: 0.85rem;
+  color: #888;
+  font-weight: 600;
+}
+.input-panel input, .input-panel select, .input-panel textarea {
+  background: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  color: #e0e0e0;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+}
+.input-panel input:focus, .input-panel select:focus, .input-panel textarea:focus {
+  outline: none;
+  border-color: #e94560;
+}
+.input-panel textarea {
+  min-height: 60px;
+  resize: vertical;
+  font-family: inherit;
+}
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.form-row {
+  display: flex;
+  gap: 12px;
+}
+.form-row .form-group { flex: 1; }
+.btn-primary {
+  background: #e94560;
+  color: #fff;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.btn-primary:hover { background: #d63851; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary {
+  background: transparent;
+  color: #e94560;
+  border: 1px solid #e94560;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.btn-secondary:hover { background: rgba(233,69,96,0.1); }
+.result-panel {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+}
+.status-msg {
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+.status-msg.info { background: rgba(126,200,227,0.1); border: 1px solid rgba(126,200,227,0.3); color: #7ec8e3; }
+.status-msg.error { background: rgba(233,69,96,0.1); border: 1px solid rgba(233,69,96,0.3); color: #e94560; }
+.status-msg.success { background: rgba(76,175,80,0.1); border: 1px solid rgba(76,175,80,0.3); color: #4caf50; }
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(126,200,227,0.3);
+  border-top-color: #7ec8e3;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+  margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Summary bar */
+.summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: #16213e;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 0.85rem;
+  color: #888;
+}
+.summary-bar .count { color: #e0e0e0; font-weight: 600; }
+
+/* Card list */
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.card-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #16213e;
+  border-radius: 6px;
+  border: 1px solid #0f3460;
+}
+.card-row:hover { border-color: #1a3a6e; }
+.card-thumb {
+  width: 40px;
+  height: 56px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.card-info {
+  flex: 1;
+  min-width: 0;
+}
+.card-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-meta {
+  font-size: 0.75rem;
+  color: #888;
+  margin-top: 2px;
+}
+.card-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.card-controls select, .card-controls input {
+  background: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  color: #e0e0e0;
+  padding: 4px 6px;
+  font-size: 0.8rem;
+}
+.card-controls input[type="number"] { width: 70px; }
+.card-controls select:focus, .card-controls input:focus {
+  outline: none;
+  border-color: #e94560;
+}
+.btn-icon {
+  background: transparent;
+  border: 1px solid #0f3460;
+  color: #888;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-icon:hover { border-color: #e94560; color: #e94560; }
+.btn-icon.danger:hover { border-color: #e94560; color: #e94560; }
+
+/* Search overlay */
+.search-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+.search-overlay.active { display: flex; }
+.search-modal {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  width: 700px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.search-header {
+  padding: 16px;
+  border-bottom: 1px solid #0f3460;
+  display: flex;
+  gap: 8px;
+}
+.search-header input {
+  flex: 1;
+  background: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  color: #e0e0e0;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+}
+.search-header input:focus { outline: none; border-color: #e94560; }
+.search-header button {
+  background: transparent;
+  border: 1px solid #0f3460;
+  color: #888;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.search-header button:hover { border-color: #e94560; color: #e94560; }
+.search-results {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+.search-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+}
+.search-candidate {
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  padding: 6px;
+  text-align: center;
+  transition: border-color 0.15s;
+}
+.search-candidate:hover { border-color: #e94560; }
+.search-candidate img {
+  width: 100%;
+  border-radius: 4px;
+  aspect-ratio: 488/680;
+  object-fit: cover;
+  background: #1a1a2e;
+}
+.search-candidate .name {
+  font-size: 0.75rem;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-candidate .set-info {
+  font-size: 0.7rem;
+  color: #888;
+}
+
+/* Save status indicator */
+.save-status {
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+
+@media (max-width: 768px) {
+  .container { flex-direction: column; }
+  .input-panel { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid #0f3460; }
+  .card-row { flex-wrap: wrap; }
+  .card-controls { width: 100%; justify-content: flex-end; }
+}
+</style>
+</head>
+<body>
+<header>
+  <a href="/">MTG Collection</a>
+  <h1>Edit Order</h1>
+</header>
+
+<div class="container">
+  <div class="input-panel" id="meta-panel">
+    <div class="status-msg info"><span class="spinner"></span>Loading order...</div>
+  </div>
+  <div class="result-panel" id="cards-panel">
+    <div class="status-msg info"><span class="spinner"></span>Loading cards...</div>
+  </div>
+</div>
+
+<div class="search-overlay" id="search-overlay">
+  <div class="search-modal">
+    <div class="search-header">
+      <input type="text" id="search-input" placeholder="Search for a card..." autocomplete="off">
+      <button id="search-close">&times;</button>
+    </div>
+    <div class="search-results" id="search-results"></div>
+  </div>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const orderId = params.get('id');
+if (!orderId) {
+  document.getElementById('meta-panel').innerHTML = '<div class="status-msg error">No order ID specified. Use ?id=N</div>';
+  document.getElementById('cards-panel').innerHTML = '';
+}
+
+let orderData = null;
+let orderCards = [];
+let searchMode = null;  // { action: 'replace', cardId: N } or { action: 'add' }
+let searchTimeout = null;
+
+async function loadOrder() {
+  const [orderRes, cardsRes] = await Promise.all([
+    fetch(`/api/orders/${orderId}`),
+    fetch(`/api/orders/${orderId}/cards`),
+  ]);
+  if (!orderRes.ok) {
+    document.getElementById('meta-panel').innerHTML = '<div class="status-msg error">Order not found</div>';
+    document.getElementById('cards-panel').innerHTML = '';
+    return;
+  }
+  orderData = await orderRes.json();
+  orderCards = await cardsRes.json();
+  renderMeta();
+  renderCards();
+}
+
+function renderMeta() {
+  const p = document.getElementById('meta-panel');
+  p.innerHTML = `
+    <div class="form-group">
+      <label>Seller Name</label>
+      <input type="text" id="meta-seller" value="${esc(orderData.seller_name || '')}">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Order #</label>
+        <input type="text" id="meta-order-num" value="${esc(orderData.order_number || '')}">
+      </div>
+      <div class="form-group">
+        <label>Date</label>
+        <input type="date" id="meta-date" value="${esc(orderData.order_date || '')}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Source</label>
+      <select id="meta-source">
+        <option value="tcgplayer" ${orderData.source === 'tcgplayer' ? 'selected' : ''}>TCGPlayer</option>
+        <option value="cardkingdom" ${orderData.source === 'cardkingdom' ? 'selected' : ''}>Card Kingdom</option>
+        <option value="other" ${orderData.source === 'other' ? 'selected' : ''}>Other</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="meta-notes" rows="3">${esc(orderData.notes || '')}</textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Subtotal</label>
+        <input type="number" step="0.01" id="meta-subtotal" value="${orderData.subtotal ?? ''}">
+      </div>
+      <div class="form-group">
+        <label>Shipping</label>
+        <input type="number" step="0.01" id="meta-shipping" value="${orderData.shipping ?? ''}">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Tax</label>
+        <input type="number" step="0.01" id="meta-tax" value="${orderData.tax ?? ''}">
+      </div>
+      <div class="form-group">
+        <label>Total</label>
+        <input type="number" step="0.01" id="meta-total" value="${orderData.total ?? ''}">
+      </div>
+    </div>
+    <button class="btn-primary" id="save-meta-btn">Save Order Details</button>
+    <div id="meta-save-status"></div>
+  `;
+  document.getElementById('save-meta-btn').addEventListener('click', saveMeta);
+}
+
+async function saveMeta() {
+  const btn = document.getElementById('save-meta-btn');
+  const status = document.getElementById('meta-save-status');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  const body = {
+    seller_name: document.getElementById('meta-seller').value,
+    order_number: document.getElementById('meta-order-num').value,
+    order_date: document.getElementById('meta-date').value,
+    source: document.getElementById('meta-source').value,
+    notes: document.getElementById('meta-notes').value,
+    subtotal: parseFloat(document.getElementById('meta-subtotal').value) || null,
+    shipping: parseFloat(document.getElementById('meta-shipping').value) || null,
+    tax: parseFloat(document.getElementById('meta-tax').value) || null,
+    total: parseFloat(document.getElementById('meta-total').value) || null,
+  };
+  try {
+    const res = await fetch(`/api/orders/${orderId}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('Failed to save');
+    status.innerHTML = '<div class="status-msg success">Saved</div>';
+    setTimeout(() => { status.innerHTML = ''; }, 2000);
+  } catch (err) {
+    status.innerHTML = `<div class="status-msg error">${err.message}</div>`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Save Order Details';
+}
+
+function renderCards() {
+  const p = document.getElementById('cards-panel');
+  const totalValue = orderCards.reduce((s, c) => s + (parseFloat(c.purchase_price) || 0), 0);
+  let html = `
+    <div class="summary-bar">
+      <span><span class="count">${orderCards.length}</span> card${orderCards.length !== 1 ? 's' : ''}</span>
+      <span>Total value: <span class="count">$${totalValue.toFixed(2)}</span></span>
+      <span style="margin-left:auto"><button class="btn-secondary" id="add-card-btn">+ Add Card</button></span>
+    </div>
+    <div class="card-list">
+  `;
+  for (const card of orderCards) {
+    const imgSrc = card.image_uri
+      ? card.image_uri.replace('/normal/', '/small/')
+      : '';
+    html += `
+      <div class="card-row" data-card-id="${card.id}">
+        ${imgSrc ? `<img class="card-thumb" src="${imgSrc}" alt="" loading="lazy">` : '<div class="card-thumb" style="background:#0f3460"></div>'}
+        <div class="card-info">
+          <div class="card-name">${esc(card.name)}</div>
+          <div class="card-meta">${esc(card.set_code?.toUpperCase() || '')} #${esc(card.collector_number || '')}</div>
+        </div>
+        <div class="card-controls">
+          <select data-field="condition" data-id="${card.id}">
+            ${conditionOptions(card.condition)}
+          </select>
+          <select data-field="finish" data-id="${card.id}">
+            ${finishOptions(card.finish)}
+          </select>
+          <input type="number" step="0.01" placeholder="Price" value="${card.purchase_price ?? ''}"
+                 data-field="purchase_price" data-id="${card.id}">
+          <button class="btn-icon" title="Replace card" onclick="openSearch('replace', ${card.id})">&#x21C4;</button>
+          <button class="btn-icon danger" title="Remove card" onclick="removeCard(${card.id})">&#x2715;</button>
+        </div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  p.innerHTML = html;
+
+  document.getElementById('add-card-btn').addEventListener('click', () => openSearch('add'));
+
+  // Wire inline edits
+  p.querySelectorAll('select[data-field], input[data-field]').forEach(el => {
+    el.addEventListener('change', () => inlineUpdate(el));
+  });
+}
+
+async function inlineUpdate(el) {
+  const id = el.dataset.id;
+  const field = el.dataset.field;
+  let value = el.value;
+  if (field === 'purchase_price') {
+    value = parseFloat(value) || null;
+  }
+  try {
+    await fetch(`/api/collection/${id}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ [field]: value }),
+    });
+  } catch (err) {
+    console.error('Failed to update:', err);
+  }
+}
+
+async function removeCard(cardId) {
+  if (!confirm('Remove this card from the order?')) return;
+  try {
+    await fetch(`/api/collection/${cardId}?confirm=true`, { method: 'DELETE' });
+    await refreshCards();
+  } catch (err) {
+    console.error('Failed to remove card:', err);
+  }
+}
+
+function openSearch(action, cardId) {
+  searchMode = action === 'replace' ? { action: 'replace', cardId } : { action: 'add' };
+  document.getElementById('search-overlay').classList.add('active');
+  const input = document.getElementById('search-input');
+  input.value = '';
+  input.focus();
+  document.getElementById('search-results').innerHTML = '<div style="color:#888;text-align:center;padding:24px">Type a card name to search</div>';
+}
+
+function closeSearch() {
+  document.getElementById('search-overlay').classList.remove('active');
+  searchMode = null;
+}
+
+document.getElementById('search-close').addEventListener('click', closeSearch);
+document.getElementById('search-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeSearch();
+});
+
+document.getElementById('search-input').addEventListener('input', (e) => {
+  clearTimeout(searchTimeout);
+  const query = e.target.value.trim();
+  if (query.length < 2) return;
+  searchTimeout = setTimeout(() => doSearch(query), 300);
+});
+
+async function doSearch(query) {
+  const container = document.getElementById('search-results');
+  container.innerHTML = '<div style="text-align:center;padding:24px"><span class="spinner"></span>Searching...</div>';
+  try {
+    const res = await fetch('/api/ingest2/search-card', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ query }),
+    });
+    const data = await res.json();
+    const candidates = data.candidates || [];
+    if (candidates.length === 0) {
+      container.innerHTML = '<div style="color:#888;text-align:center;padding:24px">No results found</div>';
+      return;
+    }
+    container.innerHTML = '<div class="search-grid">' + candidates.map(c => `
+      <div class="search-candidate" data-printing-id="${esc(c.printing_id)}">
+        <img src="${esc(c.image_uri || '')}" alt="" loading="lazy">
+        <div class="name">${esc(c.name)}</div>
+        <div class="set-info">${esc(c.set_code?.toUpperCase() || '')} #${esc(c.collector_number || '')}</div>
+      </div>
+    `).join('') + '</div>';
+
+    container.querySelectorAll('.search-candidate').forEach(el => {
+      el.addEventListener('click', () => selectCandidate(el.dataset.printingId));
+    });
+  } catch (err) {
+    container.innerHTML = `<div class="status-msg error">Search failed: ${err.message}</div>`;
+  }
+}
+
+async function selectCandidate(printingId) {
+  if (!searchMode) return;
+  const mode = searchMode;
+  closeSearch();
+  if (mode.action === 'replace') {
+    await fetch(`/api/collection/${mode.cardId}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ printing_id: printingId }),
+    });
+  } else {
+    await fetch(`/api/orders/${orderId}/add-card`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ printing_id: printingId }),
+    });
+  }
+  await refreshCards();
+}
+
+async function refreshCards() {
+  const res = await fetch(`/api/orders/${orderId}/cards`);
+  orderCards = await res.json();
+  renderCards();
+}
+
+function conditionOptions(current) {
+  const conditions = ['Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged'];
+  return conditions.map(c => `<option value="${c}" ${c === current ? 'selected' : ''}>${c}</option>`).join('');
+}
+
+function finishOptions(current) {
+  const finishes = ['nonfoil', 'foil', 'etched'];
+  return finishes.map(f => `<option value="${f}" ${f === current ? 'selected' : ''}>${f}</option>`).join('');
+}
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+if (orderId) loadOrder();
+</script>
+</body>
+</html>
