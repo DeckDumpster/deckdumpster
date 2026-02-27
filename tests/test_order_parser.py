@@ -14,6 +14,7 @@ from mtg_collector.services.order_parser import (
     _parse_condition_and_foil,
     _extract_treatment,
     _parse_dollar,
+    _parse_ck_description,
 )
 
 
@@ -26,6 +27,12 @@ class TestFormatDetection:
 
     def test_tcg_text(self):
         assert detect_order_format("Magic\tFINAL FANTASY\tCard Name\tNear Mint") == "tcg_text"
+
+    def test_ck_html(self):
+        assert detect_order_format('<table class="table orderContents">') == "ck_html"
+
+    def test_ck_html_cardkingdom(self):
+        assert detect_order_format('<html><head><title>cardkingdom.com</title></head>') == "ck_html"
 
     def test_ck_text(self):
         assert detect_order_format("1x Lightning Bolt - Near Mint") == "ck_text"
@@ -322,6 +329,253 @@ class TestTcgHtmlParsing:
         html = self._make_order_html(items=items)
         orders = parse_order(html, "tcg_html")
         assert orders[0].items[0].rarity_hint == "ACE SPEC Rare"
+
+
+class TestCkDescriptionParsing:
+    def test_simple(self):
+        name, set_hint, treatment, cn = _parse_ck_description("Lightning Bolt: Foundations")
+        assert name == "Lightning Bolt"
+        assert set_hint == "Foundations"
+        assert treatment is None
+        assert cn is None
+
+    def test_with_treatment_and_cn(self):
+        name, set_hint, treatment, cn = _parse_ck_description(
+            "Aerith Gainsborough (0374 - Borderless): Final Fantasy Variants"
+        )
+        assert name == "Aerith Gainsborough"
+        assert set_hint == "Final Fantasy Variants"
+        assert treatment == "Borderless"
+        assert cn == "0374"
+
+    def test_no_colon(self):
+        name, set_hint, treatment, cn = _parse_ck_description("Lightning Bolt")
+        assert name == "Lightning Bolt"
+        assert set_hint is None
+        assert treatment is None
+        assert cn is None
+
+    def test_collector_number_only(self):
+        name, set_hint, treatment, cn = _parse_ck_description(
+            "Sol Ring (0123): Commander Masters"
+        )
+        assert name == "Sol Ring"
+        assert set_hint == "Commander Masters"
+        assert treatment is None
+        assert cn == "0123"
+
+    def test_set_with_colon(self):
+        name, set_hint, treatment, cn = _parse_ck_description(
+            "Sol Ring (Commander Collection - Foil Etched): Commander Collection: Green"
+        )
+        assert name == "Sol Ring"
+        assert set_hint == "Commander Collection: Green"
+        assert treatment == "Foil Etched"
+        assert cn is None
+
+    def test_treatment_only_no_cn(self):
+        name, set_hint, treatment, cn = _parse_ck_description(
+            "Herald's Horn (Buy-a-Box Foil): Promotional"
+        )
+        assert name == "Herald's Horn"
+        assert set_hint == "Promotional"
+        assert treatment == "Buy-a-Box Foil"
+        assert cn is None
+
+
+class TestCkHtmlParsing:
+    """Test Card Kingdom HTML parsing with minimal HTML snippets."""
+
+    def _make_ck_html(self, order_number="161969019", items=None,
+                       subtotal="$69.20", shipping="$0.00", tax="$7.12",
+                       total="$76.32", condition_group="NM"):
+        """Build a minimal CK invoice HTML for testing."""
+        if items is None:
+            items = [
+                {"desc": "Lightning Bolt: Foundations", "condition": "NM",
+                 "qty": "1", "price": "$0.25", "total": "$0.25"},
+            ]
+
+        item_rows = ""
+        for item in items:
+            item_rows += f'''<tr valign=top>
+                <td class="Description">{item["desc"]}</td>
+                <td align=center>{item["condition"]}</td>
+                <td align=center>{item["qty"]}</td>
+                <td align=right>{item["price"]}</td>
+                <td align=right>{item["total"]}</td>
+            </tr>'''
+
+        return f'''<html>
+        <body>
+        <h1>My Account / Order #{order_number}</h1>
+        <table class="table orderContents">
+            <tr><td colspan=5><h3>{condition_group} SINGLES</h3></td></tr>
+            <tr>
+                <th>Description</th><th>Style</th><th>Qty</th><th>Price</th><th>Total</th>
+            </tr>
+            {item_rows}
+            <tr>
+                <td>Subtotal</td><td></td><td></td><td></td><td align=right>{subtotal}</td>
+            </tr>
+            <tr>
+                <td>Shipping</td><td></td><td></td><td></td><td align=right>{shipping}</td>
+            </tr>
+            <tr>
+                <td>Sales Tax</td><td></td><td></td><td></td><td align=right>{tax}</td>
+            </tr>
+            <tr>
+                <td>Total</td><td></td><td></td><td></td><td align=right>{total}</td>
+            </tr>
+        </table>
+        </body></html>'''
+
+    def test_single_item(self):
+        html = self._make_ck_html()
+        orders = parse_order(html, "ck_html")
+        assert len(orders) == 1
+        assert orders[0].order_number == "161969019"
+        assert orders[0].seller_name == "Card Kingdom"
+        assert orders[0].source == "cardkingdom"
+        assert len(orders[0].items) == 1
+        item = orders[0].items[0]
+        assert item.card_name == "Lightning Bolt"
+        assert item.set_hint == "Foundations"
+        assert item.condition == "Near Mint"
+        assert item.quantity == 1
+        assert item.price == 0.25
+
+    def test_financial_summary(self):
+        html = self._make_ck_html()
+        orders = parse_order(html, "ck_html")
+        assert orders[0].subtotal == 69.20
+        assert orders[0].shipping == 0.00
+        assert orders[0].tax == 7.12
+        assert orders[0].total == 76.32
+
+    def test_multiple_items(self):
+        items = [
+            {"desc": "Lightning Bolt: Foundations", "condition": "NM",
+             "qty": "1", "price": "$0.25", "total": "$0.25"},
+            {"desc": "Counterspell: Masters 25", "condition": "NM",
+             "qty": "2", "price": "$1.50", "total": "$3.00"},
+        ]
+        html = self._make_ck_html(items=items)
+        orders = parse_order(html, "ck_html")
+        assert len(orders[0].items) == 2
+        assert orders[0].items[0].card_name == "Lightning Bolt"
+        assert orders[0].items[1].card_name == "Counterspell"
+        assert orders[0].items[1].quantity == 2
+
+    def test_borderless_treatment(self):
+        items = [
+            {"desc": "Aerith Gainsborough (0374 - Borderless): Final Fantasy Variants",
+             "condition": "NM", "qty": "1", "price": "$8.99", "total": "$8.99"},
+        ]
+        html = self._make_ck_html(items=items)
+        orders = parse_order(html, "ck_html")
+        item = orders[0].items[0]
+        assert item.card_name == "Aerith Gainsborough"
+        assert item.set_hint == "Final Fantasy Variants"
+        assert item.treatment == "Borderless"
+        assert item.collector_number == "0374"
+
+    def test_header_row_skipped(self):
+        """Column header text like 'Description' should not be parsed as a card."""
+        html = '''<html><body>
+        <h1>My Account / Order #999</h1>
+        <table class="table orderContents">
+            <tr><td>Description</td><td>Style</td><td>Qty</td><td>Price</td><td>Total</td></tr>
+            <tr valign=top>
+                <td class="Description">Lightning Bolt: Foundations</td>
+                <td align=center>NM</td>
+                <td align=center>1</td>
+                <td align=right>$0.25</td>
+                <td align=right>$0.25</td>
+            </tr>
+        </table></body></html>'''
+        orders = parse_order(html, "ck_html")
+        assert len(orders[0].items) == 1
+        assert orders[0].items[0].card_name == "Lightning Bolt"
+
+    def test_lp_condition_group(self):
+        items = [
+            {"desc": "Sol Ring: Commander Masters", "condition": "LP",
+             "qty": "1", "price": "$1.00", "total": "$1.00"},
+        ]
+        html = self._make_ck_html(items=items, condition_group="LP")
+        orders = parse_order(html, "ck_html")
+        item = orders[0].items[0]
+        assert item.condition == "Lightly Played"
+
+    def test_foil_section(self):
+        html = '''<html><body>
+        <h1>My Account / Order #999</h1>
+        <table class="table orderContents">
+            <tr><td colspan=5><h3>NM FOILS</h3></td></tr>
+            <tr><th>Description</th><th>Style</th><th>Qty</th><th>Price</th><th>Total</th></tr>
+            <tr valign=top>
+                <td class="Description">Lightning Bolt: Foundations</td>
+                <td align=center>NM</td>
+                <td align=center>1</td>
+                <td align=right>$2.00</td>
+                <td align=right>$2.00</td>
+            </tr>
+        </table></body></html>'''
+        orders = parse_order(html, "ck_html")
+        assert orders[0].items[0].foil is True
+
+    def test_auto_detect(self):
+        html = self._make_ck_html()
+        orders = parse_order(html)
+        assert len(orders) == 1
+        assert orders[0].source == "cardkingdom"
+
+    def test_html_entities(self):
+        items = [
+            {"desc": "Aerith&#039;s Garden: Final Fantasy", "condition": "NM",
+             "qty": "1", "price": "$1.00", "total": "$1.00"},
+        ]
+        html = self._make_ck_html(items=items)
+        orders = parse_order(html, "ck_html")
+        assert orders[0].items[0].card_name == "Aerith's Garden"
+
+    def test_view_source_wrapper(self):
+        """Firefox view-source wraps each line in <span id='lineN'> with HTML as text."""
+        from html import escape
+        inner = self._make_ck_html()
+        # Firefox view-source escapes the HTML and wraps in span lines
+        wrapped_lines = []
+        for i, line in enumerate(inner.splitlines(), 1):
+            wrapped_lines.append(f'<span id="line{i}">{escape(line)}</span>')
+        html = "<html><body>" + "\n".join(wrapped_lines) + "</body></html>"
+        orders = parse_order(html, "ck_html")
+        assert len(orders) == 1
+        assert orders[0].items[0].card_name == "Lightning Bolt"
+
+
+class TestRealCkHtml:
+    """Test parsing real Card Kingdom HTML files if available."""
+
+    @pytest.fixture
+    def real_html(self):
+        import os
+        path = os.path.expanduser("~/Downloads/ck-order-example.html")
+        if not os.path.exists(path):
+            pytest.skip("Real CK HTML file not available")
+        with open(path) as f:
+            return f.read()
+
+    def test_parses_items(self, real_html):
+        orders = parse_order(real_html, "ck_html")
+        assert len(orders) >= 1
+        assert len(orders[0].items) > 0
+
+    def test_all_items_have_names(self, real_html):
+        orders = parse_order(real_html, "ck_html")
+        for o in orders:
+            for item in o.items:
+                assert item.card_name, "Item missing card name"
 
 
 class TestRealTcgHtml:

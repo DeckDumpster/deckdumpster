@@ -12,6 +12,7 @@ from mtg_collector.utils import normalize_condition, normalize_finish, now_iso
 # Covers common TCGPlayer set names that don't directly match DB codes
 SET_NAME_MAP = {
     "FINAL FANTASY": "fin",
+    "FINAL FANTASY VARIANTS": "fin",
     "FINAL FANTASY: THROUGH THE AGES": "fca",
 }
 
@@ -177,6 +178,18 @@ def _resolve_item(
     set_code = _resolve_set_code(item.set_hint, set_repo)
 
     treatment = item.treatment
+
+    # Best path: exact set_code + collector_number lookup (e.g., from CK HTML)
+    if set_code and item.collector_number:
+        p = printing_repo.get_by_set_cn(set_code, item.collector_number)
+        if p:
+            card = card_repo.get(p.oracle_id)
+            resolved.printing_id = p.printing_id
+            resolved.card_name = card.name if card else card_name
+            resolved.set_code = p.set_code
+            resolved.collector_number = p.collector_number
+            resolved.image_uri = p.image_uri
+            return resolved
 
     # Try local DB — full name
     result = _find_card_local(card_name, card_repo, printing_repo, set_code, treatment)

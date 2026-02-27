@@ -2970,6 +2970,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                         "price": item.price,
                         "treatment": item.treatment,
                         "rarity_hint": item.rarity_hint,
+                        "collector_number": item.collector_number,
                     }
                     for item in o.items
                 ],
@@ -3012,6 +3013,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     price=item_d.get("price"),
                     treatment=item_d.get("treatment"),
                     rarity_hint=item_d.get("rarity_hint"),
+                    collector_number=item_d.get("collector_number"),
                 ))
             orders.append(order)
 
@@ -3111,6 +3113,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     price=item_d.get("price"),
                     treatment=item_d.get("treatment"),
                     rarity_hint=item_d.get("rarity_hint"),
+                    collector_number=item_d.get("collector_number"),
                 )
                 ri = ResolvedItem(
                     parsed=parsed_item,
