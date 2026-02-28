@@ -32,24 +32,26 @@ decide() {
 
 # --- DENY (checked first) ---
 
-if echo "$COMMAND" | grep -qE 'rm\s+(-rf|-fr)\s'; then
-  decide deny "Blocked: rm -rf"
+if [ "$first_word" = "rm" ]; then
+  if echo "$COMMAND" | grep -qE '^rm\s+(-rf|-fr)\s'; then
+    decide deny "Blocked: rm -rf"
+  fi
 fi
 
 if [ "$first_word" = "sudo" ]; then
   decide deny "Blocked: sudo"
 fi
 
-if echo "$COMMAND" | grep -qE 'git\s+push\s+.*--force'; then
-  decide deny "Blocked: git push --force"
-fi
-
-if echo "$COMMAND" | grep -qE 'git\s+reset\s+--hard'; then
-  decide deny "Blocked: git reset --hard"
-fi
-
-if echo "$COMMAND" | grep -qE 'git\s+clean\s+-f'; then
-  decide deny "Blocked: git clean -f"
+if [ "$first_word" = "git" ]; then
+  if echo "$COMMAND" | grep -qE '^git\s+push\s+.*--force'; then
+    decide deny "Blocked: git push --force"
+  fi
+  if echo "$COMMAND" | grep -qE '^git\s+reset\s+--hard'; then
+    decide deny "Blocked: git reset --hard"
+  fi
+  if echo "$COMMAND" | grep -qE '^git\s+clean\s+-f'; then
+    decide deny "Blocked: git clean -f"
+  fi
 fi
 
 # --- ALLOW ---
