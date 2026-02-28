@@ -360,6 +360,61 @@ def _local_name_search(conn, name, set_code=None, limit=20):
     return results
 
 
+def _resolve_candidates(conn, card_infos):
+    """Resolve agent card entries to candidate printings.
+
+    One query per entry, AND'ing all available fields.
+    Results merged and deduplicated across entries.
+    """
+    all_candidates = {}  # scryfall_id → raw dict (dedup)
+
+    for ci in card_infos:
+        conditions = ["s.digital = 0"]
+        params = []
+
+        name = (ci.get("name") or "").strip()
+        sc = (ci.get("set_code") or "").strip().lower()
+        cn = (ci.get("collector_number") or "").strip()
+        artist = (ci.get("artist") or "").strip()
+
+        if name:
+            conditions.append("c.name COLLATE NOCASE = ?")
+            params.append(name)
+        if sc:
+            conditions.append("p.set_code = ?")
+            params.append(sc)
+        if cn:
+            stripped = cn.lstrip("0") or "0"
+            if stripped != cn:
+                conditions.append("p.collector_number IN (?, ?)")
+                params.extend([cn, stripped])
+            else:
+                conditions.append("p.collector_number = ?")
+                params.append(cn)
+        if artist:
+            conditions.append("p.artist LIKE ? COLLATE NOCASE")
+            params.append(f"%{artist}%")
+
+        if len(conditions) == 1:  # only s.digital = 0, no usable data
+            continue
+
+        where = " AND ".join(conditions)
+        rows = conn.execute(
+            f"""SELECT DISTINCT p.raw_json FROM printings p
+                JOIN cards c ON p.oracle_id = c.oracle_id
+                JOIN sets s ON p.set_code = s.set_code
+                WHERE {where}""",
+            params,
+        ).fetchall()
+
+        for r in rows:
+            if r[0]:
+                data = json.loads(r[0])
+                all_candidates[data["id"]] = data
+
+    return list(all_candidates.values())
+
+
 def _log_ingest(msg):
     sys.stderr.write(f"[INGEST] {msg}\n")
     sys.stderr.flush()
@@ -467,30 +522,7 @@ def _process_image_core(conn, image_id, img, log_fn):
     all_crops = []
 
     if best:
-        # Build (set_code, collector_number) pairs for all candidates,
-        # including stripped-leading-zero variants.
-        cn_pairs = []
-        for card_info in claude_cards:
-            sc = (card_info.get("set_code") or "").strip().lower()
-            cn = (card_info.get("collector_number") or "").strip()
-            if sc and cn:
-                stripped = cn.lstrip("0") or "0"
-                cn_pairs.append((sc, cn))
-                if stripped != cn:
-                    cn_pairs.append((sc, stripped))
-
-        candidates = []
-        if cn_pairs:
-            placeholders = ",".join(["(?,?)"] * len(cn_pairs))
-            params = [v for pair in cn_pairs for v in pair]
-            rows = conn.execute(
-                f"""SELECT DISTINCT p.raw_json FROM printings p
-                    JOIN sets s ON p.set_code = s.set_code
-                    WHERE (p.set_code, p.collector_number) IN ({placeholders})
-                    AND s.digital = 0""",
-                params,
-            ).fetchall()
-            candidates = [json.loads(r[0]) for r in rows if r[0]]
+        candidates = _resolve_candidates(conn, claude_cards)
 
         formatted = _format_candidates(candidates)
         all_matches.append(formatted)
@@ -2689,24 +2721,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         ocr_fragments = json.loads(img["ocr_result"]) if img.get("ocr_result") else []
 
         # Resolve corrected card list against local DB
-        from mtg_collector.db.models import PrintingRepository
-        printing_repo = PrintingRepository(conn)
-
         all_matches = []
         all_crops = []
         for ci, card_info in enumerate(corrected_cards):
-            set_code = (card_info.get("set_code") or "").strip().lower()
-            cn = (card_info.get("collector_number") or "").strip()
-            candidates = []
-            if set_code and cn:
-                printing = printing_repo.get_by_set_cn(set_code, cn.lstrip("0") or "0")
-                if not printing:
-                    printing = printing_repo.get_by_set_cn(set_code, cn)
-                if printing:
-                    card_data = printing.get_card_data()
-                    if card_data:
-                        candidates = [card_data]
-
+            candidates = _resolve_candidates(conn, [card_info])
             formatted = _format_candidates(candidates)
             all_matches.append(formatted)
 

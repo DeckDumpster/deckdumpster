@@ -53,7 +53,7 @@ Each module has `register(subparsers)` and `run(args)`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `crack_pack_server.py` | 4764 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
+| `crack_pack_server.py` | 4782 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
 | `data_cmd.py` | 922 | MTGJSON + price data import/export commands |
 | `ingest_ocr.py` | 393 | CLI image-based card ingestion via EasyOCR + Claude |
 | `ingest_corners.py` | 320 | CLI corner-photo card ingestion via Claude Vision |
@@ -118,9 +118,9 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 |------|------:|---------|
 | `test_sealed_products.py` | 1346 |  |
 | `test_order_parser.py` | 622 | Order parsing (TCGPlayer HTML/text, Card Kingdom) |
-| `test_import.py` | 620 | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
 | `test_price_import.py` | 530 | MTGJSON price import pipeline |
 | `test_mtgjson_import.py` | 515 | MTGJSON AllPrintings import |
+| `test_import.py` | 484 | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
 | `test_ingest_ids.py` | 392 | Manual card entry + `resolve_and_add_ids()` |
 | `test_order_resolver.py` | 302 | Order resolution to local DB cards |
 
@@ -132,9 +132,9 @@ Claude Vision agent loop that drives a headless browser through UX flows. Each s
 |------|---------|
 | `test_sealed_products.py` | 1346 |  |
 | `test_order_parser.py` | 622 |  |
-| `test_import.py` | 620 |  |
 | `test_price_import.py` | 530 |  |
 | `test_mtgjson_import.py` | 515 |  |
+| `test_import.py` | 484 |  |
 | `test_ingest_ids.py` | 392 |  |
 | `test_order_resolver.py` | 302 |  |
 
