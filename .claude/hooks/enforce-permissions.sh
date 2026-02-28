@@ -41,6 +41,13 @@ for allowed in "${allowed_commands[@]}"; do
   fi
 done
 
+# sqlite3: read-only queries only (no write keywords)
+if [ "$first_word" = "sqlite3" ]; then
+  if ! echo "$COMMAND" | grep -iqE '\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|REPLACE|ATTACH|DETACH|VACUUM|REINDEX)\b'; then
+    approve "Auto-approved: sqlite3 read-only"
+  fi
+fi
+
 # systemctl/journalctl only with --user
 if [ "$first_word" = "systemctl" ] || [ "$first_word" = "journalctl" ]; then
   if echo "$COMMAND" | grep -q -- '--user'; then
