@@ -548,13 +548,137 @@ def _is_treatment(text: str) -> bool:
 
 # ── Card Kingdom Text ──
 
+def _is_ck_table_format(text: str) -> bool:
+    """Check if text is CK tab-separated table format (from email)."""
+    lines = text.strip().splitlines()
+    if len(lines) < 2:
+        return False
+    # Check for "Description" header with tabs
+    first = lines[0].strip().lower()
+    if "\t" in lines[0] and "description" in first and "qty" in first:
+        return True
+    # Fallback: multiple lines with 4+ tab-separated columns
+    tab_lines = [l for l in lines if l.count("\t") >= 3]
+    return len(tab_lines) >= 2
+
+
+def _parse_ck_email_description(desc: str) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
+    """Parse CK email description: "Set: Card Name (CN - Treatment)".
+
+    Returns: (card_name, set_hint, treatment, collector_number)
+    """
+    set_hint = None
+    treatment = None
+    collector_number = None
+
+    # Split on first ": " to separate set from card
+    colon_idx = desc.find(": ")
+    if colon_idx > 0:
+        set_hint = desc[:colon_idx].strip()
+        card_part = desc[colon_idx + 2:].strip()
+    else:
+        card_part = desc.strip()
+
+    # Check for parenthetical: "Card Name (info)"
+    paren_m = re.match(r'^(.+?)\s*\(([^)]+)\)\s*$', card_part)
+    if paren_m:
+        card_name = paren_m.group(1).strip()
+        paren_content = paren_m.group(2).strip()
+
+        # Parse parenthetical: "0228 - Borderless", "2019 - Non-Foil", etc.
+        parts = [p.strip() for p in paren_content.split(" - ")]
+        for part in parts:
+            if re.fullmatch(r'\d+', part):
+                collector_number = part
+            elif _is_treatment(part):
+                treatment = part
+    else:
+        card_name = card_part
+
+    return card_name, set_hint or None, treatment, collector_number
+
+
+def _parse_ck_table(text: str) -> List[ParsedOrder]:
+    """Parse CK tab-separated table format from order confirmation emails.
+
+    Header: Description\\tStyle\\tQty\\tPrice\\tTotal
+    Rows:   Set: Card (CN - Treatment)\\tNM\\t1\\t18.99\\t18.99
+    """
+    order = ParsedOrder(source="cardkingdom", seller_name="Card Kingdom")
+
+    _CK_SKIP = {"description", "subtotal", "shipping", "sales tax", "tax",
+                 "total", "store pickup"}
+
+    for line in text.strip().splitlines():
+        line = line.strip()
+        if not line or "\t" not in line:
+            continue
+
+        cols = line.split("\t")
+        desc = cols[0].strip()
+        desc_lower = desc.lower()
+
+        if not desc or desc_lower in _CK_SKIP:
+            if desc_lower in ("subtotal", "shipping", "sales tax", "tax", "total"):
+                value = _parse_dollar(cols[-1].strip()) if len(cols) >= 2 else None
+                if "subtotal" in desc_lower:
+                    order.subtotal = value
+                elif "shipping" in desc_lower:
+                    order.shipping = value
+                elif "tax" in desc_lower:
+                    order.tax = value
+                elif "total" in desc_lower:
+                    order.total = value
+            continue
+
+        card_name, set_hint, treatment, collector_number = _parse_ck_email_description(desc)
+        if not card_name:
+            continue
+
+        # Condition from second column
+        condition = "Near Mint"
+        foil = False
+        if len(cols) >= 2 and cols[1].strip():
+            condition, foil = _parse_condition_and_foil(cols[1].strip())
+
+        # "Foil" in set name indicates foil
+        if set_hint and re.search(r'\bFoil\b', set_hint):
+            foil = True
+
+        # Quantity from third column
+        quantity = 1
+        if len(cols) >= 3 and cols[2].strip().isdigit():
+            quantity = int(cols[2].strip())
+
+        # Price from fourth column
+        price = None
+        if len(cols) >= 4:
+            price = _parse_dollar(cols[3].strip())
+
+        order.items.append(ParsedOrderItem(
+            card_name=card_name,
+            set_hint=set_hint,
+            condition=condition,
+            foil=foil,
+            quantity=quantity,
+            price=price,
+            treatment=treatment,
+            collector_number=collector_number,
+        ))
+
+    return [order] if order.items else []
+
+
 def _parse_ck_text(text: str) -> List[ParsedOrder]:
     """Parse Card Kingdom text format from order confirmation emails.
 
-    Lines like:
-    1x Lightning Bolt - Near Mint
-    2x Counterspell [Foundations] - Lightly Played
+    Handles two sub-formats:
+    1. Table format (email): tab-separated columns with Description header
+    2. Line format: "1x Lightning Bolt [Set] - Near Mint"
     """
+    if _is_ck_table_format(text):
+        return _parse_ck_table(text)
+
     order = ParsedOrder(source="cardkingdom")
 
     for line in text.strip().splitlines():

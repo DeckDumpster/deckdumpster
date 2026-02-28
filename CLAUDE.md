@@ -74,7 +74,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `order_parser.py` | 600 | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
+| `order_parser.py` | 724 | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
 | `agent.py` | 552 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
 | `claude.py` | 504 | Claude Vision API: corner reading, card identification |
 | `pack_generator.py` | 329 | MTGJSON-based booster pack simulation from SQLite |
@@ -119,13 +119,28 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 | File | Lines | What it covers |
 |------|------:|---------|
 | `test_sealed_products.py` | 1346 |  |
-| `test_order_parser.py` | 622 | Order parsing (TCGPlayer HTML/text, Card Kingdom) |
+| `test_order_parser.py` | 785 | Order parsing (TCGPlayer HTML/text, Card Kingdom) |
+| `test_import.py` | 620 | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
 | `test_price_import.py` | 530 | MTGJSON price import pipeline |
 | `test_mtgjson_import.py` | 515 | MTGJSON AllPrintings import |
 | `test_import.py` | 484 | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
 | `test_ingest_ids.py` | 392 | Manual card entry + `resolve_and_add_ids()` |
 | `test_order_resolver.py` | 302 | Order resolution to local DB cards |
 | `test_decks_binders.py` | — | Deck/binder/view repository CRUD and card assignment |
+
+### UI scenario tests (`tests/ui/`)
+
+Claude Vision agent loop that drives a headless browser through UX flows. Each scenario is a YAML file with a goal description — Claude decides what to click, type, and navigate at each step.
+
+| File | Purpose |
+|------|---------|
+| `test_sealed_products.py` | 1346 |  |
+| `test_order_parser.py` | 785 |  |
+| `test_import.py` | 620 |  |
+| `test_price_import.py` | 530 |  |
+| `test_mtgjson_import.py` | 515 |  |
+| `test_ingest_ids.py` | 392 |  |
+| `test_order_resolver.py` | 302 |  |
 
 ## Data Model
 
