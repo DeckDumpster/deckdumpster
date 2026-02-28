@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -64,6 +64,42 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
 
+-- Decks (physical deck groupings)
+CREATE TABLE IF NOT EXISTS decks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    format TEXT,
+    is_precon INTEGER NOT NULL DEFAULT 0,
+    sleeve_color TEXT,
+    deck_box TEXT,
+    storage_location TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Binders (physical binder groupings)
+CREATE TABLE IF NOT EXISTS binders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    color TEXT,
+    binder_type TEXT,
+    storage_location TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Collection views (saved filter criteria)
+CREATE TABLE IF NOT EXISTS collection_views (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    filters_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- User's collection (one row per physical card owned)
 CREATE TABLE IF NOT EXISTS collection (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,8 +122,13 @@ CREATE TABLE IF NOT EXISTS collection (
     status TEXT NOT NULL DEFAULT 'owned'
         CHECK(status IN ('owned', 'ordered', 'listed', 'sold', 'removed', 'traded', 'gifted', 'lost')),
     sale_price REAL,
-    order_id INTEGER REFERENCES orders(id)
+    order_id INTEGER REFERENCES orders(id),
+    deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+    binder_id INTEGER REFERENCES binders(id) ON DELETE SET NULL,
+    deck_zone TEXT CHECK(deck_zone IN ('mainboard', 'sideboard', 'commander') OR deck_zone IS NULL)
 );
+CREATE INDEX IF NOT EXISTS idx_collection_deck ON collection(deck_id);
+CREATE INDEX IF NOT EXISTS idx_collection_binder ON collection(binder_id);
 
 -- Status audit log (append-only)
 CREATE TABLE IF NOT EXISTS status_log (
@@ -391,11 +432,18 @@ SELECT
     c.sale_price,
     c.printing_id,
     p.oracle_id,
-    c.order_id
+    c.order_id,
+    c.deck_id,
+    c.deck_zone,
+    c.binder_id,
+    d.name AS deck_name,
+    b.name AS binder_name
 FROM collection c
 JOIN printings p ON c.printing_id = p.printing_id
 JOIN cards card ON p.oracle_id = card.oracle_id
-JOIN sets s ON p.set_code = s.set_code;
+JOIN sets s ON p.set_code = s.set_code
+LEFT JOIN decks d ON c.deck_id = d.id
+LEFT JOIN binders b ON c.binder_id = b.id;
 """
 
 
@@ -499,6 +547,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v23_to_v24(conn)
         if current < 25:
             _migrate_v24_to_v25(conn)
+        if current < 26:
+            _migrate_v25_to_v26(conn)
 
     # Record schema version
     conn.execute(
@@ -1448,6 +1498,87 @@ def _migrate_v24_to_v25(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sets ADD COLUMN digital INTEGER NOT NULL DEFAULT 0")
 
 
+def _migrate_v25_to_v26(conn: sqlite3.Connection):
+    """Add decks, binders, collection_views tables and deck/binder columns to collection."""
+    # Create new tables
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS decks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            format TEXT,
+            is_precon INTEGER NOT NULL DEFAULT 0,
+            sleeve_color TEXT,
+            deck_box TEXT,
+            storage_location TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS binders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            color TEXT,
+            binder_type TEXT,
+            storage_location TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS collection_views (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            filters_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    # Add columns to collection table
+    cursor = conn.execute("PRAGMA table_info(collection)")
+    cols = [r[1] for r in cursor.fetchall()]
+    if "deck_id" not in cols:
+        conn.execute("ALTER TABLE collection ADD COLUMN deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL")
+    if "binder_id" not in cols:
+        conn.execute("ALTER TABLE collection ADD COLUMN binder_id INTEGER REFERENCES binders(id) ON DELETE SET NULL")
+    if "deck_zone" not in cols:
+        conn.execute(
+            "ALTER TABLE collection ADD COLUMN deck_zone TEXT"
+            " CHECK(deck_zone IN ('mainboard', 'sideboard', 'commander') OR deck_zone IS NULL)"
+        )
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_collection_deck ON collection(deck_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_collection_binder ON collection(binder_id)")
+
+    # Rebuild collection_view to include deck/binder info
+    conn.execute("DROP VIEW IF EXISTS collection_view")
+    conn.execute("""
+        CREATE VIEW IF NOT EXISTS collection_view AS
+        SELECT
+            c.id, c.printing_id, c.finish, c.condition, c.language,
+            c.purchase_price, c.acquired_at, c.source, c.source_image,
+            c.notes, c.tags, c.tradelist, c.is_alter, c.proxy,
+            c.signed, c.misprint, c.status, c.sale_price, c.order_id,
+            c.deck_id, c.deck_zone, c.binder_id,
+            p.oracle_id, p.set_code, p.collector_number, p.rarity,
+            p.frame_effects, p.border_color, p.full_art, p.promo,
+            p.promo_types, p.finishes, p.artist, p.image_uri,
+            card.name, card.type_line, card.mana_cost, card.cmc,
+            card.oracle_text, card.colors, card.color_identity,
+            d.name AS deck_name,
+            b.name AS binder_name
+        FROM collection c
+        JOIN printings p ON c.printing_id = p.printing_id
+        JOIN cards card ON p.oracle_id = card.oracle_id
+        LEFT JOIN decks d ON c.deck_id = d.id
+        LEFT JOIN binders b ON c.binder_id = b.id
+    """)
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -1471,7 +1602,10 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS ingest_images;
         DROP TABLE IF EXISTS ingest_lineage;
         DROP TABLE IF EXISTS ingest_cache;
+        DROP TABLE IF EXISTS collection_views;
         DROP TABLE IF EXISTS collection;
+        DROP TABLE IF EXISTS decks;
+        DROP TABLE IF EXISTS binders;
         DROP TABLE IF EXISTS orders;
         DROP TABLE IF EXISTS printings;
         DROP TABLE IF EXISTS cards;
