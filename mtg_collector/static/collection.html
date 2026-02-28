@@ -1330,6 +1330,8 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
     <span id="sel-share-result"></span>
     <button id="sel-want-btn">Want</button>
     <button id="sel-share-btn">Share</button>
+    <button id="sel-deck-btn" onclick="showAssignDeckModal()">Add to Deck</button>
+    <button id="sel-binder-btn" onclick="showAssignBinderModal()">Add to Binder</button>
     <button id="sel-delete-btn">Delete</button>
   </div>
 </div>
@@ -1343,6 +1345,14 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 </aside>
 <div class="layout">
   <aside class="sidebar" id="sidebar">
+    <button class="secondary" id="sidebar-close-btn" style="width:100%;margin-bottom:12px;font-size:0.85rem" onclick="toggleSidebar(false)">Close Filters ✕</button>
+
+    <h3>Saved Views</h3>
+    <select id="view-select" style="width:100%;margin-bottom:4px">
+      <option value="">-- None --</option>
+    </select>
+    <button class="secondary" style="width:100%;margin-top:4px;font-size:0.8rem" onclick="saveCurrentView()">Save Current Filters as View</button>
+
     <h3>Color</h3>
     <div class="pill-group" id="color-filters">
       <input type="checkbox" id="cf-W" value="W"><label for="cf-W"><i class="ms ms-w ms-cost"></i></label>
@@ -1443,6 +1453,12 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
       <input type="date" id="date-max">
     </div>
 
+    <h3>Container</h3>
+    <select id="container-filter" style="width:100%;margin-bottom:4px">
+      <option value="">All Cards</option>
+      <option value="unassigned">Unassigned Only</option>
+    </select>
+
     <button style="margin-top:16px;width:100%" id="clear-filters-btn">Clear Filters</button>
   </aside>
 
@@ -1478,6 +1494,33 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
       <button class="secondary" id="wl-copy-tcg">Copy for TCG</button>
     </div>
     <button class="secondary" id="wl-clear-all" style="background:#4a1a1a;border-color:#8b3a3a;color:#e8a0a0">Clear All</button>
+  </div>
+</div>
+
+<!-- Assign to Deck/Binder modals -->
+<div id="assign-deck-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:200;justify-content:center;align-items:center">
+  <div style="background:#16213e;border:2px solid #0f3460;border-radius:12px;padding:24px;width:400px;max-width:90vw">
+    <h3 style="color:#e94560;margin-bottom:16px">Add to Deck</h3>
+    <select id="assign-deck-select" style="width:100%;padding:8px;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;margin-bottom:8px"></select>
+    <select id="assign-deck-zone" style="width:100%;padding:8px;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;margin-bottom:16px">
+      <option value="mainboard">Mainboard</option>
+      <option value="sideboard">Sideboard</option>
+      <option value="commander">Commander</option>
+    </select>
+    <div style="display:flex;gap:8px">
+      <button onclick="assignSelectedToDeck()">Add</button>
+      <button class="secondary" onclick="document.getElementById('assign-deck-overlay').style.display='none'">Cancel</button>
+    </div>
+  </div>
+</div>
+<div id="assign-binder-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:200;justify-content:center;align-items:center">
+  <div style="background:#16213e;border:2px solid #0f3460;border-radius:12px;padding:24px;width:400px;max-width:90vw">
+    <h3 style="color:#e94560;margin-bottom:16px">Add to Binder</h3>
+    <select id="assign-binder-select" style="width:100%;padding:8px;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;margin-bottom:16px"></select>
+    <div style="display:flex;gap:8px">
+      <button onclick="assignSelectedToBinder()">Add</button>
+      <button class="secondary" onclick="document.getElementById('assign-binder-overlay').style.display='none'">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -2224,6 +2267,80 @@ async function loadModalCopies(card) {
         }
       });
     });
+    // --- Deck/binder assignment handlers ---
+    const refreshAfterAssign = () => { loadModalCopies(card); loadContainerData(); fetchCollection(); };
+    container.querySelectorAll('.copy-add-to-deck').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        if (!sel.value) return;
+        const r = await fetch(`/api/decks/${sel.value}/cards`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ collection_ids: [parseInt(sel.dataset.copyId)], zone: 'mainboard' }),
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); sel.value = ''; return; }
+        refreshAfterAssign();
+      });
+    });
+    container.querySelectorAll('.copy-add-to-binder').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        if (!sel.value) return;
+        const r = await fetch(`/api/binders/${sel.value}/cards`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ collection_ids: [parseInt(sel.dataset.copyId)] }),
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); sel.value = ''; return; }
+        refreshAfterAssign();
+      });
+    });
+    container.querySelectorAll('.copy-remove-deck').forEach(link => {
+      link.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const r = await fetch(`/api/decks/${link.dataset.deckId}/cards`, {
+          method: 'DELETE', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ collection_ids: [parseInt(link.dataset.copyId)] }),
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); return; }
+        refreshAfterAssign();
+      });
+    });
+    container.querySelectorAll('.copy-remove-binder').forEach(link => {
+      link.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const r = await fetch(`/api/binders/${link.dataset.binderId}/cards`, {
+          method: 'DELETE', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ collection_ids: [parseInt(link.dataset.copyId)] }),
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); return; }
+        refreshAfterAssign();
+      });
+    });
+    container.querySelectorAll('.copy-move-to-deck').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        if (!sel.value) return;
+        const r = await fetch(`/api/decks/${sel.value}/cards/move`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ collection_ids: [parseInt(sel.dataset.copyId)], zone: 'mainboard' }),
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); sel.value = ''; return; }
+        refreshAfterAssign();
+      });
+    });
+    container.querySelectorAll('.copy-move-to-binder').forEach(sel => {
+      sel.addEventListener('change', async () => {
+        if (!sel.value) return;
+        const r = await fetch(`/api/binders/${sel.value}/cards/move`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ collection_ids: [parseInt(sel.dataset.copyId)] }),
+        });
+        const result = await r.json();
+        if (result.error) { alert(result.error); sel.value = ''; return; }
+        refreshAfterAssign();
+      });
+    });
   } catch (e) {
     container.innerHTML = `<div style="color:#e87e7e;font-size:0.85rem;">Failed to load copies</div>`;
   }
@@ -2263,6 +2380,37 @@ function renderCopySection(copy) {
     priceHtml += `<div class="modal-row"><span class="label">Sale Price</span><span class="value">$${parseFloat(copy.sale_price).toFixed(2)}</span></div>`;
   }
 
+  // Deck/binder assignment row
+  let assignHtml = '';
+  if (isActive) {
+    if (copy.deck_id) {
+      const binderOpts = allBinders.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+      assignHtml = `<div class="modal-row"><span class="label">Deck</span><span class="value">
+        ${copy.deck_name || 'Deck #' + copy.deck_id}
+        <a href="#" class="copy-remove-deck" data-copy-id="${copy.id}" data-deck-id="${copy.deck_id}" style="color:#e94560;margin-left:8px;font-size:0.8rem;">Remove</a>
+        ${allBinders.length ? `<select class="copy-move-to-binder" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          <option value="">Move to Binder ▾</option>${binderOpts}</select>` : ''}
+      </span></div>`;
+    } else if (copy.binder_id) {
+      const deckOpts = allDecks.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+      assignHtml = `<div class="modal-row"><span class="label">Binder</span><span class="value">
+        ${copy.binder_name || 'Binder #' + copy.binder_id}
+        <a href="#" class="copy-remove-binder" data-copy-id="${copy.id}" data-binder-id="${copy.binder_id}" style="color:#e94560;margin-left:8px;font-size:0.8rem;">Remove</a>
+        ${allDecks.length ? `<select class="copy-move-to-deck" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          <option value="">Move to Deck ▾</option>${deckOpts}</select>` : ''}
+      </span></div>`;
+    } else {
+      const deckOpts = allDecks.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
+      const binderOpts = allBinders.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+      assignHtml = `<div class="modal-row"><span class="label">Location</span><span class="value">Unassigned
+        ${allDecks.length ? `<select class="copy-add-to-deck" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          <option value="">Add to Deck ▾</option>${deckOpts}</select>` : ''}
+        ${allBinders.length ? `<select class="copy-add-to-binder" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          <option value="">Add to Binder ▾</option>${binderOpts}</select>` : ''}
+      </span></div>`;
+    }
+  }
+
   const condLabel = copy.condition || 'Near Mint';
   const finLabel = copy.finish ? copy.finish.charAt(0).toUpperCase() + copy.finish.slice(1) : '';
 
@@ -2295,7 +2443,7 @@ function renderCopySection(copy) {
       <span class="copy-id">#${copy.id}</span>
     </div>
     ${statusBadge ? `<div style="margin-bottom:6px;">${statusBadge}</div>` : ''}
-    ${orderHtml}${priceHtml}${lineageHtml}
+    ${orderHtml}${priceHtml}${lineageHtml}${assignHtml}
     ${controlsHtml}
   </div>`;
 }
@@ -2632,6 +2780,17 @@ function hasAnyFilter() {
 }
 
 function applyAllClientFilters(cards) {
+  // Container (deck/binder/unassigned)
+  const container = document.getElementById('container-filter').value;
+  if (container === 'unassigned') {
+    cards = cards.filter(c => !c.deck_id && !c.binder_id);
+  } else if (container.startsWith('deck:')) {
+    const did = parseInt(container.split(':')[1]);
+    cards = cards.filter(c => c.deck_id === did);
+  } else if (container.startsWith('binder:')) {
+    const bid = parseInt(container.split(':')[1]);
+    cards = cards.filter(c => c.binder_id === bid);
+  }
   // Color
   const colors = Array.from(document.querySelectorAll('#color-filters input:checked')).map(cb => cb.value);
   if (colors.length) {
@@ -3494,6 +3653,169 @@ async function copyAndOpen(text, url) {
   window.open(url, '_blank');
 }
 
+// --- Deck/Binder/View Integration ---
+let allDecks = [];
+let allBinders = [];
+let allViews = [];
+
+async function loadContainerData() {
+  const [decksRes, bindersRes, viewsRes] = await Promise.all([
+    fetch('/api/decks'), fetch('/api/binders'), fetch('/api/views'),
+  ]);
+  allDecks = await decksRes.json();
+  allBinders = await bindersRes.json();
+  allViews = await viewsRes.json();
+  populateContainerFilter();
+  populateViewSelect();
+}
+
+function populateContainerFilter() {
+  const sel = document.getElementById('container-filter');
+  // Keep first two options (All / Unassigned)
+  while (sel.options.length > 2) sel.remove(2);
+  if (allDecks.length) {
+    const grp1 = document.createElement('optgroup');
+    grp1.label = 'Decks';
+    allDecks.forEach(d => {
+      const opt = document.createElement('option');
+      opt.value = `deck:${d.id}`;
+      opt.textContent = `${d.name} (${d.card_count})`;
+      grp1.appendChild(opt);
+    });
+    sel.appendChild(grp1);
+  }
+  if (allBinders.length) {
+    const grp2 = document.createElement('optgroup');
+    grp2.label = 'Binders';
+    allBinders.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = `binder:${b.id}`;
+      opt.textContent = `${b.name} (${b.card_count})`;
+      grp2.appendChild(opt);
+    });
+    sel.appendChild(grp2);
+  }
+}
+
+function populateViewSelect() {
+  const sel = document.getElementById('view-select');
+  while (sel.options.length > 1) sel.remove(1);
+  allViews.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = v.name;
+    sel.appendChild(opt);
+  });
+}
+
+document.getElementById('container-filter').addEventListener('change', function() {
+  refilterAndRender();
+});
+
+document.getElementById('view-select').addEventListener('change', async function() {
+  const vid = this.value;
+  if (!vid) return;
+  const res = await fetch(`/api/views/${vid}`);
+  const view = await res.json();
+  if (view.filters_json) {
+    try {
+      const f = typeof view.filters_json === 'string' ? JSON.parse(view.filters_json) : view.filters_json;
+      if (f.container) document.getElementById('container-filter').value = f.container;
+      if (f.q) { searchInput.value = f.q; fetchCollection(); }
+    } catch {}
+  }
+});
+
+async function saveCurrentView() {
+  const name = prompt('Name for this view:');
+  if (!name) return;
+  const filters = { container: document.getElementById('container-filter').value, q: searchInput.value };
+  await fetch('/api/views', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name, filters_json: JSON.stringify(filters) }),
+  });
+  await loadContainerData();
+}
+
+async function showAssignDeckModal() {
+  if (selectedCards.size === 0) return;
+  const sel = document.getElementById('assign-deck-select');
+  sel.innerHTML = '';
+  if (allDecks.length === 0) { await loadContainerData(); }
+  allDecks.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d.id;
+    opt.textContent = d.name;
+    sel.appendChild(opt);
+  });
+  if (allDecks.length === 0) { alert('No decks. Create one first from the Decks page.'); return; }
+  document.getElementById('assign-deck-overlay').style.display = 'flex';
+}
+
+async function showAssignBinderModal() {
+  if (selectedCards.size === 0) return;
+  const sel = document.getElementById('assign-binder-select');
+  sel.innerHTML = '';
+  if (allBinders.length === 0) { await loadContainerData(); }
+  allBinders.forEach(b => {
+    const opt = document.createElement('option');
+    opt.value = b.id;
+    opt.textContent = b.name;
+    sel.appendChild(opt);
+  });
+  if (allBinders.length === 0) { alert('No binders. Create one first from the Binders page.'); return; }
+  document.getElementById('assign-binder-overlay').style.display = 'flex';
+}
+
+async function getSelectedCollectionIds() {
+  // Selected cards are indices into allCards - we need collection IDs from copies
+  const ids = [];
+  for (const idx of selectedCards) {
+    const card = allCards[idx];
+    if (!card) continue;
+    const res = await fetch(`/api/collection/copies?printing_id=${card.printing_id}&finish=${card.finish}`);
+    const copies = await res.json();
+    for (const copy of copies) {
+      if (!copy.deck_id && !copy.binder_id) ids.push(copy.id);
+    }
+  }
+  return ids;
+}
+
+async function assignSelectedToDeck() {
+  const deckId = document.getElementById('assign-deck-select').value;
+  const zone = document.getElementById('assign-deck-zone').value;
+  const ids = await getSelectedCollectionIds();
+  if (ids.length === 0) { alert('No unassigned copies found'); return; }
+  const res = await fetch(`/api/decks/${deckId}/cards`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ collection_ids: ids, zone }),
+  });
+  const result = await res.json();
+  document.getElementById('assign-deck-overlay').style.display = 'none';
+  if (result.error) { alert(result.error); return; }
+  fetchCollection();
+  loadContainerData();
+}
+
+async function assignSelectedToBinder() {
+  const binderId = document.getElementById('assign-binder-select').value;
+  const ids = await getSelectedCollectionIds();
+  if (ids.length === 0) { alert('No unassigned copies found'); return; }
+  const res = await fetch(`/api/binders/${binderId}/cards`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ collection_ids: ids }),
+  });
+  const result = await res.json();
+  document.getElementById('assign-binder-overlay').style.display = 'none';
+  if (result.error) { alert(result.error); return; }
+  fetchCollection();
+  loadContainerData();
+}
+
 // --- Init ---
 (async () => {
   const [settingsRes, cachedSetsRes, _] = await Promise.all([
@@ -3505,6 +3827,7 @@ async function copyAndOpen(text, url) {
   cachedSets = await cachedSetsRes.json();
   applySettings();
   fetchCollection();
+  loadContainerData();
 })();
 </script>
 
