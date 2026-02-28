@@ -1,7 +1,9 @@
 #!/bin/bash
 # Auto-approve safe Bash commands via PreToolUse hook.
-# Workaround for https://github.com/anthropics/claude-code/issues/18160
-# (settings.json allow rules don't prevent permission prompts).
+# Workaround for settings.json allow rules not preventing permission prompts:
+#   https://github.com/anthropics/claude-code/issues/18160
+#   https://github.com/anthropics/claude-code/issues/18846
+#   https://github.com/anthropics/claude-code/issues/20449
 #
 # Deny rules are checked first, then allow, then falls through to
 # the normal permission prompt for anything unrecognized.
