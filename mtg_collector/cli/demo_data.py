@@ -7,8 +7,14 @@ so the web UI has realistic data to browse immediately after setup.
 import sqlite3
 
 from mtg_collector.db.models import (
+    Binder,
+    BinderRepository,
     CollectionEntry,
     CollectionRepository,
+    CollectionView,
+    CollectionViewRepository,
+    Deck,
+    DeckRepository,
     Order,
     OrderRepository,
     SealedCollectionEntry,
@@ -148,6 +154,48 @@ DEMO_SEALED_PRODUCTS = [
     ("fdn", "booster_box", 1, 130.00, "listed"),          # Listed FDN box
 ]
 
+# Demo decks — assigned from owned cards by DEMO_CARDS index
+DEMO_DECKS = [
+    {
+        "name": "Bolt Tribal",
+        "format": "modern",
+        "description": "Burn deck",
+        "cards_slice": slice(0, 8),      # First 8 FDN cards (owned)
+        "zone": "mainboard",
+    },
+    {
+        "name": "Eldrazi Ramp",
+        "format": "commander",
+        "description": "Big mana Eldrazi",
+        "sleeve_color": "black",
+        "deck_box": "Ultimate Guard Boulder 100+",
+        "cards_slice": slice(20, 26),    # MH3 + SPG cards (owned)
+        "zone": "mainboard",
+    },
+]
+
+# Demo binders — assigned from owned cards by DEMO_CARDS index
+DEMO_BINDERS = [
+    {
+        "name": "Trade Binder",
+        "color": "blue",
+        "binder_type": "9-pocket",
+        "cards_slice": slice(8, 14),     # DSK cards (owned)
+    },
+    {
+        "name": "Foil Collection",
+        "color": "black",
+        "description": "Premium cards",
+        "cards_slice": slice(14, 20),    # BLB + OTJ cards (owned)
+    },
+]
+
+# Demo saved views
+DEMO_VIEWS = [
+    {"name": "Unassigned Cards", "filters_json": '{"container":"unassigned","q":""}'},
+    {"name": "Modern Staples", "filters_json": '{"container":"","q":"crawler"}'},
+]
+
 
 def load_demo_data(conn: sqlite3.Connection) -> bool:
     """Load demo fixture data into the database.
@@ -218,8 +266,9 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
         for ci in range(s.start, s.stop):
             order_card_map[ci] = order_ids[oi]
 
-    # Create collection entries
+    # Create collection entries, tracking IDs by original DEMO_CARDS index
     added = 0
+    collection_id_by_card_idx = {}
     for card_idx, printing_id, finish, condition, status in resolved:
         order_id = order_card_map.get(card_idx)
         source = "order_import" if order_id else "demo"
@@ -234,7 +283,8 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
             acquired_at=ts,
             order_id=order_id,
         )
-        collection_repo.add(entry)
+        entry_id = collection_repo.add(entry)
+        collection_id_by_card_idx[card_idx] = entry_id
         added += 1
 
     # Create sealed collection entries
@@ -284,6 +334,66 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
         wishlist_repo.add(entry)
         wishlist_added += 1
 
+    # Create demo decks and assign cards
+    deck_repo = DeckRepository(conn)
+    decks_created = 0
+    for deck_def in DEMO_DECKS:
+        deck = Deck(
+            id=None,
+            name=deck_def["name"],
+            description=deck_def.get("description"),
+            format=deck_def.get("format"),
+            sleeve_color=deck_def.get("sleeve_color"),
+            deck_box=deck_def.get("deck_box"),
+        )
+        deck_id = deck_repo.add(deck)
+        # Collect owned collection IDs within the cards_slice
+        s = deck_def["cards_slice"]
+        card_ids = [
+            collection_id_by_card_idx[ci]
+            for ci in range(s.start, s.stop)
+            if ci in collection_id_by_card_idx
+            and DEMO_CARDS[ci][4] == "owned"
+        ]
+        if card_ids:
+            deck_repo.add_cards(deck_id, card_ids, zone=deck_def.get("zone", "mainboard"))
+        decks_created += 1
+
+    # Create demo binders and assign cards
+    binder_repo = BinderRepository(conn)
+    binders_created = 0
+    for binder_def in DEMO_BINDERS:
+        binder = Binder(
+            id=None,
+            name=binder_def["name"],
+            description=binder_def.get("description"),
+            color=binder_def.get("color"),
+            binder_type=binder_def.get("binder_type"),
+        )
+        binder_id = binder_repo.add(binder)
+        s = binder_def["cards_slice"]
+        card_ids = [
+            collection_id_by_card_idx[ci]
+            for ci in range(s.start, s.stop)
+            if ci in collection_id_by_card_idx
+            and DEMO_CARDS[ci][4] == "owned"
+        ]
+        if card_ids:
+            binder_repo.add_cards(binder_id, card_ids)
+        binders_created += 1
+
+    # Create demo saved views
+    view_repo = CollectionViewRepository(conn)
+    views_created = 0
+    for view_def in DEMO_VIEWS:
+        view = CollectionView(
+            id=None,
+            name=view_def["name"],
+            filters_json=view_def.get("filters_json"),
+        )
+        view_repo.add(view)
+        views_created += 1
+
     # Mark demo as loaded
     conn.execute(
         "INSERT INTO settings (key, value) VALUES ('demo_loaded', ?)",
@@ -296,5 +406,8 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
     print(f"  Created {len(order_ids)} demo orders")
     print(f"  Added {sealed_added} sealed collection entries")
     print(f"  Added {wishlist_added} wishlist entries")
+    print(f"  Created {decks_created} demo decks")
+    print(f"  Created {binders_created} demo binders")
+    print(f"  Created {views_created} demo views")
 
     return True

@@ -376,6 +376,9 @@ function renderResolved() {
     <span class="stat">Format: <b>${formatLabel}</b></span>
   </div>
   <div class="action-bar">
+    <select id="assign-target" style="padding:8px;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px">
+      <option value="">No deck/binder assignment</option>
+    </select>
     <button class="btn-primary" id="commit-btn">Add to Collection</button>
     <button class="btn-secondary" id="cancel-btn">Cancel</button>
   </div>`;
@@ -437,6 +440,8 @@ function renderResolved() {
 
   results.innerHTML = html;
 
+  // Load assign targets
+  loadAssignTargets();
   // Wire up buttons
   document.getElementById('commit-btn').addEventListener('click', commitCards);
   document.getElementById('cancel-btn').addEventListener('click', () => {
@@ -446,6 +451,26 @@ function renderResolved() {
   });
 }
 
+async function loadAssignTargets() {
+  const sel = document.getElementById('assign-target');
+  if (!sel) return;
+  const [decksRes, bindersRes] = await Promise.all([fetch('/api/decks'), fetch('/api/binders')]);
+  const decks = await decksRes.json();
+  const binders = await bindersRes.json();
+  if (decks.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Decks';
+    decks.forEach(d => { const o = document.createElement('option'); o.value = `deck:${d.id}`; o.textContent = d.name; grp.appendChild(o); });
+    sel.appendChild(grp);
+  }
+  if (binders.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Binders';
+    binders.forEach(b => { const o = document.createElement('option'); o.value = `binder:${b.id}`; o.textContent = b.name; grp.appendChild(o); });
+    sel.appendChild(grp);
+  }
+}
+
 async function commitCards() {
   const btn = document.getElementById('commit-btn');
   btn.disabled = true;
@@ -453,15 +478,15 @@ async function commitCards() {
 
   // Only commit resolved cards
   const cardsToCommit = resolvedData.resolved.filter(c => c.resolved);
+  const assignSel = document.getElementById('assign-target');
+  const commitBody = { format: detectedFormat, cards: cardsToCommit };
+  if (assignSel && assignSel.value) commitBody.assign_target = assignSel.value;
 
   try {
     const res = await fetch('/api/import/commit', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        format: detectedFormat,
-        cards: cardsToCommit,
-      }),
+      body: JSON.stringify(commitBody),
     });
     const summary = await res.json();
 

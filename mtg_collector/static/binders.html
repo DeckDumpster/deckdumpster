@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Binders</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+header {
+  background: #16213e;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 2px solid #0f3460;
+}
+
+header h1 {
+  font-size: 1.3rem;
+  color: #e94560;
+  margin-right: 16px;
+  white-space: nowrap;
+}
+header h1 a { color: inherit; text-decoration: none; }
+header h1 a:hover { text-decoration: underline; }
+
+.controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+input[type="text"], select, button, textarea {
+  padding: 8px 14px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+}
+textarea { font-family: inherit; resize: vertical; }
+input:focus, select:focus, textarea:focus { outline: 2px solid #e94560; }
+button { background: #e94560; border-color: #e94560; color: #fff; font-weight: 600; cursor: pointer; }
+button:hover { background: #c73651; }
+button.secondary { background: #333; border-color: #555; }
+button.secondary:hover { background: #e94560; border-color: #e94560; }
+button.danger { background: #c0392b; border-color: #c0392b; }
+button.danger:hover { background: #a93226; }
+
+#status { font-size: 0.85rem; color: #888; margin-left: auto; }
+main { padding: 24px; }
+
+.binder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+.binder-card {
+  background: #16213e;
+  border: 2px solid #0f3460;
+  border-radius: 10px;
+  padding: 20px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.binder-card:hover { border-color: #e94560; background: #1a1a3e; }
+.binder-card h3 { color: #e94560; margin-bottom: 8px; font-size: 1.1rem; }
+.binder-card .meta { font-size: 0.85rem; color: #888; display: flex; flex-direction: column; gap: 4px; }
+.binder-card .meta .badge { display: inline-block; background: #0f3460; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; color: #e0e0e0; }
+.binder-card .stats { margin-top: 12px; font-size: 0.9rem; display: flex; gap: 16px; }
+.binder-card .stats span { color: #e0e0e0; }
+
+.detail-view { display: none; }
+.detail-view.active { display: block; }
+.list-view { display: none; }
+.list-view.active { display: block; }
+
+.detail-header { display: flex; align-items: flex-start; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
+.detail-header .info { flex: 1; min-width: 300px; }
+.detail-header .info h2 { color: #e94560; margin-bottom: 8px; font-size: 1.5rem; }
+.detail-header .info .meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-size: 0.9rem; }
+.detail-header .info .meta-grid .label { color: #888; }
+.detail-header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.card-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.card-table th { text-align: left; padding: 8px 12px; color: #888; border-bottom: 2px solid #0f3460; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.card-table td { padding: 8px 12px; border-bottom: 1px solid #0f3460; }
+.card-table tr:hover { background: rgba(233, 69, 96, 0.05); }
+.card-table .mana { font-size: 0.85rem; color: #aaa; }
+
+.modal-backdrop { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: center; }
+.modal-backdrop.active { display: flex; }
+.modal { background: #16213e; border: 2px solid #0f3460; border-radius: 12px; padding: 24px; width: 500px; max-width: 90vw; max-height: 90vh; overflow-y: auto; }
+.modal h3 { color: #e94560; margin-bottom: 16px; }
+.modal .form-group { margin-bottom: 12px; }
+.modal .form-group label { display: block; font-size: 0.85rem; color: #888; margin-bottom: 4px; }
+.modal .form-group input, .modal .form-group select, .modal .form-group textarea { width: 100%; }
+.modal .form-actions { display: flex; gap: 8px; margin-top: 16px; }
+
+.picker-cards { max-height: 300px; overflow-y: auto; border: 1px solid #0f3460; border-radius: 6px; margin-top: 8px; }
+.picker-card { display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #0f3460; cursor: pointer; gap: 8px; }
+.picker-card:hover { background: rgba(233, 69, 96, 0.1); }
+.picker-card.selected { background: rgba(233, 69, 96, 0.2); }
+
+.empty-state { text-align: center; padding: 48px 24px; color: #888; font-size: 1.1rem; }
+.card-table input[type="checkbox"] { cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="/">MTG</a> / Binders</h1>
+  <div class="controls" id="list-controls">
+    <button onclick="showCreateModal()">New Binder</button>
+  </div>
+  <div class="controls" id="detail-controls" style="display:none">
+    <button class="secondary" onclick="showList()">Back to Binders</button>
+    <button onclick="showAddCardsModal()">Add Cards</button>
+    <button class="secondary" onclick="removeSelectedCards()">Remove Selected</button>
+  </div>
+  <span id="status"></span>
+</header>
+
+<main>
+  <div id="list-view" class="list-view active">
+    <div id="binder-grid" class="binder-grid"></div>
+    <div id="empty-state" class="empty-state" style="display:none">
+      No binders yet. Click "New Binder" to create one.
+    </div>
+  </div>
+
+  <div id="detail-view" class="detail-view">
+    <div class="detail-header">
+      <div class="info">
+        <h2 id="binder-name"></h2>
+        <div class="meta-grid" id="binder-meta"></div>
+      </div>
+      <div class="actions">
+        <button class="secondary" onclick="showEditModal()">Edit</button>
+        <button class="danger" onclick="deleteBinder()">Delete Binder</button>
+      </div>
+    </div>
+
+    <table class="card-table" id="card-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
+          <th>Name</th>
+          <th>Set</th>
+          <th>Mana</th>
+          <th>Type</th>
+          <th>Finish</th>
+          <th>Condition</th>
+        </tr>
+      </thead>
+      <tbody id="card-tbody"></tbody>
+    </table>
+  </div>
+</main>
+
+<!-- Create/Edit Modal -->
+<div class="modal-backdrop" id="binder-modal">
+  <div class="modal">
+    <h3 id="modal-title">New Binder</h3>
+    <div class="form-group">
+      <label>Name *</label>
+      <input type="text" id="f-name" placeholder="My Trade Binder">
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <textarea id="f-description" rows="2"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Color</label>
+      <input type="text" id="f-color" placeholder="e.g. blue, black ultra pro">
+    </div>
+    <div class="form-group">
+      <label>Binder Type</label>
+      <select id="f-type">
+        <option value="">-- None --</option>
+        <option value="9-pocket">9-Pocket</option>
+        <option value="4-pocket">4-Pocket</option>
+        <option value="side-loading">Side-Loading</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Storage Location</label>
+      <input type="text" id="f-location" placeholder="e.g. bookshelf, top row">
+    </div>
+    <div class="form-actions">
+      <button onclick="saveBinder()">Save</button>
+      <button class="secondary" onclick="closeModal('binder-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Cards Modal -->
+<div class="modal-backdrop" id="add-cards-modal">
+  <div class="modal">
+    <h3>Add Cards to Binder</h3>
+    <div class="form-group">
+      <label>Search your collection</label>
+      <input type="text" id="picker-search" placeholder="Search by name..." oninput="searchPickerCards()">
+    </div>
+    <div class="picker-cards" id="picker-cards"></div>
+    <div class="form-actions">
+      <button onclick="addSelectedPickerCards()">Add Selected</button>
+      <button class="secondary" onclick="closeModal('add-cards-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let binders = [];
+let currentBinder = null;
+let binderCards = [];
+let selectedCardIds = new Set();
+let editingBinderId = null;
+let pickerCards = [];
+let pickerSelected = new Set();
+
+async function loadBinders() {
+  const res = await fetch('/api/binders');
+  binders = await res.json();
+  renderBinderList();
+}
+
+function renderBinderList() {
+  const grid = document.getElementById('binder-grid');
+  const empty = document.getElementById('empty-state');
+  if (binders.length === 0) { grid.innerHTML = ''; empty.style.display = ''; return; }
+  empty.style.display = 'none';
+  grid.innerHTML = binders.map(b => `
+    <div class="binder-card" onclick="showBinder(${b.id})">
+      <h3>${esc(b.name)}</h3>
+      <div class="meta">
+        ${b.binder_type ? `<span><span class="badge">${esc(b.binder_type)}</span></span>` : ''}
+        ${b.color ? `<span>Color: ${esc(b.color)}</span>` : ''}
+        ${b.storage_location ? `<span>${esc(b.storage_location)}</span>` : ''}
+        ${b.description ? `<span>${esc(b.description)}</span>` : ''}
+      </div>
+      <div class="stats">
+        <span>${b.card_count} cards</span>
+        ${b.total_value ? `<span>$${Number(b.total_value).toFixed(2)}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function showList() {
+  document.getElementById('list-view').classList.add('active');
+  document.getElementById('detail-view').classList.remove('active');
+  document.getElementById('list-controls').style.display = '';
+  document.getElementById('detail-controls').style.display = 'none';
+  currentBinder = null;
+  loadBinders();
+}
+
+async function showBinder(id) {
+  const res = await fetch(`/api/binders/${id}`);
+  currentBinder = await res.json();
+  editingBinderId = null;
+  document.getElementById('list-view').classList.remove('active');
+  document.getElementById('detail-view').classList.add('active');
+  document.getElementById('list-controls').style.display = 'none';
+  document.getElementById('detail-controls').style.display = '';
+  renderBinderDetail();
+  await loadBinderCards();
+}
+
+function renderBinderDetail() {
+  const b = currentBinder;
+  document.getElementById('binder-name').textContent = b.name;
+  const meta = [];
+  if (b.color) meta.push(`<span class="label">Color</span><span>${esc(b.color)}</span>`);
+  if (b.binder_type) meta.push(`<span class="label">Type</span><span>${esc(b.binder_type)}</span>`);
+  if (b.storage_location) meta.push(`<span class="label">Location</span><span>${esc(b.storage_location)}</span>`);
+  if (b.description) meta.push(`<span class="label">Notes</span><span>${esc(b.description)}</span>`);
+  meta.push(`<span class="label">Cards</span><span>${b.card_count}</span>`);
+  if (b.total_value) meta.push(`<span class="label">Value</span><span>$${Number(b.total_value).toFixed(2)}</span>`);
+  document.getElementById('binder-meta').innerHTML = meta.join('');
+}
+
+async function loadBinderCards() {
+  const res = await fetch(`/api/binders/${currentBinder.id}/cards`);
+  binderCards = await res.json();
+  selectedCardIds.clear();
+  renderCards();
+}
+
+function renderCards() {
+  const tbody = document.getElementById('card-tbody');
+  if (binderCards.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#888; padding:24px;">No cards in this binder</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = binderCards.map(c => `
+    <tr>
+      <td><input type="checkbox" data-id="${c.id}" onchange="toggleCardSelect(${c.id}, this.checked)" ${selectedCardIds.has(c.id) ? 'checked' : ''}></td>
+      <td>${esc(c.name)}</td>
+      <td>${esc(c.set_code.toUpperCase())} #${esc(c.collector_number)}</td>
+      <td class="mana">${esc(c.mana_cost || '')}</td>
+      <td>${esc(c.type_line || '')}</td>
+      <td>${esc(c.finish)}</td>
+      <td>${esc(c.condition)}</td>
+    </tr>
+  `).join('');
+}
+
+function toggleCardSelect(id, checked) {
+  if (checked) selectedCardIds.add(id); else selectedCardIds.delete(id);
+}
+
+function toggleSelectAll(checkbox) {
+  binderCards.forEach(c => {
+    if (checkbox.checked) selectedCardIds.add(c.id); else selectedCardIds.delete(c.id);
+  });
+  renderCards();
+}
+
+function showCreateModal() {
+  editingBinderId = null;
+  document.getElementById('modal-title').textContent = 'New Binder';
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-description').value = '';
+  document.getElementById('f-color').value = '';
+  document.getElementById('f-type').value = '';
+  document.getElementById('f-location').value = '';
+  document.getElementById('binder-modal').classList.add('active');
+}
+
+function showEditModal() {
+  if (!currentBinder) return;
+  editingBinderId = currentBinder.id;
+  document.getElementById('modal-title').textContent = 'Edit Binder';
+  document.getElementById('f-name').value = currentBinder.name || '';
+  document.getElementById('f-description').value = currentBinder.description || '';
+  document.getElementById('f-color').value = currentBinder.color || '';
+  document.getElementById('f-type').value = currentBinder.binder_type || '';
+  document.getElementById('f-location').value = currentBinder.storage_location || '';
+  document.getElementById('binder-modal').classList.add('active');
+}
+
+async function saveBinder() {
+  const data = {
+    name: document.getElementById('f-name').value.trim(),
+    description: document.getElementById('f-description').value.trim() || null,
+    color: document.getElementById('f-color').value.trim() || null,
+    binder_type: document.getElementById('f-type').value || null,
+    storage_location: document.getElementById('f-location').value.trim() || null,
+  };
+  if (!data.name) { alert('Name is required'); return; }
+  const url = editingBinderId ? `/api/binders/${editingBinderId}` : '/api/binders';
+  const method = editingBinderId ? 'PUT' : 'POST';
+  const res = await fetch(url, {
+    method, headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data),
+  });
+  const result = await res.json();
+  closeModal('binder-modal');
+  if (editingBinderId) { currentBinder = result; renderBinderDetail(); }
+  else { showBinder(result.id); }
+}
+
+async function deleteBinder() {
+  if (!currentBinder) return;
+  if (!confirm(`Delete "${currentBinder.name}"? Cards will be unassigned but not deleted.`)) return;
+  await fetch(`/api/binders/${currentBinder.id}`, { method: 'DELETE' });
+  showList();
+}
+
+async function removeSelectedCards() {
+  if (selectedCardIds.size === 0) { alert('No cards selected'); return; }
+  await fetch(`/api/binders/${currentBinder.id}/cards`, {
+    method: 'DELETE',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ collection_ids: Array.from(selectedCardIds) }),
+  });
+  selectedCardIds.clear();
+  const res = await fetch(`/api/binders/${currentBinder.id}`);
+  currentBinder = await res.json();
+  renderBinderDetail();
+  await loadBinderCards();
+}
+
+async function showAddCardsModal() {
+  pickerSelected.clear();
+  document.getElementById('picker-search').value = '';
+  document.getElementById('picker-cards').innerHTML = '<div style="padding:12px;color:#888;">Type to search your collection...</div>';
+  document.getElementById('add-cards-modal').classList.add('active');
+}
+
+async function searchPickerCards() {
+  const q = document.getElementById('picker-search').value.trim();
+  if (q.length < 2) {
+    document.getElementById('picker-cards').innerHTML = '<div style="padding:12px;color:#888;">Type at least 2 characters...</div>';
+    return;
+  }
+  const res = await fetch(`/api/collection?q=${encodeURIComponent(q)}&status=owned`);
+  const data = await res.json();
+  pickerCards = data.cards || [];
+  const container = document.getElementById('picker-cards');
+  if (pickerCards.length === 0) {
+    container.innerHTML = '<div style="padding:12px;color:#888;">No matching cards found</div>';
+    return;
+  }
+  container.innerHTML = pickerCards.map(c => `
+    <div class="picker-card ${pickerSelected.has(c.printing_id + '|' + c.finish) ? 'selected' : ''}"
+         onclick="togglePickerCard('${c.printing_id}', '${c.finish}', this)">
+      <span>${esc(c.name)}</span>
+      <span style="color:#888;font-size:0.85rem">${esc(c.set_code.toUpperCase())} #${esc(c.collector_number)} - ${esc(c.finish)}</span>
+      <span style="color:#888;font-size:0.85rem">x${c.qty}</span>
+    </div>
+  `).join('');
+}
+
+function togglePickerCard(printingId, finish, el) {
+  const key = printingId + '|' + finish;
+  if (pickerSelected.has(key)) { pickerSelected.delete(key); el.classList.remove('selected'); }
+  else { pickerSelected.add(key); el.classList.add('selected'); }
+}
+
+async function addSelectedPickerCards() {
+  if (pickerSelected.size === 0) { alert('No cards selected'); return; }
+  const allIds = [];
+  for (const key of pickerSelected) {
+    const [printingId, finish] = key.split('|');
+    const res = await fetch(`/api/collection/copies?printing_id=${printingId}&finish=${finish}`);
+    const copies = await res.json();
+    for (const copy of copies) {
+      if (!copy.deck_id && !copy.binder_id) allIds.push(copy.id);
+    }
+  }
+  if (allIds.length === 0) { alert('No unassigned copies found'); return; }
+  const res = await fetch(`/api/binders/${currentBinder.id}/cards`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ collection_ids: allIds }),
+  });
+  const result = await res.json();
+  if (result.error) { alert(result.error); return; }
+  closeModal('add-cards-modal');
+  const binderRes = await fetch(`/api/binders/${currentBinder.id}`);
+  currentBinder = await binderRes.json();
+  renderBinderDetail();
+  await loadBinderCards();
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+function esc(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+document.querySelectorAll('.modal-backdrop').forEach(el => {
+  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('active'); });
+});
+
+loadBinders();
+</script>
+</body>
+</html>

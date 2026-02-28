@@ -1,0 +1,13 @@
+# Scenario: Add a card to a binder using the card modal controls
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  Navigate to the Collection page. Search for "Condemn" in the search box.
+  Switch to grid view using the grid toggle button. Click on the Condemn card
+  image to open its detail modal. Scroll down in the modal to find the Copies
+  section. The copy should show "Unassigned" with an "Add to Binder" dropdown.
+  Select "Trade Binder" from the "Add to Binder" dropdown. Verify the copy now
+  shows "Binder: Trade Binder" instead of "Unassigned".

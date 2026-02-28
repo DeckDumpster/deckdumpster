@@ -556,6 +556,9 @@ function renderResults() {
 
   if (resolvedCount > 0) {
     html += `<div class="action-bar">
+      <select id="assign-target" style="padding:8px;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px">
+        <option value="">No deck/binder assignment</option>
+      </select>
       <button class="btn-primary" id="commit-btn">Add to Collection</button>
       <button class="btn-secondary" id="cancel-btn">Cancel</button>
     </div>`;
@@ -612,6 +615,8 @@ function renderResults() {
 
   results.innerHTML = html;
 
+  // Load assign targets
+  if (resolvedCount > 0) { loadAssignTargets(); }
   // Wire up event handlers
   if (resolvedCount > 0) {
     document.getElementById('commit-btn').addEventListener('click', commitCards);
@@ -642,6 +647,26 @@ function renderResults() {
   });
 }
 
+async function loadAssignTargets() {
+  const sel = document.getElementById('assign-target');
+  if (!sel) return;
+  const [decksRes, bindersRes] = await Promise.all([fetch('/api/decks'), fetch('/api/binders')]);
+  const decks = await decksRes.json();
+  const binders = await bindersRes.json();
+  if (decks.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Decks';
+    decks.forEach(d => { const o = document.createElement('option'); o.value = `deck:${d.id}`; o.textContent = d.name; grp.appendChild(o); });
+    sel.appendChild(grp);
+  }
+  if (binders.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Binders';
+    binders.forEach(b => { const o = document.createElement('option'); o.value = `binder:${b.id}`; o.textContent = b.name; grp.appendChild(o); });
+    sel.appendChild(grp);
+  }
+}
+
 async function commitCards() {
   if (!resolvedCards || resolvedCards.length === 0) return;
 
@@ -650,14 +675,17 @@ async function commitCards() {
   btn.innerHTML = '<span class="spinner"></span>Adding...';
 
   try {
+    const assignSel = document.getElementById('assign-target');
+    const commitBody = {
+      cards: resolvedCards,
+      condition: conditionSelect.value,
+      source: 'manual_id',
+    };
+    if (assignSel && assignSel.value) commitBody.assign_target = assignSel.value;
     const res = await fetch('/api/ingest-ids/commit', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        cards: resolvedCards,
-        condition: conditionSelect.value,
-        source: 'manual_id',
-      }),
+      body: JSON.stringify(commitBody),
     });
     const data = await res.json();
 

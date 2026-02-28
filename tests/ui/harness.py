@@ -229,13 +229,24 @@ class UIHarness:
         self._step = 0
         self._history: list[dict] = []
         self._messages: list[dict] = []
-        self._pending_tool_result: dict | None = None
+        self._pending_tool_results: list[dict] = []
 
     # ── public API ────────────────────────────────────────────────────────
 
     def run(self, goal: str, max_steps: int = MAX_STEPS) -> dict:
         """Run the agent loop.  Returns ``{status, summary|reason, steps}``."""
         log.info("[%s] Goal: %s", self.scenario_name, goal.strip()[:120])
+
+        # Auto-accept JS dialogs (confirm/alert) and provide a default for prompt().
+        self._last_dialog_message = None
+        def _handle_dialog(dialog):
+            self._last_dialog_message = dialog.message
+            if dialog.type == "prompt":
+                dialog.accept(dialog.default_value or "Test View")
+            else:
+                dialog.accept()
+        self.page.on("dialog", _handle_dialog)
+
         self.page.goto(f"{self.base_url}/", wait_until="networkidle")
 
         for _ in range(max_steps):
@@ -305,10 +316,10 @@ class UIHarness:
 
         user_content = []
 
-        # Include pending tool_result from previous turn.
-        if self._pending_tool_result:
-            user_content.append(self._pending_tool_result)
-            self._pending_tool_result = None
+        # Include pending tool_result(s) from previous turn.
+        if self._pending_tool_results:
+            user_content.extend(self._pending_tool_results)
+            self._pending_tool_results = []
 
         user_content.append({
             "type": "text",
@@ -346,15 +357,17 @@ class UIHarness:
         if reasoning:
             log.info("[%s] Reasoning: %s", self.scenario_name, reasoning.strip()[:200])
 
-        for block in response.content:
-            if block.type == "tool_use":
-                # Stash the tool_result to prepend to the next user turn.
-                self._pending_tool_result = {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": "OK",
-                }
-                return {"name": block.name, "input": block.input}
+        # Collect tool_results for ALL tool_use blocks in this response.
+        # The API requires every tool_use to have a matching tool_result.
+        tool_uses = [b for b in response.content if b.type == "tool_use"]
+        if tool_uses:
+            # Stash results for all tool_uses — execute only the first.
+            self._pending_tool_results = [
+                {"type": "tool_result", "tool_use_id": b.id, "content": "OK"}
+                for b in tool_uses
+            ]
+            first = tool_uses[0]
+            return {"name": first.name, "input": first.input}
 
         # No tool call — treat as failure.
         return {"name": "fail", "input": {"reason": f"No action chosen: {reasoning[:200]}"}}

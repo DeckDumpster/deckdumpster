@@ -535,6 +535,9 @@ header a:hover { color: #e94560; }
   </div>
   <div class="right-controls">
     <span id="batch-msg"></span>
+    <select id="assign-target" style="padding:6px 8px;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;font-size:0.85rem">
+      <option value="">No assignment</option>
+    </select>
     <button id="batch-btn" onclick="batchIngest()">Batch Ingest</button>
   </div>
 </div>
@@ -1308,14 +1311,38 @@ async function loadUsageStats() {
   box.innerHTML = `<span class="usage-cost">~$${cost.toFixed(4)}</span><br>${parts.join(' · ')}`;
 }
 
+async function loadAssignTargets() {
+  const sel = document.getElementById('assign-target');
+  if (!sel) return;
+  const [decksRes, bindersRes] = await Promise.all([fetch('/api/decks'), fetch('/api/binders')]);
+  const decks = await decksRes.json();
+  const binders = await bindersRes.json();
+  if (decks.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Decks';
+    decks.forEach(d => { const o = document.createElement('option'); o.value = `deck:${d.id}`; o.textContent = d.name; grp.appendChild(o); });
+    sel.appendChild(grp);
+  }
+  if (binders.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Binders';
+    binders.forEach(b => { const o = document.createElement('option'); o.value = `binder:${b.id}`; o.textContent = b.name; grp.appendChild(o); });
+    sel.appendChild(grp);
+  }
+}
+loadAssignTargets();
+
 async function batchIngest() {
   const btn = document.getElementById('batch-btn');
   const msg = document.getElementById('batch-msg');
   btn.disabled = true;
+  const assignSel = document.getElementById('assign-target');
+  const body = { hours: currentHours };
+  if (assignSel && assignSel.value) body.assign_target = assignSel.value;
   const resp = await fetch('/api/ingest2/batch-ingest', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ hours: currentHours }),
+    body: JSON.stringify(body),
   });
   const data = await resp.json();
   btn.disabled = false;

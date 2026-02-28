@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decks</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+header {
+  background: #16213e;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 2px solid #0f3460;
+}
+
+header h1 {
+  font-size: 1.3rem;
+  color: #e94560;
+  margin-right: 16px;
+  white-space: nowrap;
+}
+
+header h1 a { color: inherit; text-decoration: none; }
+header h1 a:hover { text-decoration: underline; }
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+input[type="text"], input[type="number"], select, button, textarea {
+  padding: 8px 14px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+}
+
+textarea { font-family: inherit; resize: vertical; }
+input:focus, select:focus, textarea:focus { outline: 2px solid #e94560; }
+
+button {
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover { background: #c73651; }
+button.secondary {
+  background: #333;
+  border-color: #555;
+}
+button.secondary:hover { background: #e94560; border-color: #e94560; }
+button.danger { background: #c0392b; border-color: #c0392b; }
+button.danger:hover { background: #a93226; }
+
+#status {
+  font-size: 0.85rem;
+  color: #888;
+  margin-left: auto;
+}
+
+main { padding: 24px; }
+
+/* Deck grid */
+.deck-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.deck-card {
+  background: #16213e;
+  border: 2px solid #0f3460;
+  border-radius: 10px;
+  padding: 20px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.deck-card:hover {
+  border-color: #e94560;
+  background: #1a1a3e;
+}
+
+.deck-card h3 { color: #e94560; margin-bottom: 8px; font-size: 1.1rem; }
+
+.deck-card .meta {
+  font-size: 0.85rem;
+  color: #888;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.deck-card .meta .badge {
+  display: inline-block;
+  background: #0f3460;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #e0e0e0;
+}
+
+.deck-card .meta .badge.precon { background: #8e44ad; }
+
+.deck-card .stats {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  display: flex;
+  gap: 16px;
+}
+
+.deck-card .stats span { color: #e0e0e0; }
+
+/* Detail view */
+.detail-view { display: none; }
+.detail-view.active { display: block; }
+.list-view.active { display: block; }
+.list-view { display: none; }
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.detail-header .info { flex: 1; min-width: 300px; }
+.detail-header .info h2 { color: #e94560; margin-bottom: 8px; font-size: 1.5rem; }
+.detail-header .info .meta-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  font-size: 0.9rem;
+}
+.detail-header .info .meta-grid .label { color: #888; }
+
+.detail-header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Zone tabs */
+.zone-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 16px;
+}
+.zone-tabs .tab {
+  padding: 10px 24px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  color: #888;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 0.9rem;
+}
+.zone-tabs .tab:first-child { border-radius: 8px 0 0 8px; }
+.zone-tabs .tab:last-child { border-radius: 0 8px 8px 0; }
+.zone-tabs .tab + .tab { border-left: none; }
+.zone-tabs .tab.active {
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+}
+.zone-tabs .tab:hover:not(.active) { border-color: #e94560; color: #e0e0e0; }
+
+/* Card table */
+.card-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.card-table th {
+  text-align: left;
+  padding: 8px 12px;
+  color: #888;
+  border-bottom: 2px solid #0f3460;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.card-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #0f3460;
+}
+.card-table tr:hover { background: rgba(233, 69, 96, 0.05); }
+.card-table .mana { font-size: 0.85rem; color: #aaa; }
+
+/* Modal */
+.modal-backdrop {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 100;
+  justify-content: center;
+  align-items: center;
+}
+.modal-backdrop.active { display: flex; }
+.modal {
+  background: #16213e;
+  border: 2px solid #0f3460;
+  border-radius: 12px;
+  padding: 24px;
+  width: 500px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal h3 { color: #e94560; margin-bottom: 16px; }
+.modal .form-group {
+  margin-bottom: 12px;
+}
+.modal .form-group label {
+  display: block;
+  font-size: 0.85rem;
+  color: #888;
+  margin-bottom: 4px;
+}
+.modal .form-group input,
+.modal .form-group select,
+.modal .form-group textarea {
+  width: 100%;
+}
+.modal .form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* Card picker */
+.picker-cards {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+.picker-card {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid #0f3460;
+  cursor: pointer;
+  gap: 8px;
+}
+.picker-card:hover { background: rgba(233, 69, 96, 0.1); }
+.picker-card.selected { background: rgba(233, 69, 96, 0.2); }
+.picker-card .chk { width: 16px; height: 16px; }
+
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  color: #888;
+  font-size: 1.1rem;
+}
+
+/* Checkbox in table */
+.card-table input[type="checkbox"] { cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="/">MTG</a> / Decks</h1>
+  <div class="controls" id="list-controls">
+    <button onclick="showCreateModal()">New Deck</button>
+  </div>
+  <div class="controls" id="detail-controls" style="display:none">
+    <button class="secondary" onclick="showList()">Back to Decks</button>
+    <button onclick="showAddCardsModal()">Add Cards</button>
+    <button class="secondary" onclick="removeSelectedCards()">Remove Selected</button>
+  </div>
+  <span id="status"></span>
+</header>
+
+<main>
+  <!-- List View -->
+  <div id="list-view" class="list-view active">
+    <div id="deck-grid" class="deck-grid"></div>
+    <div id="empty-state" class="empty-state" style="display:none">
+      No decks yet. Click "New Deck" to create one.
+    </div>
+  </div>
+
+  <!-- Detail View -->
+  <div id="detail-view" class="detail-view">
+    <div class="detail-header">
+      <div class="info">
+        <h2 id="deck-name"></h2>
+        <div class="meta-grid" id="deck-meta"></div>
+      </div>
+      <div class="actions">
+        <button class="secondary" onclick="showEditModal()">Edit</button>
+        <button class="danger" onclick="deleteDeck()">Delete Deck</button>
+      </div>
+    </div>
+
+    <div class="zone-tabs" id="zone-tabs">
+      <div class="tab active" data-zone="mainboard" onclick="switchZone('mainboard')">Mainboard <span id="count-mainboard"></span></div>
+      <div class="tab" data-zone="sideboard" onclick="switchZone('sideboard')">Sideboard <span id="count-sideboard"></span></div>
+      <div class="tab" data-zone="commander" onclick="switchZone('commander')">Commander <span id="count-commander"></span></div>
+    </div>
+
+    <table class="card-table" id="card-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
+          <th>Name</th>
+          <th>Set</th>
+          <th>Mana</th>
+          <th>Type</th>
+          <th>Finish</th>
+          <th>Condition</th>
+        </tr>
+      </thead>
+      <tbody id="card-tbody"></tbody>
+    </table>
+  </div>
+</main>
+
+<!-- Create/Edit Modal -->
+<div class="modal-backdrop" id="deck-modal">
+  <div class="modal">
+    <h3 id="modal-title">New Deck</h3>
+    <div class="form-group">
+      <label>Name *</label>
+      <input type="text" id="f-name" placeholder="My Commander Deck">
+    </div>
+    <div class="form-group">
+      <label>Format</label>
+      <select id="f-format">
+        <option value="">-- None --</option>
+        <option value="commander">Commander / EDH</option>
+        <option value="standard">Standard</option>
+        <option value="modern">Modern</option>
+        <option value="pioneer">Pioneer</option>
+        <option value="legacy">Legacy</option>
+        <option value="vintage">Vintage</option>
+        <option value="pauper">Pauper</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Description</label>
+      <textarea id="f-description" rows="2"></textarea>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="f-precon"> Preconstructed deck</label>
+    </div>
+    <div class="form-group">
+      <label>Sleeve Color</label>
+      <input type="text" id="f-sleeve" placeholder="e.g. black dragon shield matte">
+    </div>
+    <div class="form-group">
+      <label>Deck Box</label>
+      <input type="text" id="f-deckbox" placeholder="e.g. Ultimate Guard Boulder 100+">
+    </div>
+    <div class="form-group">
+      <label>Storage Location</label>
+      <input type="text" id="f-location" placeholder="e.g. shelf 2, left side">
+    </div>
+    <div class="form-actions">
+      <button onclick="saveDeck()">Save</button>
+      <button class="secondary" onclick="closeModal('deck-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Cards Modal -->
+<div class="modal-backdrop" id="add-cards-modal">
+  <div class="modal">
+    <h3>Add Cards to Deck</h3>
+    <div class="form-group">
+      <label>Zone</label>
+      <select id="add-zone">
+        <option value="mainboard">Mainboard</option>
+        <option value="sideboard">Sideboard</option>
+        <option value="commander">Commander</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Search your collection</label>
+      <input type="text" id="picker-search" placeholder="Search by name..." oninput="searchPickerCards()">
+    </div>
+    <div class="picker-cards" id="picker-cards"></div>
+    <div class="form-actions">
+      <button onclick="addSelectedPickerCards()">Add Selected</button>
+      <button class="secondary" onclick="closeModal('add-cards-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let decks = [];
+let currentDeck = null;
+let currentZone = 'mainboard';
+let deckCards = [];
+let selectedCardIds = new Set();
+let editingDeckId = null;
+let pickerCards = [];
+let pickerSelected = new Set();
+
+// ===== List View =====
+
+async function loadDecks() {
+  const res = await fetch('/api/decks');
+  decks = await res.json();
+  renderDeckList();
+}
+
+function renderDeckList() {
+  const grid = document.getElementById('deck-grid');
+  const empty = document.getElementById('empty-state');
+
+  if (decks.length === 0) {
+    grid.innerHTML = '';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  grid.innerHTML = decks.map(d => `
+    <div class="deck-card" onclick="showDeck(${d.id})">
+      <h3>${esc(d.name)}</h3>
+      <div class="meta">
+        ${d.format ? `<span><span class="badge">${esc(d.format)}</span></span>` : ''}
+        ${d.is_precon ? '<span><span class="badge precon">Precon</span></span>' : ''}
+        ${d.storage_location ? `<span>${esc(d.storage_location)}</span>` : ''}
+        ${d.description ? `<span>${esc(d.description)}</span>` : ''}
+      </div>
+      <div class="stats">
+        <span>${d.card_count} cards</span>
+        ${d.total_value ? `<span>$${Number(d.total_value).toFixed(2)}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function showList() {
+  document.getElementById('list-view').classList.add('active');
+  document.getElementById('detail-view').classList.remove('active');
+  document.getElementById('list-controls').style.display = '';
+  document.getElementById('detail-controls').style.display = 'none';
+  currentDeck = null;
+  loadDecks();
+}
+
+// ===== Detail View =====
+
+async function showDeck(id) {
+  const res = await fetch(`/api/decks/${id}`);
+  currentDeck = await res.json();
+  editingDeckId = null;
+
+  document.getElementById('list-view').classList.remove('active');
+  document.getElementById('detail-view').classList.add('active');
+  document.getElementById('list-controls').style.display = 'none';
+  document.getElementById('detail-controls').style.display = '';
+
+  renderDeckDetail();
+  switchZone('mainboard');
+}
+
+function renderDeckDetail() {
+  const d = currentDeck;
+  document.getElementById('deck-name').textContent = d.name;
+  const meta = [];
+  if (d.format) meta.push(`<span class="label">Format</span><span>${esc(d.format)}</span>`);
+  if (d.is_precon) meta.push(`<span class="label">Type</span><span>Preconstructed</span>`);
+  if (d.sleeve_color) meta.push(`<span class="label">Sleeves</span><span>${esc(d.sleeve_color)}</span>`);
+  if (d.deck_box) meta.push(`<span class="label">Deck Box</span><span>${esc(d.deck_box)}</span>`);
+  if (d.storage_location) meta.push(`<span class="label">Location</span><span>${esc(d.storage_location)}</span>`);
+  if (d.description) meta.push(`<span class="label">Notes</span><span>${esc(d.description)}</span>`);
+  meta.push(`<span class="label">Cards</span><span>${d.card_count}</span>`);
+  if (d.total_value) meta.push(`<span class="label">Value</span><span>$${Number(d.total_value).toFixed(2)}</span>`);
+  document.getElementById('deck-meta').innerHTML = meta.join('');
+}
+
+async function switchZone(zone) {
+  currentZone = zone;
+  selectedCardIds.clear();
+  document.querySelectorAll('.zone-tabs .tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.zone === zone);
+  });
+  await loadDeckCards();
+}
+
+async function loadDeckCards() {
+  const res = await fetch(`/api/decks/${currentDeck.id}/cards`);
+  const allCards = await res.json();
+
+  // Count per zone
+  const counts = { mainboard: 0, sideboard: 0, commander: 0 };
+  allCards.forEach(c => { if (counts[c.deck_zone] !== undefined) counts[c.deck_zone]++; });
+  document.getElementById('count-mainboard').textContent = `(${counts.mainboard})`;
+  document.getElementById('count-sideboard').textContent = `(${counts.sideboard})`;
+  document.getElementById('count-commander').textContent = `(${counts.commander})`;
+
+  deckCards = allCards.filter(c => c.deck_zone === currentZone);
+  renderCards();
+}
+
+function renderCards() {
+  const tbody = document.getElementById('card-tbody');
+  if (deckCards.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#888; padding:24px;">No cards in this zone</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = deckCards.map(c => `
+    <tr>
+      <td><input type="checkbox" data-id="${c.id}" onchange="toggleCardSelect(${c.id}, this.checked)" ${selectedCardIds.has(c.id) ? 'checked' : ''}></td>
+      <td>${esc(c.name)}</td>
+      <td>${esc(c.set_code.toUpperCase())} #${esc(c.collector_number)}</td>
+      <td class="mana">${esc(c.mana_cost || '')}</td>
+      <td>${esc(c.type_line || '')}</td>
+      <td>${esc(c.finish)}</td>
+      <td>${esc(c.condition)}</td>
+    </tr>
+  `).join('');
+}
+
+function toggleCardSelect(id, checked) {
+  if (checked) selectedCardIds.add(id);
+  else selectedCardIds.delete(id);
+}
+
+function toggleSelectAll(checkbox) {
+  deckCards.forEach(c => {
+    if (checkbox.checked) selectedCardIds.add(c.id);
+    else selectedCardIds.delete(c.id);
+  });
+  renderCards();
+}
+
+// ===== CRUD =====
+
+function showCreateModal() {
+  editingDeckId = null;
+  document.getElementById('modal-title').textContent = 'New Deck';
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-format').value = '';
+  document.getElementById('f-description').value = '';
+  document.getElementById('f-precon').checked = false;
+  document.getElementById('f-sleeve').value = '';
+  document.getElementById('f-deckbox').value = '';
+  document.getElementById('f-location').value = '';
+  document.getElementById('deck-modal').classList.add('active');
+}
+
+function showEditModal() {
+  if (!currentDeck) return;
+  editingDeckId = currentDeck.id;
+  document.getElementById('modal-title').textContent = 'Edit Deck';
+  document.getElementById('f-name').value = currentDeck.name || '';
+  document.getElementById('f-format').value = currentDeck.format || '';
+  document.getElementById('f-description').value = currentDeck.description || '';
+  document.getElementById('f-precon').checked = !!currentDeck.is_precon;
+  document.getElementById('f-sleeve').value = currentDeck.sleeve_color || '';
+  document.getElementById('f-deckbox').value = currentDeck.deck_box || '';
+  document.getElementById('f-location').value = currentDeck.storage_location || '';
+  document.getElementById('deck-modal').classList.add('active');
+}
+
+async function saveDeck() {
+  const data = {
+    name: document.getElementById('f-name').value.trim(),
+    format: document.getElementById('f-format').value || null,
+    description: document.getElementById('f-description').value.trim() || null,
+    is_precon: document.getElementById('f-precon').checked,
+    sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
+    deck_box: document.getElementById('f-deckbox').value.trim() || null,
+    storage_location: document.getElementById('f-location').value.trim() || null,
+  };
+  if (!data.name) { alert('Name is required'); return; }
+
+  const url = editingDeckId ? `/api/decks/${editingDeckId}` : '/api/decks';
+  const method = editingDeckId ? 'PUT' : 'POST';
+  const res = await fetch(url, {
+    method, headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data),
+  });
+  const result = await res.json();
+  closeModal('deck-modal');
+
+  if (editingDeckId) {
+    currentDeck = result;
+    renderDeckDetail();
+  } else {
+    showDeck(result.id);
+  }
+}
+
+async function deleteDeck() {
+  if (!currentDeck) return;
+  if (!confirm(`Delete "${currentDeck.name}"? Cards will be unassigned but not deleted.`)) return;
+  await fetch(`/api/decks/${currentDeck.id}`, { method: 'DELETE' });
+  showList();
+}
+
+async function removeSelectedCards() {
+  if (selectedCardIds.size === 0) { alert('No cards selected'); return; }
+  const ids = Array.from(selectedCardIds);
+  await fetch(`/api/decks/${currentDeck.id}/cards`, {
+    method: 'DELETE',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ collection_ids: ids }),
+  });
+  selectedCardIds.clear();
+
+  // Refresh deck data and cards
+  const res = await fetch(`/api/decks/${currentDeck.id}`);
+  currentDeck = await res.json();
+  renderDeckDetail();
+  await loadDeckCards();
+}
+
+// ===== Add Cards Picker =====
+
+async function showAddCardsModal() {
+  pickerSelected.clear();
+  document.getElementById('picker-search').value = '';
+  document.getElementById('picker-cards').innerHTML = '<div style="padding:12px;color:#888;">Type to search your collection...</div>';
+  document.getElementById('add-cards-modal').classList.add('active');
+}
+
+async function searchPickerCards() {
+  const q = document.getElementById('picker-search').value.trim();
+  if (q.length < 2) {
+    document.getElementById('picker-cards').innerHTML = '<div style="padding:12px;color:#888;">Type at least 2 characters...</div>';
+    return;
+  }
+  const res = await fetch(`/api/collection?q=${encodeURIComponent(q)}&status=owned`);
+  const data = await res.json();
+  pickerCards = data.cards || [];
+
+  const container = document.getElementById('picker-cards');
+  if (pickerCards.length === 0) {
+    container.innerHTML = '<div style="padding:12px;color:#888;">No matching cards found</div>';
+    return;
+  }
+  // Expand grouped cards into individual copies for picking
+  // The collection API returns aggregated rows - we need individual IDs
+  // For now, show the grouped results and let users pick printing groups
+  container.innerHTML = pickerCards.map(c => `
+    <div class="picker-card ${pickerSelected.has(c.printing_id + '|' + c.finish) ? 'selected' : ''}"
+         onclick="togglePickerCard('${c.printing_id}', '${c.finish}', this)">
+      <span>${esc(c.name)}</span>
+      <span style="color:#888;font-size:0.85rem">${esc(c.set_code.toUpperCase())} #${esc(c.collector_number)} - ${esc(c.finish)}</span>
+      <span style="color:#888;font-size:0.85rem">x${c.qty}</span>
+    </div>
+  `).join('');
+}
+
+function togglePickerCard(printingId, finish, el) {
+  const key = printingId + '|' + finish;
+  if (pickerSelected.has(key)) {
+    pickerSelected.delete(key);
+    el.classList.remove('selected');
+  } else {
+    pickerSelected.add(key);
+    el.classList.add('selected');
+  }
+}
+
+async function addSelectedPickerCards() {
+  if (pickerSelected.size === 0) { alert('No cards selected'); return; }
+  const zone = document.getElementById('add-zone').value;
+
+  // We need individual collection IDs. Fetch copies for each selected printing.
+  const allIds = [];
+  for (const key of pickerSelected) {
+    const [printingId, finish] = key.split('|');
+    const res = await fetch(`/api/collection/copies?printing_id=${printingId}&finish=${finish}`);
+    const copies = await res.json();
+    // Only add unassigned copies
+    for (const copy of copies) {
+      if (!copy.deck_id && !copy.binder_id) {
+        allIds.push(copy.id);
+      }
+    }
+  }
+
+  if (allIds.length === 0) {
+    alert('No unassigned copies found for the selected cards');
+    return;
+  }
+
+  const res = await fetch(`/api/decks/${currentDeck.id}/cards`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ collection_ids: allIds, zone }),
+  });
+  const result = await res.json();
+  if (result.error) {
+    alert(result.error);
+    return;
+  }
+
+  closeModal('add-cards-modal');
+
+  // Refresh
+  const deckRes = await fetch(`/api/decks/${currentDeck.id}`);
+  currentDeck = await deckRes.json();
+  renderDeckDetail();
+  await loadDeckCards();
+}
+
+// ===== Utils =====
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('active');
+}
+
+function esc(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+// Close modals on backdrop click
+document.querySelectorAll('.modal-backdrop').forEach(el => {
+  el.addEventListener('click', e => {
+    if (e.target === el) el.classList.remove('active');
+  });
+});
+
+// Init
+loadDecks();
+</script>
+</body>
+</html>

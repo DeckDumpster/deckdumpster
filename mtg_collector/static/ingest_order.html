@@ -401,6 +401,9 @@ function renderResolved() {
     ${failedCount ? `<span class="stat" style="color:#e94560">Failed: <b>${failedCount}</b></span>` : ''}
   </div>
   <div class="action-bar">
+    <select id="assign-target" style="padding:8px;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px">
+      <option value="">No deck/binder assignment</option>
+    </select>
     <button class="btn-primary" id="commit-btn">Add All to Collection</button>
     <button class="btn-secondary" id="cancel-btn">Cancel</button>
   </div>`;
@@ -448,6 +451,8 @@ function renderResolved() {
 
   results.innerHTML = html;
 
+  // Load deck/binder targets
+  loadAssignTargets();
   // Wire up commit button
   document.getElementById('commit-btn').addEventListener('click', commitOrders);
   document.getElementById('cancel-btn').addEventListener('click', () => {
@@ -456,20 +461,62 @@ function renderResolved() {
   });
 }
 
+async function loadAssignTargets() {
+  const sel = document.getElementById('assign-target');
+  if (!sel) return;
+  const [decksRes, bindersRes] = await Promise.all([fetch('/api/decks'), fetch('/api/binders')]);
+  const decks = await decksRes.json();
+  const binders = await bindersRes.json();
+  if (decks.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Decks';
+    decks.forEach(d => { const o = document.createElement('option'); o.value = `deck:${d.id}`; o.textContent = d.name; grp.appendChild(o); });
+    sel.appendChild(grp);
+  }
+  if (binders.length) {
+    const grp = document.createElement('optgroup');
+    grp.label = 'Binders';
+    binders.forEach(b => { const o = document.createElement('option'); o.value = `binder:${b.id}`; o.textContent = b.name; grp.appendChild(o); });
+    sel.appendChild(grp);
+  }
+}
+
+async function assignCardsToTarget(collectionIds) {
+  const sel = document.getElementById('assign-target');
+  if (!sel || !sel.value || collectionIds.length === 0) return;
+  const [type, id] = sel.value.split(':');
+  if (type === 'deck') {
+    await fetch(`/api/decks/${id}/cards`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ collection_ids: collectionIds, zone: 'mainboard' }),
+    });
+  } else if (type === 'binder') {
+    await fetch(`/api/binders/${id}/cards`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ collection_ids: collectionIds }),
+    });
+  }
+}
+
 async function commitOrders() {
   const btn = document.getElementById('commit-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Adding...';
 
   try {
+    const assignSel = document.getElementById('assign-target');
+    const commitBody = {
+      orders: resolvedOrders,
+      status: selectedStatus,
+      source: 'order_import',
+    };
+    if (assignSel && assignSel.value) {
+      commitBody.assign_target = assignSel.value;
+    }
     const res = await fetch('/api/order/commit', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        orders: resolvedOrders,
-        status: selectedStatus,
-        source: 'order_import',
-      }),
+      body: JSON.stringify(commitBody),
     });
     const summary = await res.json();
 

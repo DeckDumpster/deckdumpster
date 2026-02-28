@@ -14,6 +14,8 @@ A CLI + web UI tool for managing Magic: The Gathering card collections. Add card
 - **Card lifecycle tracking**: Track card status (owned → ordered → listed → sold → removed) with audit log
 - **Wishlist**: Track cards you want, with priority and price alerts
 - **Local caching**: Scryfall data cached in SQLite to minimize API calls
+- **Decks & binders**: Organize cards into named decks (with format, zones) and binders — exclusivity enforced (one container per card)
+- **Saved views**: Save and load collection filter configurations
 - **Multi-platform import/export**: Moxfield, Archidekt, Deckbox CSV formats
 - **Price data**: TCGplayer and CardKingdom prices via MTGJSON
 
@@ -227,6 +229,8 @@ Pages available at `http://localhost:8080`:
 - **Crack-a-Pack** (`/crack`) — Virtual booster pack simulator with price data
 - **Explore Sheets** (`/sheets`) — Browse booster sheet layouts by set and product type
 - **Card Ingestor** (`/ingestor-ocr`) — Upload card images for OCR-based identification and collection entry
+- **Decks** (`/decks`) — Create and manage decks with mainboard/sideboard/commander zones
+- **Binders** (`/binders`) — Organize cards into named binders
 - **Order Ingestor** (`/ingestor-order`) — Import TCGPlayer/Card Kingdom orders via paste or file upload
 
 ## Data Model
@@ -245,6 +249,8 @@ Each physical card you own is stored as a separate row with:
 | Acquired date | Auto-set on import |
 | Source | corner_ingest, manual_id, moxfield_import, order_import, etc. |
 | Order | Optional link to purchase order (seller, order number, totals) |
+| Deck | Optional assignment to a named deck (with zone: mainboard/sideboard/commander) |
+| Binder | Optional assignment to a named binder (mutually exclusive with deck) |
 | Flags | tradelist, alter, proxy, signed, misprint |
 
 ## How It Works

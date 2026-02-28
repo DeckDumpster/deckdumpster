@@ -1,0 +1,14 @@
+# Scenario: Import a text decklist via CSV Import page
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  Navigate to the CSV Import page (navigate to /import-csv). Select
+  "Deck List (text)" from the Format dropdown. In the text area, type
+  "1 Scrawling Crawler (FDN) 132" as the decklist content. Click
+  "Parse & Resolve" to submit. Verify the right side shows "Resolved: 1" and
+  the resolved card table shows "Scrawling Crawler" with set FDN. Click the
+  "Add to Collection" button. Verify a success message appears confirming the
+  card was added.

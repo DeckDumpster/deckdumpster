@@ -53,11 +53,11 @@ Each module has `register(subparsers)` and `run(args)`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `crack_pack_server.py` | 4782 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
+| `crack_pack_server.py` | 5359 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
 | `data_cmd.py` | 922 | MTGJSON + price data import/export commands |
 | `ingest_ocr.py` | 393 | CLI image-based card ingestion via EasyOCR + Claude |
 | `ingest_corners.py` | 320 | CLI corner-photo card ingestion via Claude Vision |
-| `demo_data.py` | 300 | Load demo collection for testing |
+| `demo_data.py` | 413 | Load demo collection for testing (cards, decks, binders, views) |
 | `sample_ingest.py` | 289 |  |
 | `ingest_ids.py` | 246 | Manual card entry by rarity/collector-number/set |
 
@@ -65,10 +65,10 @@ Each module has `register(subparsers)` and `run(args)`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `models.py` | 1594 | Dataclasses + repository classes (CRUD for every table) |
-| `schema.py` | 1481 | Schema DDL, all migrations, `init_db()` |
+| `models.py` | 1982 | Dataclasses + repository classes (CRUD for every table) |
+| `schema.py` | 1615 | Schema DDL, all migrations, `init_db()` |
 
-Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`.
+Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`.
 
 ### `mtg_collector/services/` — External integrations
 
@@ -85,7 +85,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `collection.html` | 3512 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
+| `collection.html` | 3835 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
 | `sealed.html` | 2116 |  |
 | `recent.html` | 1380 | Recently ingested images gallery |
 | `correct.html` | 1048 | Fix misidentified cards in ingest pipeline |
@@ -96,7 +96,9 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 | `edit_order.html` | 631 |  |
 | `ingest_corners.html` | 561 | Corner photo ingest web UI |
 | `ingest_order.html` | 495 | Order ingestion web UI |
-| `import_csv.html` | 492 | CSV import web UI |
+| `decks.html` | 748 | Deck list/detail/edit with card management |
+| `import_csv.html` | 517 | CSV import web UI (with deck/binder assignment) |
+| `binders.html` | 471 | Binder list/detail/edit with card management |
 | `process.html` | 406 | OCR processing + Claude identification |
 | `upload.html` | 395 | Photo upload for image ingest |
 | `index.html` | 309 | Homepage / navigation |
@@ -123,20 +125,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 | `test_import.py` | 484 | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
 | `test_ingest_ids.py` | 392 | Manual card entry + `resolve_and_add_ids()` |
 | `test_order_resolver.py` | 302 | Order resolution to local DB cards |
-
-### UI scenario tests (`tests/ui/`)
-
-Claude Vision agent loop that drives a headless browser through UX flows. Each scenario is a YAML file with a goal description — Claude decides what to click, type, and navigate at each step.
-
-| File | Purpose |
-|------|---------|
-| `test_sealed_products.py` | 1346 |  |
-| `test_order_parser.py` | 622 |  |
-| `test_price_import.py` | 530 |  |
-| `test_mtgjson_import.py` | 515 |  |
-| `test_import.py` | 484 |  |
-| `test_ingest_ids.py` | 392 |  |
-| `test_order_resolver.py` | 302 |  |
+| `test_decks_binders.py` | — | Deck/binder/view repository CRUD and card assignment |
 
 ## Data Model
 
@@ -145,10 +134,13 @@ Claude Vision agent loop that drives a headless browser through UX flows. Each s
 ```
 cards (oracle_id PK)          — Abstract card identity (name, colors, mana cost)
   └─ printings (printing_id PK, FK oracle_id, FK set_code)  — Specific printing (art, rarity, image)
-       └─ collection (id PK, FK printing_id, FK? order_id)  — One row per physical card owned
-            └─ orders (id PK)  — Purchase order (TCGPlayer/CK seller, totals, shipping)
+       └─ collection (id PK, FK printing_id, FK? order_id, FK? deck_id, FK? binder_id)
+            ├─ orders (id PK)    — Purchase order (TCGPlayer/CK seller, totals, shipping)
+            ├─ decks (id PK)     — Named deck (format, sleeve, deck box)
+            └─ binders (id PK)   — Named binder (color, type)
 
 sets (set_code PK)            — Set metadata, cards_fetched_at for cache status
+collection_views (id PK)      — Saved filter configurations for the collection page
 ```
 
 This is the fundamental chain: **card** → **printing** → **collection entry** (→ optional **order**).
@@ -173,9 +165,13 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `ingest_cache` — Cached OCR + Claude results by image MD5 (avoids reprocessing).
 - `ingest_images` — Persistent web UI ingest pipeline state (READY_FOR_OCR → PROCESSING → DONE/ERROR).
 - `ingest_lineage` — Maps collection entries back to source images.
+- `decks` — Named decks with format, sleeve color, deck box, storage location.
+- `binders` — Named binders with color, type, storage location.
+- `collection_views` — Saved filter/search configurations for the collection page.
 - `status_log` — Append-only audit of collection status changes.
 - `settings` — Key-value config (e.g. `price_sources`, `image_display`).
-- Schema v21 with auto-migrations in `schema.py`.
+- Schema v22 with auto-migrations in `schema.py`.
+- **Deck/binder exclusivity**: A collection entry can be in one deck OR one binder, not both. `deck_id` and `binder_id` are mutually exclusive (enforced by repository logic, returns HTTP 409 on conflict). Use `move_cards()` to atomically reassign.
 
 Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` env).
 
@@ -392,6 +388,13 @@ description: >
 ```
 
 That's it — just a goal description and metadata. Claude figures out the steps.
+
+**Tips for reliable scenarios:**
+- Search for specific card names before clicking — don't say "click any card" (the agent may pick one with wrong state)
+- Use card names from the test fixture DB (not Scryfall names — e.g. FDN #132 is "Scrawling Crawler", not "Lightning Bolt")
+- Keep steps under 12 to stay well within the 20-step limit
+- Reference visible UI elements by label, not position
+- The sidebar filter panel is long — "Saved Views" is at the top, most filters are below
 
 ### Running
 

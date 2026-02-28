@@ -735,6 +735,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("collection.html")
         elif path == "/sealed":
             self._serve_static("sealed.html")
+        elif path == "/decks":
+            self._serve_static("decks.html")
+        elif path == "/binders":
+            self._serve_static("binders.html")
         elif path == "/upload":
             self._serve_static("upload.html")
         elif path == "/recent":
@@ -839,6 +843,45 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_sealed_collection_stats()
         elif path == "/api/sealed/collection":
             self._api_sealed_collection_list(params)
+        # Deck API routes
+        elif path == "/api/decks":
+            self._api_decks_list()
+        elif path.startswith("/api/decks/") and path.endswith("/cards"):
+            did = path[len("/api/decks/"):-len("/cards")]
+            if did.isdigit():
+                self._api_deck_cards(int(did), params)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/"):
+            did = path[len("/api/decks/"):]
+            if did.isdigit():
+                self._api_deck_get(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        # Binder API routes
+        elif path == "/api/binders":
+            self._api_binders_list()
+        elif path.startswith("/api/binders/") and path.endswith("/cards"):
+            bid = path[len("/api/binders/"):-len("/cards")]
+            if bid.isdigit():
+                self._api_binder_cards(int(bid))
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/binders/"):
+            bid = path[len("/api/binders/"):]
+            if bid.isdigit():
+                self._api_binder_get(int(bid))
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        # Collection view API routes
+        elif path == "/api/views":
+            self._api_views_list()
+        elif path.startswith("/api/views/"):
+            vid = path[len("/api/views/"):]
+            if vid.isdigit():
+                self._api_view_get(int(vid))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/static/"):
             self._serve_static(path[len("/static/"):])
         else:
@@ -977,6 +1020,60 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_sealed_collection_dispose(int(entry_id), data)
+        # Deck POST routes
+        elif path == "/api/decks":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_deck_create(data)
+        elif path.startswith("/api/decks/") and path.endswith("/cards/move"):
+            did = path[len("/api/decks/"):-len("/cards/move")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_move_cards(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/cards"):
+            did = path[len("/api/decks/"):-len("/cards")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_add_cards(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        # Binder POST routes
+        elif path == "/api/binders":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_binder_create(data)
+        elif path.startswith("/api/binders/") and path.endswith("/cards/move"):
+            bid = path[len("/api/binders/"):-len("/cards/move")]
+            if bid.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_binder_move_cards(int(bid), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/binders/") and path.endswith("/cards"):
+            bid = path[len("/api/binders/"):-len("/cards")]
+            if bid.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_binder_add_cards(int(bid), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        # Collection view POST routes
+        elif path == "/api/views":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_view_create(data)
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -1010,6 +1107,33 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_collection_update(int(entry_id), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/"):
+            did = path[len("/api/decks/"):]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_update(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/binders/"):
+            bid = path[len("/api/binders/"):]
+            if bid.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_binder_update(int(bid), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/views/"):
+            vid = path[len("/api/views/"):]
+            if vid.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_view_update(int(vid), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -1035,6 +1159,42 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/wishlist/"):
             wid = path[len("/api/wishlist/"):]
             self._api_wishlist_delete(int(wid))
+        elif path.startswith("/api/decks/") and path.endswith("/cards"):
+            did = path[len("/api/decks/"):-len("/cards")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_remove_cards(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/"):
+            did = path[len("/api/decks/"):]
+            if did.isdigit():
+                self._api_deck_delete(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/binders/") and path.endswith("/cards"):
+            bid = path[len("/api/binders/"):-len("/cards")]
+            if bid.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_binder_remove_cards(int(bid), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/binders/"):
+            bid = path[len("/api/binders/"):]
+            if bid.isdigit():
+                self._api_binder_delete(int(bid))
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/views/"):
+            vid = path[len("/api/views/"):]
+            if vid.isdigit():
+                self._api_view_delete(int(vid))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -1160,6 +1320,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         filter_wanted = params.get("filter_wanted", [""])[0] == "true"
         _unowned_raw = params.get("include_unowned", [""])[0]
         include_unowned = _unowned_raw if _unowned_raw in ("base", "full") else ""
+        filter_deck_id = params.get("deck_id", [""])[0]
+        filter_binder_id = params.get("binder_id", [""])[0]
+        filter_unassigned = params.get("unassigned", [""])[0] == "1"
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -1270,6 +1433,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if filter_date_max and not include_unowned:
             where_clauses.append("c.acquired_at < date(?, '+1 day')")
             sql_params.append(filter_date_max)
+
+        if filter_deck_id and not include_unowned:
+            where_clauses.append("c.deck_id = ?")
+            sql_params.append(int(filter_deck_id))
+        if filter_binder_id and not include_unowned:
+            where_clauses.append("c.binder_id = ?")
+            sql_params.append(int(filter_binder_id))
+        if filter_unassigned and not include_unowned:
+            where_clauses.append("c.deck_id IS NULL AND c.binder_id IS NULL")
 
         where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
@@ -1401,12 +1573,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     o.order_number as order_number,
                     o.order_date as order_date,
                     c.purchase_price,
+                    c.deck_id, c.deck_zone, c.binder_id,
+                    d.name as deck_name,
+                    b.name as binder_name,
                     GROUP_CONCAT(DISTINCT ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at) as ingest_lineage_raw
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 LEFT JOIN orders o ON c.order_id = o.id
+                LEFT JOIN decks d ON c.deck_id = d.id
+                LEFT JOIN binders b ON c.binder_id = b.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                 LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
                 WHERE {where_sql}
@@ -1455,6 +1632,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "acquired_at": row["acquired_at"],
                 "owned": bool(row["owned"]) if include_unowned else True,
             }
+            # Deck/binder info
+            if "deck_id" in row.keys() and row["deck_id"]:
+                card["deck_id"] = row["deck_id"]
+                card["deck_zone"] = row["deck_zone"]
+                card["deck_name"] = row["deck_name"]
+            if "binder_id" in row.keys() and row["binder_id"]:
+                card["binder_id"] = row["binder_id"]
+                card["binder_name"] = row["binder_name"]
             # Order info
             order_id = row["order_id"] if "order_id" in row.keys() else None
             if order_id:
@@ -2788,6 +2973,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         hours = float(data.get("hours", 24))
+        assign_target = data.get("assign_target", "")
         conn = self._ingest2_db()
         rows = conn.execute(
             """SELECT id, md5, stored_name, disambiguated, claude_result
@@ -2800,6 +2986,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         printing_repo = PrintingRepository(conn)
         collection_repo = CollectionRepository(conn)
         count = 0
+        batch_collection_ids = []
 
         for row in rows:
             img = dict(row)
@@ -2829,6 +3016,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     source="ocr_ingest",
                 )
                 entry_id = collection_repo.add(entry)
+                batch_collection_ids.append(entry_id)
                 conn.execute(
                     """INSERT INTO ingest_lineage (collection_id, image_md5, image_path, card_index, created_at)
                        VALUES (?, ?, ?, ?, ?)""",
@@ -2842,6 +3030,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             count += 1
 
         conn.commit()
+
+        # Optional deck/binder assignment
+        if assign_target and batch_collection_ids:
+            from mtg_collector.db.models import BinderRepository, DeckRepository
+            if assign_target.startswith("deck:"):
+                did = int(assign_target.split(":")[1])
+                DeckRepository(conn).add_cards(did, batch_collection_ids, zone="mainboard")
+            elif assign_target.startswith("binder:"):
+                bid = int(assign_target.split(":")[1])
+                BinderRepository(conn).add_cards(bid, batch_collection_ids)
+            conn.commit()
+
         conn.close()
 
         _log_ingest(f"Batch ingest: processed {count} image(s)")
@@ -3220,6 +3420,20 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             resolved_orders, order_repo, collection_repo, conn,
             status=status, source=source,
         )
+
+        # Optional deck/binder assignment for newly added cards
+        assign_target = data.get("assign_target", "")
+        if assign_target and summary.get("collection_ids"):
+            from mtg_collector.db.models import BinderRepository, DeckRepository
+            cids = summary["collection_ids"]
+            if assign_target.startswith("deck:"):
+                did = int(assign_target.split(":")[1])
+                zone = data.get("assign_zone", "mainboard")
+                DeckRepository(conn).add_cards(did, cids, zone=zone)
+            elif assign_target.startswith("binder:"):
+                bid = int(assign_target.split(":")[1])
+                BinderRepository(conn).add_cards(bid, cids)
+            conn.commit()
 
         conn.close()
         self._send_json(summary)
@@ -3606,6 +3820,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         printing_repo = PrintingRepository(conn)
 
         added = 0
+        collection_ids = []
         for card in cards:
             printing_id = card.get("printing_id")
             if not printing_id:
@@ -3616,10 +3831,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             finish = normalize_finish("foil" if card.get("foil") else "nonfoil")
             entry = CollectionEntry(id=None, printing_id=printing_id, finish=finish,
                                    condition=condition, source=source)
-            collection_repo.add(entry)
+            new_id = collection_repo.add(entry)
+            collection_ids.append(new_id)
             added += 1
 
         conn.commit()
+
+        # Optional deck/binder assignment
+        assign_target = data.get("assign_target", "")
+        if assign_target and collection_ids:
+            from mtg_collector.db.models import BinderRepository, DeckRepository
+            if assign_target.startswith("deck:"):
+                did = int(assign_target.split(":")[1])
+                DeckRepository(conn).add_cards(did, collection_ids, zone="mainboard")
+            elif assign_target.startswith("binder:"):
+                bid = int(assign_target.split(":")[1])
+                BinderRepository(conn).add_cards(bid, collection_ids)
+            conn.commit()
+
         conn.close()
         self._send_json({"added": added, "failed": len(cards) - added})
 
@@ -3780,6 +4009,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         added = 0
         errors = []
+        collection_ids = []
         for card in cards:
             printing_id = card.get("printing_id")
             raw = card.get("raw", {})
@@ -3789,12 +4019,26 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             try:
                 entry = importer.row_to_entry(raw, printing_id)
                 for _ in range(qty):
-                    collection_repo.add(entry)
+                    new_id = collection_repo.add(entry)
+                    collection_ids.append(new_id)
                     added += 1
             except Exception as e:
                 errors.append(f"Error adding {card.get('name', '?')}: {e}")
 
         conn.commit()
+
+        # Optional deck/binder assignment
+        assign_target = data.get("assign_target", "")
+        if assign_target and collection_ids:
+            from mtg_collector.db.models import BinderRepository, DeckRepository
+            if assign_target.startswith("deck:"):
+                did = int(assign_target.split(":")[1])
+                DeckRepository(conn).add_cards(did, collection_ids, zone="mainboard")
+            elif assign_target.startswith("binder:"):
+                bid = int(assign_target.split(":")[1])
+                BinderRepository(conn).add_cards(bid, collection_ids)
+            conn.commit()
+
         conn.close()
         self._send_json({"cards_added": added, "cards_skipped": len(cards) - added, "errors": errors})
 
@@ -3808,6 +4052,339 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._send_json({"error": "Invalid JSON"}, 400)
             return None
+
+    # ===== Deck API handlers =====
+
+    def _api_decks_list(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        self._send_json(repo.list_all())
+        conn.close()
+
+    def _api_deck_get(self, deck_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        deck = repo.get(deck_id)
+        conn.close()
+        if deck is None:
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        self._send_json(deck)
+
+    def _api_deck_create(self, data: dict):
+        name = data.get("name")
+        if not name:
+            self._send_json({"error": "name is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import Deck, DeckRepository
+        repo = DeckRepository(conn)
+        deck = Deck(
+            id=None, name=name, description=data.get("description"),
+            format=data.get("format"), is_precon=bool(data.get("is_precon")),
+            sleeve_color=data.get("sleeve_color"), deck_box=data.get("deck_box"),
+            storage_location=data.get("storage_location"),
+        )
+        deck_id = repo.add(deck)
+        conn.commit()
+        result = repo.get(deck_id)
+        conn.close()
+        self._send_json(result, 201)
+
+    def _api_deck_update(self, deck_id: int, data: dict):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        if not repo.get(deck_id):
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        repo.update(deck_id, data)
+        conn.commit()
+        result = repo.get(deck_id)
+        conn.close()
+        self._send_json(result)
+
+    def _api_deck_delete(self, deck_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        if not repo.delete(deck_id):
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True})
+
+    def _api_deck_cards(self, deck_id: int, params: dict):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        zone = params.get("zone", [None])[0]
+        cards = repo.get_cards(deck_id, zone=zone)
+        conn.close()
+        self._send_json(cards)
+
+    def _api_deck_add_cards(self, deck_id: int, data: dict):
+        collection_ids = data.get("collection_ids", [])
+        zone = data.get("zone", "mainboard")
+        if not collection_ids:
+            self._send_json({"error": "collection_ids is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        try:
+            count = repo.add_cards(deck_id, collection_ids, zone=zone)
+            conn.commit()
+        except ValueError as e:
+            conn.close()
+            self._send_json({"error": str(e)}, 409)
+            return
+        conn.close()
+        self._send_json({"ok": True, "count": count})
+
+    def _api_deck_remove_cards(self, deck_id: int, data: dict):
+        collection_ids = data.get("collection_ids", [])
+        if not collection_ids:
+            self._send_json({"error": "collection_ids is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        count = repo.remove_cards(deck_id, collection_ids)
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True, "count": count})
+
+    def _api_deck_move_cards(self, deck_id: int, data: dict):
+        collection_ids = data.get("collection_ids", [])
+        zone = data.get("zone", "mainboard")
+        if not collection_ids:
+            self._send_json({"error": "collection_ids is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        count = repo.move_cards(collection_ids, deck_id, zone=zone)
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True, "count": count})
+
+    # ===== Binder API handlers =====
+
+    def _api_binders_list(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import BinderRepository
+        repo = BinderRepository(conn)
+        self._send_json(repo.list_all())
+        conn.close()
+
+    def _api_binder_get(self, binder_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import BinderRepository
+        repo = BinderRepository(conn)
+        binder = repo.get(binder_id)
+        conn.close()
+        if binder is None:
+            self._send_json({"error": "Binder not found"}, 404)
+            return
+        self._send_json(binder)
+
+    def _api_binder_create(self, data: dict):
+        name = data.get("name")
+        if not name:
+            self._send_json({"error": "name is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import Binder, BinderRepository
+        repo = BinderRepository(conn)
+        binder = Binder(
+            id=None, name=name, description=data.get("description"),
+            color=data.get("color"), binder_type=data.get("binder_type"),
+            storage_location=data.get("storage_location"),
+        )
+        binder_id = repo.add(binder)
+        conn.commit()
+        result = repo.get(binder_id)
+        conn.close()
+        self._send_json(result, 201)
+
+    def _api_binder_update(self, binder_id: int, data: dict):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import BinderRepository
+        repo = BinderRepository(conn)
+        if not repo.get(binder_id):
+            conn.close()
+            self._send_json({"error": "Binder not found"}, 404)
+            return
+        repo.update(binder_id, data)
+        conn.commit()
+        result = repo.get(binder_id)
+        conn.close()
+        self._send_json(result)
+
+    def _api_binder_delete(self, binder_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import BinderRepository
+        repo = BinderRepository(conn)
+        if not repo.delete(binder_id):
+            conn.close()
+            self._send_json({"error": "Binder not found"}, 404)
+            return
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True})
+
+    def _api_binder_cards(self, binder_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import BinderRepository
+        repo = BinderRepository(conn)
+        cards = repo.get_cards(binder_id)
+        conn.close()
+        self._send_json(cards)
+
+    def _api_binder_add_cards(self, binder_id: int, data: dict):
+        collection_ids = data.get("collection_ids", [])
+        if not collection_ids:
+            self._send_json({"error": "collection_ids is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import BinderRepository
+        repo = BinderRepository(conn)
+        try:
+            count = repo.add_cards(binder_id, collection_ids)
+            conn.commit()
+        except ValueError as e:
+            conn.close()
+            self._send_json({"error": str(e)}, 409)
+            return
+        conn.close()
+        self._send_json({"ok": True, "count": count})
+
+    def _api_binder_remove_cards(self, binder_id: int, data: dict):
+        collection_ids = data.get("collection_ids", [])
+        if not collection_ids:
+            self._send_json({"error": "collection_ids is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import BinderRepository
+        repo = BinderRepository(conn)
+        count = repo.remove_cards(binder_id, collection_ids)
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True, "count": count})
+
+    def _api_binder_move_cards(self, binder_id: int, data: dict):
+        collection_ids = data.get("collection_ids", [])
+        if not collection_ids:
+            self._send_json({"error": "collection_ids is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import BinderRepository
+        repo = BinderRepository(conn)
+        count = repo.move_cards(collection_ids, binder_id)
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True, "count": count})
+
+    # ===== Collection View API handlers =====
+
+    def _api_views_list(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import CollectionViewRepository
+        repo = CollectionViewRepository(conn)
+        self._send_json(repo.list_all())
+        conn.close()
+
+    def _api_view_get(self, view_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import CollectionViewRepository
+        repo = CollectionViewRepository(conn)
+        view = repo.get(view_id)
+        conn.close()
+        if view is None:
+            self._send_json({"error": "View not found"}, 404)
+            return
+        self._send_json(view)
+
+    def _api_view_create(self, data: dict):
+        name = data.get("name")
+        filters_json = data.get("filters_json")
+        if not name:
+            self._send_json({"error": "name is required"}, 400)
+            return
+        if filters_json is None:
+            self._send_json({"error": "filters_json is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import CollectionView, CollectionViewRepository
+        repo = CollectionViewRepository(conn)
+        if isinstance(filters_json, dict):
+            filters_json = json.dumps(filters_json)
+        view = CollectionView(
+            id=None, name=name, description=data.get("description"),
+            filters_json=filters_json,
+        )
+        view_id = repo.add(view)
+        conn.commit()
+        result = repo.get(view_id)
+        conn.close()
+        self._send_json(result, 201)
+
+    def _api_view_update(self, view_id: int, data: dict):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import CollectionViewRepository
+        repo = CollectionViewRepository(conn)
+        if not repo.get(view_id):
+            conn.close()
+            self._send_json({"error": "View not found"}, 404)
+            return
+        if "filters_json" in data and isinstance(data["filters_json"], dict):
+            data["filters_json"] = json.dumps(data["filters_json"])
+        repo.update(view_id, data)
+        conn.commit()
+        result = repo.get(view_id)
+        conn.close()
+        self._send_json(result)
+
+    def _api_view_delete(self, view_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import CollectionViewRepository
+        repo = CollectionViewRepository(conn)
+        if not repo.delete(view_id):
+            conn.close()
+            self._send_json({"error": "View not found"}, 404)
+            return
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True})
 
     def _api_shorten(self, params):
         import requests

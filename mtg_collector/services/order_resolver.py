@@ -230,6 +230,7 @@ def commit_orders(
         "cards_linked": 0,
         "cards_skipped": 0,
         "errors": [],
+        "collection_ids": [],
     }
 
     ts = now_iso()
@@ -297,8 +298,9 @@ def commit_orders(
                         order_id=order_id,
                         acquired_at=ts,
                     )
-                    collection_repo.add(entry)
+                    new_id = collection_repo.add(entry)
                     summary["cards_added"] += 1
+                    summary["collection_ids"].append(new_id)
 
     conn.commit()
     return summary
