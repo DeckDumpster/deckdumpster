@@ -9,7 +9,7 @@ You are running inside a Podman container with:
 - gh CLI (authenticated via GH_TOKEN)
 - git (configured with push access)
 
-The repo is cloned at `/workspace` on a branch called `claude/issue-${ISSUE_NUMBER}` (based on `main`). Everything is pre-installed and ready:
+The repo is at `/app` on a branch called `claude/issue-${ISSUE_NUMBER}` (based on `main`). Everything is pre-installed and ready:
 - Project dependencies including dev/test (pytest, ruff, etc.) — do not reinstall them.
 - Card database and price data are at `$MTGC_HOME`. The server starts without additional setup.
 
@@ -62,7 +62,7 @@ The repo is cloned at `/workspace` on a branch called `claude/issue-${ISSUE_NUMB
    ```
    ![screenshot](https://raw.githubusercontent.com/${REPO_FULL_NAME}/claude/issue-${ISSUE_NUMBER}/docs/screenshots/issue-${ISSUE_NUMBER}.png)
    ```
-   Include the text description from the screenshot subagent.
+   Include a brief description of what the screenshot shows.
 
 8. **Post a summary comment on the issue.** Use:
    ```

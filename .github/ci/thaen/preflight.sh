@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Pre-container sanity checks for the plan workflow.
+# Pre-container sanity checks for plan/implement workflows.
 # Runs BEFORE the expensive Claude container to gate it cheaply.
 #
-# Usage: preflight.sh <issue_number> <repo> <author> [label]
+# Usage: preflight.sh <issue_number> <repo> <author> [label] [trigger_label] [workflow_file]
 # Env:   GH_TOKEN
 #
-# The label arg is the event trigger label (from github.event.label.name).
-# Used as a fast-path reject when a non-plan label is added. The real
-# gate is whether the issue currently has the ready_for_claude_plan label.
+# Arguments:
+#   label          — event trigger label (github.event.label.name), fast-path reject
+#   trigger_label  — required label the issue must have (default: ready_for_claude_plan)
+#   workflow_file  — workflow filename for rate limiting (default: plan.yml)
 #
 # Exit 0 = skip (nothing to do — wrong label, closed, missing trigger label)
 # Exit 1 = error (rate limit, unknown author)
@@ -18,9 +19,10 @@ ISSUE_NUMBER="$1"
 REPO="$2"
 AUTHOR="$3"
 LABEL="${4:-}"
+TRIGGER_LABEL="${5:-ready_for_claude_plan}"
+WORKFLOW_FILE="${6:-plan.yml}"
 
 ALLOWED_AUTHORS="thaen rgantt"
-TRIGGER_LABEL="ready_for_claude_plan"
 SKIP_LABELS="wontfix question duplicate invalid no-claude"
 MAX_CONCURRENT_RUNS=3
 
@@ -55,7 +57,7 @@ if [ "$BODY_LEN" -lt 20 ]; then
     exit 0
 fi
 
-# 4. Required label — issue must have ready_for_claude_plan
+# 4. Required label — issue must have the trigger label
 ISSUE_LABELS=$(echo "$ISSUE_JSON" | python3 -c "
 import sys, json
 labels = json.load(sys.stdin).get('labels', [])
@@ -74,11 +76,11 @@ for label in $SKIP_LABELS; do
     fi
 done
 
-# --- 6. Rate limit — max concurrent plan workflow runs ---
+# --- 6. Rate limit — max concurrent workflow runs ---
 # Workflow may not exist yet (pre-merge) — treat 404 as 0 running.
-RUNNING=$(gh run list --repo "$REPO" --workflow "plan.yml" --status in_progress --json databaseId --jq 'length' 2>/dev/null || echo 0)
+RUNNING=$(gh run list --repo "$REPO" --workflow "$WORKFLOW_FILE" --status in_progress --json databaseId --jq 'length' 2>/dev/null || echo 0)
 if [ "$RUNNING" -ge "$MAX_CONCURRENT_RUNS" ]; then
-    echo "ERROR: $RUNNING plan workflows already running (max $MAX_CONCURRENT_RUNS)" >&2
+    echo "ERROR: $RUNNING ${WORKFLOW_FILE} workflows already running (max $MAX_CONCURRENT_RUNS)" >&2
     exit 1
 fi
 

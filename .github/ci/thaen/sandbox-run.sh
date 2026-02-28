@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs a Claude planning agent inside a Podman container.
+# Runs a Claude plan or implement agent inside a Podman container.
 #
-# Usage: sandbox-run.sh plan <issue_number> <repo> [base_branch]
+# Usage: sandbox-run.sh <plan|implement> <issue_number> <repo> [base_branch]
 # Env:   ANTHROPIC_API_KEY, GH_TOKEN (bot account: thaen-claude)
+#
+# Plan mode:  Claude explores the codebase and writes a plan to /out/plan-comment.md.
+#             Post-run: post plan comment, advance label to ready_for_human_plan_review.
+# Implement:  Claude implements the approved plan, pushes a branch, opens a PR.
+#             Post-run: verify PR exists, advance label to ready_for_human_review.
 #
 # Host paths (macOS /opt ↔ VM /var/opt via virtiofs):
 #   /opt/dd-ci-code/   — git clone + Linux .venv (overlay-mounted read-only)
@@ -41,11 +46,20 @@ if [ -z "${GH_TOKEN:-}" ]; then
     exit 1
 fi
 
+# --- Derive trigger label and workflow file from mode ---
+if [ "$MODE" = "plan" ]; then
+    TRIGGER_LABEL="ready_for_claude_plan"
+    WORKFLOW_FILE="plan.yml"
+else
+    TRIGGER_LABEL="ready_for_claude_implement"
+    WORKFLOW_FILE="implement.yml"
+fi
+
 # --- Local runs: run preflight first (CI already ran it as a separate step) ---
 if [ -z "${GITHUB_ACTIONS:-}" ]; then
     AUTHOR=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}" --jq '.user.login')
     echo "Local run — running preflight for issue #${ISSUE_NUMBER} (author: ${AUTHOR})"
-    PREFLIGHT_OUT=$(bash "$SCRIPT_DIR/preflight.sh" "$ISSUE_NUMBER" "$REPO" "$AUTHOR")
+    PREFLIGHT_OUT=$(bash "$SCRIPT_DIR/preflight.sh" "$ISSUE_NUMBER" "$REPO" "$AUTHOR" "" "$TRIGGER_LABEL" "$WORKFLOW_FILE")
     PREFLIGHT_RC=$?
     echo "$PREFLIGHT_OUT"
     if [ $PREFLIGHT_RC -ne 0 ]; then
@@ -154,6 +168,26 @@ if [ "$MODE" = "plan" ] && [ "$CONTAINER_RC" -eq 0 ]; then
     gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
         --remove-label ready_for_claude_plan \
         --add-label ready_for_human_plan_review
+    echo "Labels updated"
+fi
+
+# --- Verify implementation + advance label ---
+if [ "$MODE" = "implement" ] && [ "$CONTAINER_RC" -eq 0 ]; then
+    BRANCH="claude/issue-${ISSUE_NUMBER}"
+
+    # Verify the PR was created by Claude inside the container
+    PR_URL=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json url --jq '.[0].url' 2>/dev/null || true)
+    if [ -z "$PR_URL" ]; then
+        echo "WARNING: container exited cleanly but no open PR found for branch $BRANCH" >&2
+        exit 1
+    fi
+    echo "PR found: $PR_URL"
+
+    # Advance label
+    echo "Advancing label: ready_for_claude_implement → ready_for_human_review"
+    gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+        --remove-label ready_for_claude_implement \
+        --add-label ready_for_human_review
     echo "Labels updated"
 fi
 
