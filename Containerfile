@@ -35,6 +35,9 @@ COPY --from=builder /app/mtg_collector /app/mtg_collector
 # Pre-built test fixture for fast --test container setup (no network needed)
 COPY tests/fixtures/test-data.sqlite /app/test-data.sqlite
 
+# Sample ingest images for recents page test data (used by mtg sample-ingest)
+COPY tests/fixtures/sample-*.jpg tests/fixtures/sample-*.jpeg /app/tests/fixtures/
+
 ENV PATH="/app/.venv/bin:$PATH"
 ENV MTGC_HOME=/data
 

@@ -162,6 +162,13 @@ if [ "$TEST" = "true" ]; then
         --entrypoint mtg \
         "localhost/mtgc:${INSTANCE}" \
         setup --demo --from-fixture /app/test-data.sqlite
+    # Load sample ingest images for recents page testing
+    podman run --rm \
+        -v "${VOLUME_NAME}:/data:Z" \
+        -e MTGC_HOME=/data \
+        --entrypoint mtg \
+        "localhost/mtgc:${INSTANCE}" \
+        sample-ingest
 elif [ "$INIT" = "true" ]; then
     VOLUME_NAME="${SERVICE_NAME}-data"
     SEED_VOLUME="mtgc-seed-data"
