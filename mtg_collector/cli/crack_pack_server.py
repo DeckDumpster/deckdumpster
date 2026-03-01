@@ -335,11 +335,11 @@ def _format_candidates(raw_cards):
     for c in raw_cards:
         image_uri = None
         if "image_uris" in c:
-            image_uri = c["image_uris"].get("small") or c["image_uris"].get("normal")
+            image_uri = c["image_uris"].get("normal") or c["image_uris"].get("small")
         elif "card_faces" in c and c["card_faces"]:
             face = c["card_faces"][0]
             if "image_uris" in face:
-                image_uri = face["image_uris"].get("small") or face["image_uris"].get("normal")
+                image_uri = face["image_uris"].get("normal") or face["image_uris"].get("small")
 
         prices = c.get("prices", {})
         price = prices.get("usd") or prices.get("usd_foil")
@@ -3639,11 +3639,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # Extract image URI
             image_uri = None
             if "image_uris" in card_data:
-                image_uri = card_data["image_uris"].get("small") or card_data["image_uris"].get("normal")
+                image_uri = card_data["image_uris"].get("normal") or card_data["image_uris"].get("small")
             elif "card_faces" in card_data and card_data["card_faces"]:
                 face = card_data["card_faces"][0]
                 if "image_uris" in face:
-                    image_uri = face["image_uris"].get("small") or face["image_uris"].get("normal")
+                    image_uri = face["image_uris"].get("normal") or face["image_uris"].get("small")
 
             resolved_cards.append({
                 "printing_id": card_data["id"],
@@ -3818,7 +3818,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             image_uris = card_data.get("image_uris") or {}
             if not image_uris and card_data.get("card_faces"):
                 image_uris = card_data["card_faces"][0].get("image_uris", {})
-            image_uri = image_uris.get("small", image_uris.get("normal", ""))
+            image_uri = image_uris.get("normal", image_uris.get("small", ""))
 
             resolved.append({
                 "index": idx,
