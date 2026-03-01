@@ -1,0 +1,11 @@
+# Scenario: Move a card between deck and binder via the card modal
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  A copy of Scrawling Crawler that is assigned to deck Bolt Tribal can
+  be moved to binder Trade Binder from the card detail modal. After
+  moving, the copy should show the binder assignment instead of the
+  deck assignment.

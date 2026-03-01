@@ -1,0 +1,10 @@
+# Scenario: Manually search and select a card with zero candidates
+#
+# Related:
+#   issues: []
+#   pull_requests: [117]
+
+description: >
+  When a card on the Recent Images page has zero candidates from the
+  agent, I can manually search for it by name, select a printing from
+  the results, and batch ingest it into the collection.

@@ -1,0 +1,10 @@
+# Scenario: Create a binder and manage cards in it
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  I can create a new binder, see it in the binder list, open it, and
+  add cards to it. The added cards should appear in the binder's card
+  list.

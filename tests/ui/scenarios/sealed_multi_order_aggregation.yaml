@@ -1,8 +1,0 @@
-description: >
-  Starting from the sealed collection page, add a Final Fantasy Play
-  Booster Box with quantity 2 and price $89.99. Then add the same
-  product again with quantity 1 and price $94.50. Verify that the
-  collection shows one aggregated row for this product with a total
-  quantity of 3. Open the product detail and verify it lists two
-  separate entries — one with qty 2 at $89.99 and one with qty 1 at
-  $94.50.

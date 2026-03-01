@@ -1,0 +1,10 @@
+# Scenario: Select a candidate from a specific set
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the Recent Images page, I can open the accordion for a card with
+  multiple set candidates, select a candidate from a specific set, and
+  see the photo update to reflect the selection with a green border.

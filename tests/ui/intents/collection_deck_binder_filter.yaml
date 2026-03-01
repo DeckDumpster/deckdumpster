@@ -1,0 +1,9 @@
+# Scenario: Filter the collection by deck and binder assignment
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  I can filter my collection to show only unassigned cards using the
+  container filter, and then switch back to see all cards again.

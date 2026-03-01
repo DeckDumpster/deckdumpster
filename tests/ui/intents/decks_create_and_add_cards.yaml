@@ -1,0 +1,10 @@
+# Scenario: Create a deck and add cards to it
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  I can create a new deck with a name and format, see it in the deck
+  list, open it to see zone tabs and an empty card list, and add cards
+  to it. The added cards should appear in the deck's card list.

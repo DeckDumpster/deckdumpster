@@ -1,0 +1,10 @@
+# Scenario: Add a card to an existing order
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  From the collection's ordered cards view, I can navigate to an order's
+  edit page, search for a card, and add it to the order. The card should
+  appear in the order's card list.

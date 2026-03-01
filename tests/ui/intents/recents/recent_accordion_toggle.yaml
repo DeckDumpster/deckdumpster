@@ -1,0 +1,11 @@
+# Scenario: Accordion panel shows candidate cards for a photo
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the Recent Images page, clicking a card photo opens an accordion
+  panel showing candidate card matches returned by the agent. The panel
+  includes card details and action controls. Clicking the photo again
+  collapses the accordion.

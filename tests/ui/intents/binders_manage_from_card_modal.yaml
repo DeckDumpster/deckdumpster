@@ -1,0 +1,10 @@
+# Scenario: Add a card to a binder using the card modal controls
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  I can assign an unassigned card to a binder from the card detail modal's
+  Copies section. After assigning, the copy should show the binder name
+  instead of "Unassigned".

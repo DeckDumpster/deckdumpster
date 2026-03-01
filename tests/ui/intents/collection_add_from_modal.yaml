@@ -1,0 +1,10 @@
+# Scenario: Add a card to the collection from the card modal
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can add a new copy of a card to my collection from the card detail
+  modal by filling in purchase details and confirming. The new copy
+  should appear in the modal's Copies section.

@@ -1,0 +1,9 @@
+# Scenario: Load saved collection views from the sidebar
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  I can load the saved view "Modern Staples" from the sidebar and
+  verify that the collection filters to show only the expected cards.

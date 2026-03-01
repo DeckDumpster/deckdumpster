@@ -1,0 +1,10 @@
+# Scenario: Import a text decklist via CSV Import page
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  I can import a text decklist containing "1 Scrawling Crawler (FDN) 132"
+  through the CSV Import page. The card should resolve successfully and
+  be added to my collection.

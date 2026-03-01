@@ -1,0 +1,10 @@
+# Scenario: Orders view shows card images in collection
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I switch to the ordered cards view, I can see cards grouped by
+  order with visible card art thumbnails. Card images should not be
+  blank or broken.

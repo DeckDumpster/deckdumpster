@@ -1,0 +1,10 @@
+# Scenario: Deleting a deck does not delete its cards from the collection
+#
+# Related:
+#   issues: [127]
+#   pull_requests: []
+
+description: >
+  When I delete the deck Eldrazi Ramp, its cards remain in my
+  collection. After deletion, I can search for Disruptor Flute on the
+  Collection page and find it.

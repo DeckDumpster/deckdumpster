@@ -1,0 +1,11 @@
+# Scenario: Multiple purchases of the same sealed product aggregate
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I add the same sealed product twice with different quantities and
+  prices, the collection shows one aggregated row with the combined
+  quantity. The product detail lists both entries separately with their
+  individual quantities and prices.
