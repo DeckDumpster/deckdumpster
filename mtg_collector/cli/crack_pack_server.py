@@ -304,6 +304,31 @@ def _extract_ocr_name(ocr_fragments, fragment_indices):
     return " ".join(f["text"] for f in top_frags)
 
 
+def _narrow_candidates(candidates, card_info):
+    """Progressively narrow candidates by artist, set, and collector number."""
+    if len(candidates) <= 1:
+        return candidates
+    result = candidates
+    artist = (card_info.get("artist") or "").strip()
+    if artist:
+        al = artist.lower()
+        matched = [c for c in result if al in (c.get("artist") or "").lower()]
+        if matched:
+            result = matched
+    set_code = (card_info.get("set_code") or "").strip()
+    if set_code:
+        sl = set_code.lower()
+        matched = [c for c in result if c.get("set_code", "").lower() == sl]
+        if matched:
+            result = matched
+    cn = (card_info.get("collector_number") or "").strip()
+    if cn:
+        matched = [c for c in result if c.get("collector_number") == cn]
+        if matched:
+            result = matched
+    return result
+
+
 def _format_candidates(raw_cards):
     """Format raw card dicts into the candidate shape the client expects."""
     formatted = []
@@ -628,28 +653,34 @@ def _process_image_background(db_path, image_id):
 
         final_status = "READY_FOR_DISAMBIGUATION"
 
-        # Auto-confirm when candidates narrow to a single printing.
-        # Picks nonfoil when available, otherwise first finish.
+        # Auto-select best candidate for each card slot.
+        # Single printing → auto-confirm. Multiple → narrow and pick first.
         # Does NOT create collection/lineage — batch ingest does that.
         confirmed_finishes = [None] * len(disambiguated) if disambiguated else []
-        if (
-            disambiguated
-            and disambiguated[0] is None
-            and claude_cards
-            and all_matches
-            and all_matches[0]
-        ):
-            # Digital sets already filtered during resolution.
-            unique_ids = {c["printing_id"] for c in all_matches[0]}
+        for idx in range(len(disambiguated or [])):
+            if disambiguated[idx] is not None:
+                continue
+            candidates = all_matches[idx] if idx < len(all_matches) else []
+            if not candidates:
+                continue
+            card_info = claude_cards[idx] if idx < len(claude_cards) else {}
+
+            unique_ids = {c["printing_id"] for c in candidates}
             if len(unique_ids) == 1:
-                first = all_matches[0][0]
-                sid = first["printing_id"]
-                finishes = first.get("finishes", ["nonfoil"])
-                finish = "nonfoil" if "nonfoil" in finishes else finishes[0]
-                disambiguated[0] = sid
-                confirmed_finishes[0] = finish
-                final_status = "DONE"
-                _log_ingest(f"[bg:{image_id}] Auto-confirmed {sid} as {finish}")
+                pick = candidates[0]
+            else:
+                narrowed = _narrow_candidates(candidates, card_info)
+                pick = narrowed[0]
+
+            sid = pick["printing_id"]
+            finishes = pick.get("finishes", ["nonfoil"])
+            finish = "nonfoil" if "nonfoil" in finishes else finishes[0]
+            disambiguated[idx] = sid
+            confirmed_finishes[idx] = finish
+            _log_ingest(f"[bg:{image_id}] Auto-selected {sid} as {finish}")
+
+        if disambiguated and all(d is not None for d in disambiguated):
+            final_status = "DONE"
 
         # Save state
         conn.execute(
