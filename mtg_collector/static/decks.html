@@ -647,7 +647,7 @@ async function searchPickerCards() {
   }
   const res = await fetch(`/api/collection?q=${encodeURIComponent(q)}&status=owned`);
   const data = await res.json();
-  pickerCards = data.cards || [];
+  pickerCards = Array.isArray(data) ? data : data.cards || [];
 
   const container = document.getElementById('picker-cards');
   if (pickerCards.length === 0) {
