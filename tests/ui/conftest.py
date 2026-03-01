@@ -12,6 +12,7 @@ Or pass an existing instance via --instance:
     uv run pytest tests/ui/ -v --instance my-instance
 """
 
+import logging
 import ssl
 import subprocess
 import urllib.request
@@ -20,6 +21,26 @@ from pathlib import Path
 
 import pytest
 from playwright.sync_api import sync_playwright
+
+log = logging.getLogger(__name__)
+
+# DB path inside the container (data volume mount point).
+_CONTAINER_DB = "/data/collection.sqlite"
+_CONTAINER_DB_BACKUP = "/data/collection.sqlite.bak"
+
+# Python one-liner for safe SQLite backup (handles open connections).
+_BACKUP_CMD = (
+    f'python3 -c "import sqlite3; '
+    f"s=sqlite3.connect('{_CONTAINER_DB}'); "
+    f"d=sqlite3.connect('{_CONTAINER_DB_BACKUP}'); "
+    f's.backup(d); s.close(); d.close()"'
+)
+_RESTORE_CMD = (
+    f'python3 -c "import sqlite3; '
+    f"s=sqlite3.connect('{_CONTAINER_DB_BACKUP}'); "
+    f"d=sqlite3.connect('{_CONTAINER_DB}'); "
+    f's.backup(d); s.close(); d.close()"'
+)
 
 
 def pytest_addoption(parser):
@@ -89,7 +110,20 @@ def _discover_container(instance_name):
 
 
 @pytest.fixture(scope="session")
-def base_url(request, instance_name):
+def container_name(instance_name):
+    """Resolve and expose the container name for DB snapshot/restore."""
+    name = _discover_container(instance_name)
+    if name is None:
+        pytest.skip(
+            f"No container found for instance '{instance_name}'. "
+            f"Start it with: bash deploy/setup.sh {instance_name} --init && "
+            f"systemctl --user start mtgc-{instance_name}"
+        )
+    return name
+
+
+@pytest.fixture(scope="session")
+def base_url(request, instance_name, container_name):
     """Discover the base URL for the running server.
 
     Use --base-url to point at a local dev server directly (e.g.
@@ -110,14 +144,6 @@ def base_url(request, instance_name):
         except Exception:
             pytest.skip(f"Server at {explicit} not responding")
         return explicit
-
-    container_name = _discover_container(instance_name)
-    if container_name is None:
-        pytest.skip(
-            f"No container found for instance '{instance_name}'. "
-            f"Start it with: bash deploy/setup.sh {instance_name} --init && "
-            f"systemctl --user start mtgc-{instance_name}"
-        )
 
     try:
         result = subprocess.run(
@@ -145,6 +171,34 @@ def base_url(request, instance_name):
         pytest.skip(f"Instance at {url} not responding")
 
     return url
+
+
+@pytest.fixture(scope="session")
+def _db_snapshot(container_name):
+    """Create a one-time DB snapshot at session start for per-test restore."""
+    log.info("Creating DB snapshot in container %s", container_name)
+    subprocess.run(
+        ["podman", "exec", container_name, "bash", "-c", _BACKUP_CMD],
+        check=True, capture_output=True, text=True,
+    )
+    yield container_name
+    # Clean up the backup file.
+    subprocess.run(
+        ["podman", "exec", container_name, "rm", "-f", _CONTAINER_DB_BACKUP],
+        capture_output=True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _restore_db(_db_snapshot):
+    """Restore the DB to its snapshot state after each test."""
+    yield
+    container = _db_snapshot
+    log.info("Restoring DB snapshot in container %s", container)
+    subprocess.run(
+        ["podman", "exec", container, "bash", "-c", _RESTORE_CMD],
+        check=True, capture_output=True, text=True,
+    )
 
 
 @pytest.fixture(scope="session")
