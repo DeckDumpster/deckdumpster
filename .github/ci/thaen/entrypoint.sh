@@ -30,7 +30,7 @@ git fetch origin
 
 BASE="${BASE_BRANCH:-main}"
 git checkout "$BASE"
-git rebase "origin/$BASE"
+git reset --hard "origin/$BASE"
 
 # --- Install/update deps (overlay venv has --no-dev, plan needs dev deps) ---
 uv sync --group dev
