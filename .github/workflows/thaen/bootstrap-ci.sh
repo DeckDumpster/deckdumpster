@@ -104,6 +104,28 @@ else
         "$IMAGE" /app/.venv/bin/mtg setup --demo
 fi
 
+# ---------- 7b. MTGJSON booster data ----------
+# mtg setup --demo does not import MTGJSON booster configs. Without this,
+# the server auto-imports from AllPrintings.json on every container start (~5 min).
+info "Checking MTGJSON booster data"
+HAS_MTGJSON=$(podman run --rm \
+    -v "${VM_CODE}:/app" \
+    -v "${VM_DATA}:/data" \
+    -e MTGC_HOME=/data \
+    --entrypoint python3 \
+    "$IMAGE" -c "import sqlite3; c=sqlite3.connect('/data/collection.sqlite'); print(c.execute('SELECT COUNT(*) FROM mtgjson_booster_configs').fetchone()[0])" 2>/dev/null || echo 0)
+if [ "$HAS_MTGJSON" -gt 0 ] 2>/dev/null; then
+    skip
+else
+    info "Importing MTGJSON booster data — this takes a few minutes"
+    podman run --rm \
+        -v "${VM_CODE}:/app" \
+        -v "${VM_DATA}:/data" \
+        -e MTGC_HOME=/data \
+        --entrypoint bash \
+        "$IMAGE" -c "cd /app && uv run mtg data import"
+fi
+
 # ---------- 8. Daily cron ----------
 CRON_CMD="podman run --rm -v ${VM_CODE}:/app --entrypoint bash ${IMAGE} -c 'cd /app && git pull && uv sync --group dev'"
 info "Checking daily cron job"

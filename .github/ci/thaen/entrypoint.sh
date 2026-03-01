@@ -57,7 +57,9 @@ PROMPT_FILE="/app/.github/ci/thaen/prompts/${MODE}.md"
 PROMPT=$(ISSUE_NUMBER="$ISSUE_NUMBER" REPO_FULL_NAME="$REPO_FULL_NAME" envsubst < "$PROMPT_FILE")
 
 # --- Run Claude as non-root (refuses --dangerously-skip-permissions as root) ---
-runuser -u ci -- claude --dangerously-skip-permissions \
+# Preserve MTGC_DB so the agent uses the writable DB copy.
+runuser -u ci -- env MTGC_DB="${MTGC_DB:-}" MTGC_HOME="${MTGC_HOME:-}" \
+    claude --dangerously-skip-permissions \
     -p "$PROMPT" \
     --max-turns 50 \
     --verbose \
