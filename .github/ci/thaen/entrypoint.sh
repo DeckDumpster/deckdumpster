@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Container-internal entrypoint for CI planning/implementation.
 #
-# Expected env: ANTHROPIC_API_KEY, GH_TOKEN, ISSUE_NUMBER, REPO_FULL_NAME,
+# Expected env: GH_TOKEN, ISSUE_NUMBER, REPO_FULL_NAME,
 #               MODE (plan|implement), BASE_BRANCH (default: main)
 #
 # Expected mounts:

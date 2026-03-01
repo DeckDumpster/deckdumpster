@@ -115,7 +115,6 @@ podman run --rm \
     -v "${VM_DATA}:/data:O" \
     -v "${VM_CLAUDE}:/opt/claude:ro" \
     -v "${VM_CI_OUT}:/out" \
-    -e ANTHROPIC_API_KEY \
     -e GH_TOKEN \
     -e ISSUE_NUMBER="$ISSUE_NUMBER" \
     -e REPO_FULL_NAME="$REPO" \

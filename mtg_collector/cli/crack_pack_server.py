@@ -431,12 +431,19 @@ def _scryfall_rate_limit():
         _scryfall_last_request = time.time()
 
 
+def _require_api_key():
+    """Raise if ANTHROPIC_API_KEY is not set."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set")
+
+
 def _process_image_core(conn, image_id, img, log_fn):
     """Process a single image: OCR -> Claude -> DB lookup. Returns final status string.
 
     Used by both the SSE endpoint and background workers.
     log_fn(event_type, data_dict) is called for progress events.
     """
+    _require_api_key()
     from mtg_collector.services.agent import run_agent
     from mtg_collector.services.ocr import run_ocr_with_boxes
     from mtg_collector.utils import now_iso
@@ -3483,6 +3490,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_corners_detect(self):
         """Upload a photo, run Claude Vision corner detection, resolve cards."""
+        _require_api_key()
         from mtg_collector.cli.ingest_ids import RARITY_MAP, lookup_card
         from mtg_collector.db.models import PrintingRepository, SetRepository
         from mtg_collector.db.schema import init_db
@@ -5261,11 +5269,6 @@ def register(subparsers):
 
 def run(args):
     """Run the crack-pack-server command."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("Error: ANTHROPIC_API_KEY environment variable is not set", file=sys.stderr)
-        print("Card ingestion (OCR + corner reading) requires an Anthropic API key.", file=sys.stderr)
-        sys.exit(1)
-
     db_path = get_db_path(getattr(args, "db", None))
 
     # Start background ingest worker pool
