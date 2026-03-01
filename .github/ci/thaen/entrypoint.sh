@@ -14,6 +14,13 @@ set -euo pipefail
 # --- Claude CLI ---
 export PATH="/opt/claude/bin:$PATH"
 
+# --- Claude auth (Max plan, no API key) ---
+# Credentials are pre-staged in /opt/claude/.credentials.json (ro mount).
+# Copy to ci user's home so the CLI authenticates via subscription, not API.
+mkdir -p /home/ci/.claude
+cp /opt/claude/.credentials.json /home/ci/.claude/.credentials.json
+chown -R ci:ci /home/ci/.claude
+
 # --- Git auth (runs as root; overlay files are root-owned) ---
 git config --global --add safe.directory /app
 git config --global credential.helper \
