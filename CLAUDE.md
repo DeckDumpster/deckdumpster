@@ -43,88 +43,6 @@ systemctl --user start mtgc-my-feature   # Start instance
 systemctl --user status mtgc-my-feature  # Check status
 ```
 
-## File Index
-
-### `mtg_collector/cli/` — CLI subcommands
-
-Each module has `register(subparsers)` and `run(args)`.
-
-| File | Purpose |
-|------|---------|
-| `crack_pack_server.py` | **Web server**: all HTTP routes, API handlers, SSE endpoints |
-| `data_cmd.py` | MTGJSON + price data import/export commands |
-| `demo_data.py` | Load demo collection for testing (cards, decks, binders, views) |
-| `ingest_corners.py` | CLI corner-photo card ingestion via Claude Vision |
-| `ingest_ids.py` | Manual card entry by rarity/collector-number/set |
-| `ingest_ocr.py` | CLI image-based card ingestion via EasyOCR + Claude |
-| `sample_ingest.py` |  |
-
-### `mtg_collector/db/` — SQLite layer
-
-| File | Purpose |
-|------|---------|
-| `models.py` | Dataclasses + repository classes (CRUD for every table) |
-| `schema.py` | Schema DDL, all migrations, `init_db()` |
-
-Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`.
-
-### `mtg_collector/services/` — External integrations
-
-| File | Purpose |
-|------|---------|
-| `agent.py` | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
-| `bulk_import.py` | `ScryfallBulkClient` class (bulk cache only), `cache_card_data()`, `ensure_set_populated()` |
-| `claude.py` | Claude Vision API: corner reading, card identification |
-| `order_parser.py` | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
-| `order_resolver.py` | Resolve parsed orders to local DB cards, treatment-aware matching |
-| `pack_generator.py` | MTGJSON-based booster pack simulation from SQLite |
-
-### `mtg_collector/static/` — Web UI (single-file HTML pages)
-
-| File | Purpose |
-|------|---------|
-| `binders.html` | Binder list/detail/edit with card management |
-| `collection.html` | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
-| `correct.html` | Fix misidentified cards in ingest pipeline |
-| `crack_pack.html` | Booster pack simulator with rarity borders and badge system |
-| `decks.html` | Deck list/detail/edit with card management |
-| `disambiguate.html` | Resolve ambiguous card matches |
-| `edit_order.html` |  |
-| `explore_sheets.html` | Browse MTGJSON booster sheet layouts |
-| `import_csv.html` | CSV import web UI (with deck/binder assignment) |
-| `index.html` | Homepage / navigation |
-| `ingest_corners.html` | Corner photo ingest web UI |
-| `ingest_ids.html` | Manual card entry web UI |
-| `ingest_order.html` | Order ingestion web UI |
-| `process.html` | OCR processing + Claude identification |
-| `recent.html` | Recently ingested images gallery |
-| `sealed.html` |  |
-| `upload.html` | Photo upload for image ingest |
-
-### `mtg_collector/importers/` and `exporters/`
-
-| File | Purpose |
-|------|---------|
-
-### Other key files
-
-| File | Purpose |
-|------|---------|
-| `mtg_collector.py` | Legacy entrypoint (predates package structure) |
-
-### Tests
-
-| File | What it covers |
-|------|---------|
-| `test_decks_binders.py` |  |
-| `test_import.py` | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
-| `test_ingest_ids.py` | Manual card entry + `resolve_and_add_ids()` |
-| `test_mtgjson_import.py` | MTGJSON AllPrintings import |
-| `test_order_parser.py` | Order parsing (TCGPlayer HTML/text, Card Kingdom) |
-| `test_order_resolver.py` | Order resolution to local DB cards |
-| `test_price_import.py` | MTGJSON price import pipeline |
-| `test_sealed_products.py` |  |
-
 ## Data Model
 
 ### Core join chain
@@ -168,7 +86,8 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `collection_views` — Saved filter/search configurations for the collection page.
 - `status_log` — Append-only audit of collection status changes.
 - `settings` — Key-value config (e.g. `price_sources`, `image_display`).
-- Schema v22 with auto-migrations in `schema.py`.
+- Schema v26 with auto-migrations in `schema.py`.
+- Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`.
 - **Deck/binder exclusivity**: A collection entry can be in one deck OR one binder, not both. `deck_id` and `binder_id` are mutually exclusive (enforced by repository logic, returns HTTP 409 on conflict). Use `move_cards()` to atomically reassign.
 
 Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` env).
@@ -187,7 +106,7 @@ Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` 
 
 ### Rarity/set border gradients
 
-Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-gradient(to bottom, ...)`. Shared JS helpers in `crack_pack.html`: `getRarityColor(rarity)`, `getSetColor(cardSetCode, packSetCode)`. `buildCardBadges(card, packSetCode)` generates SF/CK price links, foil/treatment badges. Use these for any new card display.
+Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-gradient(to bottom, ...)`. Shared JS helpers in `crack_pack.html`: `getRarityColor(rarity)`, `getSetColor(cardSetCode, packSetCode)`. `buildCardBadges(card, packSetCode)` generates SF/CK price links, foil/treatment badges. `buildBadges(card, packSetCode)` wraps it with a zoom badge for the pack grid. Use these for any new card display.
 
 ### Collection page filtering
 
@@ -223,6 +142,15 @@ Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in
 1. Look up printing in local DB by set + collector number
 2. Create collection entry with finish, condition, source metadata
 3. If card not found, fail with error telling user to run `mtg cache all`
+
+## Known Pitfalls
+
+- **Prices join on `(set_code, collector_number)`, NOT `printing_id`.** The `prices` table has no FK to `printings`. Always join through set_code + collector_number.
+- **`deck_id` and `binder_id` are mutually exclusive.** A collection entry cannot be in both. The repository returns HTTP 409 on conflict. Use `move_cards()` to reassign atomically.
+- **JSON arrays stored as TEXT.** `colors`, `finishes`, `promo_types` are JSON-encoded strings. Use `json.loads()`, never SQL array operations.
+- **Card not in local DB → tell user to run `mtg cache all`.** Do not fall back to Scryfall API. The card simply isn't cached yet.
+- **Test fixture goes stale after schema migrations.** Regenerate with `uv run python scripts/build_test_fixture.py`, then recreate seed volume with `bash deploy/seed.sh --force`.
+- **HTML pages share no JS imports.** Helpers like `getRarityColor()` are copy-pasted between pages. Changes to shared patterns must be updated in each page that uses them.
 
 ## Deployment
 
@@ -369,7 +297,3 @@ uv run pytest tests/ui/ -v --instance <instance>
 
 Do NOT create or modify UI scenario tests in automated workflows. They are managed by humans.
 
-## Web UI Shared Conventions (crack_pack.html)
-
-- **Rarity/set border gradients**: Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-gradient(to bottom, ...)` to show rarity (top) and guest-set status (bottom). Shared JS helpers `getRarityColor(rarity)` and `getSetColor(cardSetCode, packSetCode)` return the colors. Use these for any new card display (lists, grids, etc.).
-- **Badge builder**: `buildCardBadges(card, packSetCode)` returns HTML for SF/CK links with prices, foil, and treatment badges. `buildBadges(card, packSetCode)` wraps it with a zoom badge for the pack grid.
