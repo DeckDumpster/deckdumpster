@@ -1,0 +1,7 @@
+start_page: /collection
+involves:
+  - card images in the table view (default view)
+  - card detail modal with X close button
+notes: >
+  The collection defaults to table view. Click any card image
+  in the first column to open the detail modal.

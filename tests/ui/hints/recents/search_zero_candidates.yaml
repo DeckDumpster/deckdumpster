@@ -1,0 +1,20 @@
+start_page: /recent
+involves:
+  - time filter pills (30m, 2h, 4h, 12h, 24h)
+  - 'red-bordered card for "Llanowar Elves" with zero candidates'
+  - accordion drawer with a search input field
+  - 'search input has placeholder "Replace with..."'
+  - search results appear as candidate cards in the accordion
+  - '"Batch Ingest" button'
+fixture_data:
+  card_name: "Llanowar Elves"
+  search_term: "Llanowar Elves"
+notes: >
+  1. Click the "24h" time pill. 2. Find the Llanowar Elves photo (red
+  border, zero candidates — the accordion will show "No candidates found"
+  or similar). 3. Click it to open the accordion. 4. The candidate area
+  should be empty with a search field. 5. Type "Llanowar Elves" in the
+  search field (placeholder "Replace with...") and press Enter. 6. Search
+  results appear as candidate cards. 7. Click a candidate to select it.
+  8. The photo border should turn green. 9. Click "Batch Ingest" to
+  ingest. Done.

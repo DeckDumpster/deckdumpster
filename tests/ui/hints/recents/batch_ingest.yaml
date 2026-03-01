@@ -1,0 +1,15 @@
+start_page: /recent
+involves:
+  - time filter pills (30m, 2h, 4h, 12h, 24h)
+  - card photo grid with red/green borders
+  - accordion drawer opens when clicking a photo
+  - candidate cards in the accordion with set icons and finish badges
+  - '"Batch Ingest" button appears when at least one card is resolved (green border)'
+notes: >
+  1. Click the "24h" time pill to show recent images. 2. Look for a
+  green-bordered card photo (already resolved, status DONE). If none are
+  green, click a red-bordered photo to open the accordion, select a
+  candidate to resolve it (border turns green). 3. Once at least one card
+  is green, the "Batch Ingest" button should be visible at the top.
+  4. Click "Batch Ingest". 5. Verify the resolved cards are removed from
+  the grid and a success message appears. Done.

@@ -1,0 +1,21 @@
+start_page: /decks
+involves:
+  - '"New Deck" button opens a creation modal'
+  - name input and format dropdown in the modal
+  - deck list shows the new deck as a clickable row
+  - deck detail view with zone tabs (Mainboard, Sideboard, Commander)
+  - '"Add Cards" button opens a card picker modal with a search field'
+  - 'search field placeholder is "Search by name..."'
+  - picker results are clickable rows that toggle selection
+  - '"Add Selected" button confirms the selection'
+fixture_data:
+  deck_name: "Test Deck"
+  deck_format: "commander"
+  search_term: "Cathar"
+notes: >
+  1. Click "New Deck". 2. Fill in name "Test Deck", select format
+  "commander", submit. 3. The new deck appears in the list — click it to
+  open the detail view. 4. Click "Add Cards". 5. In the search field, type
+  "Cathar" and wait for results. 6. Click a result row to select it
+  (it highlights). 7. Click "Add Selected" to confirm. 8. The deck detail
+  view should now show the card under the Mainboard tab. Done.

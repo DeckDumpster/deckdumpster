@@ -1,0 +1,21 @@
+start_page: /binders
+involves:
+  - '"New Binder" button opens a creation form/modal'
+  - name input and color dropdown in the modal
+  - binder list shows the new binder as a clickable row
+  - binder detail view shows card count and "Add Cards" button
+  - '"Add Cards" button opens a card picker modal with a search field'
+  - 'search field placeholder is "Search by name..."'
+  - picker results are clickable rows that toggle selection
+  - '"Add Selected" button confirms the selection'
+fixture_data:
+  binder_name: "Test Binder"
+  binder_color: "red"
+  search_term: "Condemn"
+notes: >
+  1. Click "New Binder". 2. Fill in name "Test Binder", select color "red",
+  submit. 3. The new binder appears in the list — click it to open the
+  detail view. 4. Click "Add Cards". 5. In the search field, type
+  "Condemn" and wait for results. 6. Click a result row to select it
+  (it highlights). 7. Click "Add Selected" to confirm. 8. The binder
+  detail view should now show the card. Done.

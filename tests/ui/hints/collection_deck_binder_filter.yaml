@@ -1,0 +1,9 @@
+start_page: /collection
+involves:
+  - 'sidebar "Filters" toggle button'
+  - '"Container" filter dropdown in the sidebar'
+  - 'options include "All Cards" and "Unassigned"'
+notes: >
+  The sidebar must be opened first via the Filters button before
+  the Container dropdown is visible. Scroll down in the sidebar
+  if needed.

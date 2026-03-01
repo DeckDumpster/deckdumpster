@@ -1,0 +1,13 @@
+start_page: /recent
+involves:
+  - card photo grid with bordered images
+  - clicking a card photo opens a full-width accordion panel below that row
+  - accordion shows candidate cards with set icons and details
+  - clicking the same photo again collapses the accordion
+  - time filter pills (30m, 2h, 4h, 12h, 24h)
+notes: >
+  1. Click the "24h" time pill to ensure images are visible. 2. Click any
+  card image in the grid. 3. An accordion panel should appear below the
+  row showing candidate cards. 4. Verify the accordion contains candidate
+  information. 5. Click the same photo again to collapse the accordion.
+  6. Verify the accordion is no longer visible. Done.
