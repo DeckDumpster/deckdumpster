@@ -39,6 +39,41 @@ header h1 {
   flex-wrap: wrap;
 }
 
+.col-controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.col-btn {
+  width: 28px; height: 28px;
+  border: 1px solid #0f3460;
+  background: #16213e;
+  color: #888;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+.col-btn:first-child { border-radius: 6px 0 0 6px; }
+.col-btn:last-child { border-radius: 0 6px 6px 0; }
+.col-btn + .col-btn { border-left: none; }
+.col-btn:hover { border-color: #e94560; color: #e0e0e0; }
+.col-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.col-count {
+  width: 28px; height: 28px;
+  border: 1px solid #0f3460; border-left: none; border-right: none;
+  background: #16213e;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 select, button, .set-search-input {
   padding: 8px 14px;
   border: 1px solid #0f3460;
@@ -138,12 +173,12 @@ button.nav-secondary:hover { background: #e94560; border-color: #e94560; }
 
 /* Content area */
 .content {
-  padding: 24px;
+  padding: 12px;
 }
 
 /* Collapsible sections */
 .section {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
   border: 1px solid #0f3460;
   border-radius: 8px;
   overflow: hidden;
@@ -183,7 +218,7 @@ button.nav-secondary:hover { background: #e94560; border-color: #e94560; }
 
 .section-body {
   display: none;
-  padding: 16px;
+  padding: 10px;
 }
 
 .section.open .section-body {
@@ -227,8 +262,8 @@ button.nav-secondary:hover { background: #e94560; border-color: #e94560; }
 
 /* Sub-group containers */
 .subgroup {
-  margin-bottom: 12px;
-  padding: 12px;
+  margin-bottom: 6px;
+  padding: 8px;
   background: rgba(15, 52, 96, 0.15);
   border: 1px solid #0f346044;
   border-radius: 6px;
@@ -238,7 +273,7 @@ button.nav-secondary:hover { background: #e94560; border-color: #e94560; }
 
 .subgroup-header {
   font-size: 0.85rem;
-  margin: 0 0 10px;
+  margin: 0 0 6px;
   padding: 0;
   color: #bbb;
   font-weight: 600;
@@ -246,19 +281,19 @@ button.nav-secondary:hover { background: #e94560; border-color: #e94560; }
 
 /* Card grid */
 .card-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: repeat(var(--grid-cols, 6), 1fr);
+  gap: 8px;
 }
 
 .sheet-card {
-  width: 264px;
+  width: 100%;
   position: relative;
   cursor: pointer;
 }
 
 .sheet-card-img-wrap {
-  width: 264px;
+  width: 100%;
   aspect-ratio: 488 / 680;
   border-radius: 8px;
   position: relative;
@@ -379,10 +414,6 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
   box-shadow: 0 12px 40px rgba(0,0,0,0.8);
 }
 
-@media (max-width: 768px) {
-  .sheet-card { width: 168px; }
-  .sheet-card-img-wrap { width: 168px; }
-}
 </style>
 </head>
 <body>
@@ -396,6 +427,11 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
     </div>
     <div class="product-radios" id="product-radios"></div>
     <button id="pack-btn" class="nav-secondary" disabled>Open Pack</button>
+    <div class="col-controls">
+      <button class="col-btn" id="col-minus">&minus;</button>
+      <div class="col-count" id="col-count"></div>
+      <button class="col-btn" id="col-plus">+</button>
+    </div>
   </div>
   <div id="status"></div>
 </header>
@@ -428,6 +464,27 @@ let allSets = [];
 let selectedSetCode = '';
 let activeDropdownIndex = -1;
 let _settings = {};
+
+// Column count (+/- buttons)
+const COL_MIN = 1, COL_MAX = 12;
+let gridCols = parseInt(localStorage.getItem('exploreGridCols')) || (window.innerWidth < 600 ? 3 : 6);
+
+function applyGridCols() {
+  document.documentElement.style.setProperty('--grid-cols', gridCols);
+  document.getElementById('col-count').textContent = gridCols;
+  document.getElementById('col-minus').disabled = gridCols <= COL_MIN;
+  document.getElementById('col-plus').disabled = gridCols >= COL_MAX;
+  localStorage.setItem('exploreGridCols', gridCols);
+}
+
+document.getElementById('col-minus').addEventListener('click', () => {
+  if (gridCols > COL_MIN) { gridCols--; applyGridCols(); }
+});
+document.getElementById('col-plus').addEventListener('click', () => {
+  if (gridCols < COL_MAX) { gridCols++; applyGridCols(); }
+});
+
+applyGridCols();
 
 // --- Border colors ---
 
