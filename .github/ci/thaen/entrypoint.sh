@@ -41,6 +41,7 @@ git reset --hard "origin/$BASE"
 
 # --- Install/update deps (overlay venv has --no-dev, plan needs dev deps) ---
 uv sync --group dev
+chown -R ci:ci /home/ci/.cache/uv
 
 # --- Writable DB copy ---
 # /data is overlay-mounted; the server needs a writable DB.
