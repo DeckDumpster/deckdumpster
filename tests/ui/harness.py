@@ -186,6 +186,21 @@ EXTRACT_ELEMENTS_JS = """
     else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
       value = (el.value || '').slice(0, 50) || null;
 
+    // Build a CSS selector path for fallback targeting.
+    function cssPath(e) {
+      const parts = [];
+      while (e && e.nodeType === 1) {
+        let sel = e.tagName.toLowerCase();
+        if (e.id) { parts.unshift('#' + e.id); break; }
+        const sib = e.parentElement ? Array.from(e.parentElement.children).filter(
+          c => c.tagName === e.tagName) : [];
+        if (sib.length > 1) sel += ':nth-of-type(' + (sib.indexOf(e) + 1) + ')';
+        parts.unshift(sel);
+        e = e.parentElement;
+      }
+      return parts.join(' > ');
+    }
+
     results.push({
       idx: idx,
       tag: el.tagName.toLowerCase(),
@@ -195,6 +210,9 @@ EXTRACT_ELEMENTS_JS = """
       id: el.id || null,
       value: value,
       disabled: el.disabled || false,
+      testid: el.getAttribute('data-testid') || null,
+      aria_label: el.getAttribute('aria-label') || null,
+      css_path: cssPath(el),
     });
     idx++;
   }
@@ -220,22 +238,43 @@ EXTRACT_ELEMENTS_JS = """
 class UIHarness:
     """Drive a Playwright page toward a UX goal via Claude Vision agent loop."""
 
-    def __init__(self, page, base_url: str, screenshot_dir: Path, scenario_name: str):
+    def __init__(self, page, base_url: str, screenshot_dir: Path, scenario_name: str,
+                 *, recording: bool = False, hints: dict | None = None):
         self.page = page
         self.base_url = base_url
         self.screenshot_dir = screenshot_dir
         self.scenario_name = scenario_name
+        self.recording = recording
+        self.hints = hints
         self.client = anthropic.Anthropic()
         self._step = 0
         self._history: list[dict] = []
         self._messages: list[dict] = []
         self._pending_tool_results: list[dict] = []
+        self._last_elements: list[dict] = []
 
     # ── public API ────────────────────────────────────────────────────────
 
     def run(self, goal: str, max_steps: int = MAX_STEPS) -> dict:
         """Run the agent loop.  Returns ``{status, summary|reason, steps}``."""
-        log.info("[%s] Goal: %s", self.scenario_name, goal.strip()[:120])
+        # Build augmented goal with hints if available.
+        augmented_goal = goal
+        if self.hints:
+            hint_parts = []
+            if self.hints.get("start_page"):
+                hint_parts.append(f"Start on page: {self.hints['start_page']}")
+            if self.hints.get("involves"):
+                involves = ", ".join(self.hints["involves"])
+                hint_parts.append(f"Key UI elements: {involves}")
+            if self.hints.get("fixture_data"):
+                data_items = [f"{k}={v}" for k, v in self.hints["fixture_data"].items()]
+                hint_parts.append(f"Test data to use: {', '.join(data_items)}")
+            if self.hints.get("notes"):
+                hint_parts.append(f"Notes: {self.hints['notes']}")
+            if hint_parts:
+                augmented_goal = goal + "\n\nHints:\n" + "\n".join(f"- {h}" for h in hint_parts)
+
+        log.info("[%s] Goal: %s", self.scenario_name, augmented_goal.strip()[:200])
 
         # Auto-accept JS dialogs (confirm/alert) and provide a default for prompt().
         self._last_dialog_message = None
@@ -247,7 +286,11 @@ class UIHarness:
                 dialog.accept()
         self.page.on("dialog", _handle_dialog)
 
-        self.page.goto(f"{self.base_url}/", wait_until="networkidle")
+        # Navigate to start page (from hints) or homepage.
+        start = "/"
+        if self.hints and self.hints.get("start_page"):
+            start = self.hints["start_page"]
+        self.page.goto(f"{self.base_url}{start}", wait_until="networkidle")
 
         for _ in range(max_steps):
             screenshot_b64, elements = self._observe()
@@ -255,7 +298,7 @@ class UIHarness:
                 "[%s] Step %d — %d interactive elements visible",
                 self.scenario_name, self._step, len(elements),
             )
-            action = self._decide(goal, screenshot_b64, elements)
+            action = self._decide(augmented_goal, screenshot_b64, elements)
 
             name = action["name"]
             inputs = action["input"]
@@ -263,11 +306,16 @@ class UIHarness:
             if name == "done":
                 log.info("[%s] DONE: %s", self.scenario_name, inputs["summary"])
                 self._snap("done")
-                return {
+                result = {
                     "status": "done",
                     "summary": inputs["summary"],
                     "steps": self._history,
                 }
+                if self.recording:
+                    result["done_summary"] = inputs["summary"]
+                    result["final_elements"] = self._last_elements
+                    result["final_url"] = self.page.url
+                return result
 
             if name == "fail":
                 log.warning("[%s] FAIL: %s", self.scenario_name, inputs["reason"])
@@ -284,12 +332,21 @@ class UIHarness:
             )
             result = self._execute(name, inputs)
             log.info("[%s] Step %d result: %s", self.scenario_name, self._step, result)
-            self._history.append({
+            entry = {
                 "step": self._step,
                 "action": name,
                 "input": inputs,
                 "result": result,
-            })
+            }
+            if self.recording:
+                element_idx = inputs.get("element")
+                entry["stable_selector"] = (
+                    self._stable_selector(element_idx)
+                    if element_idx is not None else None
+                )
+                entry["elements_snapshot"] = self._last_elements
+                entry["page_url"] = self.page.url
+            self._history.append(entry)
             self._settle()
 
         self._snap("max_steps")
@@ -308,6 +365,7 @@ class UIHarness:
         path = self._snap(f"step_{self._step:02d}")
         screenshot_b64 = base64.standard_b64encode(path.read_bytes()).decode()
         elements = self.page.evaluate(EXTRACT_ELEMENTS_JS)
+        self._last_elements = elements
         return screenshot_b64, elements
 
     def _decide(self, goal, screenshot_b64, elements):
@@ -425,6 +483,40 @@ class UIHarness:
         path = self.screenshot_dir / name
         self.page.screenshot(path=str(path))
         return path
+
+    def _stable_selector(self, idx):
+        """Return the best stable selector for an element by index.
+
+        Returns a tuple of (strategy, value) where strategy is one of:
+        test_id, text, placeholder, selector.
+        """
+        el = next((e for e in self._last_elements if e["idx"] == idx), None)
+        if el is None:
+            return ("selector", f'[data-uitest="{idx}"]')
+
+        if el.get("testid"):
+            return ("test_id", el["testid"])
+
+        # Unique text — only usable if no other visible element has the same text.
+        text = el.get("text")
+        if text:
+            same_text = [e for e in self._last_elements if e.get("text") == text]
+            if len(same_text) == 1:
+                return ("text", text)
+
+        if el.get("placeholder"):
+            return ("placeholder", el["placeholder"])
+
+        if el.get("id"):
+            return ("selector", f'#{el["id"]}')
+
+        if el.get("aria_label"):
+            return ("aria_label", el["aria_label"])
+
+        if el.get("css_path"):
+            return ("selector", el["css_path"])
+
+        return ("selector", f'[data-uitest="{idx}"]')
 
     @staticmethod
     def _format_elements(elements):

@@ -25,22 +25,48 @@ from playwright.sync_api import sync_playwright
 def pytest_addoption(parser):
     # Guard: option may already be registered by tests/integration/conftest.py
     # when both test directories are collected together.
-    try:
-        parser.addoption(
-            "--instance",
+    for opt_args, opt_kwargs in [
+        (["--instance"], dict(
             default="integration-test",
             help="Container instance name to test against (default: integration-test)",
-        )
-    except ValueError:
-        pass
-    try:
-        parser.addoption(
-            "--base-url",
+        )),
+        (["--base-url"], dict(
             default=None,
             help="Base URL to test against directly, skipping container discovery (e.g. http://localhost:8000)",
-        )
-    except ValueError:
-        pass
+        )),
+        (["--generate"], dict(
+            default=None,
+            help="Generate implementation for a specific intent name",
+        )),
+        (["--generate-missing"], dict(
+            action="store_true",
+            default=False,
+            help="Generate implementations for all intents that lack one",
+        )),
+        (["--regenerate"], dict(
+            default=None,
+            help="Force-regenerate implementation for a specific intent name",
+        )),
+        (["--regenerate-all"], dict(
+            action="store_true",
+            default=False,
+            help="Force-regenerate all implementations",
+        )),
+        (["--diagnose"], dict(
+            action="store_true",
+            default=False,
+            help="On replay failure, run conflict resolver to diagnose the cause",
+        )),
+        (["--intents-only"], dict(
+            action="store_true",
+            default=False,
+            help="Force all tests through Claude harness, ignoring implementations",
+        )),
+    ]:
+        try:
+            parser.addoption(*opt_args, **opt_kwargs)
+        except ValueError:
+            pass
 
 
 @pytest.fixture(scope="session")
