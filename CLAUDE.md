@@ -87,7 +87,7 @@ Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingR
 |------|------:|---------|
 | `collection.html` | 3898 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
 | `sealed.html` | 2116 |  |
-| `recent.html` | 1370 | Recently ingested images gallery |
+| `recent.html` | 1549 | Recently ingested images gallery |
 | `correct.html` | 1048 | Fix misidentified cards in ingest pipeline |
 | `crack_pack.html` | 1040 | Booster pack simulator with rarity borders and badge system |
 | `explore_sheets.html` | 881 | Browse MTGJSON booster sheet layouts |

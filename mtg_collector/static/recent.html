@@ -108,6 +108,59 @@ header a:hover { color: #e94560; }
   gap: 10px;
 }
 
+/* ── Table/list view mode ───────────────────────────────────────────────── */
+#grid.table-mode { grid-template-columns: repeat(var(--grid-cols, 2), 1fr); gap: 6px; }
+.table-mode .img-card {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 8px; border-width: 2px;
+}
+.table-mode .img-card > img { display: none; }
+/* Hide grid-only overlays on card rows only (not accordion) */
+.table-mode > .img-card > .set-overlay,
+.table-mode > .img-card > .finish-badges,
+.table-mode > .img-card > .finish-overlay,
+.table-mode > .img-card > .card-title,
+.table-mode > .img-card > .foil-shimmer,
+.table-mode > .img-card > .error-icon,
+.table-mode > .img-card > .error-tooltip { display: none !important; }
+/* Info row: visible only in table mode */
+.info-row { display: none; }
+.table-mode .img-card > .info-row {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 1.1rem; color: #e0e0e0;
+  min-width: 0; overflow: hidden; order: -1;
+}
+.info-row .info-text {
+  display: flex; align-items: center; gap: 6px;
+  min-width: 0; overflow: hidden;
+  padding: 6px 4px;
+  background: linear-gradient(to right, rgba(15,52,96,0.6), transparent);
+  border-radius: 4px;
+}
+.info-row .card-name {
+  font-weight: 700; font-size: 1.15rem; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.info-row .card-meta { color: #999; white-space: nowrap; font-size: 0.95rem; }
+.info-row .card-meta .ss { font-size: 1.2rem; vertical-align: -1px; }
+.info-row .card-finish-foil { color: #c8b560; }
+.info-row .img-pair {
+  display: flex; gap: 4px;
+}
+.info-row .img-wrap {
+  width: calc(50% - 2px); position: relative; overflow: hidden; border-radius: 4px;
+}
+.info-row .img-wrap > img {
+  width: 100%; height: var(--table-img-h, 200px);
+  object-fit: cover; object-position: top; display: block;
+}
+.info-row .img-wrap > .foil-shimmer {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; display: none;
+}
+.info-row .img-wrap.foil > .foil-shimmer { display: block; }
+.info-row .scryfall-thumb { background: #1a1a2e; }
+
 .img-card {
   display: block;
   color: inherit;
@@ -509,6 +562,7 @@ header a:hover { color: #e94560; }
     <div class="col-count" id="col-count"></div>
     <button class="col-btn" id="col-plus">+</button>
   </div>
+  <button class="col-btn" id="view-toggle" title="Toggle grid/list view" style="border-radius:6px;margin-left:4px;">&#9776;</button>
   <div class="right-controls">
     <span id="batch-msg"></span>
     <select id="assign-target" style="padding:6px 8px;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;font-size:0.85rem">
@@ -528,28 +582,96 @@ header a:hover { color: #e94560; }
 <script>
 const activePolls = new Map(); // image_id (number) → intervalId
 let discoveryTimer = null;
+let viewMode = localStorage.getItem('recent-view-mode') || 'table';
 
 // ── Column count ─────────────────────────────────────────────────────────────
 
 const MIN_COLS = 1;
 const MAX_COLS = 12;
-let gridCols = window.innerWidth < 600 ? 2 : 6;
+const DEFAULT_GRID_COLS = window.innerWidth < 600 ? 2 : 6;
+const DEFAULT_TABLE_COLS = window.innerWidth < 600 ? 1 : 3;
+let gridColsGrid = DEFAULT_GRID_COLS;
+let gridColsTable = DEFAULT_TABLE_COLS;
+let gridCols = gridColsGrid;
 
 function applyGridCols() {
-  document.getElementById('grid').style.setProperty('--grid-cols', gridCols);
+  gridCols = viewMode === 'table' ? gridColsTable : gridColsGrid;
+  const grid = document.getElementById('grid');
+  grid.style.setProperty('--grid-cols', gridCols);
   document.getElementById('col-count').textContent = gridCols;
   document.getElementById('col-minus').disabled = gridCols <= MIN_COLS;
   document.getElementById('col-plus').disabled = gridCols >= MAX_COLS;
+  if (viewMode === 'table') {
+    // card width * 2/3 for 3:2 aspect ratio across the full image pair
+    const gridW = grid.offsetWidth;
+    const gapBetweenCols = 6 * (gridCols - 1);
+    const cardPad = 16; // 8px padding each side
+    const pairW = (gridW - gapBetweenCols) / gridCols - cardPad;
+    grid.style.setProperty('--table-img-h', Math.round(pairW * 2 / 3) + 'px');
+  }
 }
 
 document.getElementById('col-minus').addEventListener('click', () => {
-  if (gridCols > MIN_COLS) { gridCols--; applyGridCols(); repositionAccordion(); }
+  if (gridCols > MIN_COLS) {
+    if (viewMode === 'table') gridColsTable--; else gridColsGrid--;
+    applyGridCols(); repositionAccordion();
+  }
 });
 document.getElementById('col-plus').addEventListener('click', () => {
-  if (gridCols < MAX_COLS) { gridCols++; applyGridCols(); repositionAccordion(); }
+  if (gridCols < MAX_COLS) {
+    if (viewMode === 'table') gridColsTable++; else gridColsGrid++;
+    applyGridCols(); repositionAccordion();
+  }
 });
 
 applyGridCols();
+window.addEventListener('resize', () => { if (viewMode === 'table') applyGridCols(); });
+
+// ── View mode (grid / table) ─────────────────────────────────────────────────
+
+function applyViewMode() {
+  const grid = document.getElementById('grid');
+  const btn = document.getElementById('view-toggle');
+  if (viewMode === 'table') {
+    grid.classList.add('table-mode');
+    btn.innerHTML = '&#9638;';
+    loadScryfallThumbnails();
+  } else {
+    grid.classList.remove('table-mode');
+    btn.innerHTML = '&#9776;';
+  }
+  applyGridCols();
+}
+
+document.getElementById('view-toggle').addEventListener('click', () => {
+  viewMode = viewMode === 'grid' ? 'table' : 'grid';
+  localStorage.setItem('recent-view-mode', viewMode);
+  applyViewMode();
+  repositionAccordion();
+});
+
+function loadScryfallThumbnails() {
+  if (viewMode !== 'table') return;
+  const cards = document.querySelectorAll('#grid .img-card');
+  let delay = 0;
+  for (const card of cards) {
+    const thumb = card.querySelector('.scryfall-thumb');
+    if (!thumb || thumb.hasAttribute('src')) continue;
+    const imgId = Number(card.dataset.id);
+    if (!imgId) continue;
+    setTimeout(async () => {
+      const detail = await loadAccordionDetail(imgId);
+      const sid = (detail.disambiguated || [])[0];
+      if (!sid || sid === 'skipped' || sid === 'already_ingested') return;
+      const candidates = (detail.scryfall_matches || [])[0] || [];
+      const match = candidates.find(c => c.printing_id === sid);
+      if (match && match.image_uri) thumb.src = match.image_uri.replace('/small/', '/normal/');
+    }, delay);
+    delay += 50;
+  }
+}
+
+applyViewMode();
 
 // ── Rendering helpers ────────────────────────────────────────────────────────
 
@@ -629,7 +751,36 @@ function createCardEl(img) {
     ${finishHtml}
     ${titleHtml}
   `;
+  // Info row (visible only in table mode)
+  const cards0 = (img.cards || [])[0];
+  const infoRow = document.createElement('div');
+  infoRow.className = 'info-row';
+  const infoName = cards0 ? escapeHtml(cards0.name || '') : '';
+  const infoSetCode = cards0 && cards0.set_code ? cards0.set_code : '';
+  const infoCn = cards0 && cards0.collector_number ? '#' + escapeHtml(cards0.collector_number) : '';
+  const infoFinish = cards0 ? escapeHtml(cards0.finish || 'nonfoil') : '';
+  const krSet = keyruneSetCode(infoSetCode);
+  const userPhotoSrc = `/api/ingest/image/${escapeHtml(img.stored_name)}`;
+  const metaParts = [];
+  if (infoSetCode) metaParts.push(`<i class="ss ss-${krSet}"></i> ${escapeHtml(infoSetCode.toUpperCase())}`);
+  if (infoCn) metaParts.push(escapeHtml(infoCn));
+  const finishClass = infoFinish === 'foil' ? 'card-finish-foil' : '';
+  if (infoFinish) metaParts.push(`<span class="${finishClass}">${infoFinish}</span>`);
+  const foilClass = isFoil ? ' foil' : '';
+  infoRow.innerHTML = `
+    <div class="info-text">
+      <span class="card-name">${infoName}</span>
+      <span class="card-meta">${metaParts.join(' &middot; ')}</span>
+    </div>
+    <div class="img-pair">
+      <div class="img-wrap${foilClass}"><img class="user-photo" src="${userPhotoSrc}" loading="lazy"><div class="foil-shimmer"></div></div>
+      <div class="img-wrap${foilClass}"><img class="scryfall-thumb" loading="lazy"><div class="foil-shimmer"></div></div>
+    </div>
+  `;
+  card.appendChild(infoRow);
+
   applyCropToImg(card.querySelector('img'), img.crop);
+  applyCropToImg(infoRow.querySelector('.user-photo'), img.crop);
   card.addEventListener('click', (e) => {
     if (e.target.closest('.finish-badge')) return;
     toggleAccordion(img.id);
@@ -994,6 +1145,8 @@ async function accDeleteImage(imgId) {
 
 // ── Toggle accordion ─────────────────────────────────────────────────────────
 
+function effectiveCols() { return gridCols; }
+
 function repositionAccordion() {
   if (!accordionPanel.classList.contains('open')) return;
   const grid = document.getElementById('grid');
@@ -1001,7 +1154,8 @@ function repositionAccordion() {
   if (!sel) return;
   const cards = Array.from(grid.querySelectorAll('.img-card'));
   const idx = cards.indexOf(sel);
-  const rowEnd = Math.min(Math.floor(idx / gridCols) * gridCols + gridCols - 1, cards.length - 1);
+  const cols = effectiveCols();
+  const rowEnd = Math.min(Math.floor(idx / cols) * cols + cols - 1, cards.length - 1);
   cards[rowEnd].after(accordionPanel);
 }
 
@@ -1025,7 +1179,8 @@ async function toggleAccordion(imgId) {
   // Get all card elements (exclude the accordion itself)
   const cards = Array.from(grid.querySelectorAll('.img-card'));
   const idx = cards.indexOf(card);
-  const rowEnd = Math.min(Math.floor(idx / gridCols) * gridCols + gridCols - 1, cards.length - 1);
+  const cols = effectiveCols();
+  const rowEnd = Math.min(Math.floor(idx / cols) * cols + cols - 1, cards.length - 1);
 
   // Move accordion after the last card in this row
   cards[rowEnd].after(accordionPanel);
@@ -1108,6 +1263,29 @@ function updateCardEl(card, img) {
   const oldTitle = card.querySelector('.card-title');
   if (oldTitle) oldTitle.remove();
   if (titleHtml) card.insertAdjacentHTML('beforeend', titleHtml);
+
+  // Update info-row for table mode
+  const infoRow = card.querySelector('.info-row');
+  if (infoRow) {
+    const cards0 = (img.cards || [])[0];
+    const nameEl = infoRow.querySelector('.card-name');
+    if (nameEl) nameEl.textContent = cards0 ? (cards0.name || '') : '';
+    const metaEl = infoRow.querySelector('.card-meta');
+    if (metaEl && cards0) {
+      const parts = [];
+      if (cards0.set_code) {
+        const krSet = keyruneSetCode(cards0.set_code);
+        parts.push(`<i class="ss ss-${krSet}"></i> ${escapeHtml(cards0.set_code.toUpperCase())}`);
+      }
+      if (cards0.collector_number) parts.push('#' + escapeHtml(cards0.collector_number));
+      const f = cards0.finish || 'nonfoil';
+      const fc = f === 'foil' ? 'card-finish-foil' : '';
+      parts.push(`<span class="${fc}">${escapeHtml(f)}</span>`);
+      metaEl.innerHTML = parts.join(' &middot; ');
+    }
+    // Toggle foil shimmer on img wraps
+    infoRow.querySelectorAll('.img-wrap').forEach(w => w.classList.toggle('foil', isFoil));
+  }
 }
 
 function updateSummary(images) {
@@ -1183,6 +1361,7 @@ async function loadRecent() {
   }
 
   syncPolls(images);
+  if (viewMode === 'table') loadScryfallThumbnails();
 }
 
 // ── Per-image polling ────────────────────────────────────────────────────────
