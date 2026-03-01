@@ -2272,7 +2272,17 @@ async function loadModalCopies(card) {
     container.querySelectorAll('.copy-add-to-deck').forEach(sel => {
       sel.addEventListener('change', async () => {
         if (!sel.value) return;
-        const r = await fetch(`/api/decks/${sel.value}/cards`, {
+        let deckId = sel.value;
+        if (deckId === '__new__') {
+          const name = prompt('New deck name:');
+          if (!name) { sel.value = ''; return; }
+          const cr = await fetch('/api/decks', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name }) });
+          const created = await cr.json();
+          if (created.error) { alert(created.error); sel.value = ''; return; }
+          deckId = created.id;
+          await loadContainerData();
+        }
+        const r = await fetch(`/api/decks/${deckId}/cards`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ collection_ids: [parseInt(sel.dataset.copyId)], zone: 'mainboard' }),
         });
@@ -2284,7 +2294,17 @@ async function loadModalCopies(card) {
     container.querySelectorAll('.copy-add-to-binder').forEach(sel => {
       sel.addEventListener('change', async () => {
         if (!sel.value) return;
-        const r = await fetch(`/api/binders/${sel.value}/cards`, {
+        let binderId = sel.value;
+        if (binderId === '__new__') {
+          const name = prompt('New binder name:');
+          if (!name) { sel.value = ''; return; }
+          const cr = await fetch('/api/binders', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name }) });
+          const created = await cr.json();
+          if (created.error) { alert(created.error); sel.value = ''; return; }
+          binderId = created.id;
+          await loadContainerData();
+        }
+        const r = await fetch(`/api/binders/${binderId}/cards`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ collection_ids: [parseInt(sel.dataset.copyId)] }),
         });
@@ -2320,7 +2340,17 @@ async function loadModalCopies(card) {
     container.querySelectorAll('.copy-move-to-deck').forEach(sel => {
       sel.addEventListener('change', async () => {
         if (!sel.value) return;
-        const r = await fetch(`/api/decks/${sel.value}/cards/move`, {
+        let deckId = sel.value;
+        if (deckId === '__new__') {
+          const name = prompt('New deck name:');
+          if (!name) { sel.value = ''; return; }
+          const cr = await fetch('/api/decks', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name }) });
+          const created = await cr.json();
+          if (created.error) { alert(created.error); sel.value = ''; return; }
+          deckId = created.id;
+          await loadContainerData();
+        }
+        const r = await fetch(`/api/decks/${deckId}/cards/move`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ collection_ids: [parseInt(sel.dataset.copyId)], zone: 'mainboard' }),
         });
@@ -2332,7 +2362,17 @@ async function loadModalCopies(card) {
     container.querySelectorAll('.copy-move-to-binder').forEach(sel => {
       sel.addEventListener('change', async () => {
         if (!sel.value) return;
-        const r = await fetch(`/api/binders/${sel.value}/cards/move`, {
+        let binderId = sel.value;
+        if (binderId === '__new__') {
+          const name = prompt('New binder name:');
+          if (!name) { sel.value = ''; return; }
+          const cr = await fetch('/api/binders', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name }) });
+          const created = await cr.json();
+          if (created.error) { alert(created.error); sel.value = ''; return; }
+          binderId = created.id;
+          await loadContainerData();
+        }
+        const r = await fetch(`/api/binders/${binderId}/cards/move`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({ collection_ids: [parseInt(sel.dataset.copyId)] }),
         });
@@ -2388,25 +2428,25 @@ function renderCopySection(copy) {
       assignHtml = `<div class="modal-row"><span class="label">Deck</span><span class="value">
         ${copy.deck_name || 'Deck #' + copy.deck_id}
         <a href="#" class="copy-remove-deck" data-copy-id="${copy.id}" data-deck-id="${copy.deck_id}" style="color:#e94560;margin-left:8px;font-size:0.8rem;">Remove</a>
-        ${allBinders.length ? `<select class="copy-move-to-binder" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
-          <option value="">Move to Binder ▾</option>${binderOpts}</select>` : ''}
+        <select class="copy-move-to-binder" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          <option value="">Move to Binder ▾</option>${binderOpts}<option value="__new__">New Binder...</option></select>
       </span></div>`;
     } else if (copy.binder_id) {
       const deckOpts = allDecks.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
       assignHtml = `<div class="modal-row"><span class="label">Binder</span><span class="value">
         ${copy.binder_name || 'Binder #' + copy.binder_id}
         <a href="#" class="copy-remove-binder" data-copy-id="${copy.id}" data-binder-id="${copy.binder_id}" style="color:#e94560;margin-left:8px;font-size:0.8rem;">Remove</a>
-        ${allDecks.length ? `<select class="copy-move-to-deck" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
-          <option value="">Move to Deck ▾</option>${deckOpts}</select>` : ''}
+        <select class="copy-move-to-deck" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          <option value="">Move to Deck ▾</option>${deckOpts}<option value="__new__">New Deck...</option></select>
       </span></div>`;
     } else {
       const deckOpts = allDecks.map(d => `<option value="${d.id}">${d.name}</option>`).join('');
       const binderOpts = allBinders.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
       assignHtml = `<div class="modal-row"><span class="label">Location</span><span class="value">Unassigned
-        ${allDecks.length ? `<select class="copy-add-to-deck" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
-          <option value="">Add to Deck ▾</option>${deckOpts}</select>` : ''}
-        ${allBinders.length ? `<select class="copy-add-to-binder" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
-          <option value="">Add to Binder ▾</option>${binderOpts}</select>` : ''}
+        <select class="copy-add-to-deck" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          <option value="">Add to Deck ▾</option>${deckOpts}<option value="__new__">New Deck...</option></select>
+        <select class="copy-add-to-binder" data-copy-id="${copy.id}" style="margin-left:8px;padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          <option value="">Add to Binder ▾</option>${binderOpts}<option value="__new__">New Binder...</option></select>
       </span></div>`;
     }
   }
@@ -3721,7 +3761,8 @@ document.getElementById('view-select').addEventListener('change', async function
     try {
       const f = typeof view.filters_json === 'string' ? JSON.parse(view.filters_json) : view.filters_json;
       if (f.container) document.getElementById('container-filter').value = f.container;
-      if (f.q) { searchInput.value = f.q; fetchCollection(); }
+      searchInput.value = f.q || '';
+      fetchCollection();
     } catch {}
   }
 });
@@ -3749,7 +3790,10 @@ async function showAssignDeckModal() {
     opt.textContent = d.name;
     sel.appendChild(opt);
   });
-  if (allDecks.length === 0) { alert('No decks. Create one first from the Decks page.'); return; }
+  const newOpt = document.createElement('option');
+  newOpt.value = '__new__';
+  newOpt.textContent = 'New Deck...';
+  sel.appendChild(newOpt);
   document.getElementById('assign-deck-overlay').style.display = 'flex';
 }
 
@@ -3764,7 +3808,10 @@ async function showAssignBinderModal() {
     opt.textContent = b.name;
     sel.appendChild(opt);
   });
-  if (allBinders.length === 0) { alert('No binders. Create one first from the Binders page.'); return; }
+  const newOpt = document.createElement('option');
+  newOpt.value = '__new__';
+  newOpt.textContent = 'New Binder...';
+  sel.appendChild(newOpt);
   document.getElementById('assign-binder-overlay').style.display = 'flex';
 }
 
@@ -3784,8 +3831,16 @@ async function getSelectedCollectionIds() {
 }
 
 async function assignSelectedToDeck() {
-  const deckId = document.getElementById('assign-deck-select').value;
+  let deckId = document.getElementById('assign-deck-select').value;
   const zone = document.getElementById('assign-deck-zone').value;
+  if (deckId === '__new__') {
+    const name = prompt('New deck name:');
+    if (!name) return;
+    const cr = await fetch('/api/decks', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name }) });
+    const created = await cr.json();
+    if (created.error) { alert(created.error); return; }
+    deckId = created.id;
+  }
   const ids = await getSelectedCollectionIds();
   if (ids.length === 0) { alert('No unassigned copies found'); return; }
   const res = await fetch(`/api/decks/${deckId}/cards`, {
@@ -3801,7 +3856,15 @@ async function assignSelectedToDeck() {
 }
 
 async function assignSelectedToBinder() {
-  const binderId = document.getElementById('assign-binder-select').value;
+  let binderId = document.getElementById('assign-binder-select').value;
+  if (binderId === '__new__') {
+    const name = prompt('New binder name:');
+    if (!name) return;
+    const cr = await fetch('/api/binders', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ name }) });
+    const created = await cr.json();
+    if (created.error) { alert(created.error); return; }
+    binderId = created.id;
+  }
   const ids = await getSelectedCollectionIds();
   if (ids.length === 0) { alert('No unassigned copies found'); return; }
   const res = await fetch(`/api/binders/${binderId}/cards`, {
