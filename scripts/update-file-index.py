@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Update file index line counts in CLAUDE.md / CLAUDE_NEW.md.
+"""Update file index in CLAUDE.md / CLAUDE_NEW.md.
 
-Scans project directories for source files >= 200 lines. Updates line counts,
-adds new files with blank summaries, removes files below threshold or deleted.
-Preserves hand-written purpose/summary strings.
+Scans project directories for source files >= 200 lines. Adds new files with
+blank summaries, removes files below threshold or deleted. Preserves
+hand-written purpose/summary strings. No line counts — they cause merge
+conflicts and research shows they don't improve agent efficiency.
 
 Usage:
     python3 scripts/update-file-index.py          # manual run
-    # Also runs automatically via .git/hooks/pre-commit
 """
 
 import re
@@ -18,7 +18,7 @@ from pathlib import Path
 MIN_LINES = 200
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*(\d+)\s*\|\s*(.*?)\s*\|$")
+ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|(?:\s*\d+\s*\|)?\s*(.*?)\s*\|$")
 SKIP = frozenset({"__init__.py", "__main__.py"})
 
 
@@ -45,7 +45,7 @@ def scan(base, pattern, exclude=frozenset()):
 
 
 def files_for_section(header):
-    """Return [(display_name, line_count)] or None if section not recognized."""
+    """Return [display_name, ...] or None if section not recognized."""
     pairs = []
 
     if "`mtg_collector/cli/`" in header:
@@ -78,13 +78,9 @@ def files_for_section(header):
     else:
         return None
 
-    results = []
-    for display, path in pairs:
-        n = count_lines(path)
-        if n >= MIN_LINES:
-            results.append((display, n))
-    results.sort(key=lambda x: -x[1])
-    return results
+    return sorted(
+        display for display, path in pairs if count_lines(path) >= MIN_LINES
+    )
 
 
 def update(content):
@@ -148,13 +144,13 @@ def update(content):
         for row in lines[tbl_start:tbl_end]:
             m = ROW_RE.match(row.strip())
             if m:
-                purposes[m.group(1)] = m.group(3).strip()
+                purposes[m.group(1)] = m.group(2).strip()
 
         # Build new rows
         new_rows = []
-        for display, n in new_files:
+        for display in new_files:
             purpose = purposes.get(display, "")
-            new_rows.append(f"| `{display}` | {n} | {purpose} |")
+            new_rows.append(f"| `{display}` | {purpose} |")
 
         lines[tbl_start:tbl_end] = new_rows
 

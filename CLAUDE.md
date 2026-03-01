@@ -45,87 +45,85 @@ systemctl --user status mtgc-my-feature  # Check status
 
 ## File Index
 
-Files not listed here are smaller.
-
 ### `mtg_collector/cli/` — CLI subcommands
 
 Each module has `register(subparsers)` and `run(args)`.
 
-| File | Lines | Purpose |
-|------|------:|---------|
-| `crack_pack_server.py` | 5393 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
-| `data_cmd.py` | 922 | MTGJSON + price data import/export commands |
-| `demo_data.py` | 427 | Load demo collection for testing (cards, decks, binders, views) |
-| `ingest_ocr.py` | 393 | CLI image-based card ingestion via EasyOCR + Claude |
-| `ingest_corners.py` | 320 | CLI corner-photo card ingestion via Claude Vision |
-| `sample_ingest.py` | 289 |  |
-| `ingest_ids.py` | 246 | Manual card entry by rarity/collector-number/set |
+| File | Purpose |
+|------|---------|
+| `crack_pack_server.py` | **Web server**: all HTTP routes, API handlers, SSE endpoints |
+| `data_cmd.py` | MTGJSON + price data import/export commands |
+| `demo_data.py` | Load demo collection for testing (cards, decks, binders, views) |
+| `ingest_corners.py` | CLI corner-photo card ingestion via Claude Vision |
+| `ingest_ids.py` | Manual card entry by rarity/collector-number/set |
+| `ingest_ocr.py` | CLI image-based card ingestion via EasyOCR + Claude |
+| `sample_ingest.py` |  |
 
 ### `mtg_collector/db/` — SQLite layer
 
-| File | Lines | Purpose |
-|------|------:|---------|
-| `models.py` | 1982 | Dataclasses + repository classes (CRUD for every table) |
-| `schema.py` | 1615 | Schema DDL, all migrations, `init_db()` |
+| File | Purpose |
+|------|---------|
+| `models.py` | Dataclasses + repository classes (CRUD for every table) |
+| `schema.py` | Schema DDL, all migrations, `init_db()` |
 
 Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`.
 
 ### `mtg_collector/services/` — External integrations
 
-| File | Lines | Purpose |
-|------|------:|---------|
-| `order_parser.py` | 724 | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
-| `agent.py` | 555 | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
-| `claude.py` | 507 | Claude Vision API: corner reading, card identification |
-| `pack_generator.py` | 329 | MTGJSON-based booster pack simulation from SQLite |
-| `order_resolver.py` | 318 | Resolve parsed orders to local DB cards, treatment-aware matching |
-| `bulk_import.py` | 264 | `ScryfallBulkClient` class (bulk cache only), `cache_card_data()`, `ensure_set_populated()` |
+| File | Purpose |
+|------|---------|
+| `agent.py` | Agentic OCR: Claude tool-use loop with `query_local_db` and `analyze_image` tools |
+| `bulk_import.py` | `ScryfallBulkClient` class (bulk cache only), `cache_card_data()`, `ensure_set_populated()` |
+| `claude.py` | Claude Vision API: corner reading, card identification |
+| `order_parser.py` | Parse TCGPlayer HTML/text and Card Kingdom text into `ParsedOrder` |
+| `order_resolver.py` | Resolve parsed orders to local DB cards, treatment-aware matching |
+| `pack_generator.py` | MTGJSON-based booster pack simulation from SQLite |
 
 ### `mtg_collector/static/` — Web UI (single-file HTML pages)
 
-| File | Lines | Purpose |
-|------|------:|---------|
-| `collection.html` | 3898 | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
-| `sealed.html` | 2116 |  |
-| `recent.html` | 1549 | Recently ingested images gallery |
-| `correct.html` | 1048 | Fix misidentified cards in ingest pipeline |
-| `crack_pack.html` | 1040 | Booster pack simulator with rarity borders and badge system |
-| `explore_sheets.html` | 881 | Browse MTGJSON booster sheet layouts |
-| `decks.html` | 748 | Deck list/detail/edit with card management |
-| `ingest_ids.html` | 708 | Manual card entry web UI |
-| `disambiguate.html` | 634 | Resolve ambiguous card matches |
-| `edit_order.html` | 631 |  |
-| `ingest_corners.html` | 561 | Corner photo ingest web UI |
-| `ingest_order.html` | 542 | Order ingestion web UI |
-| `import_csv.html` | 517 | CSV import web UI (with deck/binder assignment) |
-| `binders.html` | 471 | Binder list/detail/edit with card management |
-| `process.html` | 406 | OCR processing + Claude identification |
-| `upload.html` | 395 | Photo upload for image ingest |
-| `index.html` | 311 | Homepage / navigation |
+| File | Purpose |
+|------|---------|
+| `binders.html` | Binder list/detail/edit with card management |
+| `collection.html` | **Collection browser**: filters, sorting, card grid, inline editing. Canonical card display. |
+| `correct.html` | Fix misidentified cards in ingest pipeline |
+| `crack_pack.html` | Booster pack simulator with rarity borders and badge system |
+| `decks.html` | Deck list/detail/edit with card management |
+| `disambiguate.html` | Resolve ambiguous card matches |
+| `edit_order.html` |  |
+| `explore_sheets.html` | Browse MTGJSON booster sheet layouts |
+| `import_csv.html` | CSV import web UI (with deck/binder assignment) |
+| `index.html` | Homepage / navigation |
+| `ingest_corners.html` | Corner photo ingest web UI |
+| `ingest_ids.html` | Manual card entry web UI |
+| `ingest_order.html` | Order ingestion web UI |
+| `process.html` | OCR processing + Claude identification |
+| `recent.html` | Recently ingested images gallery |
+| `sealed.html` |  |
+| `upload.html` | Photo upload for image ingest |
 
 ### `mtg_collector/importers/` and `exporters/`
 
-| File | Lines | Purpose |
-|------|------:|---------|
+| File | Purpose |
+|------|---------|
 
 ### Other key files
 
-| File | Lines | Purpose |
-|------|------:|---------|
-| `mtg_collector.py` | 470 | Legacy entrypoint (predates package structure) |
+| File | Purpose |
+|------|---------|
+| `mtg_collector.py` | Legacy entrypoint (predates package structure) |
 
 ### Tests
 
-| File | Lines | What it covers |
-|------|------:|---------|
-| `test_sealed_products.py` | 1346 |  |
-| `test_order_parser.py` | 785 | Order parsing (TCGPlayer HTML/text, Card Kingdom) |
-| `test_price_import.py` | 530 | MTGJSON price import pipeline |
-| `test_mtgjson_import.py` | 515 | MTGJSON AllPrintings import |
-| `test_import.py` | 484 | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
-| `test_decks_binders.py` | 401 |  |
-| `test_ingest_ids.py` | 392 | Manual card entry + `resolve_and_add_ids()` |
-| `test_order_resolver.py` | 302 | Order resolution to local DB cards |
+| File | What it covers |
+|------|---------|
+| `test_decks_binders.py` |  |
+| `test_import.py` | CSV import (Moxfield, Archidekt, Deckbox, decklist) |
+| `test_ingest_ids.py` | Manual card entry + `resolve_and_add_ids()` |
+| `test_mtgjson_import.py` | MTGJSON AllPrintings import |
+| `test_order_parser.py` | Order parsing (TCGPlayer HTML/text, Card Kingdom) |
+| `test_order_resolver.py` | Order resolution to local DB cards |
+| `test_price_import.py` | MTGJSON price import pipeline |
+| `test_sealed_products.py` |  |
 
 ## Data Model
 
