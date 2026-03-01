@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
        > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
-    && apt-get purge -y curl gpg && apt-get autoremove -y \
+    && apt-get purge -y gpg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js (needed by Claude CLI)
@@ -61,7 +61,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
 
 # Non-root user for Claude CLI (refuses --dangerously-skip-permissions as root).
 # Caller uses --userns=keep-id:uid=1000,gid=1000 to map host user → ci.
-RUN useradd -m -s /bin/bash -u 1000 ci
+RUN useradd -m -s /bin/bash -u 1000 ci \
+    && mkdir -p /home/ci/.cache/uv && chown -R ci:ci /home/ci/.cache
 ENV HOME=/home/ci
 
 WORKDIR /app

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Container-internal entrypoint for CI planning/implementation.
 #
-# Expected env: ANTHROPIC_API_KEY, GH_TOKEN, ISSUE_NUMBER, REPO_FULL_NAME,
+# Expected env: GH_TOKEN, ISSUE_NUMBER, REPO_FULL_NAME,
 #               MODE (plan|implement), BASE_BRANCH (default: main)
 #
 # Expected mounts:
@@ -13,6 +13,13 @@ set -euo pipefail
 
 # --- Claude CLI ---
 export PATH="/opt/claude/bin:$PATH"
+
+# --- Claude auth (Max plan, no API key) ---
+# Credentials are pre-staged in /opt/claude/.credentials.json (ro mount).
+# Copy to ci user's home so the CLI authenticates via subscription, not API.
+mkdir -p /home/ci/.claude
+cp /opt/claude/.credentials.json /home/ci/.claude/.credentials.json
+chown -R ci:ci /home/ci/.claude
 
 # --- Git auth (runs as root; overlay files are root-owned) ---
 git config --global --add safe.directory /app
@@ -30,17 +37,18 @@ git fetch origin
 
 BASE="${BASE_BRANCH:-main}"
 git checkout "$BASE"
-git rebase "origin/$BASE"
+git reset --hard "origin/$BASE"
 
 # --- Install/update deps (overlay venv has --no-dev, plan needs dev deps) ---
 uv sync --group dev
+chown -R ci:ci /home/ci/.cache/uv
 
 # --- Writable DB copy ---
 # /data is overlay-mounted; the server needs a writable DB.
 # MTGC_DB is checked by get_db_path() before MTGC_HOME.
 if [ -f /data/collection.sqlite ]; then
     cp /data/collection.sqlite /tmp/collection.sqlite
-    chmod 644 /tmp/collection.sqlite
+    chown ci:ci /tmp/collection.sqlite
     export MTGC_DB=/tmp/collection.sqlite
 fi
 
@@ -48,6 +56,8 @@ fi
 if [ "$MODE" = "implement" ]; then
     BRANCH="claude/issue-${ISSUE_NUMBER}"
     git checkout -B "$BRANCH"
+    # Overlay upper layer is root-owned; give ci write access to source files.
+    chown -R ci:ci /app
 fi
 
 # --- Build prompt from template ---
@@ -55,7 +65,9 @@ PROMPT_FILE="/app/.github/ci/thaen/prompts/${MODE}.md"
 PROMPT=$(ISSUE_NUMBER="$ISSUE_NUMBER" REPO_FULL_NAME="$REPO_FULL_NAME" envsubst < "$PROMPT_FILE")
 
 # --- Run Claude as non-root (refuses --dangerously-skip-permissions as root) ---
-runuser -u ci -- claude --dangerously-skip-permissions \
+# Preserve MTGC_DB so the agent uses the writable DB copy.
+runuser -u ci -- env MTGC_DB="${MTGC_DB:-}" MTGC_HOME="${MTGC_HOME:-}" \
+    claude --dangerously-skip-permissions \
     -p "$PROMPT" \
     --max-turns 50 \
     --verbose \
