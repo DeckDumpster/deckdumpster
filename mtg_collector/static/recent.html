@@ -34,22 +34,6 @@ header a:hover { color: #e94560; }
   flex-wrap: wrap;
 }
 .controls label { font-size: 0.8rem; color: #888; }
-.pill-row { display: flex; gap: 0; }
-.pill-row .pill {
-  padding: 5px 12px;
-  border: 1px solid #0f3460;
-  background: #16213e;
-  color: #888;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  user-select: none;
-}
-.pill-row .pill:first-child { border-radius: 6px 0 0 6px; }
-.pill-row .pill:last-child { border-radius: 0 6px 6px 0; }
-.pill-row .pill + .pill { border-left: none; }
-.pill-row .pill.active { background: #e94560; border-color: #e94560; color: #fff; }
-.pill-row .pill:hover:not(.active) { border-color: #e94560; color: #e0e0e0; }
 
 .col-controls {
   display: flex;
@@ -519,14 +503,6 @@ header a:hover { color: #e94560; }
 </header>
 
 <div class="controls">
-  <label>Time window:</label>
-  <div class="pill-row" id="time-pills">
-    <div class="pill" data-hours="0.5">30m</div>
-    <div class="pill active" data-hours="2">2h</div>
-    <div class="pill" data-hours="4">4h</div>
-    <div class="pill" data-hours="12">12h</div>
-    <div class="pill" data-hours="24">24h</div>
-  </div>
   <label>Columns:</label>
   <div class="col-controls">
     <button class="col-btn" id="col-minus">&minus;</button>
@@ -550,7 +526,6 @@ header a:hover { color: #e94560; }
 </div>
 
 <script>
-let currentHours = 2;
 const activePolls = new Map(); // image_id (number) → intervalId
 let discoveryTimer = null;
 
@@ -575,18 +550,6 @@ document.getElementById('col-plus').addEventListener('click', () => {
 });
 
 applyGridCols();
-
-// ── Time pills ───────────────────────────────────────────────────────────────
-
-document.querySelectorAll('#time-pills .pill').forEach(pill => {
-  pill.addEventListener('click', () => {
-    document.querySelectorAll('#time-pills .pill').forEach(p => p.classList.remove('active'));
-    pill.classList.add('active');
-    currentHours = parseFloat(pill.dataset.hours);
-    loadRecent();
-    loadUsageStats();
-  });
-});
 
 // ── Rendering helpers ────────────────────────────────────────────────────────
 
@@ -938,7 +901,7 @@ async function accRefresh(imgId) {
     renderAccordionContent(imgId, detail);
   }
   // Also refresh the grid card
-  const resp = await fetch(`/api/ingest2/recent?hours=${currentHours}&id=${imgId}`);
+  const resp = await fetch(`/api/ingest2/recent?id=${imgId}`);
   const images = await resp.json();
   if (images.length) {
     const card = document.querySelector(`#grid .img-card[data-id="${imgId}"]`);
@@ -949,7 +912,7 @@ async function accRefresh(imgId) {
 
 function updateSummaryFromGrid() {
   // Re-fetch summary from server to stay accurate
-  fetch(`/api/ingest2/recent?hours=${currentHours}`)
+  fetch('/api/ingest2/recent')
     .then(r => r.json())
     .then(images => updateSummary(images));
 }
@@ -1168,10 +1131,10 @@ function updateSummary(images) {
   batchBtn.style.display = counts.done > 0 ? 'inline-block' : 'none';
 }
 
-// ── Full render (initial load + time-pill changes) ───────────────────────────
+// ── Full render (initial load) ────────────────────────────────────────────────
 
 async function loadRecent() {
-  const resp = await fetch(`/api/ingest2/recent?hours=${currentHours}`);
+  const resp = await fetch('/api/ingest2/recent');
   const images = await resp.json();
 
   const grid = document.getElementById('grid');
@@ -1243,7 +1206,7 @@ function syncPolls(images) {
 }
 
 async function pollOneImage(id) {
-  const resp = await fetch(`/api/ingest2/recent?hours=${currentHours}&id=${id}`);
+  const resp = await fetch(`/api/ingest2/recent?id=${id}`);
   const images = await resp.json();
   if (images.length === 0) {
     clearInterval(activePolls.get(id));
@@ -1262,7 +1225,7 @@ async function pollOneImage(id) {
 // ── Discovery poll (slow — finds new images uploaded while page is open) ─────
 
 async function discoverNewImages() {
-  const resp = await fetch(`/api/ingest2/recent?hours=${currentHours}`);
+  const resp = await fetch('/api/ingest2/recent');
   const images = await resp.json();
   const grid = document.getElementById('grid');
   let foundNew = false;
@@ -1290,7 +1253,7 @@ function fmtTokens(n) {
 }
 
 async function loadUsageStats() {
-  const resp = await fetch(`/api/ingest2/usage-stats?hours=${currentHours}`);
+  const resp = await fetch('/api/ingest2/usage-stats');
   const data = await resp.json();
   const box = document.getElementById('usage-box');
   const u = data.usage;
@@ -1337,7 +1300,7 @@ async function batchIngest() {
   const msg = document.getElementById('batch-msg');
   btn.disabled = true;
   const assignSel = document.getElementById('assign-target');
-  const body = { hours: currentHours };
+  const body = {};
   if (assignSel && assignSel.value) body.assign_target = assignSel.value;
   const resp = await fetch('/api/ingest2/batch-ingest', {
     method: 'POST',
@@ -1384,7 +1347,7 @@ document.getElementById('grid').addEventListener('click', async (e) => {
   });
 
   // Refresh the single card
-  const resp = await fetch(`/api/ingest2/recent?hours=${currentHours}&id=${imgId}`);
+  const resp = await fetch(`/api/ingest2/recent?id=${imgId}`);
   const images = await resp.json();
   if (images.length && card) updateCardEl(card, images[0]);
 

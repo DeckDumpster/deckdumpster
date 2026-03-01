@@ -1900,15 +1900,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(counts)
 
     def _api_ingest2_recent(self, params):
-        """Return images from last N hours with computed status info.
+        """Return all non-INGESTED images with computed status info.
 
         Optional ?id=X filters to a single image (for per-image polling).
         """
-        hours = float(params.get("hours", ["2"])[0])
         image_id = params.get("id", [None])[0]
         conn = self._ingest2_db()
-        where = "WHERE created_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?) AND status != 'INGESTED'"
-        args = [f"-{int(hours * 3600)} seconds"]
+        where = "WHERE status != 'INGESTED'"
+        args = []
         if image_id is not None:
             where += " AND id = ?"
             args.append(int(image_id))
@@ -2040,14 +2039,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _api_ingest2_usage_stats(self, params):
-        """Aggregate API token usage and estimated cost over a time window."""
-        hours = float(params.get("hours", ["24"])[0])
+        """Aggregate API token usage and estimated cost for non-INGESTED images."""
         conn = self._ingest2_db()
         rows = conn.execute(
             """SELECT api_usage FROM ingest_images
                WHERE api_usage IS NOT NULL
-               AND created_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)""",
-            (f"-{int(hours * 3600)} seconds",),
+               AND status != 'INGESTED'""",
         ).fetchall()
         conn.close()
 
@@ -2972,15 +2969,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if data is None:
             return
 
-        hours = float(data.get("hours", 24))
         assign_target = data.get("assign_target", "")
         conn = self._ingest2_db()
         rows = conn.execute(
             """SELECT id, md5, stored_name, disambiguated, claude_result
                FROM ingest_images
-               WHERE status = 'DONE'
-               AND created_at >= strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)""",
-            (f"-{int(hours * 3600)} seconds",),
+               WHERE status = 'DONE'""",
         ).fetchall()
 
         printing_repo = PrintingRepository(conn)
