@@ -1,0 +1,7 @@
+start_page: /collection
+involves:
+  - card detail modal for an unassigned card
+  - '"Add to Binder" dropdown in Copies section'
+fixture_data:
+  card_name: "Bonny Pall"
+  target_binder: "Trade Binder"

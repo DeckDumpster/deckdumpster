@@ -125,6 +125,14 @@ def test_scenario(intent_name, intent_path, impl_path, base_url, page, screensho
                 dialog.accept()
         page.on("dialog", _handle_dialog)
 
+        # Navigate to start page from hints (mirrors UIHarness.run behavior).
+        # The UIHarness always navigates before recording, so generated
+        # implementations never include an initial navigate() call.
+        from .generator import _load_hints
+        replay_hints = _load_hints(intent_path)
+        start = (replay_hints.get("start_page") if replay_hints else None) or "/"
+        harness.navigate(start)
+
         try:
             steps_fn(harness)
         except ReplayStepError as e:

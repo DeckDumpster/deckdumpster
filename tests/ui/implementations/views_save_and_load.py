@@ -1,17 +1,16 @@
 """
-Generated from intent: views_save_and_load
-Generated at: 2026-02-28T23:27:55Z
-System version: d11cf4c
-Intent hash: ceeb0652c3375a4a
+Hand-written implementation for views_save_and_load.
+
+The demo fixture has a saved view "Modern Staples" with filter q=crawler.
+Loading it should filter the collection to show Scrawling Crawler cards.
 """
 
 
 def steps(harness):
-    harness.click_by_text("Collection
-Browse your card collection with search, filters, and prices")
+    # Open the filter sidebar.
     harness.click_by_text("Filters")
-    harness.select_by_label("-- None --
-Modern Staples
-Test View
-Unassigned Cards", "Modern Staples")
+    # Select the "Modern Staples" saved view from the dropdown.
+    harness.select_by_label("#view-select", "Modern Staples")
+    # Verify that the search filtered to show Scrawling Crawler.
+    harness.wait_for_text("Scrawling Crawler")
     harness.screenshot("final_state")

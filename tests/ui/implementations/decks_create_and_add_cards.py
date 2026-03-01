@@ -9,7 +9,7 @@ Intent hash: 4f24d502aca65742
 def steps(harness):
     harness.click_by_text("New Deck")
     harness.fill_by_placeholder("My Commander Deck", "Test Deck")
-    harness.select_by_label("-- None --", "Commander / EDH")
+    harness.select_by_label("#f-format", "Commander / EDH")
     harness.click_by_text("Save")
     harness.click_by_text("Add Cards")
     harness.fill_by_placeholder("Search by name...", "Cathar")

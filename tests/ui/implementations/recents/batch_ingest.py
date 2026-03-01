@@ -1,19 +1,19 @@
 """
-Generated from intent: batch_ingest
-Generated at: 2026-03-01T00:35:33Z
-System version: d11cf4c
-Intent hash: 7beae9737fd744eb
+Hand-written implementation for batch_ingest.
+
+The fixture has 2 DONE cards (Mox Emerald, Armed Response) that are
+already resolved. Clicking "Batch Ingest" ingests them into the
+collection. Then navigate to /collection and search to verify.
 """
 
 
 def steps(harness):
-    harness.click_by_text("24h")
-    harness.click_by_selector("#grid > div:nth-of-type(1)")
-    harness.click_by_selector("Replace with...")
-    harness.fill_by_placeholder("Replace with...", "Lightning Bolt")
-    harness.scroll("down")
-    harness.fill_by_placeholder("Replace with...", "Black Lotus")
+    # The default 2h pill shows all 5 images, 2 already resolved (green).
+    # Click "Batch Ingest" — it's visible because resolved cards exist.
     harness.click_by_text("Batch Ingest")
-    harness.click_by_text("Collection")
+    # Verify success message appeared.
+    harness.wait_for_text("photos inserted")
+    # Navigate to collection to verify the cards were added.
+    harness.navigate("/collection")
     harness.fill_by_placeholder("Search cards...", "Armed Response")
     harness.screenshot("final_state")

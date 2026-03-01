@@ -1,18 +1,24 @@
 """
-Generated from intent: collection_add_from_modal
-Generated at: 2026-02-28T23:06:47Z
-System version: d11cf4c
-Intent hash: 55f1249f8ce63c70
+Hand-written implementation for collection_add_from_modal.
+
+Opens a card modal, clicks Add, fills in purchase details, confirms.
 """
 
 
 def steps(harness):
-    harness.click_by_text("Collection
-Browse your card collection with search, filters, and prices")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(1) > td:nth-of-type(3)")
-    harness.click_by_selector("#main > table > tbody > tr > td:nth-of-type(1)")
-    harness.click_by_text("Add")
-    harness.fill_by_placeholder("Price", "1.50")
-    harness.fill_by_placeholder("Source", "TCGPlayer")
-    harness.click_by_text("Confirm")
+    # Wait for collection to load.
+    harness.wait_for_visible("tr[data-idx]")
+    # Switch to grid view for direct card click handler.
+    harness.click_by_selector("#view-grid-btn")
+    # Click the first card in grid view to open the modal.
+    harness.click_by_selector(".sheet-card[data-idx]")
+    # Wait for modal to appear.
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    # Click the "Add" button to show the add form.
+    harness.click_by_selector("#modal-add-btn")
+    # Fill in purchase details.
+    harness.fill_by_selector("#add-price", "5.00")
+    harness.fill_by_selector("#add-source", "LGS")
+    # Confirm the addition.
+    harness.click_by_selector("#add-confirm-btn")
     harness.screenshot("final_state")

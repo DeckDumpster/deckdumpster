@@ -1,0 +1,7 @@
+start_page: /collection
+involves:
+  - card detail modal for an unassigned card
+  - '"Add to Deck" dropdown in Copies section'
+fixture_data:
+  card_name: "Slick Sequence"
+  target_deck: "Bolt Tribal"

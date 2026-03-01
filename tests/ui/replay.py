@@ -98,6 +98,17 @@ class ReplayHarness:
         self._settle()
         self._snap()
 
+    def press_key(self, key: str, *, selector: str | None = None):
+        """Press a keyboard key, optionally targeting a specific element."""
+        target = selector or "active element"
+        self._record("press_key", f"{key} on {target}")
+        if selector:
+            self.page.press(selector, key, timeout=5_000)
+        else:
+            self.page.keyboard.press(key)
+        self._settle()
+        self._snap()
+
     def select_by_label(self, selector: str, label: str):
         self._record("select_by_label", f"{selector}={label}")
         self.page.select_option(selector, label=label, timeout=5_000)

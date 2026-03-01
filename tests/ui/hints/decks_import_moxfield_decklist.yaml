@@ -1,0 +1,7 @@
+start_page: /import-csv
+involves:
+  - format selector dropdown
+  - textarea for pasting decklist
+  - '"Parse & Resolve" button'
+fixture_data:
+  decklist: "1 Scrawling Crawler (FDN) 132"

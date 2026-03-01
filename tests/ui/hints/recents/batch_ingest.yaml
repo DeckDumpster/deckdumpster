@@ -6,10 +6,9 @@ involves:
   - candidate cards in the accordion with set icons and finish badges
   - '"Batch Ingest" button appears when at least one card is resolved (green border)'
 notes: >
-  1. Click the "24h" time pill to show recent images. 2. Look for a
-  green-bordered card photo (already resolved, status DONE). If none are
-  green, click a red-bordered photo to open the accordion, select a
-  candidate to resolve it (border turns green). 3. Once at least one card
-  is green, the "Batch Ingest" button should be visible at the top.
-  4. Click "Batch Ingest". 5. Verify the resolved cards are removed from
-  the grid and a success message appears. Done.
+  The default 2h pill already shows all 5 images — no need to change it.
+  Two cards (Mox Emerald, Armed Response) are already resolved (green
+  border, DONE status). 1. Click "Batch Ingest" — it's visible because
+  resolved cards exist. 2. A success message "N photos inserted" appears.
+  3. Navigate to /collection. 4. Search for "Armed Response" to verify
+  the card was added. Done.

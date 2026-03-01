@@ -1,0 +1,6 @@
+start_page: /sealed
+involves:
+  - '"+ Add" button opens add modal'
+  - adding same product twice with different qty/price
+  - aggregated display shows combined quantity
+  - product detail shows individual entries

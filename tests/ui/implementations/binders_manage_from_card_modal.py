@@ -1,29 +1,25 @@
 """
-Generated from intent: binders_manage_from_card_modal
-Generated at: 2026-02-28T23:05:59Z
-System version: d11cf4c
-Intent hash: ea0f6433f372b24d
+Hand-written implementation for binders_manage_from_card_modal.
+
+Assigns an unassigned card to a binder from the card detail modal
+on the collection page. Uses Orazca Puzzle-Door (LCI) which is unassigned
+and not used by any other test.
 """
 
 
 def steps(harness):
-    harness.click_by_text("Collection
-Browse your card collection with search, filters, and prices")
-    harness.navigate("/binders")
-    harness.navigate("/collection")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(1) > td:nth-of-type(3)")
-    harness.click_by_selector("#main > table > tbody > tr > td:nth-of-type(1)")
-    harness.click_by_text("×")
-    harness.fill_by_placeholder("Search cards...", "")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(2) > td:nth-of-type(1)")
-    harness.click_by_text("×")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(3) > td:nth-of-type(2)")
-    harness.click_by_text("×")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(5) > td:nth-of-type(1)")
-    harness.click_by_text("×")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(6) > td:nth-of-type(1)")
-    harness.select_by_label("Add to Binder ▾
-Foil Collection
-Test Binder
-Trade Binder", "Trade Binder")
+    # Search for an unassigned card.
+    harness.fill_by_placeholder("Search cards...", "Orazca")
+    # Wait for search results to render.
+    harness.wait_for_visible("tr[data-idx]")
+    # Switch to grid view so we can click the card directly.
+    harness.click_by_selector("#view-grid-btn")
+    # Click the card in grid view.
+    harness.click_by_selector(".sheet-card[data-idx]")
+    # Wait for modal to appear.
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    # Wait for the binder dropdown to appear (copies section loads async).
+    harness.wait_for_visible("select.copy-add-to-binder", timeout=10_000)
+    # Assign to Trade Binder using the dropdown.
+    harness.select_by_label("select.copy-add-to-binder", "Trade Binder")
     harness.screenshot("final_state")

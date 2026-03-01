@@ -1,0 +1,8 @@
+start_page: /decks
+involves:
+  - deck detail view for "Eldrazi Ramp"
+  - '"Delete Deck" button with confirm dialog'
+  - collection page search to verify cards remain
+fixture_data:
+  deck_name: "Eldrazi Ramp"
+  card_name: "Disruptor Flute"

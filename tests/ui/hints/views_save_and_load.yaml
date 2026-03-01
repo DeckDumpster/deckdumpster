@@ -1,0 +1,5 @@
+start_page: /collection
+involves:
+  - sidebar "Filters" toggle button
+  - '"Saved Views" dropdown in the sidebar'
+  - '"Modern Staples" saved view filters to q=crawler'

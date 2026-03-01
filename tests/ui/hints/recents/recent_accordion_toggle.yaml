@@ -6,8 +6,7 @@ involves:
   - clicking the same photo again collapses the accordion
   - time filter pills (30m, 2h, 4h, 12h, 24h)
 notes: >
-  1. Click the "24h" time pill to ensure images are visible. 2. Click any
-  card image in the grid. 3. An accordion panel should appear below the
-  row showing candidate cards. 4. Verify the accordion contains candidate
-  information. 5. Click the same photo again to collapse the accordion.
-  6. Verify the accordion is no longer visible. Done.
+  The default 2h pill already shows all images — no need to change it.
+  1. Click a card photo (e.g. "Arenson's Aura"). 2. The accordion panel
+  (#accordion-panel) appears with class "open". 3. Click the same card
+  again. 4. The accordion closes (class "open" removed). Done.

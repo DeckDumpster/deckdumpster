@@ -1,0 +1,6 @@
+start_page: /collection
+involves:
+  - orders view toggle to find orders
+  - '"Edit" link on order group to navigate to edit page'
+  - '"+ Add Card" button on edit page'
+  - card search overlay

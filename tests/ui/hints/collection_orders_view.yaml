@@ -1,0 +1,4 @@
+start_page: /collection
+involves:
+  - orders view toggle button (hidden until data loads)
+  - order groups with card thumbnails

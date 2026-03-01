@@ -1,0 +1,6 @@
+start_page: /collection
+involves:
+  - card detail modal
+  - '"Add" button in modal opens purchase form'
+  - 'price, source, and date fields'
+  - '"Confirm" button adds a new copy'

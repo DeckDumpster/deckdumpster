@@ -1,0 +1,6 @@
+start_page: /sealed
+involves:
+  - '"+ Add" button opens add modal'
+  - search for sealed products by name
+  - '"Add to Collection" confirm button'
+  - table view toggle

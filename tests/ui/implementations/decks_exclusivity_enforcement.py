@@ -1,20 +1,22 @@
 """
-Generated from intent: decks_exclusivity_enforcement
-Generated at: 2026-02-28T23:12:39Z
-System version: d11cf4c
-Intent hash: 1dffed1b7dde5ebe
+Hand-written implementation for decks_exclusivity_enforcement.
+
+Assigns an unassigned copy of Scrawling Crawler to Trade Binder.
+Scrawling Crawler has 3 copies: 2 in Bolt Tribal, 1 unassigned (#3).
 """
 
 
 def steps(harness):
-    harness.click_by_text("Collection
-Browse your card collection with search, filters, and prices")
+    # Search for Scrawling Crawler on the collection page.
     harness.fill_by_placeholder("Search cards...", "Scrawling Crawler")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(2) > td:nth-of-type(3)")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(2) > td:nth-of-type(3) > div")
-    harness.click_by_selector("#main > table > tbody > tr:nth-of-type(1) > td:nth-of-type(1)")
-    harness.select_by_label("Move to Binder ▾
-Foil Collection
-Test Binder
-Trade Binder", "Trade Binder")
+    # Wait for results and switch to grid view.
+    harness.wait_for_visible("tr[data-idx]")
+    harness.click_by_selector("#view-grid-btn")
+    # Click the card in grid view.
+    harness.click_by_selector(".sheet-card[data-idx]")
+    # Wait for modal and copies to load.
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    harness.wait_for_text("Copies")
+    # Assign the unassigned copy to Trade Binder.
+    harness.select_by_label("select.copy-add-to-binder", "Trade Binder")
     harness.screenshot("final_state")

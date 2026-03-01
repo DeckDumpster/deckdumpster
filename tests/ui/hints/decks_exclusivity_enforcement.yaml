@@ -1,0 +1,8 @@
+start_page: /collection
+involves:
+  - card detail modal for Scrawling Crawler
+  - '"Add to Binder" dropdown in Copies section'
+  - unassigned copy can be assigned to Trade Binder
+fixture_data:
+  card_name: "Scrawling Crawler"
+  target_binder: "Trade Binder"

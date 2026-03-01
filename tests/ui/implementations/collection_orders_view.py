@@ -1,13 +1,16 @@
 """
-Generated from intent: collection_orders_view
-Generated at: 2026-02-28T23:09:44Z
-System version: d11cf4c
-Intent hash: 65c35143dd4a82f3
+Hand-written implementation for collection_orders_view.
+
+Switches to the orders view on the collection page and verifies
+card art thumbnails are visible in the order groups.
 """
 
 
 def steps(harness):
-    harness.click_by_text("Collection
-Browse your card collection with search, filters, and prices")
-    harness.click_by_text("View Ordered")
+    # The orders view button is hidden until data loads. Wait for cards.
+    harness.wait_for_visible("#view-orders-btn", timeout=10_000)
+    # Click the orders view toggle button.
+    harness.click_by_selector("#view-orders-btn")
+    # Verify we can see an order group with card images.
+    harness.wait_for_text("CardHaus Gaming")
     harness.screenshot("final_state")

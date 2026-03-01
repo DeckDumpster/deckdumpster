@@ -1,24 +1,18 @@
 """
-Generated from intent: decks_import_moxfield_decklist
-Generated at: 2026-02-28T23:13:23Z
-System version: d11cf4c
-Intent hash: c14affab9a474ef1
+Hand-written implementation for decks_import_moxfield_decklist.
+
+Imports a text decklist "1 Scrawling Crawler (FDN) 132" through the
+CSV Import page and verifies the card resolves successfully.
 """
 
 
 def steps(harness):
-    harness.navigate("/csv-import")
-    harness.navigate("/import")
-    harness.navigate("/")
-    harness.scroll("down")
-    harness.click_by_text("Ingestor (CSV Import)
-Import cards from Moxfield, Archidekt, or Deckbox CSV expo")
-    harness.fill_by_placeholder("Paste CSV here (e.g. Moxfield deck export)...", "1 Scrawling Crawler (FDN) 132")
-    harness.select_by_label("Auto-detect
-Deck List (text)
-Moxfield (CSV)
-Archidekt (CSV)
-Deckbox (CSV)", "Deck List (text)")
-    harness.click_by_text("Parse & Resolve")
-    harness.click_by_text("Add to Collection")
+    # Select "Deck List (text)" format.
+    harness.select_by_label("#format-select", "Deck List (text)")
+    # Paste the decklist into the textarea.
+    harness.fill_by_selector("#csv-text", "1 Scrawling Crawler (FDN) 132")
+    # Click "Parse & Resolve".
+    harness.click_by_selector("#parse-btn")
+    # Wait for resolution results.
+    harness.wait_for_text("Scrawling Crawler")
     harness.screenshot("final_state")
