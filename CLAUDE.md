@@ -53,7 +53,7 @@ Each module has `register(subparsers)` and `run(args)`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `crack_pack_server.py` | 5357 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
+| `crack_pack_server.py` | 5362 | **Web server**: all HTTP routes, API handlers, SSE endpoints |
 | `data_cmd.py` | 922 | MTGJSON + price data import/export commands |
 | `demo_data.py` | 413 | Load demo collection for testing (cards, decks, binders, views) |
 | `ingest_ocr.py` | 393 | CLI image-based card ingestion via EasyOCR + Claude |

@@ -47,7 +47,7 @@ uv sync --group dev
 # MTGC_DB is checked by get_db_path() before MTGC_HOME.
 if [ -f /data/collection.sqlite ]; then
     cp /data/collection.sqlite /tmp/collection.sqlite
-    chmod 644 /tmp/collection.sqlite
+    chown ci:ci /tmp/collection.sqlite
     export MTGC_DB=/tmp/collection.sqlite
 fi
 
