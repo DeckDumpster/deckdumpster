@@ -1944,7 +1944,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """
         image_id = params.get("id", [None])[0]
         conn = self._ingest2_db()
-        where = "WHERE status != 'INGESTED'"
+        where = ("WHERE (status NOT IN ('INGESTED', 'DONE')"
+                 " OR (status = 'DONE' AND md5 NOT IN (SELECT DISTINCT image_md5 FROM ingest_lineage)))")
         args = []
         if image_id is not None:
             where += " AND id = ?"
@@ -3015,7 +3016,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         rows = conn.execute(
             """SELECT id, md5, stored_name, disambiguated, claude_result
                FROM ingest_images
-               WHERE status = 'DONE'""",
+               WHERE status = 'DONE'
+               AND md5 NOT IN (SELECT DISTINCT image_md5 FROM ingest_lineage)""",
         ).fetchall()
 
         printing_repo = PrintingRepository(conn)
