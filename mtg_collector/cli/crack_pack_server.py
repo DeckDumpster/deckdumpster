@@ -655,7 +655,6 @@ def _process_image_background(db_path, image_id):
 
         # Auto-select best candidate for each card slot.
         # Single printing → auto-confirm. Multiple → narrow and pick first.
-        # Does NOT create collection/lineage — batch ingest does that.
         confirmed_finishes = [None] * len(disambiguated) if disambiguated else []
         for idx in range(len(disambiguated or [])):
             if disambiguated[idx] is not None:
@@ -696,6 +695,48 @@ def _process_image_background(db_path, image_id):
              now_iso(), image_id),
         )
         conn.commit()
+
+        # Auto-ingest: when all cards are auto-disambiguated, create collection
+        # entries + lineage immediately so cards appear without manual batch ingest.
+        if final_status == "DONE":
+            from mtg_collector.db.models import (
+                CollectionEntry,
+                CollectionRepository,
+                PrintingRepository,
+            )
+
+            printing_repo = PrintingRepository(conn)
+            collection_repo = CollectionRepository(conn)
+            md5 = img["md5"]
+
+            for card_idx, sid in enumerate(disambiguated):
+                if not sid or sid in ("skipped", "already_ingested"):
+                    continue
+                printing = printing_repo.get(sid)
+                if not printing:
+                    continue
+                finish = confirmed_finishes[card_idx] if card_idx < len(confirmed_finishes) and confirmed_finishes[card_idx] else "nonfoil"
+                entry = CollectionEntry(
+                    id=None,
+                    printing_id=sid,
+                    finish=finish,
+                    condition="Near Mint",
+                    source="ocr_ingest",
+                )
+                entry_id = collection_repo.add(entry)
+                conn.execute(
+                    """INSERT INTO ingest_lineage (collection_id, image_md5, image_path, card_index, created_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (entry_id, md5, img["stored_name"], card_idx, now_iso()),
+                )
+
+            conn.execute(
+                "UPDATE ingest_images SET status='INGESTED', updated_at=? WHERE id=?",
+                (now_iso(), image_id),
+            )
+            conn.commit()
+            final_status = "INGESTED"
+
         _log_ingest(f"[bg:{image_id}] Finished -> {final_status}")
 
     except Exception as e:
