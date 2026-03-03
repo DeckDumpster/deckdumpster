@@ -1,0 +1,7 @@
+[Unit]
+Description=MTGC backup ({{INSTANCE}})
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mtgc-{{INSTANCE}}/deploy/backup.sh {{INSTANCE}}
+TimeoutStartSec=900

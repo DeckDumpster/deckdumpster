@@ -140,7 +140,7 @@ sed \
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_USER_DIR"
 
-for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog; do
+for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup; do
     echo "==> Installing ${UNIT_PREFIX} timer"
     for EXT in service timer; do
         sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
@@ -202,4 +202,5 @@ fi
 echo "  Logs:       journalctl --user -u $SERVICE_NAME -f"
 echo "  Prices:     systemctl --user enable --now mtgc-prices-${INSTANCE}.timer"
 echo "  Sealed:     systemctl --user enable --now mtgc-sealed-catalog-${INSTANCE}.timer"
+echo "  Backup:     systemctl --user enable --now mtgc-backup-${INSTANCE}.timer"
 echo "  Teardown:   bash deploy/teardown.sh $INSTANCE"
