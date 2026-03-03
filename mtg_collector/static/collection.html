@@ -7,6 +7,8 @@
 <title>Collection Browser</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/keyrune@latest/css/keyrune.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mana-font@latest/css/mana.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -666,6 +668,18 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
   font-size: 0.75rem;
   padding: 3px 8px;
 }
+
+.price-chart-section { padding-top: 8px; display: none; }
+.price-chart-section.visible { display: block; }
+.price-range-pills { display: flex; gap: 4px; margin-bottom: 6px; }
+.price-range-pill {
+  background: #0f3460; color: #ccc; border: none; border-radius: 12px;
+  padding: 2px 10px; font-size: 0.7rem; cursor: pointer; transition: background 0.15s;
+}
+.price-range-pill:hover { background: #163d6f; }
+.price-range-pill.active { background: #e94560; color: #fff; }
+.price-range-pill.disabled { opacity: 0.3; pointer-events: none; }
+.price-chart-canvas-wrap { height: 150px; position: relative; }
 
 a.lineage-link {
   display: block;
@@ -1891,12 +1905,15 @@ const RARITY_COLORS = {common: '#111', uncommon: '#6a6a6a', rare: '#c9a816', myt
 function getRarityColor(rarity) { return RARITY_COLORS[rarity] || '#111'; }
 
 // --- Card detail modal ---
+let _priceChart = null;
+function _destroyPriceChart() { if (_priceChart) { _priceChart.destroy(); _priceChart = null; } }
+
 modalOverlay.addEventListener('click', (e) => {
-  if (e.target === modalOverlay) modalOverlay.classList.remove('active');
+  if (e.target === modalOverlay) { _destroyPriceChart(); modalOverlay.classList.remove('active'); }
 });
-modalClose.addEventListener('click', () => modalOverlay.classList.remove('active'));
+modalClose.addEventListener('click', () => { _destroyPriceChart(); modalOverlay.classList.remove('active'); });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') modalOverlay.classList.remove('active');
+  if (e.key === 'Escape') { _destroyPriceChart(); modalOverlay.classList.remove('active'); }
 });
 
 // Modal filter click handler (delegated, added once)
@@ -1905,12 +1922,194 @@ modalDetails.addEventListener('click', (e) => {
   const filterEl = e.target.closest('[data-filter-type]');
   if (filterEl) {
     e.stopPropagation();
+    _destroyPriceChart();
     modalOverlay.classList.remove('active');
     applyFilter(filterEl.dataset.filterType, filterEl.dataset.filterValue);
   }
 });
 
 const DFC_LAYOUTS = ['transform', 'modal_dfc', 'reversible_card', 'double_faced_token', 'art_series'];
+
+// --- Price history chart ---
+const PRICE_SERIES_COLORS = {
+  tcgplayer_normal: '#e94560', cardkingdom_normal: '#7ec8e3',
+  tcgplayer_foil: '#a83248', cardkingdom_foil: '#5a9bb5',
+};
+const PRICE_SERIES_LABELS = {
+  tcgplayer_normal: 'TCG Normal', cardkingdom_normal: 'CK Normal',
+  tcgplayer_foil: 'TCG Foil', cardkingdom_foil: 'CK Foil',
+};
+const crosshairPlugin = {
+  id: 'crosshair',
+  afterDraw(chart) {
+    if (chart.tooltip?._active?.length) {
+      const x = chart.tooltip._active[0].element.x;
+      const { top, bottom } = chart.chartArea;
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+};
+
+const purchaseLinesPlugin = {
+  id: 'purchaseLines',
+  afterDraw(chart) {
+    const prices = chart.options.plugins.purchaseLines?.prices;
+    if (!prices?.length) return;
+    const { left, right } = chart.chartArea;
+    const yScale = chart.scales.y;
+    const ctx = chart.ctx;
+    ctx.save();
+    for (const price of prices) {
+      const y = yScale.getPixelForValue(price);
+      if (y < chart.chartArea.top || y > chart.chartArea.bottom) continue;
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(right, y);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(126,232,176,0.5)';
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(126,232,176,0.7)';
+      ctx.font = '9px sans-serif';
+      ctx.fillText('$' + price.toFixed(2), left + 3, y - 3);
+    }
+    ctx.restore();
+  }
+};
+
+async function renderPriceChart(card) {
+  const section = document.getElementById('price-chart-section');
+  if (!section) return;
+  section.classList.remove('visible');
+
+  let data;
+  try {
+    const res = await fetch(`/api/price-history/${encodeURIComponent(card.set_code)}/${encodeURIComponent(card.collector_number)}`);
+    data = await res.json();
+  } catch { return; }
+
+  const seriesKeys = Object.keys(data).filter(k => data[k].length > 0);
+  if (!seriesKeys.length) return;
+
+  section.classList.add('visible');
+
+  // Fetch distinct purchase prices for horizontal reference lines
+  let purchasePrices = [];
+  try {
+    const copiesRes = await fetch(`/api/collection/copies?printing_id=${encodeURIComponent(card.printing_id)}`);
+    const copies = await copiesRes.json();
+    const seen = new Set();
+    for (const c of copies) {
+      if (c.purchase_price != null) {
+        const p = parseFloat(c.purchase_price);
+        if (p > 0 && !seen.has(p)) { seen.add(p); purchasePrices.push(p); }
+      }
+    }
+  } catch {}
+
+  // Find earliest date across all series
+  let earliest = Infinity;
+  for (const k of seriesKeys) {
+    const t = new Date(data[k][0].date).getTime();
+    if (t < earliest) earliest = t;
+  }
+  const spanDays = (Date.now() - earliest) / 86400000;
+
+  // Set pill states
+  const pills = section.querySelectorAll('.price-range-pill');
+  const ranges = [30, 90, 180, 365, 0];
+  pills.forEach((pill, i) => {
+    pill.classList.toggle('disabled', ranges[i] > 0 && spanDays < ranges[i]);
+  });
+
+  // Pick default: largest non-disabled range that isn't ALL, or fall back to ALL
+  let activeRange = 0;
+  for (const pill of pills) {
+    if (!pill.classList.contains('disabled')) {
+      activeRange = parseInt(pill.dataset.range);
+      break;
+    }
+  }
+  pills.forEach(p => p.classList.toggle('active', parseInt(p.dataset.range) === activeRange));
+
+  function filterData(rangeDays) {
+    const cutoff = rangeDays > 0 ? Date.now() - rangeDays * 86400000 : 0;
+    return seriesKeys.map(k => ({
+      key: k,
+      points: data[k].filter(p => new Date(p.date).getTime() >= cutoff),
+    })).filter(s => s.points.length > 0);
+  }
+
+  function buildDatasets(filtered) {
+    return filtered.map(s => ({
+      label: PRICE_SERIES_LABELS[s.key] || s.key,
+      data: s.points.map(p => ({ x: p.date, y: p.price })),
+      borderColor: PRICE_SERIES_COLORS[s.key] || '#888',
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      tension: 0.25,
+    }));
+  }
+
+  const canvas = document.getElementById('price-chart-canvas');
+  const filtered = filterData(activeRange);
+  _priceChart = new Chart(canvas, {
+    type: 'line',
+    data: { datasets: buildDatasets(filtered) },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'MMM d, yyyy' },
+          ticks: { color: '#666', maxTicksLimit: 5, font: { size: 10 } },
+          grid: { color: 'rgba(255,255,255,0.06)' },
+        },
+        y: {
+          ticks: {
+            color: '#666', font: { size: 10 },
+            callback: v => '$' + v.toFixed(2),
+          },
+          grid: { color: 'rgba(255,255,255,0.06)' },
+        },
+      },
+      plugins: {
+        legend: { position: 'top', labels: { color: '#888', font: { size: 10 }, boxWidth: 12 } },
+        tooltip: {
+          callbacks: { label: ctx => `${ctx.dataset.label}: $${ctx.parsed.y.toFixed(2)}` },
+        },
+        purchaseLines: { prices: purchasePrices },
+      },
+    },
+    plugins: [crosshairPlugin, purchaseLinesPlugin],
+  });
+
+  // Pill click handlers
+  pills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      if (pill.classList.contains('disabled')) return;
+      pills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const range = parseInt(pill.dataset.range);
+      const filtered = filterData(range);
+      _priceChart.data.datasets = buildDatasets(filtered);
+      _priceChart.update();
+    });
+  });
+}
 
 function showCardModal(card) {
   // Front image
@@ -2033,12 +2232,27 @@ function showCardModal(card) {
       </div>
       <div id="add-collection-form-container"></div>
       <div id="copies-container"><div style="color:#888;font-size:0.85rem;padding:8px 0;">Loading copies...</div></div>
+      <div class="price-chart-section" id="price-chart-section">
+        <div class="modal-section">
+          <span class="modal-section-title">Price History</span>
+          <div class="price-range-pills" id="price-range-pills">
+            <button class="price-range-pill active" data-range="30">1M</button>
+            <button class="price-range-pill" data-range="90">3M</button>
+            <button class="price-range-pill" data-range="180">6M</button>
+            <button class="price-range-pill" data-range="365">1Y</button>
+            <button class="price-range-pill" data-range="0">ALL</button>
+          </div>
+          <div class="price-chart-canvas-wrap"><canvas id="price-chart-canvas"></canvas></div>
+        </div>
+      </div>
     `;
     // Load per-copy data
     loadModalCopies(card);
   }
 
   renderDetails(0);
+  _destroyPriceChart();
+  renderPriceChart(card);
 
   // Lazy-load copies for owned/ordered cards
   if (card.qty > 0) {
