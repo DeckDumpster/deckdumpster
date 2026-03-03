@@ -151,27 +151,73 @@ done
 
 systemctl --user daemon-reload
 
-# --- Optional: initialize data volume ---
+# --- Optional: initialize data volume (always exercises restore.sh) ---
+
+# Helper: package backup-able data from a volume into a tarball.
+# Extracts collection.sqlite, source_images/, and ingest_images/.
+create_backup_tarball() {
+    local volume="$1"
+    local image="$2"
+    local tarball_path="$3"
+    local staging
+    staging=$(mktemp -d)
+    local temp="mtgc-export-$$"
+
+    podman run -d --name "$temp" \
+        -v "${volume}:/data:Z" \
+        --entrypoint sleep "$image" infinity >/dev/null
+
+    podman cp "$temp:/data/collection.sqlite" "$staging/collection.sqlite"
+    podman cp "$temp:/data/source_images" "$staging/source_images" 2>/dev/null \
+        || mkdir -p "$staging/source_images"
+    podman cp "$temp:/data/ingest_images" "$staging/ingest_images" 2>/dev/null \
+        || mkdir -p "$staging/ingest_images"
+    podman rm -f "$temp" >/dev/null
+
+    tar czf "$tarball_path" -C "$staging" collection.sqlite source_images ingest_images
+    rm -rf "$staging"
+}
+
+RESTORED=false
 
 if [ "$TEST" = "true" ]; then
     VOLUME_NAME="${SERVICE_NAME}-data"
-    echo "==> Initializing data volume ($VOLUME_NAME) from pre-built fixture..."
+    TEMP_VOL="${VOLUME_NAME}-setup"
+    IMAGE="localhost/mtgc:${INSTANCE}"
+
+    echo "==> Initializing data from fixture via backup/restore pipeline..."
+
+    # 1. Populate a temporary volume with fixture + sample data
+    podman volume create "$TEMP_VOL" >/dev/null 2>&1 || true
     podman run --rm \
-        -v "${VOLUME_NAME}:/data:Z" \
+        -v "${TEMP_VOL}:/data:Z" \
         -e MTGC_HOME=/data \
         --entrypoint mtg \
-        "localhost/mtgc:${INSTANCE}" \
+        "$IMAGE" \
         setup --demo --from-fixture /app/test-data.sqlite
-    # Load sample ingest images for recents page testing
     podman run --rm \
-        -v "${VOLUME_NAME}:/data:Z" \
+        -v "${TEMP_VOL}:/data:Z" \
         -e MTGC_HOME=/data \
         --entrypoint mtg \
-        "localhost/mtgc:${INSTANCE}" \
+        "$IMAGE" \
         sample-ingest
+
+    # 2. Package into a backup tarball
+    TARBALL=$(mktemp --suffix=.tar.gz)
+    echo "==> Packaging data into backup tarball..."
+    create_backup_tarball "$TEMP_VOL" "$IMAGE" "$TARBALL"
+    podman volume rm "$TEMP_VOL" >/dev/null
+
+    # 3. Restore from the tarball (exercises the full restore pipeline)
+    bash "$REPO_DIR/deploy/restore.sh" --yes "$TARBALL" "$INSTANCE"
+    rm -f "$TARBALL"
+    RESTORED=true
+
 elif [ "$INIT" = "true" ]; then
     VOLUME_NAME="${SERVICE_NAME}-data"
     SEED_VOLUME="mtgc-seed-data"
+    IMAGE="localhost/mtgc:${INSTANCE}"
+
     if podman volume exists "$SEED_VOLUME" 2>/dev/null; then
         echo "==> Cloning seed volume to $VOLUME_NAME..."
         podman volume create "$VOLUME_NAME" >/dev/null 2>&1 || true
@@ -182,22 +228,36 @@ elif [ "$INIT" = "true" ]; then
         echo "    TIP: Run 'bash deploy/seed.sh' once to create a reusable seed volume."
         echo "    This downloads ~600 MB of MTGJSON data and caches Scryfall cards."
         echo "    May take 15-30 minutes on first run."
+        podman volume create "$VOLUME_NAME" >/dev/null 2>&1 || true
         podman run --rm \
             -v "${VOLUME_NAME}:/data:Z" \
             -e MTGC_HOME=/data \
             --entrypoint mtg \
-            "localhost/mtgc:${INSTANCE}" \
+            "$IMAGE" \
             setup --demo
     fi
+
+    # Round-trip through backup/restore to exercise the restore pipeline.
+    # Non-backup data (AllPrintings.json, Scryfall cache) stays on the volume
+    # untouched — restore only overwrites collection.sqlite and image dirs.
+    TARBALL=$(mktemp --suffix=.tar.gz)
+    echo "==> Exercising backup/restore pipeline..."
+    create_backup_tarball "$VOLUME_NAME" "$IMAGE" "$TARBALL"
+    bash "$REPO_DIR/deploy/restore.sh" --yes "$TARBALL" "$INSTANCE"
+    rm -f "$TARBALL"
+    RESTORED=true
 fi
 
 echo ""
 echo "==> Setup complete!"
 echo ""
-echo "  Start:      systemctl --user start $SERVICE_NAME"
-echo "  Port:       podman port systemd-${SERVICE_NAME}"
-if [ "$INIT" = "false" ]; then
-echo "  Init data:  podman exec -it systemd-${SERVICE_NAME} mtg setup"
+if [ "$RESTORED" = "true" ]; then
+    echo "  Status:     running (started during restore)"
+    echo "  Port:       podman port systemd-${SERVICE_NAME}"
+else
+    echo "  Start:      systemctl --user start $SERVICE_NAME"
+    echo "  Port:       podman port systemd-${SERVICE_NAME}"
+    echo "  Init data:  podman exec -it systemd-${SERVICE_NAME} mtg setup"
 fi
 echo "  Logs:       journalctl --user -u $SERVICE_NAME -f"
 echo "  Prices:     systemctl --user enable --now mtgc-prices-${INSTANCE}.timer"
