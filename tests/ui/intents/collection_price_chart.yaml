@@ -1,0 +1,19 @@
+# Scenario: Price history chart in card detail modal
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   The test instance must have price history data in the `prices` table
+#   for at least one card. The default --test fixture has no price rows,
+#   so the implementation must seed data via podman exec before opening
+#   the modal.
+
+description: >
+  When I open a card's detail modal, a "Price History" section appears
+  at the bottom with an interactive Chart.js line chart and time-range
+  pills (1M, 3M, 6M, 1Y, ALL). The 1M pill is active by default.
+  Clicking a different pill re-filters the chart data. Pills whose
+  range exceeds the available data span are greyed out. If a card has
+  no price history at all, the chart section is hidden entirely.

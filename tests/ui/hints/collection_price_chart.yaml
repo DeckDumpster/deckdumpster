@@ -1,0 +1,14 @@
+start_page: /collection
+involves:
+  - card detail modal (click any card image to open)
+  - '"Price History" section below copies list'
+  - Chart.js canvas (#price-chart-canvas)
+  - time-range pill buttons (1M, 3M, 6M, 1Y, ALL) in .price-range-pills
+  - '.price-chart-section hidden by default, .visible when data exists'
+notes: >
+  The --test fixture has no price rows. The implementation must inject
+  price data into the container DB before navigating. Use podman exec
+  to INSERT INTO prices for a known card (e.g. blb/124). After seeding,
+  open the modal for that card and scroll down to verify the chart.
+  Then open a different card with no price data to confirm the section
+  hides.
