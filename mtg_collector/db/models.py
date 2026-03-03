@@ -550,6 +550,24 @@ class PrintingRepository:
         )
         return [self._row_to_printing(row) for row in cursor]
 
+    def get_by_flavor_name(self, name: str, set_code: Optional[str] = None) -> Optional[Printing]:
+        """Find a printing by flavor_name (UB/crossover cards with alternate names)."""
+        if set_code:
+            cursor = self.conn.execute(
+                "SELECT * FROM printings"
+                " WHERE set_code = ? AND json_extract(raw_json, '$.flavor_name') = ? COLLATE NOCASE",
+                (set_code, name),
+            )
+        else:
+            cursor = self.conn.execute(
+                "SELECT * FROM printings"
+                " WHERE json_extract(raw_json, '$.flavor_name') = ? COLLATE NOCASE"
+                " LIMIT 1",
+                (name,),
+            )
+        row = cursor.fetchone()
+        return self._row_to_printing(row) if row else None
+
     def exists(self, printing_id: str) -> bool:
         """Check if a printing exists."""
         cursor = self.conn.execute(
