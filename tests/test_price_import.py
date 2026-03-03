@@ -5,8 +5,10 @@ To run: uv run pytest tests/test_price_import.py -v
 """
 
 import json
+import os
 import sqlite3
 import tempfile
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -374,6 +376,141 @@ class TestPriceFetchLog:
         dates = json.loads(log["dates_imported"])
         assert "2024-01-15" in dates
         conn2.close()
+
+
+class TestUuidMapStaleness:
+    def test_rebuilds_when_mtime_changes(self, test_db, mock_allprintings):
+        """_ensure_uuid_map rebuilds when AllPrintings.json mtime changes."""
+        from mtg_collector.cli.data_cmd import _ensure_uuid_map
+
+        _, conn = test_db
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            _ensure_uuid_map(conn)
+
+        count1 = conn.execute("SELECT COUNT(*) FROM mtgjson_uuid_map").fetchone()[0]
+        assert count1 == 5
+
+        # Append a new card to the file and update its mtime
+        data = json.loads(mock_allprintings.read_text())
+        data["data"]["NEO"]["cards"].append({"uuid": "uuid-004", "number": "4"})
+        mock_allprintings.write_text(json.dumps(data))
+        # Force a different mtime (file write should change it, but be explicit)
+        os.utime(mock_allprintings, (time.time() + 100, time.time() + 100))
+
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            _ensure_uuid_map(conn)
+
+        count2 = conn.execute("SELECT COUNT(*) FROM mtgjson_uuid_map").fetchone()[0]
+        assert count2 == 6  # New card picked up via INSERT OR IGNORE
+
+    def test_skips_when_mtime_matches(self, test_db, mock_allprintings):
+        """_ensure_uuid_map skips rebuild when mtime matches stored value."""
+        from mtg_collector.cli.data_cmd import _ensure_uuid_map
+
+        _, conn = test_db
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            _ensure_uuid_map(conn)
+
+        # Manually delete rows to verify it doesn't rebuild
+        conn.execute("DELETE FROM mtgjson_uuid_map WHERE uuid = 'uuid-001'")
+        conn.commit()
+
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            _ensure_uuid_map(conn)
+
+        # Should still be 4 because mtime matched — no rebuild
+        count = conn.execute("SELECT COUNT(*) FROM mtgjson_uuid_map").fetchone()[0]
+        assert count == 4
+
+    def test_rebuilds_when_no_stored_mtime(self, test_db, mock_allprintings):
+        """_ensure_uuid_map rebuilds when no stored mtime (legacy DB)."""
+        from mtg_collector.cli.data_cmd import _ensure_uuid_map
+
+        _, conn = test_db
+        # Pre-populate uuid_map without setting mtime (simulates pre-fix state)
+        conn.executemany(
+            "INSERT INTO mtgjson_uuid_map (uuid, set_code, collector_number) VALUES (?, ?, ?)",
+            [("uuid-001", "neo", "1")],
+        )
+        conn.commit()
+
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            _ensure_uuid_map(conn)
+
+        # Should rebuild and pick up all 5 entries
+        count = conn.execute("SELECT COUNT(*) FROM mtgjson_uuid_map").fetchone()[0]
+        assert count == 5
+
+
+class TestEnsureAllprintingsFresh:
+    def test_skips_when_version_matches(self, test_db, mock_allprintings):
+        """_ensure_allprintings_fresh does nothing when local version matches remote."""
+        from mtg_collector.cli.data_cmd import _ensure_allprintings_fresh
+
+        db_path, conn = test_db
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('mtgjson_version', '5.3.0+20260302')"
+        )
+        conn.commit()
+
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            with patch("mtg_collector.db.connection.get_db_path", return_value=db_path):
+                with patch("mtg_collector.cli.data_cmd._fetch_mtgjson_version", return_value="5.3.0+20260302"):
+                    with patch("mtg_collector.cli.data_cmd.fetch_allprintings") as mock_fetch:
+                        _ensure_allprintings_fresh()
+                        mock_fetch.assert_not_called()
+
+    def test_triggers_when_version_differs(self, test_db, mock_allprintings):
+        """_ensure_allprintings_fresh re-downloads when remote version is newer."""
+        from mtg_collector.cli.data_cmd import _ensure_allprintings_fresh
+
+        db_path, conn = test_db
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('mtgjson_version', '5.3.0+20260216')"
+        )
+        conn.commit()
+
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            with patch("mtg_collector.db.connection.get_db_path", return_value=db_path):
+                with patch("mtg_collector.cli.data_cmd._fetch_mtgjson_version", return_value="5.3.0+20260302"):
+                    with patch("mtg_collector.cli.data_cmd.fetch_allprintings") as mock_fetch:
+                        _ensure_allprintings_fresh()
+                        mock_fetch.assert_called_once_with(force=True)
+
+    def test_triggers_when_no_stored_version(self, test_db, mock_allprintings):
+        """_ensure_allprintings_fresh re-downloads when no local version stored (legacy DB)."""
+        from mtg_collector.cli.data_cmd import _ensure_allprintings_fresh
+
+        db_path, conn = test_db
+
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            with patch("mtg_collector.db.connection.get_db_path", return_value=db_path):
+                with patch("mtg_collector.cli.data_cmd._fetch_mtgjson_version", return_value="5.3.0+20260302"):
+                    with patch("mtg_collector.cli.data_cmd.fetch_allprintings") as mock_fetch:
+                        _ensure_allprintings_fresh()
+                        mock_fetch.assert_called_once_with(force=True)
+
+    def test_triggers_when_file_missing(self, tmp_path):
+        """_ensure_allprintings_fresh downloads when file doesn't exist."""
+        from mtg_collector.cli.data_cmd import _ensure_allprintings_fresh
+
+        missing = tmp_path / "AllPrintings.json"
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=missing):
+            with patch("mtg_collector.cli.data_cmd.fetch_allprintings") as mock_fetch:
+                _ensure_allprintings_fresh()
+                mock_fetch.assert_called_once_with(force=True)
+
+    def test_skips_when_meta_fetch_fails(self, test_db, mock_allprintings):
+        """_ensure_allprintings_fresh does nothing when Meta.json fetch fails."""
+        from mtg_collector.cli.data_cmd import _ensure_allprintings_fresh
+
+        db_path, _ = test_db
+
+        with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+            with patch("mtg_collector.cli.data_cmd._fetch_mtgjson_version", return_value=None):
+                with patch("mtg_collector.cli.data_cmd.fetch_allprintings") as mock_fetch:
+                    _ensure_allprintings_fresh()
+                    mock_fetch.assert_not_called()
 
 
 class TestMigrationV14ToV15:

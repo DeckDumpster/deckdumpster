@@ -21,6 +21,7 @@ def _download(url: str, dest: Path):
 
 MTGJSON_URL = "https://mtgjson.com/api/v5/AllPrintings.json.gz"
 MTGJSON_PRICES_URL = "https://mtgjson.com/api/v5/AllPricesToday.json.gz"
+MTGJSON_META_URL = "https://mtgjson.com/api/v5/Meta.json"
 
 
 def get_allprintings_path() -> Path:
@@ -165,6 +166,16 @@ def fetch_allprintings(force: bool = False):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path()
         import_mtgjson(db_path)
+        # Store the MTGJSON version we just imported
+        version = _fetch_mtgjson_version()
+        if version:
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('mtgjson_version', ?)",
+                (version,),
+            )
+            conn.commit()
+            conn.close()
     except Exception as e:
         print(f"Warning: auto-import failed: {e}", file=sys.stderr)
 
@@ -352,8 +363,52 @@ def import_mtgjson(db_path: str):
     print(f"  Elapsed: {elapsed:.1f}s")
 
 
+def _fetch_mtgjson_version() -> str | None:
+    """Fetch the current MTGJSON build version from Meta.json."""
+    try:
+        req = urllib.request.Request(MTGJSON_META_URL, headers={"User-Agent": _USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            meta = json.loads(resp.read())
+        return meta.get("data", {}).get("version")
+    except Exception as e:
+        print(f"Warning: could not fetch MTGJSON meta: {e}", file=sys.stderr)
+        return None
+
+
+def _ensure_allprintings_fresh():
+    """Re-download AllPrintings.json if MTGJSON has published a newer build."""
+    path = get_allprintings_path()
+    if not path.exists():
+        print("AllPrintings.json not found — downloading ...")
+        fetch_allprintings(force=True)
+        return
+
+    remote_version = _fetch_mtgjson_version()
+    if not remote_version:
+        return
+
+    try:
+        from mtg_collector.db.connection import get_db_path
+        conn = sqlite3.connect(get_db_path())
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'mtgjson_version'"
+        ).fetchone()
+        conn.close()
+    except Exception:
+        return
+
+    local_version = row[0] if row else None
+    if local_version == remote_version:
+        return
+
+    print(f"MTGJSON updated: {local_version or 'unknown'} → {remote_version} — refreshing AllPrintings.json ...")
+    fetch_allprintings(force=True)
+
+
 def _fetch_prices(force: bool = False):
     """Download AllPricesToday.json from MTGJSON, then auto-import into SQLite."""
+    _ensure_allprintings_fresh()
+
     dest = get_allpricestoday_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -388,15 +443,22 @@ def _fetch_prices(force: bool = False):
 
 
 def _ensure_uuid_map(conn: sqlite3.Connection):
-    """Build mtgjson_uuid_map from AllPrintings.json if empty."""
+    """Build mtgjson_uuid_map from AllPrintings.json if empty or stale."""
     count = conn.execute("SELECT COUNT(*) FROM mtgjson_uuid_map").fetchone()[0]
-    if count > 0:
-        return
 
     path = get_allprintings_path()
     if not path.exists():
-        print(f"AllPrintings.json not found at {path} — cannot build UUID map")
+        if count == 0:
+            print(f"AllPrintings.json not found at {path} — cannot build UUID map")
         return
+
+    file_mtime = str(path.stat().st_mtime)
+    stored_mtime = conn.execute(
+        "SELECT value FROM settings WHERE key = 'uuid_map_source_mtime'"
+    ).fetchone()
+
+    if count > 0 and stored_mtime and stored_mtime[0] == file_mtime:
+        return  # Map is current
 
     print("Building UUID map from AllPrintings.json ...")
     with open(path) as f:
@@ -413,6 +475,10 @@ def _ensure_uuid_map(conn: sqlite3.Connection):
     conn.executemany(
         "INSERT OR IGNORE INTO mtgjson_uuid_map (uuid, set_code, collector_number) VALUES (?, ?, ?)",
         rows,
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('uuid_map_source_mtime', ?)",
+        (file_mtime,),
     )
     conn.commit()
     print(f"  UUID map populated: {len(rows)} entries")
