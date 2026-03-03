@@ -665,14 +665,14 @@ def _process_image_background(db_path, image_id):
                 continue
             card_info = claude_cards[idx] if idx < len(claude_cards) else {}
 
-            unique_ids = {c["printing_id"] for c in candidates}
+            unique_ids = {c.get("printing_id") or c.get("scryfall_id") for c in candidates}
             if len(unique_ids) == 1:
                 pick = candidates[0]
             else:
                 narrowed = _narrow_candidates(candidates, card_info)
                 pick = narrowed[0]
 
-            sid = pick["printing_id"]
+            sid = pick.get("printing_id") or pick.get("scryfall_id")
             finishes = pick.get("finishes", ["nonfoil"])
             finish = "nonfoil" if "nonfoil" in finishes else finishes[0]
             disambiguated[idx] = sid
@@ -2018,7 +2018,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 sid = disambiguated[idx] if idx < len(disambiguated) else None
                 resolved = None
                 if sid and sid != "skipped" and idx < len(scryfall_matches):
-                    resolved = next((c for c in scryfall_matches[idx] if c.get("printing_id") == sid), None)
+                    resolved = next((c for c in scryfall_matches[idx] if (c.get("printing_id") or c.get("scryfall_id")) == sid), None)
                 if resolved:
                     # Use confirmed finish from collection if available
                     coll_finish = confirmed_finishes.get((md5_val, idx))
@@ -2048,7 +2048,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 # Detect finish options across ALL candidates for badge UI
                 candidates = scryfall_matches[idx] if idx < len(scryfall_matches) else []
                 if candidates:
-                    unique_ids = {c["printing_id"] for c in candidates}
+                    unique_ids = {c.get("printing_id") or c.get("scryfall_id") for c in candidates}
                     per_candidate = [frozenset(c.get("finishes", ["nonfoil"])) for c in candidates]
                     if per_candidate and all(fs == per_candidate[0] for fs in per_candidate):
                         entry["finish_options"] = sorted(per_candidate[0])
@@ -2442,7 +2442,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # Auto-confirm single-candidate cards
             if len(candidates) == 1:
                 c = candidates[0]
-                printing_id = c["printing_id"]
+                printing_id = c.get("printing_id") or c.get("scryfall_id")
 
                 printing_repo = PrintingRepository(conn)
                 collection_repo = CollectionRepository(conn)
@@ -2863,7 +2863,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             collection_repo.delete(old_collection_id)
 
             if card_idx < len(scryfall_matches):
-                existing_ids = {c["printing_id"] for c in scryfall_matches[card_idx]}
+                existing_ids = {c.get("printing_id") or c.get("scryfall_id") for c in scryfall_matches[card_idx]}
                 if printing_id not in existing_ids:
                     formatted = _format_candidates([card_data]) if card_data else []
                     scryfall_matches[card_idx] = formatted + scryfall_matches[card_idx]
@@ -2875,7 +2875,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # No collection entry yet — just update image metadata
             # Resolve name for response
             if card_idx < len(scryfall_matches) and scryfall_matches[card_idx]:
-                match = next((c for c in scryfall_matches[card_idx] if c.get("printing_id") == printing_id), None)
+                match = next((c for c in scryfall_matches[card_idx] if (c.get("printing_id") or c.get("scryfall_id")) == printing_id), None)
                 if match:
                     name = match.get("name", "???")
                     set_code = match.get("set_code", "")
