@@ -1056,7 +1056,21 @@ async function accRefresh(imgId) {
   const images = await resp.json();
   if (images.length) {
     const card = document.querySelector(`#grid .img-card[data-id="${imgId}"]`);
-    if (card) updateCardEl(card, images[0]);
+    if (card) {
+      updateCardEl(card, images[0]);
+      // Update scryfall thumbnail (table mode matched card image)
+      const thumb = card.querySelector('.scryfall-thumb');
+      if (thumb) {
+        const sid = (detail.disambiguated || [])[0];
+        if (sid && sid !== 'skipped' && sid !== 'already_ingested') {
+          const candidates = (detail.scryfall_matches || [])[0] || [];
+          const match = candidates.find(c => c.printing_id === sid);
+          if (match && match.image_uri) thumb.src = match.image_uri.replace('/small/', '/normal/');
+        } else {
+          thumb.removeAttribute('src');
+        }
+      }
+    }
   }
   updateSummaryFromGrid();
 }
