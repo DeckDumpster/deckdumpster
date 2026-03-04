@@ -147,6 +147,10 @@ class BaseImporter(ABC):
         collector_number: Optional[str],
     ) -> Optional[str]:
         """Resolve a card using the local database. Returns printing_id or None."""
+        # Normalize set_code to lowercase (DB stores lowercase, imports may have uppercase)
+        if set_code:
+            set_code = set_code.lower()
+
         # Normalize DFC names: Moxfield exports "Front / Back", Scryfall stores "Front // Back"
         if " / " in name:
             name = name.replace(" / ", " // ")
