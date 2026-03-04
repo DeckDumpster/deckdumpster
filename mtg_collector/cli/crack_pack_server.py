@@ -385,10 +385,21 @@ def _local_name_search(conn, name, set_code=None, limit=20):
     return results
 
 
+def _strip_accents(s):
+    """Normalize unicode to ASCII for accent-insensitive comparison."""
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s)
+        if not unicodedata.combining(c)
+    )
+
+
 def _resolve_candidates(conn, card_infos):
     """Resolve agent card entries to candidate printings.
 
-    One query per entry, AND'ing all available fields.
+    One query per entry, AND'ing name + set + collector_number in SQL.
+    Artist is compared in Python after accent-stripping (SQLite LIKE
+    doesn't handle unicode diacritics).
     Results merged and deduplicated across entries.
     """
     all_candidates = {}  # scryfall_id → raw dict (dedup)
@@ -400,6 +411,7 @@ def _resolve_candidates(conn, card_infos):
         name = (ci.get("name") or "").strip()
         sc = (ci.get("set_code") or "").strip().lower()
         cn = (ci.get("collector_number") or "").strip()
+        artist = (ci.get("artist") or "").strip()
 
         if name:
             conditions.append("c.name COLLATE NOCASE = ?")
@@ -420,15 +432,20 @@ def _resolve_candidates(conn, card_infos):
 
         where = " AND ".join(conditions)
         rows = conn.execute(
-            f"""SELECT DISTINCT p.raw_json FROM printings p
+            f"""SELECT DISTINCT p.raw_json, p.artist FROM printings p
                 JOIN cards c ON p.oracle_id = c.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 WHERE {where}""",
             params,
         ).fetchall()
 
+        # Post-filter by artist in Python (accent-insensitive)
+        artist_norm = _strip_accents(artist).casefold() if artist else ""
         for r in rows:
             if r[0]:
+                if artist_norm and r["artist"]:
+                    if artist_norm not in _strip_accents(r["artist"]).casefold():
+                        continue
                 data = json.loads(r[0])
                 all_candidates[data["id"]] = data
 
