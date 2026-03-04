@@ -4,7 +4,11 @@
 # Runs on the host, outside the container. No sudo required.
 #
 # Usage:
-#   bash deploy/backup.sh [instance]       # defaults to "prod"
+#   set -a && . ~/.config/mtgc/prod.env && set +a && bash deploy/backup.sh [instance]
+#
+#   The env file must be sourced with `set -a` (export all) so that
+#   MTGC_BACKUP_S3_BUCKET and AWS_PROFILE are visible to the script.
+#   Instance defaults to "prod" if omitted.
 #
 # What gets backed up:
 #   - collection.sqlite  (online snapshot via sqlite3.backup())
@@ -24,10 +28,16 @@
 #   Skipped silently if unset (local-only mode works out of the box).
 #
 #   Setup:
-#     1. aws configure                      # set credentials
-#     2. aws s3 mb s3://your-bucket-name    # create bucket
-#     3. Add to ~/.config/mtgc/prod.env or export:
+#     1. Create an IAM role with S3 access and a user that can assume it
+#     2. aws configure                      # set base credentials for the user
+#     3. Add a profile to ~/.aws/config:
+#        [profile mtgc-backup]
+#        role_arn = arn:aws:iam::ACCOUNT_ID:role/mtgc-backup-role
+#        source_profile = default
+#     4. aws s3 mb s3://your-bucket-name    # create bucket
+#     5. Add to ~/.config/mtgc/<instance>.env:
 #        MTGC_BACKUP_S3_BUCKET=your-bucket-name
+#        AWS_PROFILE=mtgc-backup
 #
 set -euo pipefail
 
