@@ -1,0 +1,16 @@
+start_page: /collection
+involves:
+  - card detail modal
+  - '"Add" button in modal opens purchase form'
+  - 'price, source, and date fields'
+  - '"Confirm" button adds a new copy'
+  - closing modal and opening a second card
+  - repeating the Add flow on the second card
+fixture_data:
+  first_card_index: 0
+  second_card_index: 1
+notes: >
+  This tests for an event listener accumulation bug where the Add button
+  handler was re-attached on every modal open. On the second open, two
+  handlers fire — the first creates the form, the second toggles it off —
+  so the Add button appears to do nothing.

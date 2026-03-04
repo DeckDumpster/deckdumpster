@@ -1,0 +1,12 @@
+# Scenario: Add a second card from the modal without a page refresh
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  After adding a card to my collection from the card detail modal, I can
+  close the modal, open a different card's modal, and successfully add
+  that second card using the same "Add" button workflow — without needing
+  a full page refresh. The Add button must remain functional across
+  consecutive modal opens.
