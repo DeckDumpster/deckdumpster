@@ -13,6 +13,7 @@ MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gath
 - As few error paths as possible. Let it crash visibly.
 - Tests use pre-populated `tests/fixtures/test-cards.sqlite` for offline testing. Corner identification tests require `ANTHROPIC_API_KEY`.
 - Aggressively limit modality. Defaults are good enough for everyone.
+- **Tests that demonstrate bugs must fail.** If a test exists to reproduce a known bug, it should assert the correct/fixed behavior — not the broken behavior. A passing test means the bug is fixed; a failing test means the bug still exists. Never write a test that passes when the bug is present.
 
 ## Commands
 

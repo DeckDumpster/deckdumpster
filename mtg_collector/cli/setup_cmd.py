@@ -17,6 +17,11 @@ def register(subparsers):
         help="Load demo fixture data (~50 cards) for testing/staging",
     )
     parser.add_argument(
+        "--wipe",
+        action="store_true",
+        help="Delete all user data (collection, orders, decks, ingest, etc.) before loading demo data",
+    )
+    parser.add_argument(
         "--skip-cache",
         action="store_true",
         help="Skip Scryfall bulk data caching",
@@ -94,19 +99,7 @@ def run(args):
         import_sealed_products(db_path)
 
     # Step 4: Load demo data
-    if args.demo:
-        print("\n=== Step 4: Demo data ===")
-        print("  NOTE: Demo data is for testing/staging only.")
-        conn = get_connection(db_path)
-        init_db(conn)
-
-        from mtg_collector.cli.demo_data import load_demo_data
-        loaded = load_demo_data(conn)
-        if loaded:
-            print("  Demo data loaded successfully.")
-        else:
-            print("  Demo data already loaded (skipping).")
-        conn.close()
+    _maybe_load_demo(args)
 
     print("\nSetup complete!")
 
@@ -129,17 +122,33 @@ def _run_from_fixture(args):
         print(f"  Database already up to date (v{SCHEMA_VERSION})")
     close_connection()
 
-    if args.demo:
-        print("\n=== Step 3: Demo data ===")
-        conn = get_connection(db_path)
-        init_db(conn)
+    _maybe_load_demo(args)
 
+    print("\nSetup complete!")
+
+
+def _maybe_load_demo(args):
+    """Wipe (if requested) and load demo data."""
+    if not args.demo and not args.wipe:
+        return
+
+    conn = get_connection(args.db_path)
+    init_db(conn)
+
+    if args.wipe:
+        from mtg_collector.cli.demo_data import wipe_user_data
+        print("\n=== Wipe: clearing user data ===")
+        wipe_user_data(conn)
+        print("  Done.")
+
+    if args.demo:
+        print("\n=== Demo data ===")
+        print("  NOTE: Demo data is for testing/staging only.")
         from mtg_collector.cli.demo_data import load_demo_data
         loaded = load_demo_data(conn)
         if loaded:
             print("  Demo data loaded successfully.")
         else:
             print("  Demo data already loaded (skipping).")
-        conn.close()
 
-    print("\nSetup complete!")
+    conn.close()

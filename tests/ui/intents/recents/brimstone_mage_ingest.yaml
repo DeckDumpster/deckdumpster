@@ -1,0 +1,6 @@
+description: >
+  Brimstone Mage is pre-loaded by --demo as READY_FOR_OCR and processed
+  on server startup by the fake agent. _resolve_candidates should match
+  the ROE printing despite the unicode artist name mismatch. With only
+  1 candidate in the fixture DB, auto-disambiguation selects it. All
+  demo ingest cards should be done — none stuck at needs_disambiguation.

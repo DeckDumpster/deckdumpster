@@ -24,10 +24,10 @@ DEMO_SETS = ["fdn", "dsk", "blb", "otj", "mh3", "spg", "woe", "lci", "mkm"]
 # Extra sets required by UI test sealed-product scenarios
 UI_TEST_SETS = ["ecl", "fin"]
 
-# Sets required by sample-ingest (recents page test data)
-SAMPLE_INGEST_SETS = ["2ed", "eoe", "ice", "5dn", "ptc"]
+# Sets required by demo ingest samples (recents page test data)
+DEMO_INGEST_SETS = ["tsp", "ddh", "tmp", "8ed", "roe"]
 
-ALL_SETS = DEMO_SETS + UI_TEST_SETS + SAMPLE_INGEST_SETS
+ALL_SETS = DEMO_SETS + UI_TEST_SETS + DEMO_INGEST_SETS
 
 # Synthetic sealed products.  The first 8 match demo_data.DEMO_SEALED_PRODUCTS
 # category keywords so demo data load succeeds.  The last 2 match UI test

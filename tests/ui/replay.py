@@ -109,6 +109,12 @@ class ReplayHarness:
         self._settle()
         self._snap()
 
+    def set_input_files(self, selector: str, file_path: str):
+        self._record("set_input_files", f"{selector} <- {file_path}")
+        self.page.set_input_files(selector, file_path, timeout=5_000)
+        self._settle()
+        self._snap()
+
     def select_by_label(self, selector: str, label: str):
         self._record("select_by_label", f"{selector}={label}")
         self.page.select_option(selector, label=label, timeout=5_000)

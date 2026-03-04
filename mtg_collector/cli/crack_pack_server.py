@@ -385,10 +385,21 @@ def _local_name_search(conn, name, set_code=None, limit=20):
     return results
 
 
+def _strip_accents(s):
+    """Normalize unicode to ASCII for accent-insensitive comparison."""
+    import unicodedata
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s)
+        if not unicodedata.combining(c)
+    )
+
+
 def _resolve_candidates(conn, card_infos):
     """Resolve agent card entries to candidate printings.
 
-    One query per entry, AND'ing all available fields.
+    One query per entry, AND'ing name + set + collector_number in SQL.
+    Artist is compared in Python after accent-stripping (SQLite LIKE
+    doesn't handle unicode diacritics).
     Results merged and deduplicated across entries.
     """
     all_candidates = {}  # scryfall_id → raw dict (dedup)
@@ -416,24 +427,25 @@ def _resolve_candidates(conn, card_infos):
             else:
                 conditions.append("p.collector_number = ?")
                 params.append(cn)
-        if artist:
-            conditions.append("p.artist LIKE ? COLLATE NOCASE")
-            params.append(f"%{artist}%")
-
         if len(conditions) == 1:  # only s.digital = 0, no usable data
             continue
 
         where = " AND ".join(conditions)
         rows = conn.execute(
-            f"""SELECT DISTINCT p.raw_json FROM printings p
+            f"""SELECT DISTINCT p.raw_json, p.artist FROM printings p
                 JOIN cards c ON p.oracle_id = c.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 WHERE {where}""",
             params,
         ).fetchall()
 
+        # Post-filter by artist in Python (accent-insensitive)
+        artist_norm = _strip_accents(artist).casefold() if artist else ""
         for r in rows:
             if r[0]:
+                if artist_norm and r["artist"]:
+                    if artist_norm not in _strip_accents(r["artist"]).casefold():
+                        continue
                 data = json.loads(r[0])
                 all_candidates[data["id"]] = data
 
@@ -461,13 +473,26 @@ def _has_api_key():
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
+def _has_fake_agent():
+    """Check if fake agent mode is enabled."""
+    return bool(os.environ.get("MTGC_FAKE_AGENT"))
+
+
+def _can_process():
+    """Check if image processing is possible (real or fake agent)."""
+    return _has_api_key() or _has_fake_agent()
+
+
 def _process_image_core(conn, image_id, img, log_fn):
     """Process a single image: OCR -> Claude -> DB lookup. Returns final status string.
 
     Used by both the SSE endpoint and background workers.
     log_fn(event_type, data_dict) is called for progress events.
     """
-    from mtg_collector.services.agent import run_agent
+    if _has_fake_agent():
+        from mtg_collector.services.fake_agent import run_agent
+    else:
+        from mtg_collector.services.agent import run_agent
     from mtg_collector.services.ocr import run_ocr_with_boxes
     from mtg_collector.utils import now_iso
 
@@ -732,11 +757,11 @@ def _recover_pending_images(db_path):
     )
     conn.commit()
 
-    # Re-queue all READY_FOR_OCR (only if API key available for Claude agent)
+    # Re-queue all READY_FOR_OCR (only if processing is possible)
     rows = conn.execute("SELECT id FROM ingest_images WHERE status='READY_FOR_OCR'").fetchall()
     conn.close()
 
-    if rows and _has_api_key():
+    if rows and _can_process():
         print(f"[startup] Re-queuing {len(rows)} pending image(s) for OCR", flush=True)
         for row in rows:
             _log_ingest(f"Recovering image {row['id']} for background processing")
@@ -2296,8 +2321,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "md5": md5,
             })
 
-            # Submit for background processing (requires API key for Claude agent)
-            if _ingest_executor is not None and _has_api_key():
+            # Submit for background processing (requires API key or fake agent)
+            if _ingest_executor is not None and _can_process():
                 _ingest_executor.submit(_process_image_background, self.db_path, image_id)
 
         conn.close()
@@ -2320,7 +2345,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_ingest2_process_sse(self, image_id):
         """SSE endpoint: process one image through OCR -> Claude -> DB lookup, DB-backed."""
-        if not _has_api_key():
+        if not _can_process():
             self._send_json({"error": "ANTHROPIC_API_KEY not set — card identification requires an API key"}, 503)
             return
         conn = self._ingest2_db()
@@ -2507,13 +2532,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"done": True, "total_cards": total_cards, "total_done": total_done, "auto_confirmed": auto_confirmed})
 
     def _api_ingest2_confirm(self):
-        """Confirm a card: add to collection + ingest_lineage."""
-        from mtg_collector.db.models import (
-            CollectionEntry,
-            CollectionRepository,
-            PrintingRepository,
-        )
-        from mtg_collector.utils import now_iso
+        """Confirm a candidate: update disambiguated + confirmed_finishes.
+
+        Does NOT create a collection entry — that belongs to batch ingest.
+        """
+        from mtg_collector.db.models import PrintingRepository
 
         data = self._read_json_body()
         if data is None:
@@ -2532,54 +2555,37 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         printing_repo = PrintingRepository(conn)
-        collection_repo = CollectionRepository(conn)
-
         printing = printing_repo.get(printing_id)
         if not printing:
             conn.close()
             self._send_json({"error": f"Printing {printing_id} not in local cache"}, 404)
             return
 
-        entry = CollectionEntry(
-            id=None,
-            printing_id=printing_id,
-            finish=finish,
-            condition="Near Mint",
-            source="ocr_ingest",
-        )
-        entry_id = collection_repo.add(entry)
-
-        md5 = img["md5"]
-        conn.execute(
-            """INSERT INTO ingest_lineage (collection_id, image_md5, image_path, card_index, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (entry_id, md5, img["stored_name"], card_idx, now_iso()),
-        )
-
         # Update disambiguated + confirmed_finishes
         disambiguated = json.loads(img["disambiguated"]) if img.get("disambiguated") else []
-        if card_idx < len(disambiguated):
-            disambiguated[card_idx] = printing_id
+        while len(disambiguated) <= card_idx:
+            disambiguated.append(None)
+        disambiguated[card_idx] = printing_id
+
         confirmed_finishes = json.loads(img["confirmed_finishes"]) if img.get("confirmed_finishes") else []
-        while len(confirmed_finishes) < len(disambiguated):
+        while len(confirmed_finishes) <= card_idx:
             confirmed_finishes.append(None)
-        if card_idx < len(confirmed_finishes):
-            confirmed_finishes[card_idx] = finish
+        confirmed_finishes[card_idx] = finish
+
         self._ingest2_update_image(conn, image_id, disambiguated=json.dumps(disambiguated), confirmed_finishes=json.dumps(confirmed_finishes))
 
         # Check if all cards done
         if all(d is not None for d in disambiguated):
             self._ingest2_update_image(conn, image_id, status="DONE")
 
-        conn.commit()
         conn.close()
 
         name = printing.raw_json and json.loads(printing.raw_json).get("name", "???") or "???"
         set_code = printing.set_code
         cn = printing.collector_number
-        _log_ingest(f"Confirmed2: {name} ({set_code.upper()} #{cn}) -> collection ID {entry_id}")
+        _log_ingest(f"Confirmed: {name} ({set_code.upper()} #{cn})")
 
-        self._send_json({"ok": True, "entry_id": entry_id, "name": name, "set_code": set_code, "collector_number": cn})
+        self._send_json({"ok": True, "name": name, "set_code": set_code, "collector_number": cn})
 
     def _api_ingest2_add_card(self):
         """Add a new card slot to an existing image and confirm it."""
@@ -2992,11 +2998,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         _log_ingest(f"Reset image {image_id}: {img['filename']} — requeued for processing")
 
-        # Submit for background processing (requires API key for Claude agent)
-        if _ingest_executor is not None and _has_api_key():
+        # Submit for background processing (requires API key or fake agent)
+        if _ingest_executor is not None and _can_process():
             _ingest_executor.submit(_process_image_background, self.db_path, image_id)
 
-        self._send_json({"ok": True, "processing": _has_api_key()})
+        self._send_json({"ok": True, "processing": _can_process()})
 
     def _api_ingest2_batch_ingest(self):
         """Ensure all DONE images have collection entries, then mark INGESTED."""

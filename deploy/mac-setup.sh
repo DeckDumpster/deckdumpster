@@ -107,40 +107,49 @@ podman build -t "mtgc:${INSTANCE}" -f "$REPO_DIR/Containerfile" "$REPO_DIR"
 
 # --- Optional: initialize data volume ---
 
-if [ "$TEST" = "true" ]; then
-    echo "==> Initializing data volume ($VOLUME_NAME) from pre-built fixture..."
-    podman run --rm \
-        -v "${VOLUME_NAME}:/data" \
-        -e MTGC_HOME=/data \
-        --entrypoint mtg \
-        "localhost/mtgc:${INSTANCE}" \
-        setup --demo --from-fixture /app/test-data.sqlite
-elif [ "$INIT" = "true" ]; then
-    echo "==> Initializing data volume ($VOLUME_NAME) with demo dataset..."
-    echo "    This downloads ~600 MB of MTGJSON data and caches Scryfall cards."
-    echo "    May take 15-30 minutes on first run."
-    podman run --rm \
-        -v "${VOLUME_NAME}:/data" \
-        -e MTGC_HOME=/data \
-        --entrypoint mtg \
-        "localhost/mtgc:${INSTANCE}" \
-        setup --demo
-fi
-
 # --- Start the container ---
 
 # Stop any existing container with this name
 podman stop "$CONTAINER_NAME" 2>/dev/null || true
 podman rm "$CONTAINER_NAME" 2>/dev/null || true
 
-echo "==> Starting container ($CONTAINER_NAME)..."
-podman run -d \
-    --name "$CONTAINER_NAME" \
-    --env-file "$ENV_FILE" \
-    -e MTGC_HOME=/data \
-    -p ":8081" \
-    -v "${VOLUME_NAME}:/data" \
-    "localhost/mtgc:${INSTANCE}"
+# On macOS, rootless podman remaps UIDs between container invocations,
+# so files created by one `podman run` are inaccessible from another.
+# Work around this by running setup + server in the same container.
+if [ "$TEST" = "true" ]; then
+    echo "==> Starting container with data from pre-built fixture..."
+    podman run -d \
+        --name "$CONTAINER_NAME" \
+        --env-file "$ENV_FILE" \
+        -e MTGC_HOME=/data \
+        -p ":8081" \
+        -v "${VOLUME_NAME}:/data" \
+        --entrypoint sh \
+        "localhost/mtgc:${INSTANCE}" \
+        -c "mtg setup --demo --from-fixture /app/test-data.sqlite && exec mtg crack-pack-server --port 8081 --https"
+elif [ "$INIT" = "true" ]; then
+    echo "==> Starting container with demo dataset..."
+    echo "    This downloads ~600 MB of MTGJSON data and caches Scryfall cards."
+    echo "    May take 15-30 minutes on first run."
+    podman run -d \
+        --name "$CONTAINER_NAME" \
+        --env-file "$ENV_FILE" \
+        -e MTGC_HOME=/data \
+        -p ":8081" \
+        -v "${VOLUME_NAME}:/data" \
+        --entrypoint sh \
+        "localhost/mtgc:${INSTANCE}" \
+        -c "mtg setup --demo && exec mtg crack-pack-server --port 8081 --https"
+else
+    echo "==> Starting container ($CONTAINER_NAME)..."
+    podman run -d \
+        --name "$CONTAINER_NAME" \
+        --env-file "$ENV_FILE" \
+        -e MTGC_HOME=/data \
+        -p ":8081" \
+        -v "${VOLUME_NAME}:/data" \
+        "localhost/mtgc:${INSTANCE}"
+fi
 
 # Discover the assigned port
 sleep 2
