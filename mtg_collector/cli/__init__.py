@@ -71,6 +71,13 @@ def main():
     except ImportError:
         pass
 
+    try:
+        from mtg_collector.cli import build_deck
+        modules.append(build_deck)
+    except ImportError:
+        # anthropic not installed - build-deck won't be available
+        pass
+
     for module in modules:
         module.register(subparsers)
 
