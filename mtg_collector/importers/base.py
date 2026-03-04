@@ -1,5 +1,6 @@
 """Base importer interface."""
 
+import json
 import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -146,6 +147,10 @@ class BaseImporter(ABC):
         collector_number: Optional[str],
     ) -> Optional[str]:
         """Resolve a card using the local database. Returns printing_id or None."""
+        # Normalize DFC names: Moxfield exports "Front / Back", Scryfall stores "Front // Back"
+        if " / " in name:
+            name = name.replace(" / ", " // ")
+
         # Strategy 1: If set_code + collector_number, look up printing and validate name
         if set_code and collector_number:
             printing = printing_repo.get_by_set_cn(set_code, collector_number)
@@ -153,24 +158,32 @@ class BaseImporter(ABC):
                 card = card_repo.get(printing.oracle_id)
                 if card and self._name_matches(name, card.name):
                     return printing.printing_id
+                # Check flavor_name for UB/crossover cards (e.g. TMNT set
+                # renames Vigor → Heralds of the Shredder)
+                if printing.raw_json:
+                    raw = json.loads(printing.raw_json)
+                    flavor = raw.get("flavor_name")
+                    if flavor and self._name_matches(name, flavor):
+                        return printing.printing_id
                 # Name mismatch — fall through to name-based lookup
 
         # Strategy 2: Name-based lookup
         card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
-        if not card:
-            return None
+        if card:
+            printings = printing_repo.get_by_oracle_id(card.oracle_id)
+            if printings:
+                if set_code:
+                    for p in printings:
+                        if p.set_code.lower() == set_code.lower():
+                            return p.printing_id
+                return printings[0].printing_id
 
-        printings = printing_repo.get_by_oracle_id(card.oracle_id)
-        if not printings:
-            return None
+        # Strategy 3: Flavor name lookup (UB/crossover cards with alternate names)
+        printing = printing_repo.get_by_flavor_name(name, set_code)
+        if printing:
+            return printing.printing_id
 
-        # If set_code provided, prefer a printing from that set
-        if set_code:
-            for p in printings:
-                if p.set_code.lower() == set_code.lower():
-                    return p.printing_id
-
-        return printings[0].printing_id
+        return None
 
     @staticmethod
     def _name_matches(search_name: str, db_name: str) -> bool:

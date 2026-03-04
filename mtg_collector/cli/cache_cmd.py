@@ -23,6 +23,11 @@ def register(subparsers):
         "all",
         help="Download and cache all cards from Scryfall bulk data",
     )
+    set_parser = cache_sub.add_parser(
+        "set",
+        help="Refresh a specific set from the Scryfall per-set API",
+    )
+    set_parser.add_argument("set_code", help="Set code to refresh (e.g. tmc)")
     parser.set_defaults(func=run)
 
 
@@ -30,8 +35,10 @@ def run(args):
     """Run the cache command."""
     if args.cache_command == "all":
         cache_all(db_path=args.db_path)
+    elif args.cache_command == "set":
+        cache_set(db_path=args.db_path, set_code=args.set_code)
     else:
-        print("Usage: mtg cache all")
+        print("Usage: mtg cache {all,set}")
         sys.exit(1)
 
 
@@ -138,37 +145,50 @@ def cache_all(db_path: str):
         set_repo.mark_cards_cached(sc)
     conn.commit()
 
-    # Step 6: Backfill under-populated token sets.
-    # The bulk data snapshot can lag behind the live API for newly released
-    # token sets — find token-type sets with 0 printings and fetch them via
-    # the per-set search API.
-    token_backfill = 0
+    # Step 6: Backfill sets under-populated in bulk data.
+    # The bulk data snapshot can lag behind the live API for pre-release,
+    # newly released, or token sets. Compare local printing counts against
+    # Scryfall's reported card_count and backfill via per-set API.
+    expected_counts = {s["code"]: s.get("card_count", 0) for s in all_sets}
+    backfill_count = 0
+
     cursor = conn.execute(
-        "SELECT s.set_code FROM sets s"
+        "SELECT s.set_code, s.digital, COUNT(p.printing_id) as local_count"
+        " FROM sets s"
         " LEFT JOIN printings p ON s.set_code = p.set_code"
-        " WHERE s.set_type = 'token'"
+        " WHERE s.digital = 0"
         " GROUP BY s.set_code"
-        " HAVING COUNT(p.printing_id) = 0"
     )
-    empty_token_sets = [row["set_code"] for row in cursor.fetchall()]
+    sets_needing_backfill = []
+    for row in cursor.fetchall():
+        sc = row["set_code"]
+        local = row["local_count"]
+        expected = expected_counts.get(sc, 0)
+        if expected > 0 and local < expected and sc not in all_set_codes:
+            sets_needing_backfill.append((sc, local, expected))
 
-    for token_code in empty_token_sets:
-        cards = api.get_set_cards(token_code)
-        if not cards:
-            continue
-        for card_data in cards:
-            if "oracle_id" not in card_data:
+    if sets_needing_backfill:
+        print(f"  Backfilling {len(sets_needing_backfill)} sets not fully covered by bulk data...")
+        for sc, local, expected in sets_needing_backfill:
+            cards = api.get_set_cards(sc)
+            if not cards:
                 continue
-            card = api.to_card_model(card_data)
-            card_repo.upsert(card)
-            printing = api.to_printing_model(card_data)
-            printing_repo.upsert(printing)
-            token_backfill += 1
-        set_repo.mark_cards_cached(token_code)
-        conn.commit()
+            set_backfill = 0
+            for card_data in cards:
+                if "oracle_id" not in card_data:
+                    continue
+                card = api.to_card_model(card_data)
+                card_repo.upsert(card)
+                printing = api.to_printing_model(card_data)
+                printing_repo.upsert(printing)
+                set_backfill += 1
+            set_repo.mark_cards_cached(sc)
+            conn.commit()
+            backfill_count += set_backfill
+            print(f"    {sc.upper()}: {local} → {set_backfill} cards")
 
-    if token_backfill:
-        print(f"  Backfilled {token_backfill} token cards via per-set API")
+    if backfill_count:
+        print(f"  Backfilled {backfill_count} cards via per-set API")
 
     # Step 7: Clean up temp file
     tmp_path.unlink(missing_ok=True)
@@ -177,3 +197,50 @@ def cache_all(db_path: str):
     print("\nDone!")
     print(f"  Cards processed: {processed}")
     print(f"  Sets updated: {len(all_set_codes)}")
+
+
+def cache_set(db_path: str, set_code: str):
+    """Fetch all cards for a specific set from the Scryfall per-set API."""
+    conn = get_connection(db_path)
+    init_db(conn)
+
+    card_repo = CardRepository(conn)
+    set_repo = SetRepository(conn)
+    printing_repo = PrintingRepository(conn)
+    api = ScryfallAPI()
+
+    set_code = set_code.lower()
+
+    # Ensure set metadata exists
+    if not set_repo.exists(set_code):
+        set_data = api.get_set(set_code)
+        if not set_data:
+            print(f"Set not found on Scryfall: {set_code.upper()}")
+            sys.exit(1)
+        set_repo.upsert(api.to_set_model(set_data))
+        conn.commit()
+
+    local_before = conn.execute(
+        "SELECT COUNT(*) FROM printings WHERE set_code = ?", (set_code,)
+    ).fetchone()[0]
+
+    print(f"Fetching {set_code.upper()} from Scryfall per-set API...")
+    cards = api.get_set_cards(set_code)
+    if not cards:
+        print(f"  No cards found for set: {set_code.upper()}")
+        sys.exit(1)
+
+    processed = 0
+    for card_data in cards:
+        if "oracle_id" not in card_data:
+            continue
+        card = api.to_card_model(card_data)
+        card_repo.upsert(card)
+        printing = api.to_printing_model(card_data)
+        printing_repo.upsert(printing)
+        processed += 1
+
+    set_repo.mark_cards_cached(set_code)
+    conn.commit()
+
+    print(f"\nDone! {set_code.upper()}: {local_before} → {processed} cards")
