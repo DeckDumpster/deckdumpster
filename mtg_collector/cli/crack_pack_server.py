@@ -2055,6 +2055,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                         "set_code": (resolved.get("set_code") or card.get("set_code") or "").upper(),
                         "collector_number": resolved.get("collector_number", ""),
                         "finish": coll_finish,
+                        "image_uri": resolved.get("image_uri") or "",
                     }
                 else:
                     # Use top candidate for set_code/finish when available
@@ -2065,6 +2066,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                         "set_code": (card.get("set_code") or top.get("set_code") or "").upper(),
                         "collector_number": card.get("collector_number") or top.get("collector_number", ""),
                         "finish": top_finishes[0] if top_finishes else "nonfoil",
+                        "image_uri": top.get("image_uri") or "",
                     }
                 # OCR name: topmost fragments for this card, merging nearby bboxes
                 entry["ocr_name"] = _extract_ocr_name(ocr_fragments, card.get("fragment_indices", []))
