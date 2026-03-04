@@ -195,12 +195,6 @@ if [ "$TEST" = "true" ]; then
         --entrypoint mtg \
         "$IMAGE" \
         setup --demo --from-fixture /app/test-data.sqlite
-    podman run --rm \
-        -v "${TEMP_VOL}:/data:Z" \
-        -e MTGC_HOME=/data \
-        --entrypoint mtg \
-        "$IMAGE" \
-        sample-ingest
 
     # 2. Package into a backup tarball
     TARBALL=$(mktemp --suffix=.tar.gz)

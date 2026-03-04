@@ -18,7 +18,11 @@ Index layout:
   40-44: CK order (ordered, linked to DEMO-CK-001)
 """
 
+import hashlib
+import json
+import shutil
 import sqlite3
+from pathlib import Path
 
 from mtg_collector.db.models import (
     Binder,
@@ -36,7 +40,7 @@ from mtg_collector.db.models import (
     WishlistEntry,
     WishlistRepository,
 )
-from mtg_collector.utils import now_iso
+from mtg_collector.utils import get_mtgc_home, now_iso
 
 # Each tuple: (set_code, collector_number, finish, condition, status)
 # status is one of: "owned", "ordered"
@@ -204,11 +208,177 @@ DEMO_BINDERS = [
     },
 ]
 
+FIXTURES_DIR = Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures"
+
+# Demo ingest samples — cards identified by the agent, shown on the Recents page.
+# OCR/claude data captured from real ingest sessions.
+DEMO_INGEST_SAMPLES = [
+    {
+        "name": "Aetherflame Wall",
+        "target_set": "tsp",
+        "target_cn": "142",
+        "candidate_sets": ["tsp"],
+        "fixture": "sample-aetherflame-wall.jpg",
+        "stored_name": "sample_aetherflame_wall.jpg",
+        "status": "DONE",
+        "ocr_fragments": [
+            {"text": "Atherflame Wall", "bbox": {"x": 208.0, "y": 498.0, "w": 258.0, "h": 35.0}, "confidence": 0.986},
+            {"text": "Creature-Wall", "bbox": {"x": 207.0, "y": 950.0, "w": 217.0, "h": 31.0}, "confidence": 0.984},
+            {"text": "Defender", "bbox": {"x": 210.0, "y": 1020.0, "w": 132.0, "h": 30.0}, "confidence": 0.997},
+            {"text": "with shadow as though they didn't have shadow. AEtherflame Wall can block creatures", "bbox": {"x": 209.0, "y": 1059.0, "w": 497.0, "h": 91.0}, "confidence": 0.97},
+            {"text": "end of turn. :AEtherflame Wall gets +1/+0 until", "bbox": {"x": 207.0, "y": 1160.0, "w": 500.0, "h": 64.0}, "confidence": 0.932},
+            {"text": "0/4", "bbox": {"x": 658.0, "y": 1244.0, "w": 66.0, "h": 37.0}, "confidence": 0.995},
+            {"text": "Justin Sweet", "bbox": {"x": 244.0, "y": 1262.0, "w": 123.0, "h": 23.0}, "confidence": 0.98},
+            {"text": "1993-2006.Wiznrds-ofthe-Coast", "bbox": {"x": 230.0, "y": 1288.0, "w": 228.0, "h": 17.0}, "confidence": 0.802},
+        ],
+        "claude_result": [
+            {"name": "Aetherflame Wall", "set_code": "tsp", "collector_number": "142", "fragment_indices": [0, 1, 2, 3, 4, 5, 6, 7]},
+        ],
+        "crops": [{"x": 119, "y": 417, "w": 693, "h": 968}],
+    },
+    {
+        "name": "Canyon Wildcat",
+        "target_set": "ddh",
+        "target_cn": "6",
+        "candidate_sets": ["ddh", "tmp", "8ed"],
+        "fixture": "sample-canyon-wildcat.jpg",
+        "stored_name": "sample_canyon_wildcat.jpg",
+        "status": "DONE",
+        "ocr_fragments": [
+            {"text": "Canyon Wildcat", "bbox": {"x": 216.0, "y": 510.0, "w": 240.0, "h": 33.0}, "confidence": 0.981},
+            {"text": "8", "bbox": {"x": 684.0, "y": 947.0, "w": 28.0, "h": 26.0}, "confidence": 0.915},
+            {"text": "Creature-Cat", "bbox": {"x": 213.0, "y": 948.0, "w": 195.0, "h": 27.0}, "confidence": 0.985},
+            {"text": "unblockable as long as defending player Mountainwalk (This creature is controls a Mountain.)", "bbox": {"x": 217.0, "y": 1010.0, "w": 505.0, "h": 93.0}, "confidence": 0.974},
+            {"text": "tracking sense and ability to climb walls. used in the hunt are prized for their In the warrior kingdom of Keld, the cats", "bbox": {"x": 215.0, "y": 1121.0, "w": 505.0, "h": 99.0}, "confidence": 0.97},
+            {"text": "2/1", "bbox": {"x": 653.0, "y": 1230.0, "w": 54.0, "h": 35.0}, "confidence": 0.995},
+        ],
+        "claude_result": [
+            {"name": "Canyon Wildcat", "set_code": "ddh", "collector_number": "6", "fragment_indices": [0, 2, 3, 4, 5]},
+            {"name": "Canyon Wildcat", "set_code": "tmp", "collector_number": "167", "fragment_indices": [0, 2, 3, 4, 5]},
+            {"name": "Canyon Wildcat", "set_code": "8ed", "collector_number": "181", "fragment_indices": [0, 2, 3, 4, 5]},
+            {"name": "Canyon Wildcat", "set_code": "8ed", "collector_number": "181\u2605", "fragment_indices": [0, 2, 3, 4, 5]},
+            {"name": "Canyon Wildcat", "set_code": "tpr", "collector_number": "127", "fragment_indices": [0, 2, 3, 4, 5]},
+        ],
+        "crops": [{"x": 143, "y": 434, "w": 649, "h": 906}],
+    },
+]
+
 # Demo saved views
 DEMO_VIEWS = [
     {"name": "Unassigned Cards", "filters_json": '{"container":"unassigned","q":""}'},
     {"name": "Modern Staples", "filters_json": '{"container":"","q":"crawler"}'},
 ]
+
+
+def _build_ingest_candidate(row):
+    """Build an ingest candidate dict from a printings DB row."""
+    finishes = json.loads(row["finishes"]) if row["finishes"] else ["nonfoil"]
+    frame_effects = json.loads(row["frame_effects"]) if row["frame_effects"] else []
+    price = None
+    if row["raw_json"]:
+        prices = json.loads(row["raw_json"]).get("prices", {})
+        price = prices.get("usd") or prices.get("usd_foil")
+    return {
+        "printing_id": row["printing_id"],
+        "name": row["name"],
+        "set_code": row["set_code"],
+        "set_name": row["set_name"],
+        "collector_number": row["collector_number"],
+        "rarity": row["rarity"],
+        "image_uri": row["image_uri"],
+        "foil": "foil" in finishes,
+        "finishes": finishes,
+        "promo": bool(row["promo"]),
+        "full_art": bool(row["full_art"]),
+        "border_color": row["border_color"] or "",
+        "frame_effects": frame_effects,
+        "price": price,
+        "artist": row["artist"] or "",
+    }
+
+
+def _load_demo_ingest(conn, ts):
+    """Load demo ingest samples for the recents page.
+
+    Returns the number of ingest records added.
+    """
+    if not FIXTURES_DIR.is_dir():
+        return 0
+
+    images_dir = get_mtgc_home() / "ingest_images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    added = 0
+
+    for sample in DEMO_INGEST_SAMPLES:
+        fixture_path = FIXTURES_DIR / sample["fixture"]
+        if not fixture_path.is_file():
+            continue
+
+        # Look up card
+        card_row = conn.execute(
+            "SELECT oracle_id FROM cards WHERE name = ?",
+            (sample["name"],),
+        ).fetchone()
+        if not card_row:
+            continue
+
+        # Build candidates from specified sets
+        candidates = []
+        for sc in sample["candidate_sets"]:
+            rows = conn.execute(
+                """SELECT p.printing_id, c.name, p.set_code, s.set_name,
+                          p.collector_number, p.rarity, p.image_uri,
+                          p.finishes, p.promo, p.full_art, p.border_color,
+                          p.frame_effects, p.artist, p.raw_json
+                   FROM printings p
+                   JOIN cards c ON p.oracle_id = c.oracle_id
+                   JOIN sets s ON p.set_code = s.set_code
+                   WHERE p.oracle_id = ? AND p.set_code = ?""",
+                (card_row["oracle_id"], sc),
+            ).fetchall()
+            for row in rows:
+                candidates.append(_build_ingest_candidate(row))
+
+        if not candidates:
+            continue
+
+        # Resolve target printing
+        target = conn.execute(
+            "SELECT printing_id FROM printings WHERE set_code = ? AND collector_number = ?",
+            (sample["target_set"], sample["target_cn"]),
+        ).fetchone()
+        if not target:
+            continue
+
+        # Copy fixture image
+        image_path = images_dir / sample["stored_name"]
+        shutil.copy2(str(fixture_path), str(image_path))
+        md5 = hashlib.md5(image_path.read_bytes()).hexdigest()
+
+        conn.execute(
+            """INSERT INTO ingest_images
+               (filename, stored_name, md5, status, ocr_result, claude_result,
+                scryfall_matches, disambiguated, confirmed_finishes, crops,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                sample["stored_name"],
+                sample["stored_name"],
+                md5,
+                sample["status"],
+                json.dumps(sample["ocr_fragments"]),
+                json.dumps(sample["claude_result"]),
+                json.dumps([candidates]),
+                json.dumps([target["printing_id"]]),
+                json.dumps(["nonfoil"]),
+                json.dumps(sample["crops"]),
+                ts,
+                ts,
+            ),
+        )
+        added += 1
+
+    return added
 
 
 def load_demo_data(conn: sqlite3.Connection) -> bool:
@@ -408,6 +578,9 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
         view_repo.add(view)
         views_created += 1
 
+    # Create demo ingest samples (recents page)
+    ingest_added = _load_demo_ingest(conn, ts)
+
     # Mark demo as loaded
     conn.execute(
         "INSERT INTO settings (key, value) VALUES ('demo_loaded', ?)",
@@ -423,5 +596,6 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
     print(f"  Created {decks_created} demo decks")
     print(f"  Created {binders_created} demo binders")
     print(f"  Created {views_created} demo views")
+    print(f"  Added {ingest_added} demo ingest samples")
 
     return True
