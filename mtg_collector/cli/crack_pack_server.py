@@ -802,6 +802,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("decks.html")
         elif path == "/binders":
             self._serve_static("binders.html")
+        elif path == "/set-value":
+            self._serve_static("set_value.html")
         elif path == "/upload":
             self._serve_static("upload.html")
         elif path == "/recent":
@@ -1137,6 +1139,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_view_create(data)
+        elif path == "/api/set-value-data":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_set_value_data(data)
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -4090,6 +4097,57 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         conn.close()
         self._send_json({"cards_added": added, "cards_skipped": len(cards) - added, "errors": errors})
+
+    def _api_set_value_data(self, data):
+        sets = data.get("sets", [])
+        if not sets:
+            self._send_json({"error": "Missing 'sets'"}, 400)
+            return
+        source = data.get("source", "tcgplayer")
+        price_type = data.get("price_type", "normal")
+        placeholders = ",".join("?" for _ in sets)
+        params = [source, price_type] + [s.lower() for s in sets]
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""SELECT c.name, p.set_code, s.set_name, p.collector_number,
+                       p.rarity, c.colors, lp.price,
+                       p.finishes, p.frame_effects, p.border_color,
+                       p.full_art, p.promo, p.promo_types,
+                       (SELECT COUNT(*) FROM collection col
+                        WHERE col.printing_id = p.printing_id) AS owned
+                FROM printings p
+                JOIN cards c ON p.oracle_id = c.oracle_id
+                JOIN sets s ON p.set_code = s.set_code
+                LEFT JOIN latest_prices lp
+                    ON lp.set_code = p.set_code
+                    AND lp.collector_number = p.collector_number
+                    AND lp.source = ? AND lp.price_type = ?
+                WHERE p.set_code IN ({placeholders})
+                ORDER BY p.set_code, lp.price DESC""",
+            params,
+        ).fetchall()
+        conn.close()
+        result = [
+            {
+                "name": r["name"],
+                "set_code": r["set_code"],
+                "set_name": r["set_name"],
+                "collector_number": r["collector_number"],
+                "rarity": r["rarity"],
+                "colors": r["colors"],
+                "price": float(r["price"]) if r["price"] is not None else None,
+                "finishes": r["finishes"],
+                "frame_effects": r["frame_effects"],
+                "border_color": r["border_color"],
+                "full_art": r["full_art"],
+                "promo": r["promo"],
+                "promo_types": r["promo_types"],
+                "owned": r["owned"],
+            }
+            for r in rows
+        ]
+        self._send_json(result)
 
     def _read_json_body(self):
         content_length = int(self.headers.get("Content-Length", 0))

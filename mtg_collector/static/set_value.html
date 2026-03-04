@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set Value Analysis</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+header {
+  background: #16213e;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid #0f3460;
+}
+header a {
+  color: #e94560;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+header h1 {
+  font-size: 1.4rem;
+  color: #e94560;
+}
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+/* Controls row */
+.controls {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.controls .multi-select-wrap {
+  flex: 1;
+  min-width: 250px;
+}
+.analyze-btn {
+  padding: 8px 24px;
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.analyze-btn:hover { background: #c73651; }
+.analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Source/type toggles */
+.toggle-group {
+  display: flex;
+  gap: 0;
+}
+.toggle-group .pill {
+  padding: 6px 14px;
+  border: 1px solid #0f3460;
+  background: #16213e;
+  color: #888;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle-group .pill:first-child { border-radius: 4px 0 0 4px; }
+.toggle-group .pill:last-child { border-radius: 0 4px 4px 0; }
+.toggle-group .pill + .pill { border-left: none; }
+.toggle-group .pill.active {
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+}
+.toggle-group .pill:hover:not(.active) {
+  border-color: #e94560;
+  color: #e0e0e0;
+}
+
+/* Multi-select */
+.multi-select-wrap { position: relative; }
+.multi-search-input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+}
+.multi-search-input:focus { outline: 2px solid #e94560; }
+.multi-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  z-index: 50;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.multi-dropdown.open { display: block; }
+.multi-dropdown li {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.multi-dropdown li:hover { background: #0f3460; }
+.multi-dropdown li.selected { color: #e94560; }
+
+/* Selected set pills */
+.selected-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.selected-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: #0f3460;
+  border: 1px solid #e94560;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  color: #e0e0e0;
+}
+.selected-pill .remove-pill {
+  cursor: pointer;
+  color: #e94560;
+}
+
+/* Filter bar */
+.filter-bar {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 12px;
+  background: #16213e;
+  border-radius: 6px;
+  border: 1px solid #0f3460;
+}
+.filter-bar label {
+  font-size: 0.8rem;
+  color: #888;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.check-row {
+  display: flex;
+  gap: 4px;
+}
+.check-row .pill {
+  padding: 4px 10px;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  background: #16213e;
+  color: #888;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.check-row .pill.active {
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+}
+.check-row .pill:hover:not(.active) {
+  border-color: #e94560;
+  color: #e0e0e0;
+}
+
+/* Summary stats */
+.summary {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.stat {
+  text-align: center;
+}
+.stat .value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #e94560;
+}
+.stat .label {
+  font-size: 0.7rem;
+  color: #888;
+  text-transform: uppercase;
+}
+
+/* Chart */
+.chart-wrap {
+  position: relative;
+  height: 500px;
+  margin-bottom: 24px;
+  background: #16213e;
+  border-radius: 6px;
+  border: 1px solid #0f3460;
+  padding: 16px;
+}
+
+/* Top cards table */
+.top-cards h3 {
+  font-size: 1rem;
+  color: #e94560;
+  margin-bottom: 8px;
+}
+.top-cards table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.top-cards th {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid #0f3460;
+  color: #888;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+.top-cards td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #0f3460;
+}
+.top-cards tr:hover { background: #0f3460; }
+.top-cards a {
+  color: #e94560;
+  text-decoration: none;
+}
+.top-cards a:hover { text-decoration: underline; }
+
+/* Treatment tags */
+.treatment-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: #0f3460;
+  color: #e0e0e0;
+  margin-right: 2px;
+}
+.treatment-tag.foil { background: #8b6914; color: #fff; }
+.treatment-tag.etched { background: #5a5a8a; color: #fff; }
+.treatment-tag.borderless { background: #2d6a4f; color: #fff; }
+.treatment-tag.showcase { background: #7b2d8b; color: #fff; }
+.treatment-tag.extendedart { background: #8b4513; color: #fff; }
+.treatment-tag.fullart { background: #1a6b5a; color: #fff; }
+.treatment-tag.promo { background: #b22222; color: #fff; }
+
+/* Price filter */
+.price-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.price-filter input {
+  width: 60px;
+  padding: 4px 8px;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+  text-align: right;
+}
+.price-filter input:focus { outline: 2px solid #e94560; }
+
+/* Owned count badge */
+.owned-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  background: #2d6a4f;
+  color: #fff;
+}
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #888;
+  display: none;
+}
+.loading.visible { display: block; }
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 60px;
+  color: #888;
+}
+</style>
+</head>
+<body>
+<header>
+  <a href="/">&larr; Home</a>
+  <h1>Set Value Analysis</h1>
+</header>
+
+<div class="container">
+  <!-- Controls -->
+  <div class="controls">
+    <div class="multi-select-wrap">
+      <input type="text" class="multi-search-input" id="set-search" placeholder="Search sets...">
+      <ul class="multi-dropdown" id="set-dropdown"></ul>
+    </div>
+    <div class="toggle-group" id="source-toggle">
+      <div class="pill active" data-value="tcgplayer">TCGplayer</div>
+      <div class="pill" data-value="cardkingdom">Card Kingdom</div>
+    </div>
+    <div class="toggle-group" id="type-toggle">
+      <div class="pill active" data-value="normal">Normal</div>
+      <div class="pill" data-value="foil">Foil</div>
+    </div>
+    <button class="analyze-btn" id="analyze-btn" disabled>Analyze</button>
+  </div>
+
+  <div class="selected-pills" id="selected-pills"></div>
+
+  <!-- Filter bar -->
+  <div class="filter-bar" id="filter-bar" style="display:none;">
+    <label>Split by:</label>
+    <div class="toggle-group" id="split-toggle">
+      <div class="pill active" data-value="none">None</div>
+      <div class="pill" data-value="rarity">Rarity</div>
+      <div class="pill" data-value="color">Color</div>
+      <div class="pill" data-value="owned">Owned</div>
+    </div>
+
+    <label>Cards:</label>
+    <div class="toggle-group" id="card-type-toggle">
+      <div class="pill active" data-value="all">All</div>
+      <div class="pill" data-value="normal">Normal</div>
+      <div class="pill" data-value="special">Special</div>
+    </div>
+
+    <label>Owned:</label>
+    <div class="toggle-group" id="owned-toggle">
+      <div class="pill active" data-value="all">All</div>
+      <div class="pill" data-value="owned">Owned</div>
+      <div class="pill" data-value="unowned">Not Owned</div>
+    </div>
+
+    <label>Price:</label>
+    <div class="price-filter">
+      <div class="toggle-group" id="price-op-toggle">
+        <div class="pill active" data-value="off">Off</div>
+        <div class="pill" data-value="gte">&ge;</div>
+        <div class="pill" data-value="lte">&le;</div>
+      </div>
+      <span>$</span><input type="number" id="price-filter-val" min="0" value="1" step="1">
+    </div>
+
+    <label>Rarity:</label>
+    <div class="check-row" id="rarity-filters">
+      <div class="pill active" data-value="common">C</div>
+      <div class="pill active" data-value="uncommon">U</div>
+      <div class="pill active" data-value="rare">R</div>
+      <div class="pill active" data-value="mythic">M</div>
+    </div>
+
+    <label>Color:</label>
+    <div class="check-row" id="color-filters">
+      <div class="pill active" data-value="W">W</div>
+      <div class="pill active" data-value="U">U</div>
+      <div class="pill active" data-value="B">B</div>
+      <div class="pill active" data-value="R">R</div>
+      <div class="pill active" data-value="G">G</div>
+      <div class="pill active" data-value="C">C</div>
+      <div class="pill active" data-value="M">Multi</div>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary" id="summary" style="display:none;">
+    <div class="stat"><div class="value" id="stat-total">0</div><div class="label">Total Cards</div></div>
+    <div class="stat"><div class="value" id="stat-priced">0</div><div class="label">With Prices</div></div>
+    <div class="stat"><div class="value" id="stat-median">$0</div><div class="label">Median</div></div>
+    <div class="stat"><div class="value" id="stat-chaff">0%</div><div class="label">&lt;$0.40 (Chaff)</div></div>
+    <div class="stat"><div class="value" id="stat-modest">0%</div><div class="label">$0.40-$2</div></div>
+    <div class="stat"><div class="value" id="stat-high">0%</div><div class="label">$2-$10</div></div>
+    <div class="stat"><div class="value" id="stat-premium">0%</div><div class="label">$10+</div></div>
+  </div>
+
+  <!-- Chart -->
+  <div class="chart-wrap" id="chart-wrap" style="display:none;">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading" id="loading">Loading card data...</div>
+
+  <!-- Empty state -->
+  <div class="empty-state" id="empty-state">Select one or more sets and click Analyze to view value distribution.</div>
+
+  <!-- Top cards -->
+  <div class="top-cards" id="top-cards" style="display:none;">
+    <h3>Top 20 Most Valuable Cards</h3>
+    <table>
+      <thead><tr><th>#</th><th>Card</th><th>Set</th><th>CN</th><th>Rarity</th><th>Finishes</th><th>Owned</th><th>Price</th></tr></thead>
+      <tbody id="top-cards-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// State
+let allSets = [];
+let selectedSets = new Map(); // code -> name
+let allCards = [];
+let chart = null;
+
+const BINS = [
+  { label: '$0-0.10',   min: 0,    max: 0.10 },
+  { label: '$0.10-0.25', min: 0.10, max: 0.25 },
+  { label: '$0.25-0.50', min: 0.25, max: 0.50 },
+  { label: '$0.50-1',    min: 0.50, max: 1    },
+  { label: '$1-2',       min: 1,    max: 2    },
+  { label: '$2-5',       min: 2,    max: 5    },
+  { label: '$5-10',      min: 5,    max: 10   },
+  { label: '$10-20',     min: 10,   max: 20   },
+  { label: '$20-50',     min: 20,   max: 50   },
+  { label: '$50+',       min: 50,   max: Infinity },
+];
+
+const RARITY_COLORS = {
+  common:   '#888888',
+  uncommon: '#c0c0c0',
+  rare:     '#e6c300',
+  mythic:   '#e94560',
+};
+
+const COLOR_COLORS = {
+  W: '#f9faf4',
+  U: '#0e68ab',
+  B: '#665a7a',
+  R: '#d3202a',
+  G: '#00733e',
+  C: '#888888',
+  M: '#cfb53b',
+};
+
+const SET_PALETTE = [
+  '#e94560', '#4ecdc4', '#f7dc6f', '#8e44ad',
+  '#3498db', '#e67e22', '#2ecc71', '#e74c3c',
+];
+
+// Toggle group (exclusive)
+function initToggle(id) {
+  const el = document.getElementById(id);
+  el.querySelectorAll('.pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      el.querySelector('.pill.active')?.classList.remove('active');
+      pill.classList.add('active');
+      if (allCards.length) buildChart();
+    });
+  });
+}
+
+function getToggleValue(id) {
+  return document.getElementById(id).querySelector('.pill.active')?.dataset.value;
+}
+
+// Check row (multi-toggle)
+function initCheckRow(id) {
+  document.getElementById(id).querySelectorAll('.pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      pill.classList.toggle('active');
+      if (allCards.length) buildChart();
+    });
+  });
+}
+
+function getActiveValues(id) {
+  return [...document.getElementById(id).querySelectorAll('.pill.active')]
+    .map(p => p.dataset.value);
+}
+
+// Color classification
+function getColorCategory(colorsJson) {
+  const colors = JSON.parse(colorsJson || '[]');
+  if (colors.length === 0) return 'C';
+  if (colors.length > 1) return 'M';
+  return colors[0];
+}
+
+// Special card classification
+function isSpecial(card) {
+  const fe = JSON.parse(card.frame_effects || '[]');
+  if (fe.some(e => ['extendedart', 'showcase', 'fullart'].includes(e))) return true;
+  if (card.border_color === 'borderless') return true;
+  if (card.promo) return true;
+  const pt = JSON.parse(card.promo_types || '[]');
+  if (pt.length > 0) return true;
+  return false;
+}
+
+// Build treatment tags for table display
+function getTreatmentTags(card) {
+  const tags = [];
+  const finishes = JSON.parse(card.finishes || '[]');
+  if (finishes.includes('foil')) tags.push('<span class="treatment-tag foil">Foil</span>');
+  if (finishes.includes('etched')) tags.push('<span class="treatment-tag etched">Etched</span>');
+  if (card.border_color === 'borderless') tags.push('<span class="treatment-tag borderless">Borderless</span>');
+  const fe = JSON.parse(card.frame_effects || '[]');
+  if (fe.includes('showcase')) tags.push('<span class="treatment-tag showcase">Showcase</span>');
+  if (fe.includes('extendedart')) tags.push('<span class="treatment-tag extendedart">Extended Art</span>');
+  if (card.full_art) tags.push('<span class="treatment-tag fullart">Full Art</span>');
+  if (card.promo) tags.push('<span class="treatment-tag promo">Promo</span>');
+  return tags.join('');
+}
+
+// Multi-select for sets
+function initMultiSelect() {
+  const searchEl = document.getElementById('set-search');
+  const dropdownEl = document.getElementById('set-dropdown');
+  const pillsEl = document.getElementById('selected-pills');
+
+  function renderDropdown(filter) {
+    const q = (filter || '').toLowerCase();
+    const items = allSets.filter(s => {
+      const label = `${s.name} (${s.code})`.toLowerCase();
+      return !q || label.includes(q);
+    });
+    dropdownEl.innerHTML = '';
+    for (const s of items.slice(0, 50)) {
+      const li = document.createElement('li');
+      li.textContent = `${s.name} (${s.code.toUpperCase()})`;
+      if (selectedSets.has(s.code)) li.classList.add('selected');
+      li.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        if (selectedSets.has(s.code)) {
+          selectedSets.delete(s.code);
+        } else {
+          selectedSets.set(s.code, s.name);
+        }
+        renderPills();
+        renderDropdown(searchEl.value);
+        updateAnalyzeBtn();
+      });
+      dropdownEl.appendChild(li);
+    }
+  }
+
+  function renderPills() {
+    pillsEl.innerHTML = '';
+    for (const [code, name] of selectedSets) {
+      const pill = document.createElement('span');
+      pill.className = 'selected-pill';
+      pill.innerHTML = `${name} (${code.toUpperCase()}) <span class="remove-pill">&times;</span>`;
+      pill.querySelector('.remove-pill').addEventListener('click', () => {
+        selectedSets.delete(code);
+        renderPills();
+        renderDropdown(searchEl.value);
+        updateAnalyzeBtn();
+      });
+      pillsEl.appendChild(pill);
+    }
+  }
+
+  searchEl.addEventListener('focus', () => {
+    renderDropdown(searchEl.value);
+    dropdownEl.classList.add('open');
+  });
+  searchEl.addEventListener('input', () => {
+    renderDropdown(searchEl.value);
+    dropdownEl.classList.add('open');
+  });
+  searchEl.addEventListener('blur', () => {
+    setTimeout(() => dropdownEl.classList.remove('open'), 150);
+  });
+}
+
+function updateAnalyzeBtn() {
+  document.getElementById('analyze-btn').disabled = selectedSets.size === 0;
+}
+
+// Fetch sets on load
+async function loadSets() {
+  const resp = await fetch('/api/cached-sets');
+  allSets = await resp.json();
+  initMultiSelect();
+}
+
+// Fetch card data
+async function analyze() {
+  const sets = [...selectedSets.keys()];
+  if (!sets.length) return;
+
+  const source = getToggleValue('source-toggle');
+  const priceType = getToggleValue('type-toggle');
+
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('loading').classList.add('visible');
+  document.getElementById('filter-bar').style.display = 'none';
+  document.getElementById('summary').style.display = 'none';
+  document.getElementById('chart-wrap').style.display = 'none';
+  document.getElementById('top-cards').style.display = 'none';
+
+  const resp = await fetch('/api/set-value-data', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sets, source, price_type: priceType }),
+  });
+  allCards = await resp.json();
+
+  document.getElementById('loading').classList.remove('visible');
+  document.getElementById('filter-bar').style.display = 'flex';
+  document.getElementById('summary').style.display = 'flex';
+  document.getElementById('chart-wrap').style.display = 'block';
+  document.getElementById('top-cards').style.display = 'block';
+
+  buildChart();
+}
+
+// Filter cards by active rarity/color/card-type/owned/price pills
+function filterCards() {
+  const rarities = getActiveValues('rarity-filters');
+  const colors = getActiveValues('color-filters');
+  const cardType = getToggleValue('card-type-toggle');
+  const ownedFilter = getToggleValue('owned-toggle');
+  const priceOp = getToggleValue('price-op-toggle');
+  const priceVal = parseFloat(document.getElementById('price-filter-val').value) || 0;
+  return allCards.filter(c => {
+    if (!rarities.includes(c.rarity)) return false;
+    if (!colors.includes(getColorCategory(c.colors))) return false;
+    if (cardType === 'normal' && isSpecial(c)) return false;
+    if (cardType === 'special' && !isSpecial(c)) return false;
+    if (ownedFilter === 'owned' && !c.owned) return false;
+    if (ownedFilter === 'unowned' && c.owned) return false;
+    if (priceOp !== 'off' && c.price != null) {
+      const p = parseFloat(c.price);
+      if (priceOp === 'gte' && p < priceVal) return false;
+      if (priceOp === 'lte' && p > priceVal) return false;
+    }
+    if (priceOp !== 'off' && c.price == null) return false;
+    return true;
+  });
+}
+
+// Bin cards into price buckets
+function binCards(cards) {
+  const counts = new Array(BINS.length).fill(0);
+  for (const c of cards) {
+    if (c.price == null) continue;
+    const p = parseFloat(c.price);
+    for (let i = 0; i < BINS.length; i++) {
+      if (p >= BINS[i].min && p < BINS[i].max) {
+        counts[i]++;
+        break;
+      }
+    }
+  }
+  return counts;
+}
+
+// Build Scryfall search URL for a bin
+function buildScryfallUrl(cards, binIdx, splitKey, splitMode) {
+  const bin = BINS[binIdx];
+  const setCodes = [...new Set(cards.map(c => c.set_code))];
+  let q = '';
+  if (setCodes.length === 1) {
+    q = `s:${setCodes[0]}`;
+  } else {
+    q = '(' + setCodes.map(s => `s:${s}`).join(' or ') + ')';
+  }
+
+  if (splitMode === 'rarity' && splitKey) {
+    const rarityChar = splitKey === 'mythic' ? 'm' : splitKey[0];
+    q += ` r:${rarityChar}`;
+  } else if (splitMode === 'color' && splitKey) {
+    if (splitKey === 'C') q += ' c=c';
+    else if (splitKey === 'M') q += ' c>=2';
+    else q += ` c=${splitKey.toLowerCase()}`;
+  }
+
+  const priceType = getToggleValue('type-toggle');
+  const priceField = priceType === 'foil' ? 'usd_foil' : 'usd';
+
+  if (bin.max === Infinity) {
+    q += ` ${priceField}>=${bin.min}`;
+  } else {
+    q += ` ${priceField}>=${bin.min} ${priceField}<${bin.max}`;
+  }
+
+  return `https://scryfall.com/search?q=${encodeURIComponent(q)}`;
+}
+
+// Build/update chart
+function buildChart() {
+  const filtered = filterCards();
+  const splitMode = getToggleValue('split-toggle');
+
+  const labels = BINS.map(b => b.label);
+  let datasets = [];
+
+  if (splitMode === 'none') {
+    // One dataset per set
+    const bySet = new Map();
+    for (const c of filtered) {
+      if (!bySet.has(c.set_code)) bySet.set(c.set_code, []);
+      bySet.get(c.set_code).push(c);
+    }
+    let colorIdx = 0;
+    for (const [setCode, cards] of bySet) {
+      datasets.push({
+        label: `${cards[0]?.set_name || setCode} (${setCode.toUpperCase()})`,
+        data: binCards(cards),
+        backgroundColor: SET_PALETTE[colorIdx % SET_PALETTE.length],
+        _setCode: setCode,
+        _splitKey: null,
+      });
+      colorIdx++;
+    }
+  } else if (splitMode === 'rarity') {
+    const order = ['common', 'uncommon', 'rare', 'mythic'];
+    for (const rarity of order) {
+      const cards = filtered.filter(c => c.rarity === rarity);
+      if (!cards.length) continue;
+      datasets.push({
+        label: rarity.charAt(0).toUpperCase() + rarity.slice(1),
+        data: binCards(cards),
+        backgroundColor: RARITY_COLORS[rarity],
+        _splitKey: rarity,
+      });
+    }
+  } else if (splitMode === 'color') {
+    const order = ['W', 'U', 'B', 'R', 'G', 'C', 'M'];
+    const colorNames = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green', C: 'Colorless', M: 'Multicolor' };
+    for (const color of order) {
+      const cards = filtered.filter(c => getColorCategory(c.colors) === color);
+      if (!cards.length) continue;
+      datasets.push({
+        label: colorNames[color],
+        data: binCards(cards),
+        backgroundColor: COLOR_COLORS[color],
+        _splitKey: color,
+      });
+    }
+  } else if (splitMode === 'owned') {
+    const owned = filtered.filter(c => c.owned > 0);
+    const unowned = filtered.filter(c => !c.owned);
+    if (owned.length) {
+      datasets.push({
+        label: 'Owned',
+        data: binCards(owned),
+        backgroundColor: '#2ecc71',
+        _splitKey: 'owned',
+      });
+    }
+    if (unowned.length) {
+      datasets.push({
+        label: 'Not Owned',
+        data: binCards(unowned),
+        backgroundColor: '#555555',
+        _splitKey: 'unowned',
+      });
+    }
+  }
+
+  const stacked = splitMode !== 'none';
+
+  if (chart) chart.destroy();
+  const ctx = document.getElementById('chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      onClick: (evt, elements) => {
+        if (!elements.length) return;
+        const el = elements[0];
+        const ds = datasets[el.datasetIndex];
+        const binIdx = el.index;
+        // Determine which cards were in this dataset
+        let cards;
+        if (splitMode === 'none') {
+          cards = filtered.filter(c => c.set_code === ds._setCode);
+        } else if (splitMode === 'rarity') {
+          cards = filtered.filter(c => c.rarity === ds._splitKey);
+        } else if (splitMode === 'color') {
+          cards = filtered.filter(c => getColorCategory(c.colors) === ds._splitKey);
+        } else if (splitMode === 'owned') {
+          cards = ds._splitKey === 'owned'
+            ? filtered.filter(c => c.owned > 0)
+            : filtered.filter(c => !c.owned);
+        }
+        const url = buildScryfallUrl(cards, binIdx, ds._splitKey, splitMode);
+        window.open(url, '_blank');
+      },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y} cards`,
+          },
+        },
+        legend: {
+          labels: { color: '#e0e0e0' },
+        },
+      },
+      scales: {
+        x: {
+          stacked,
+          ticks: { color: '#888' },
+          grid: { color: '#0f3460' },
+          title: { display: true, text: 'Price Range', color: '#888' },
+        },
+        y: {
+          stacked,
+          ticks: { color: '#888' },
+          grid: { color: '#0f3460' },
+          title: { display: true, text: 'Number of Cards', color: '#888' },
+        },
+      },
+    },
+  });
+
+  updateSummary(filtered);
+  updateTopCards(filtered);
+}
+
+// Summary stats
+function updateSummary(cards) {
+  const total = cards.length;
+  const priced = cards.filter(c => c.price != null);
+  const prices = priced.map(c => parseFloat(c.price)).sort((a, b) => a - b);
+  const median = prices.length ? prices[Math.floor(prices.length / 2)] : 0;
+  const pct = (n) => priced.length ? ((n / priced.length) * 100).toFixed(0) + '%' : '0%';
+
+  document.getElementById('stat-total').textContent = total;
+  document.getElementById('stat-priced').textContent = priced.length;
+  document.getElementById('stat-median').textContent = '$' + median.toFixed(2);
+  document.getElementById('stat-chaff').textContent = pct(prices.filter(p => p < 0.40).length);
+  document.getElementById('stat-modest').textContent = pct(prices.filter(p => p >= 0.40 && p < 2).length);
+  document.getElementById('stat-high').textContent = pct(prices.filter(p => p >= 2 && p < 10).length);
+  document.getElementById('stat-premium').textContent = pct(prices.filter(p => p >= 10).length);
+}
+
+// Top cards table
+function updateTopCards(cards) {
+  const priced = cards.filter(c => c.price != null)
+    .sort((a, b) => parseFloat(b.price) - parseFloat(a.price))
+    .slice(0, 20);
+  const tbody = document.getElementById('top-cards-body');
+  tbody.innerHTML = '';
+  priced.forEach((c, i) => {
+    const tr = document.createElement('tr');
+    const sfUrl = `https://scryfall.com/card/${c.set_code.toLowerCase()}/${c.collector_number}`;
+    const ownedHtml = c.owned ? `<span class="owned-badge">${c.owned}</span>` : '';
+    tr.innerHTML = `<td>${i + 1}</td>
+      <td><a href="${sfUrl}" target="_blank" rel="noopener">${c.name}</a></td>
+      <td>${c.set_code.toUpperCase()}</td>
+      <td>${c.collector_number}</td>
+      <td>${c.rarity ? c.rarity[0].toUpperCase() : ''}</td>
+      <td>${getTreatmentTags(c)}</td>
+      <td>${ownedHtml}</td>
+      <td>$${parseFloat(c.price).toFixed(2)}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+// Init
+initToggle('source-toggle');
+initToggle('type-toggle');
+initToggle('split-toggle');
+initToggle('card-type-toggle');
+initToggle('owned-toggle');
+initToggle('price-op-toggle');
+initCheckRow('rarity-filters');
+initCheckRow('color-filters');
+document.getElementById('price-filter-val').addEventListener('input', () => {
+  if (allCards.length && getToggleValue('price-op-toggle') !== 'off') buildChart();
+});
+document.getElementById('analyze-btn').addEventListener('click', analyze);
+loadSets();
+</script>
+</body>
+</html>
