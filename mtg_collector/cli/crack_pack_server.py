@@ -311,8 +311,8 @@ def _narrow_candidates(candidates, card_info):
     result = candidates
     artist = (card_info.get("artist") or "").strip()
     if artist:
-        al = artist.lower()
-        matched = [c for c in result if al in (c.get("artist") or "").lower()]
+        al = _normalize_artist(artist)
+        matched = [c for c in result if al in _normalize_artist(c.get("artist") or "")]
         if matched:
             result = matched
     set_code = (card_info.get("set_code") or "").strip()
@@ -394,6 +394,18 @@ def _strip_accents(s):
     )
 
 
+def _normalize_artist(s):
+    """Normalize artist name for fuzzy comparison.
+
+    Strips accents, casefolds, removes punctuation (. and -), collapses whitespace.
+    """
+    import re
+    n = _strip_accents(s).casefold()
+    n = n.replace(".", "").replace("-", "")
+    n = re.sub(r"\s+", " ", n).strip()
+    return n
+
+
 def _resolve_candidates(conn, card_infos):
     """Resolve agent card entries to candidate printings.
 
@@ -439,15 +451,20 @@ def _resolve_candidates(conn, card_infos):
             params,
         ).fetchall()
 
-        # Post-filter by artist in Python (accent-insensitive)
-        artist_norm = _strip_accents(artist).casefold() if artist else ""
-        for r in rows:
-            if r[0]:
-                if artist_norm and r["artist"]:
-                    if artist_norm not in _strip_accents(r["artist"]).casefold():
-                        continue
-                data = json.loads(r[0])
-                all_candidates[data["id"]] = data
+        # Post-filter by artist in Python (soft — fall back to all rows if no match)
+        sql_matched = [r for r in rows if r[0]]
+        if artist and sql_matched:
+            artist_norm = _normalize_artist(artist)
+            artist_filtered = [
+                r for r in sql_matched
+                if not r["artist"] or artist_norm in _normalize_artist(r["artist"])
+            ]
+            use = artist_filtered if artist_filtered else sql_matched
+        else:
+            use = sql_matched
+        for r in use:
+            data = json.loads(r[0])
+            all_candidates[data["id"]] = data
 
     return list(all_candidates.values())
 
