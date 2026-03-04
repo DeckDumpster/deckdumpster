@@ -2520,13 +2520,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"done": True, "total_cards": total_cards, "total_done": total_done, "auto_confirmed": auto_confirmed})
 
     def _api_ingest2_confirm(self):
-        """Confirm a card: add to collection + ingest_lineage."""
-        from mtg_collector.db.models import (
-            CollectionEntry,
-            CollectionRepository,
-            PrintingRepository,
-        )
-        from mtg_collector.utils import now_iso
+        """Confirm a candidate: update disambiguated + confirmed_finishes.
+
+        Does NOT create a collection entry — that belongs to batch ingest.
+        """
+        from mtg_collector.db.models import PrintingRepository
 
         data = self._read_json_body()
         if data is None:
@@ -2545,54 +2543,37 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         printing_repo = PrintingRepository(conn)
-        collection_repo = CollectionRepository(conn)
-
         printing = printing_repo.get(printing_id)
         if not printing:
             conn.close()
             self._send_json({"error": f"Printing {printing_id} not in local cache"}, 404)
             return
 
-        entry = CollectionEntry(
-            id=None,
-            printing_id=printing_id,
-            finish=finish,
-            condition="Near Mint",
-            source="ocr_ingest",
-        )
-        entry_id = collection_repo.add(entry)
-
-        md5 = img["md5"]
-        conn.execute(
-            """INSERT INTO ingest_lineage (collection_id, image_md5, image_path, card_index, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (entry_id, md5, img["stored_name"], card_idx, now_iso()),
-        )
-
         # Update disambiguated + confirmed_finishes
         disambiguated = json.loads(img["disambiguated"]) if img.get("disambiguated") else []
-        if card_idx < len(disambiguated):
-            disambiguated[card_idx] = printing_id
+        while len(disambiguated) <= card_idx:
+            disambiguated.append(None)
+        disambiguated[card_idx] = printing_id
+
         confirmed_finishes = json.loads(img["confirmed_finishes"]) if img.get("confirmed_finishes") else []
-        while len(confirmed_finishes) < len(disambiguated):
+        while len(confirmed_finishes) <= card_idx:
             confirmed_finishes.append(None)
-        if card_idx < len(confirmed_finishes):
-            confirmed_finishes[card_idx] = finish
+        confirmed_finishes[card_idx] = finish
+
         self._ingest2_update_image(conn, image_id, disambiguated=json.dumps(disambiguated), confirmed_finishes=json.dumps(confirmed_finishes))
 
         # Check if all cards done
         if all(d is not None for d in disambiguated):
             self._ingest2_update_image(conn, image_id, status="DONE")
 
-        conn.commit()
         conn.close()
 
         name = printing.raw_json and json.loads(printing.raw_json).get("name", "???") or "???"
         set_code = printing.set_code
         cn = printing.collector_number
-        _log_ingest(f"Confirmed2: {name} ({set_code.upper()} #{cn}) -> collection ID {entry_id}")
+        _log_ingest(f"Confirmed: {name} ({set_code.upper()} #{cn})")
 
-        self._send_json({"ok": True, "entry_id": entry_id, "name": name, "set_code": set_code, "collector_number": cn})
+        self._send_json({"ok": True, "name": name, "set_code": set_code, "collector_number": cn})
 
     def _api_ingest2_add_card(self):
         """Add a new card slot to an existing image and confirm it."""

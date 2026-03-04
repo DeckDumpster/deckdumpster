@@ -4,4 +4,5 @@ description: >
   in _resolve_candidates, the card appears on the Recents page as
   needs_disambiguation (empty scryfall_matches). Open the accordion,
   search for "Brimstone Mage", select a candidate from the search
-  results, and verify the candidate gets a selected border.
+  results, verify the card turns green, and confirm that no collection
+  entry was created (insertion belongs to batch ingest).

@@ -6,7 +6,9 @@ mismatch ("Volkan Baga" vs "Volkan Bağa") — card lands as
 needs_disambiguation with empty scryfall_matches.
 
 Open the accordion, search for the card, select a candidate from search
-results, and verify the candidate gets a green "selected" border.
+results, and verify:
+  1. The candidate gets a selected border.
+  2. No collection entry was created — insertion belongs to batch ingest.
 
 Requires MTGC_FAKE_AGENT=1 and ROE cached in the fixture DB.
 """
@@ -30,6 +32,13 @@ def steps(harness):
     harness.wait_for_visible(".acc-candidates .acc-candidate", timeout=10_000)
     harness.click_by_selector(".acc-candidates .acc-candidate:first-child")
 
-    # Candidate should get the "selected" border after being clicked.
+    # Candidate gets .selected synchronously on click.
     harness.wait_for_visible(".acc-candidates .acc-candidate.selected", timeout=5_000)
+
+    # Confirm should NOT have created a collection entry.
+    # Actual insertion belongs to batch ingest.
+    # Navigate to collection — the page load ensures confirm has completed.
+    harness.navigate("/collection")
+    harness.assert_text_absent("Brimstone Mage")
+
     harness.screenshot("final_state")
