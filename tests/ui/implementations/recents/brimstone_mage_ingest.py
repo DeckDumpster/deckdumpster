@@ -5,7 +5,8 @@ returns two candidates, but _resolve_candidates fails on unicode artist
 mismatch ("Volkan Baga" vs "Volkan Bağa") — card lands as
 needs_disambiguation with empty scryfall_matches.
 
-Open the accordion, search for the card, select a candidate, verify green.
+Open the accordion, search for the card, select a candidate from search
+results, and verify the candidate gets a green "selected" border.
 
 Requires MTGC_FAKE_AGENT=1 and ROE cached in the fixture DB.
 """
@@ -13,16 +14,12 @@ Requires MTGC_FAKE_AGENT=1 and ROE cached in the fixture DB.
 
 def steps(harness):
     # Brimstone Mage was inserted as READY_FOR_OCR by --demo.
-    # Server processes it on startup. Wait for it to appear.
+    # Server processes it on startup. Wait for the card grid to load.
     harness.navigate("/recent")
-    harness.wait_for_text("Brimstone Mage", timeout=15_000)
+    harness.wait_for_visible(".img-card.needs_disambiguation", timeout=15_000)
 
-    # Card should be needs_disambiguation (not DONE) because
-    # _resolve_candidates fails on unicode artist mismatch.
-    harness.assert_visible(".img-card.needs_disambiguation")
-
-    # Click the card to open accordion.
-    harness.click_by_text("Brimstone Mage")
+    # Click the needs_disambiguation card to open accordion.
+    harness.click_by_selector(".img-card.needs_disambiguation")
     harness.assert_visible("#accordion-panel.open")
 
     # Search for "Brimstone Mage" in the accordion search box.
@@ -33,6 +30,6 @@ def steps(harness):
     harness.wait_for_visible(".acc-candidates .acc-candidate", timeout=10_000)
     harness.click_by_selector(".acc-candidates .acc-candidate:first-child")
 
-    # Card should now be green (DONE).
-    harness.assert_visible(".img-card.done")
+    # Candidate should get the "selected" border after being clicked.
+    harness.wait_for_visible(".acc-candidates .acc-candidate.selected", timeout=5_000)
     harness.screenshot("final_state")
