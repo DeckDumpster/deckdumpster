@@ -32,7 +32,6 @@ _PAGE_TO_HTML = {
     "/collection": "collection.html",
     "/sealed": "sealed.html",
     "/recent": "recent.html",
-    "/correct": "correct.html",
     "/crack-pack": "crack_pack.html",
     "/explore-sheets": "explore_sheets.html",
     "/ingest-ids": "ingest_ids.html",

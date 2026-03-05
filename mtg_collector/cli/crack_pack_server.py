@@ -652,12 +652,64 @@ def _reset_ingest_image(conn, image_id, md5, now):
             names_data=NULL,
             names_disambiguated=NULL,
             user_card_edits=NULL,
+            confirmed_finishes=NULL,
             error_message=NULL,
             updated_at=?
            WHERE id=?""",
         (now, image_id),
     )
     return removed
+
+
+def _refinish_ingest_card(conn, image_id, md5, card_index):
+    """Remove a specific card's collection entry and lineage so it can be re-finished.
+
+    Preserves all Agent identification (disambiguated, claude_result, etc.).
+    Clears the confirmed_finishes entry for this card_index.
+    Sets image status to DONE if no remaining lineage rows exist, otherwise keeps INGESTED.
+
+    Does NOT commit — caller is responsible.
+    """
+    from mtg_collector.utils import now_iso
+
+    # Delete lineage + collection entry for this specific card_index
+    lineage_row = conn.execute(
+        "SELECT collection_id FROM ingest_lineage WHERE image_md5=? AND card_index=?",
+        (md5, card_index),
+    ).fetchone()
+    if lineage_row:
+        conn.execute(
+            "DELETE FROM ingest_lineage WHERE image_md5=? AND card_index=?",
+            (md5, card_index),
+        )
+        conn.execute(
+            "DELETE FROM collection WHERE id=?",
+            (lineage_row["collection_id"],),
+        )
+
+    # Clear confirmed_finishes for this card_index
+    img = conn.execute(
+        "SELECT confirmed_finishes FROM ingest_images WHERE id=?", (image_id,)
+    ).fetchone()
+    if img and img["confirmed_finishes"]:
+        finishes = json.loads(img["confirmed_finishes"])
+        if card_index < len(finishes):
+            finishes[card_index] = None
+        conn.execute(
+            "UPDATE ingest_images SET confirmed_finishes=? WHERE id=?",
+            (json.dumps(finishes), image_id),
+        )
+
+    # Check if any lineage rows remain for this image
+    remaining = conn.execute(
+        "SELECT COUNT(*) FROM ingest_lineage WHERE image_md5=?", (md5,)
+    ).fetchone()[0]
+
+    new_status = "INGESTED" if remaining > 0 else "DONE"
+    conn.execute(
+        "UPDATE ingest_images SET status=?, updated_at=? WHERE id=?",
+        (new_status, now_iso(), image_id),
+    )
 
 
 def _process_image_background(db_path, image_id):
@@ -829,8 +881,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("recent.html")
         elif path == "/disambiguate":
             self._serve_static("disambiguate.html")
-        elif path == "/correct":
-            self._serve_static("correct.html")
         elif path == "/api/sets":
             self._api_sets()
         elif path == "/api/cached-sets":
@@ -1006,6 +1056,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_ingest2_delete()
         elif path == "/api/ingest2/reset":
             self._api_ingest2_reset()
+        elif path == "/api/ingest2/refinish":
+            self._api_ingest2_refinish()
         elif path == "/api/ingest2/batch-ingest":
             self._api_ingest2_batch_ingest()
         elif path == "/api/wishlist":
@@ -3029,6 +3081,29 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             _ingest_executor.submit(_process_image_background, self.db_path, image_id)
 
         self._send_json({"ok": True, "processing": _can_process()})
+
+    def _api_ingest2_refinish(self):
+        """Remove a card's collection entry so it reappears on Recents for finish re-selection."""
+        data = self._read_json_body()
+        if data is None:
+            return
+
+        image_id = data["image_id"]
+        card_index = data.get("card_index", 0)
+
+        conn = self._ingest2_db()
+        img = self._ingest2_load_image(conn, image_id)
+        if not img:
+            conn.close()
+            self._send_json({"error": "Image not found"}, 404)
+            return
+
+        _refinish_ingest_card(conn, image_id, img["md5"], card_index)
+        conn.commit()
+        conn.close()
+
+        _log_ingest(f"Refinish image {image_id} card_index={card_index}: {img['filename']}")
+        self._send_json({"ok": True})
 
     def _api_ingest2_batch_ingest(self):
         """Ensure all DONE images have collection entries, then mark INGESTED."""

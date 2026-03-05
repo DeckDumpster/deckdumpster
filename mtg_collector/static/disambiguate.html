@@ -375,7 +375,6 @@ function buildCardBlock(pc, idx) {
             <option value="foil">Foil</option>
             <option value="etched">Etched</option>
           </select>
-          <button class="secondary goto-correct-btn" data-idx="${idx}" style="font-size:0.8rem;padding:4px 10px;">Go to image correction</button>
         </div>
       </div>
     </div>
@@ -413,10 +412,6 @@ function buildCardBlock(pc, idx) {
 
   // Event listeners
   block.querySelector('.confirm-btn').addEventListener('click', () => confirmCard(idx));
-  block.querySelector('.goto-correct-btn').addEventListener('click', () => {
-    const imageId = parseInt(block.dataset.imageId);
-    window.open(`/correct?image_id=${imageId}`, '_blank');
-  });
   block.querySelector('.search-btn').addEventListener('click', () => searchCard(idx));
   block.querySelector('.search-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') searchCard(idx);
