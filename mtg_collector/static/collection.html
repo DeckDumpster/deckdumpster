@@ -2533,14 +2533,18 @@ async function loadModalCopies(card) {
     container.querySelectorAll('.refinish-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const imageId = parseInt(btn.dataset.imageId);
-        const cardIndex = parseInt(btn.dataset.cardIndex);
-        if (!confirm('This will remove this card from your collection so you can fix the finish. Continue?')) return;
+        const md5 = btn.dataset.imageMd5;
+        const allFromImage = container.querySelectorAll(`.refinish-btn[data-image-md5="${md5}"]`).length;
+        const msg = allFromImage > 1
+          ? `This will remove ALL ${allFromImage} cards from this image so you can fix the finish. Continue?`
+          : 'This will remove this card from your collection so you can fix the finish. Continue?';
+        if (!confirm(msg)) return;
         btn.disabled = true;
         btn.textContent = 'Refinishing...';
         const r = await fetch('/api/ingest2/refinish', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image_id: imageId, card_index: cardIndex }),
+          body: JSON.stringify({ image_id: imageId }),
         });
         if (r.ok) {
           loadModalCopies(card);
@@ -2696,7 +2700,7 @@ function renderCopySection(copy) {
   if (copy.image_md5 && copy.image_id) {
     lineageHtml = `<div class="modal-row"><span class="label">Lineage</span><span class="value" style="display:flex;gap:8px;align-items:center;">
       <button class="reprocess-btn" data-image-id="${copy.image_id}" data-image-md5="${copy.image_md5}" style="padding:2px 8px;font-size:0.8rem;background:#0f3460;color:#e0e0e0;border:1px solid #16213e;border-radius:4px;cursor:pointer;">Reprocess</button>
-      <button class="refinish-btn" data-image-id="${copy.image_id}" data-card-index="${copy.card_index}" style="padding:2px 8px;font-size:0.8rem;background:#0f3460;color:#e0e0e0;border:1px solid #16213e;border-radius:4px;cursor:pointer;">Refinish</button>
+      <button class="refinish-btn" data-image-id="${copy.image_id}" data-image-md5="${copy.image_md5}" style="padding:2px 8px;font-size:0.8rem;background:#0f3460;color:#e0e0e0;border:1px solid #16213e;border-radius:4px;cursor:pointer;">Refinish</button>
     </span></div>`;
   }
 

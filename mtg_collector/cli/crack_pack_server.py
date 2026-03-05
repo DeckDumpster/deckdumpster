@@ -661,54 +661,38 @@ def _reset_ingest_image(conn, image_id, md5, now):
     return removed
 
 
-def _refinish_ingest_card(conn, image_id, md5, card_index):
-    """Remove a specific card's collection entry and lineage so it can be re-finished.
+def _refinish_ingest_image(conn, image_id, md5):
+    """Remove all collection entries and lineage for an image so it can be re-finished.
 
     Preserves all Agent identification (disambiguated, claude_result, etc.).
-    Clears the confirmed_finishes entry for this card_index.
-    Sets image status to DONE if no remaining lineage rows exist, otherwise keeps INGESTED.
+    Clears all confirmed_finishes entries. Sets image status to DONE.
 
     Does NOT commit — caller is responsible.
     """
     from mtg_collector.utils import now_iso
 
-    # Delete lineage + collection entry for this specific card_index
-    lineage_row = conn.execute(
-        "SELECT collection_id FROM ingest_lineage WHERE image_md5=? AND card_index=?",
-        (md5, card_index),
-    ).fetchone()
-    if lineage_row:
-        conn.execute(
-            "DELETE FROM ingest_lineage WHERE image_md5=? AND card_index=?",
-            (md5, card_index),
-        )
-        conn.execute(
-            "DELETE FROM collection WHERE id=?",
-            (lineage_row["collection_id"],),
-        )
+    # Delete all lineage + collection entries for this image
+    lineage_rows = conn.execute(
+        "SELECT collection_id FROM ingest_lineage WHERE image_md5=?", (md5,)
+    ).fetchall()
+    if lineage_rows:
+        collection_ids = [r["collection_id"] for r in lineage_rows]
+        placeholders = ",".join("?" * len(collection_ids))
+        conn.execute("DELETE FROM ingest_lineage WHERE image_md5=?", (md5,))
+        conn.execute(f"DELETE FROM collection WHERE id IN ({placeholders})", collection_ids)
 
-    # Clear confirmed_finishes for this card_index
+    # Clear all confirmed_finishes
     img = conn.execute(
         "SELECT confirmed_finishes FROM ingest_images WHERE id=?", (image_id,)
     ).fetchone()
+    cleared_finishes = None
     if img and img["confirmed_finishes"]:
         finishes = json.loads(img["confirmed_finishes"])
-        if card_index < len(finishes):
-            finishes[card_index] = None
-        conn.execute(
-            "UPDATE ingest_images SET confirmed_finishes=? WHERE id=?",
-            (json.dumps(finishes), image_id),
-        )
+        cleared_finishes = json.dumps([None] * len(finishes))
 
-    # Check if any lineage rows remain for this image
-    remaining = conn.execute(
-        "SELECT COUNT(*) FROM ingest_lineage WHERE image_md5=?", (md5,)
-    ).fetchone()[0]
-
-    new_status = "INGESTED" if remaining > 0 else "DONE"
     conn.execute(
-        "UPDATE ingest_images SET status=?, updated_at=? WHERE id=?",
-        (new_status, now_iso(), image_id),
+        "UPDATE ingest_images SET status='DONE', confirmed_finishes=?, updated_at=? WHERE id=?",
+        (cleared_finishes, now_iso(), image_id),
     )
 
 
@@ -3083,13 +3067,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True, "processing": _can_process()})
 
     def _api_ingest2_refinish(self):
-        """Remove a card's collection entry so it reappears on Recents for finish re-selection."""
+        """Remove all collection entries for an image so it reappears on Recents for finish re-selection."""
         data = self._read_json_body()
         if data is None:
             return
 
         image_id = data["image_id"]
-        card_index = data.get("card_index", 0)
 
         conn = self._ingest2_db()
         img = self._ingest2_load_image(conn, image_id)
@@ -3098,11 +3081,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Image not found"}, 404)
             return
 
-        _refinish_ingest_card(conn, image_id, img["md5"], card_index)
+        _refinish_ingest_image(conn, image_id, img["md5"])
         conn.commit()
         conn.close()
 
-        _log_ingest(f"Refinish image {image_id} card_index={card_index}: {img['filename']}")
+        _log_ingest(f"Refinish image {image_id}: {img['filename']}")
         self._send_json({"ok": True})
 
     def _api_ingest2_batch_ingest(self):
