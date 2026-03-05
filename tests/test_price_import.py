@@ -71,7 +71,7 @@ def mock_allpricestoday(tmp_path):
             "uuid-001": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {"2024-01-15": 1.50, "2024-01-14": 1.45},
                             "foil": {"2024-01-15": 3.00},
                         }
@@ -86,7 +86,7 @@ def mock_allpricestoday(tmp_path):
             "uuid-002": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {"2024-01-15": 0.50},
                         }
                     },
@@ -105,7 +105,7 @@ def mock_allpricestoday(tmp_path):
             "uuid-010": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {"2024-01-15": 10.00},
                         }
                     },
@@ -115,7 +115,7 @@ def mock_allpricestoday(tmp_path):
             "uuid-999": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {"2024-01-15": 99.99},
                         }
                     },
@@ -136,7 +136,7 @@ def mock_allpricestoday_backfill(tmp_path):
             "uuid-001": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {
                                 "2024-01-13": 1.40,
                                 "2024-01-14": 1.45,
@@ -243,10 +243,10 @@ class TestImportPrices:
         # Reconnect since import_prices closes conn
         conn2 = sqlite3.connect(db_path)
         rows = conn2.execute("SELECT * FROM prices").fetchall()
-        # uuid-001: ck normal x2 dates + ck foil x1 + tcg normal x1 = 4
-        # uuid-002: ck normal x1 = 1
+        # uuid-001: ck buylist_normal x2 dates + ck buylist_foil x1 + tcg normal x1 = 4
+        # uuid-002: ck buylist_normal x1 = 1
         # uuid-003: tcg normal x1 + tcg foil x1 = 2
-        # uuid-010: ck normal x1 = 1
+        # uuid-010: ck buylist_normal x1 = 1
         # uuid-999: unmapped, skipped = 0
         assert len(rows) == 8
         conn2.close()

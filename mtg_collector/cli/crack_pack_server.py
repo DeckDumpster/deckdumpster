@@ -1357,7 +1357,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 price_type = "foil" if foil else "normal"
                 sc = card.get("set_code", "").lower()
                 cn = card.get("collector_number", "")
-                card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
+                card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", f"buylist_{price_type}")
                 card["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
 
         self._send_json(result)
@@ -1383,7 +1383,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             sc = card.get("set_code", "").lower()
             cn = card.get("collector_number", "")
             card["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
-            card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
+            card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", f"buylist_{price_type}")
 
         self._send_json(result)
 
@@ -1791,7 +1791,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
             for i, card in enumerate(results):
                 sc, cn, pt = price_keys[i]
-                card["ck_price"] = price_map.get((sc, cn, "cardkingdom", pt))
+                card["ck_price"] = price_map.get((sc, cn, "cardkingdom", f"buylist_{pt}"))
                 card["tcg_price"] = price_map.get((sc, cn, "tcgplayer", pt))
                 foil = card["finish"] in ("foil", "etched")
                 urls = ck_url_map.get(card["printing_id"], ("", ""))
@@ -1866,7 +1866,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Prices from SQLite
         sc = row["set_code"].lower()
         cn = row["collector_number"]
-        result["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", "normal")
+        result["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", "buylist_normal")
         result["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", "normal")
         result["ck_url"] = self.generator.get_ck_url(printing_id, False) if self.generator else ""
 
@@ -4129,8 +4129,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         source = data.get("source", "tcgplayer")
         price_type = data.get("price_type", "normal")
+        # CK prices are stored as buylist_normal/buylist_foil
+        db_price_type = f"buylist_{price_type}" if source == "cardkingdom" else price_type
         placeholders = ",".join("?" for _ in sets)
-        params = [source, price_type] + [s.lower() for s in sets]
+        params = [source, db_price_type] + [s.lower() for s in sets]
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(

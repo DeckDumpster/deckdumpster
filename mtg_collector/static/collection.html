@@ -1671,7 +1671,7 @@ const ALL_COLUMNS = [
   { key: 'price', label: 'Price', sort: 'price', defaultOn: true },
   { key: 'condition', label: 'Cond.', sort: 'name', defaultOn: false },
   { key: 'date_added', label: 'Added', sort: 'date_added', defaultOn: false },
-  { key: 'ck_price', label: 'CK $', sort: 'ck_price', defaultOn: false },
+  { key: 'ck_price', label: 'CK Buy $', sort: 'ck_price', defaultOn: false },
   { key: 'tcg_price', label: 'TCG $', sort: 'tcg_price', defaultOn: false },
 ];
 
@@ -1951,12 +1951,12 @@ const DFC_LAYOUTS = ['transform', 'modal_dfc', 'reversible_card', 'double_faced_
 
 // --- Price history chart ---
 const PRICE_SERIES_COLORS = {
-  tcgplayer_normal: '#e94560', cardkingdom_normal: '#7ec8e3',
-  tcgplayer_foil: '#a83248', cardkingdom_foil: '#5a9bb5',
+  tcgplayer_normal: '#e94560', cardkingdom_buylist_normal: '#7ec8e3',
+  tcgplayer_foil: '#a83248', cardkingdom_buylist_foil: '#5a9bb5',
 };
 const PRICE_SERIES_LABELS = {
-  tcgplayer_normal: 'TCG Normal', cardkingdom_normal: 'CK Normal',
-  tcgplayer_foil: 'TCG Foil', cardkingdom_foil: 'CK Foil',
+  tcgplayer_normal: 'TCG Normal', cardkingdom_buylist_normal: 'CK Buy Normal',
+  tcgplayer_foil: 'TCG Foil', cardkingdom_buylist_foil: 'CK Buy Foil',
 };
 const crosshairPlugin = {
   id: 'crosshair',
