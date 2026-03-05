@@ -160,6 +160,7 @@ header a:hover { color: #e94560; }
 }
 .info-row .img-wrap.foil > .foil-shimmer { display: block; }
 .info-row .scryfall-thumb { background: #1a1a2e; }
+.info-row .scryfall-thumb:not([src]) { visibility: hidden; }
 
 .img-card {
   display: block;
@@ -781,6 +782,11 @@ function createCardEl(img) {
 
   applyCropToImg(card.querySelector('img'), img.crop);
   applyCropToImg(infoRow.querySelector('.user-photo'), img.crop);
+  // Set scryfall thumbnail if image_uri available from resolved card
+  const thumbInit = infoRow.querySelector('.scryfall-thumb');
+  if (thumbInit && cards0 && cards0.image_uri) {
+    thumbInit.src = cards0.image_uri.replace('/small/', '/normal/');
+  }
   card.addEventListener('click', (e) => {
     if (e.target.closest('.finish-badge')) return;
     toggleAccordion(img.id);
@@ -1299,6 +1305,20 @@ function updateCardEl(card, img) {
     }
     // Toggle foil shimmer on img wraps
     infoRow.querySelectorAll('.img-wrap').forEach(w => w.classList.toggle('foil', isFoil));
+
+    // Update scryfall thumbnail from card image_uri
+    const thumb = infoRow.querySelector('.scryfall-thumb');
+    if (thumb && cards0 && cards0.image_uri) {
+      thumb.src = cards0.image_uri.replace('/small/', '/normal/');
+    } else if (thumb && (!cards0 || !cards0.image_uri)) {
+      thumb.removeAttribute('src');
+    }
+
+    // Apply crop to table-mode user photo
+    const userPhoto = infoRow.querySelector('.user-photo');
+    if (userPhoto && img.crop && !userPhoto.style.objectViewBox) {
+      applyCropToImg(userPhoto, img.crop);
+    }
   }
 }
 

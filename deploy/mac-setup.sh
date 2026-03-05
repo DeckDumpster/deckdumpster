@@ -86,7 +86,10 @@ fi
 ENV_FILE="${MTGC_CONFIG}/${INSTANCE}.env"
 if [ ! -f "$ENV_FILE" ]; then
     mkdir -p "$MTGC_CONFIG"
-    if [ -f "${MTGC_CONFIG}/default.env" ]; then
+    if [ "$TEST" = "true" ] && [ -f "${MTGC_CONFIG}/test.env" ]; then
+        echo "==> Creating $ENV_FILE from test.env..."
+        cp "${MTGC_CONFIG}/test.env" "$ENV_FILE"
+    elif [ -f "${MTGC_CONFIG}/default.env" ]; then
         echo "==> Creating $ENV_FILE from default.env..."
         cp "${MTGC_CONFIG}/default.env" "$ENV_FILE"
     else
