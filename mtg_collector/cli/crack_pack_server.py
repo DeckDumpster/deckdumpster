@@ -42,6 +42,19 @@ _scryfall_last_request: float = 0.0
 _background_db_path: str | None = None
 
 
+def _batch_ingest_query(image_id=None):
+    """Build the query + params for batch ingest image selection."""
+    query = """SELECT id, md5, stored_name, disambiguated, claude_result, confirmed_finishes
+               FROM ingest_images
+               WHERE status = 'DONE'
+               AND md5 NOT IN (SELECT DISTINCT image_md5 FROM ingest_lineage)"""
+    params = []
+    if image_id is not None:
+        query += " AND id = ?"
+        params.append(image_id)
+    return query, params
+
+
 def _get_ingest_images_dir() -> Path:
     global _INGEST_IMAGES_DIR
     if _INGEST_IMAGES_DIR is None:
@@ -3044,13 +3057,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         assign_target = data.get("assign_target", "")
+        image_id = data.get("image_id")
         conn = self._ingest2_db()
-        rows = conn.execute(
-            """SELECT id, md5, stored_name, disambiguated, claude_result, confirmed_finishes
-               FROM ingest_images
-               WHERE status = 'DONE'
-               AND md5 NOT IN (SELECT DISTINCT image_md5 FROM ingest_lineage)""",
-        ).fetchall()
+        rows = conn.execute(*_batch_ingest_query(image_id)).fetchall()
 
         printing_repo = PrintingRepository(conn)
         collection_repo = CollectionRepository(conn)

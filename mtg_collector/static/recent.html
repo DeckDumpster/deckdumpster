@@ -979,6 +979,10 @@ function renderAccordionContent(imgId, detail) {
   html += `<button class="danger" onclick="accDeleteImage(${imgId})">Delete</button>`;
   html += `</div>`;
 
+  if (!isPending && sid !== 'already_ingested') {
+    html += `<button class="primary" onclick="accIngestSingle(${imgId})">Add to Collection</button>`;
+  }
+
   if (sid !== 'already_ingested') {
     html += `<input type="text" id="acc-search-input-${imgId}" placeholder="Replace with..." value="${escapeHtml(cardInfo.name || '')}">`;
   }
@@ -1161,6 +1165,24 @@ async function accDeleteImage(imgId) {
   if (card) card.remove();
 
   updateSummaryFromGrid();
+}
+
+async function accIngestSingle(imgId) {
+  const assignSel = document.getElementById('assign-target');
+  const body = { image_id: imgId };
+  if (assignSel && assignSel.value) body.assign_target = assignSel.value;
+  const resp = await fetch('/api/ingest2/batch-ingest', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (data.ok) {
+    const card = document.querySelector(`#grid .img-card[data-id="${imgId}"]`);
+    if (card) card.remove();
+    accordionPanel.classList.remove('open');
+    updateSummaryFromGrid();
+  }
 }
 
 // ── Toggle accordion ─────────────────────────────────────────────────────────
