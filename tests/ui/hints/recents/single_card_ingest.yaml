@@ -1,0 +1,6 @@
+start_page: /recent
+involves:
+  - recents page card grid
+  - accordion sidebar
+  - single-card ingest button
+  - batch-ingest endpoint with image_id

@@ -110,8 +110,13 @@ def _discover_container(instance_name):
 
 
 @pytest.fixture(scope="session")
-def container_name(instance_name):
-    """Resolve and expose the container name for DB snapshot/restore."""
+def container_name(request, instance_name):
+    """Resolve and expose the container name for DB snapshot/restore.
+
+    Returns None when --base-url is provided (no container needed).
+    """
+    if request.config.getoption("--base-url"):
+        return None
     name = _discover_container(instance_name)
     if name is None:
         pytest.skip(
@@ -175,7 +180,13 @@ def base_url(request, instance_name, container_name):
 
 @pytest.fixture(scope="session")
 def _db_snapshot(container_name):
-    """Create a one-time DB snapshot at session start for per-test restore."""
+    """Create a one-time DB snapshot at session start for per-test restore.
+
+    No-op when running against a local server (--base-url, no container).
+    """
+    if container_name is None:
+        yield None
+        return
     log.info("Creating DB snapshot in container %s", container_name)
     subprocess.run(
         ["podman", "exec", container_name, "bash", "-c", _BACKUP_CMD],
@@ -191,9 +202,14 @@ def _db_snapshot(container_name):
 
 @pytest.fixture(autouse=True)
 def _restore_db(_db_snapshot):
-    """Restore the DB to its snapshot state after each test."""
+    """Restore the DB to its snapshot state after each test.
+
+    No-op when running against a local server (--base-url, no container).
+    """
     yield
     container = _db_snapshot
+    if container is None:
+        return
     log.info("Restoring DB snapshot in container %s", container)
     subprocess.run(
         ["podman", "exec", container, "bash", "-c", _RESTORE_CMD],

@@ -1,0 +1,12 @@
+# Scenario: Ingest a single card from the accordion sidebar
+#
+# Related:
+#   issues: [173]
+#   pull_requests: [175]
+
+description: >
+  On the recent images page, clicking a confirmed card opens the accordion
+  sidebar which shows an "Add to Collection" button. Clicking that button
+  ingests only that card (marks it INGESTED), removes it from the grid,
+  and leaves the remaining cards untouched (still DONE). After ingesting
+  one card, the grid should have one fewer card than before.
