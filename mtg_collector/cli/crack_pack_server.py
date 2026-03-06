@@ -603,6 +603,24 @@ def _process_image_core(conn, image_id, img, log_fn):
     # Step 3: Local DB resolution
     log_fn("status", {"message": "Resolving card..."})
 
+    # Apply set_hint as fallback set_code for cards that lack one
+    hint_set_code = None
+    raw_hint = (img.get("set_hint") or "").strip()
+    if raw_hint:
+        from mtg_collector.db.models import SetRepository
+        set_repo = SetRepository(conn)
+        # Try as set code first, then as set name
+        s = set_repo.get(raw_hint.lower())
+        if not s:
+            s = set_repo.get_by_name(raw_hint)
+        if s:
+            hint_set_code = s.set_code
+            _log_ingest(f"Resolved set_hint '{raw_hint}' -> {hint_set_code}")
+    if hint_set_code:
+        for ci in claude_cards:
+            if not (ci.get("set_code") or "").strip():
+                ci["set_code"] = hint_set_code
+
     all_matches = []
     all_crops = []
 
@@ -2346,6 +2364,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = self._ingest2_db()
         ts = now_iso()
 
+        # Extract set_hint from non-file form fields
+        set_hint = None
+        for part in parts:
+            if not part or part.strip() == b"--" or part.strip() == b"":
+                continue
+            header_end = part.find(b"\r\n\r\n")
+            if header_end == -1:
+                continue
+            header_str = part[:header_end].decode("utf-8", errors="replace")
+            if 'filename="' in header_str:
+                continue  # skip file parts
+            name_match = re.search(r'name="([^"]+)"', header_str)
+            if name_match and name_match.group(1) == "set_hint":
+                raw = part[header_end + 4:]
+                if raw.endswith(b"\r\n"):
+                    raw = raw[:-2]
+                set_hint = raw.decode("utf-8", errors="replace").strip() or None
+
         for part in parts:
             if not part or part.strip() == b"--" or part.strip() == b"":
                 continue
@@ -2381,9 +2417,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             md5 = _md5_file(str(dest))
 
             cursor = conn.execute(
-                """INSERT INTO ingest_images (filename, stored_name, md5, status, created_at, updated_at)
-                   VALUES (?, ?, ?, 'READY_FOR_OCR', ?, ?)""",
-                (original_name, stored_name, md5, ts, ts),
+                """INSERT INTO ingest_images (filename, stored_name, md5, status, set_hint, created_at, updated_at)
+                   VALUES (?, ?, ?, 'READY_FOR_OCR', ?, ?, ?)""",
+                (original_name, stored_name, md5, set_hint, ts, ts),
             )
             image_id = cursor.lastrowid
             conn.commit()
@@ -2992,7 +3028,20 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         conn = self._ingest2_db()
-        results = _local_name_search(conn, query)
+
+        # Resolve optional set_code filter (code or name)
+        resolved_set = None
+        raw_set = (data.get("set_code") or "").strip()
+        if raw_set:
+            from mtg_collector.db.models import SetRepository
+            set_repo = SetRepository(conn)
+            s = set_repo.get(raw_set.lower())
+            if not s:
+                s = set_repo.get_by_name(raw_set)
+            if s:
+                resolved_set = s.set_code
+
+        results = _local_name_search(conn, query, set_code=resolved_set)
         formatted = _format_candidates(results)
 
         # Update scryfall_matches in DB if image_id provided
