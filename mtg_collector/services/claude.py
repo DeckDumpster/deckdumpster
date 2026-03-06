@@ -123,13 +123,15 @@ OCR TEXT:
                 last_error = f"JSON parse error: {e}"
                 print(f"  {last_error}")
             except anthropic.BadRequestError as e:
+                error_msg = str(e)
+                if "credit balance" in error_msg.lower() or "billing" in error_msg.lower():
+                    raise RuntimeError("Anthropic API credit balance too low. Add credits at console.anthropic.com.") from e
                 print(f"  Error: {e}")
                 return []
             except Exception as e:
                 last_error = str(e)
                 if "api_key" in str(e).lower() or "authentication" in str(e).lower():
-                    print(f"  Error: {e}")
-                    return []
+                    raise RuntimeError(f"Anthropic API authentication error: {e}") from e
                 print(f"  Error: {e}")
 
         print(f"  Failed after {self.max_retries + 1} attempts. Last error: {last_error}")
@@ -284,13 +286,15 @@ OCR FRAGMENTS:
 
                 return cards, response.usage
             except anthropic.BadRequestError as e:
+                error_msg = str(e)
+                if "credit balance" in error_msg.lower() or "billing" in error_msg.lower():
+                    raise RuntimeError("Anthropic API credit balance too low. Add credits at console.anthropic.com.") from e
                 print(f"  Error: {e}")
                 return [], None
             except Exception as e:
                 last_error = str(e)
                 if "api_key" in str(e).lower() or "authentication" in str(e).lower():
-                    print(f"  Error: {e}")
-                    return [], None
+                    raise RuntimeError(f"Anthropic API authentication error: {e}") from e
                 print(f"  Error: {e}")
 
         print(f"  Failed after {self.max_retries + 1} attempts. Last error: {last_error}")
@@ -494,13 +498,15 @@ Return ONLY a JSON array:
                 last_error = f"JSON parse error: {e}"
                 print(f"  {last_error}")
             except anthropic.BadRequestError as e:
+                error_msg = str(e)
+                if "credit balance" in error_msg.lower() or "billing" in error_msg.lower():
+                    raise RuntimeError("Anthropic API credit balance too low. Add credits at console.anthropic.com.") from e
                 print(f"  Error: {e}")
                 return [], []
             except Exception as e:
                 last_error = str(e)
                 if "api_key" in str(e).lower() or "authentication" in str(e).lower():
-                    print(f"  Error: {e}")
-                    return [], []
+                    raise RuntimeError(f"Anthropic API authentication error: {e}") from e
                 print(f"  Error: {e}")
 
         print(f"  Failed after {self.max_retries + 1} attempts. Last error: {last_error}")
