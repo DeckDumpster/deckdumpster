@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS ingest_images (
     status TEXT NOT NULL DEFAULT 'READY_FOR_OCR'
         CHECK(status IN ('READY_FOR_OCR','PROCESSING','READY_FOR_DISAMBIGUATION','DONE','ERROR','INGESTED')),
     mode TEXT,
+    set_hint TEXT,
     ocr_result TEXT,
     claude_result TEXT,
     agent_trace TEXT,               -- JSON array of trace strings from the agent run
@@ -549,6 +550,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v24_to_v25(conn)
         if current < 26:
             _migrate_v25_to_v26(conn)
+        if current < 27:
+            _migrate_v26_to_v27(conn)
 
     # Record schema version
     conn.execute(
@@ -1578,6 +1581,17 @@ def _migrate_v25_to_v26(conn: sqlite3.Connection):
         LEFT JOIN decks d ON c.deck_id = d.id
         LEFT JOIN binders b ON c.binder_id = b.id
     """)
+
+
+def _migrate_v26_to_v27(conn: sqlite3.Connection):
+    """Add set_hint column to ingest_images."""
+    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    if "ingest_images" not in tables:
+        return
+    cursor = conn.execute("PRAGMA table_info(ingest_images)")
+    cols = [r[1] for r in cursor.fetchall()]
+    if "set_hint" not in cols:
+        conn.execute("ALTER TABLE ingest_images ADD COLUMN set_hint TEXT")
 
 
 def drop_all_tables(conn: sqlite3.Connection):
