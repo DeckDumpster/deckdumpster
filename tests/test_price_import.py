@@ -71,7 +71,7 @@ def mock_allpricestoday(tmp_path):
             "uuid-001": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {"2024-01-15": 1.50, "2024-01-14": 1.45},
                             "foil": {"2024-01-15": 3.00},
                         }
@@ -86,7 +86,7 @@ def mock_allpricestoday(tmp_path):
             "uuid-002": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {"2024-01-15": 0.50},
                         }
                     },
@@ -105,7 +105,7 @@ def mock_allpricestoday(tmp_path):
             "uuid-010": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {"2024-01-15": 10.00},
                         }
                     },
@@ -115,7 +115,7 @@ def mock_allpricestoday(tmp_path):
             "uuid-999": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {"2024-01-15": 99.99},
                         }
                     },
@@ -136,7 +136,7 @@ def mock_allpricestoday_backfill(tmp_path):
             "uuid-001": {
                 "paper": {
                     "cardkingdom": {
-                        "retail": {
+                        "buylist": {
                             "normal": {
                                 "2024-01-13": 1.40,
                                 "2024-01-14": 1.45,
@@ -243,10 +243,10 @@ class TestImportPrices:
         # Reconnect since import_prices closes conn
         conn2 = sqlite3.connect(db_path)
         rows = conn2.execute("SELECT * FROM prices").fetchall()
-        # uuid-001: ck normal x2 dates + ck foil x1 + tcg normal x1 = 4
-        # uuid-002: ck normal x1 = 1
+        # uuid-001: ck buylist_normal x2 dates + ck buylist_foil x1 + tcg normal x1 = 4
+        # uuid-002: ck buylist_normal x1 = 1
         # uuid-003: tcg normal x1 + tcg foil x1 = 2
-        # uuid-010: ck normal x1 = 1
+        # uuid-010: ck buylist_normal x1 = 1
         # uuid-999: unmapped, skipped = 0
         assert len(rows) == 8
         conn2.close()
@@ -287,6 +287,61 @@ class TestImportPrices:
         assert rows[0][0] == "2024-01-13"
         assert rows[1][0] == "2024-01-14"
         assert rows[2][0] == "2024-01-15"
+        conn2.close()
+
+    def test_ck_imports_buylist_not_retail(self, test_db, mock_allprintings, tmp_path):
+        """CK prices use buylist price types; CK retail data is ignored."""
+        from mtg_collector.cli.data_cmd import import_prices
+
+        db_path, conn = test_db
+        self._setup_uuid_map(conn)
+
+        # Card has both retail and buylist for CK, only retail for TCG
+        data = {
+            "data": {
+                "uuid-001": {
+                    "paper": {
+                        "cardkingdom": {
+                            "retail": {
+                                "normal": {"2024-01-15": 5.00},
+                            },
+                            "buylist": {
+                                "normal": {"2024-01-15": 2.50},
+                                "foil": {"2024-01-15": 4.00},
+                            },
+                        },
+                        "tcgplayer": {
+                            "retail": {
+                                "normal": {"2024-01-15": 3.00},
+                            }
+                        },
+                    }
+                },
+            }
+        }
+        prices_path = tmp_path / "AllPricesToday.json"
+        prices_path.write_text(json.dumps(data))
+
+        with patch("mtg_collector.cli.data_cmd.get_allpricestoday_path", return_value=prices_path):
+            with patch("mtg_collector.cli.data_cmd.get_allprintings_path", return_value=mock_allprintings):
+                import_prices(db_path)
+
+        conn2 = sqlite3.connect(db_path)
+        conn2.row_factory = sqlite3.Row
+        rows = conn2.execute(
+            "SELECT source, price_type, price FROM prices ORDER BY source, price_type"
+        ).fetchall()
+
+        prices = {(r["source"], r["price_type"]): r["price"] for r in rows}
+
+        # CK buylist prices imported
+        assert prices[("cardkingdom", "buylist_normal")] == 2.50
+        assert prices[("cardkingdom", "buylist_foil")] == 4.00
+        # CK retail NOT imported
+        assert ("cardkingdom", "normal") not in prices
+        # TCG retail imported as usual
+        assert prices[("tcgplayer", "normal")] == 3.00
+
         conn2.close()
 
     def test_unmapped_uuids_skipped(self, test_db, mock_allprintings, mock_allpricestoday):

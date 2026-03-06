@@ -536,16 +536,24 @@ def import_prices(db_path: str):
         paper = card_prices.get("paper", {})
         for provider_key, source_name in provider_map.items():
             prov = paper.get(provider_key, {})
-            retail = prov.get("retail", {})
-            for price_type in ("normal", "foil"):
-                prices_by_date = retail.get(price_type, {})
-                for date_str, price_val in prices_by_date.items():
-                    if price_val is not None:
-                        price_rows.append((
-                            set_code, collector_number, source_name,
-                            price_type, float(price_val), date_str,
-                        ))
-                        dates_seen.add(date_str)
+            # CK: import buylist prices (what CK will pay you)
+            # TCG: import retail prices (what you'd pay)
+            price_categories = (
+                [("buylist", "buylist_")]
+                if provider_key == "cardkingdom"
+                else [("retail", "")]
+            )
+            for category, type_prefix in price_categories:
+                cat_data = prov.get(category, {})
+                for price_type in ("normal", "foil"):
+                    prices_by_date = cat_data.get(price_type, {})
+                    for date_str, price_val in prices_by_date.items():
+                        if price_val is not None:
+                            price_rows.append((
+                                set_code, collector_number, source_name,
+                                f"{type_prefix}{price_type}", float(price_val), date_str,
+                            ))
+                            dates_seen.add(date_str)
 
     print(f"  Inserting {len(price_rows)} price rows ...")
     conn.executemany(
