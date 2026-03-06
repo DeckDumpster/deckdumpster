@@ -165,11 +165,16 @@ def _merge_overlapping_cards(claude_cards, ocr_fragments):
 
     def _fields_conflict(a, b):
         """Check if two cards have conflicting non-null fields."""
-        for key in ("name", "type", "subtype", "mana_cost", "collector_number", "set_code"):
+        for key in ("name",):
             va = a.get(key)
             vb = b.get(key)
             if va and vb and str(va).lower() != str(vb).lower():
                 return True
+        # If both have printing_ids, check for any overlap (overlap = same card = no conflict)
+        a_ids = set(a.get("printing_ids", []))
+        b_ids = set(b.get("printing_ids", []))
+        if a_ids and b_ids and not a_ids & b_ids:
+            return True
         return False
 
     # Compute bboxes
@@ -205,10 +210,17 @@ def _merge_overlapping_cards(claude_cards, ocr_fragments):
         dst_frags = set(dst.get("fragment_indices", []))
         dst_frags.update(src.get("fragment_indices", []))
         dst["fragment_indices"] = sorted(dst_frags)
+        # Merge printing_ids (union, preserving dst order first)
+        dst_pids = list(dst.get("printing_ids", []))
+        src_pids = src.get("printing_ids", [])
+        dst_pid_set = set(dst_pids)
+        for pid in src_pids:
+            if pid not in dst_pid_set:
+                dst_pids.append(pid)
+                dst_pid_set.add(pid)
+        dst["printing_ids"] = dst_pids
         # Fill in missing fields from src
-        for key in ("name", "mana_cost", "mana_value", "type", "subtype",
-                     "rules_text", "collector_number", "set_code", "artist",
-                     "power", "toughness"):
+        for key in ("name", "notes"):
             if not dst.get(key) and src.get(key):
                 dst[key] = src[key]
 
@@ -318,9 +330,18 @@ def _extract_ocr_name(ocr_fragments, fragment_indices):
 
 
 def _narrow_candidates(candidates, card_info):
-    """Progressively narrow candidates by artist, set, and collector number."""
+    """Narrow candidates using agent's printing_id ordering.
+
+    When the agent emits printing_ids, candidates are already in preference
+    order from _resolve_candidates. For legacy card_info format (user edits),
+    falls back to narrowing by set and collector number.
+    """
     if len(candidates) <= 1:
         return candidates
+    # New format: agent already ordered by preference via printing_ids
+    if card_info.get("printing_ids"):
+        return candidates
+    # Legacy format: narrow by set_code/collector_number
     result = candidates
     artist = (card_info.get("artist") or "").strip()
     if artist:
@@ -422,63 +443,82 @@ def _normalize_artist(s):
 def _resolve_candidates(conn, card_infos):
     """Resolve agent card entries to candidate printings.
 
-    One query per entry, AND'ing name + set + collector_number in SQL.
-    Artist is compared in Python after accent-stripping (SQLite LIKE
-    doesn't handle unicode diacritics).
-    Results merged and deduplicated across entries.
+    The agent emits printing_ids directly from DB queries. We look up each ID
+    and return the raw card data. Results merged and deduplicated across entries.
+    Falls back to name/set/cn lookup for legacy card_info format (e.g. user edits).
     """
-    all_candidates = {}  # scryfall_id → raw dict (dedup)
+    all_candidates = {}  # printing_id → raw dict (dedup)
 
     for ci in card_infos:
-        conditions = ["s.digital = 0"]
-        params = []
+        printing_ids = ci.get("printing_ids", [])
 
-        name = (ci.get("name") or "").strip()
-        sc = (ci.get("set_code") or "").strip().lower()
-        cn = (ci.get("collector_number") or "").strip()
-        artist = (ci.get("artist") or "").strip()
-
-        if name:
-            conditions.append("c.name COLLATE NOCASE = ?")
-            params.append(name)
-        if sc:
-            conditions.append("p.set_code = ?")
-            params.append(sc)
-        if cn:
-            stripped = cn.lstrip("0") or "0"
-            if stripped != cn:
-                conditions.append("p.collector_number IN (?, ?)")
-                params.extend([cn, stripped])
-            else:
-                conditions.append("p.collector_number = ?")
-                params.append(cn)
-        if len(conditions) == 1:  # only s.digital = 0, no usable data
-            continue
-
-        where = " AND ".join(conditions)
-        rows = conn.execute(
-            f"""SELECT DISTINCT p.raw_json, p.artist FROM printings p
-                JOIN cards c ON p.oracle_id = c.oracle_id
-                JOIN sets s ON p.set_code = s.set_code
-                WHERE {where}""",
-            params,
-        ).fetchall()
-
-        # Post-filter by artist in Python (soft — fall back to all rows if no match)
-        sql_matched = [r for r in rows if r[0]]
-        if artist and sql_matched:
-            artist_norm = _normalize_artist(artist)
-            artist_filtered = [
-                r for r in sql_matched
-                if not r["artist"] or artist_norm in _normalize_artist(r["artist"])
-            ]
-            use = artist_filtered if artist_filtered else sql_matched
+        if printing_ids:
+            # New format: agent emitted printing_ids directly
+            placeholders = ",".join("?" for _ in printing_ids)
+            rows = conn.execute(
+                f"SELECT printing_id, raw_json FROM printings WHERE printing_id IN ({placeholders})",
+                printing_ids,
+            ).fetchall()
+            row_map = {}
+            for r in rows:
+                if r["raw_json"]:
+                    row_map[r["printing_id"]] = json.loads(r["raw_json"])
+            # Insert in agent's preferred order (most likely first)
+            for pid in printing_ids:
+                if pid in row_map and pid not in all_candidates:
+                    all_candidates[pid] = row_map[pid]
         else:
-            use = sql_matched
-        for r in use:
-            data = json.loads(r[0])
-            all_candidates[data["id"]] = data
+            # Legacy format: name/set_code/collector_number (user card edits)
+            conditions = ["s.digital = 0"]
+            params = []
 
+            name = (ci.get("name") or "").strip()
+            sc = (ci.get("set_code") or "").strip().lower()
+            cn = (ci.get("collector_number") or "").strip()
+
+            if name:
+                conditions.append("c.name COLLATE NOCASE = ?")
+                params.append(name)
+            if sc:
+                conditions.append("p.set_code = ?")
+                params.append(sc)
+            if cn:
+                stripped = cn.lstrip("0") or "0"
+                if stripped != cn:
+                    conditions.append("p.collector_number IN (?, ?)")
+                    params.extend([cn, stripped])
+                else:
+                    conditions.append("p.collector_number = ?")
+                    params.append(cn)
+            if len(conditions) == 1:
+                continue
+
+            where = " AND ".join(conditions)
+            rows = conn.execute(
+                f"""SELECT DISTINCT p.raw_json, p.artist FROM printings p
+                    JOIN cards c ON p.oracle_id = c.oracle_id
+                    JOIN sets s ON p.set_code = s.set_code
+                    WHERE {where}""",
+                params,
+            ).fetchall()
+
+            # Post-filter by artist in Python (soft — fall back to all rows if no match)
+            artist = (ci.get("artist") or "").strip()
+            sql_matched = [r for r in rows if r[0]]
+            if artist and sql_matched:
+                artist_norm = _normalize_artist(artist)
+                artist_filtered = [
+                    r for r in sql_matched
+                    if not r["artist"] or artist_norm in _normalize_artist(r["artist"])
+                ]
+                use = artist_filtered if artist_filtered else sql_matched
+            else:
+                use = sql_matched
+            for r in use:
+                data = json.loads(r[0])
+                all_candidates[data["id"]] = data
+
+    # Return in insertion order (agent's preferred order preserved)
     return list(all_candidates.values())
 
 
@@ -519,11 +559,28 @@ def _process_image_core(conn, image_id, img, log_fn):
     Used by both the SSE endpoint and background workers.
     log_fn(event_type, data_dict) is called for progress events.
     """
-    if _has_fake_agent():
-        from mtg_collector.services.fake_agent import run_agent
-    else:
-        from mtg_collector.services.agent import run_agent
+    from mtg_collector.services.agent import run_agent as real_agent
+    from mtg_collector.services.fake_agent import run_agent as fake_agent
     from mtg_collector.services.ocr import run_ocr_with_boxes
+
+    def run_agent(image_path, ocr_fragments, status_callback=None, trace_out=None):
+        """Dispatch to fake or real agent based on env config.
+
+        API key only: always real agent.
+        API key + FAKE_AGENT: try fake, fall back to real on miss.
+        FAKE_AGENT only: fake only, error on miss.
+        """
+        if _has_fake_agent():
+            try:
+                return fake_agent(image_path, ocr_fragments=ocr_fragments,
+                                  status_callback=status_callback, trace_out=trace_out)
+            except ValueError:
+                if _has_api_key():
+                    _log_ingest("Fake agent miss, falling back to real agent")
+                else:
+                    raise
+        return real_agent(image_path, ocr_fragments=ocr_fragments,
+                          status_callback=status_callback, trace_out=trace_out)
     from mtg_collector.utils import now_iso
 
     image_path = str(_get_ingest_images_dir() / img["stored_name"])
@@ -732,6 +789,8 @@ def _process_image_background(db_path, image_id):
     from mtg_collector.db.schema import init_db
     from mtg_collector.utils import now_iso
 
+    _log_ingest(f"[bg:{image_id}] Background worker started")
+
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -744,6 +803,7 @@ def _process_image_background(db_path, image_id):
     )
     conn.commit()
     if cursor.rowcount == 0:
+        _log_ingest(f"[bg:{image_id}] Skipped — not READY_FOR_OCR")
         conn.close()
         return
 

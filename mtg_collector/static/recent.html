@@ -1250,7 +1250,8 @@ async function toggleAccordion(imgId) {
   accordionPanel.classList.add('open');
   card.classList.add('selected');
 
-  // Fetch detail and render
+  // Always fetch fresh detail when opening
+  invalidateDetailCache(imgId);
   const detail = await loadAccordionDetail(imgId);
   renderAccordionContent(imgId, detail);
 
@@ -1473,6 +1474,12 @@ async function pollOneImage(id) {
   if (img.border_status !== 'processing') {
     clearInterval(activePolls.get(id));
     activePolls.delete(id);
+    // Refresh accordion if it's open for this image
+    invalidateDetailCache(id);
+    if (accordionPanel.dataset.imgId === String(id) && accordionPanel.classList.contains('open')) {
+      const detail = await loadAccordionDetail(id);
+      renderAccordionContent(id, detail);
+    }
   }
 }
 

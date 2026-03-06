@@ -232,7 +232,7 @@ DEMO_INGEST_SAMPLES = [
             {"text": "1993-2006.Wiznrds-ofthe-Coast", "bbox": {"x": 230.0, "y": 1288.0, "w": 228.0, "h": 17.0}, "confidence": 0.802},
         ],
         "claude_result": [
-            {"name": "Aetherflame Wall", "set_code": "tsp", "collector_number": "142", "fragment_indices": [0, 1, 2, 3, 4, 5, 6, 7]},
+            {"name": "Aetherflame Wall", "printing_ids": ["93b14f08-dd93-4a9f-a616-8f8d0b26b966"], "fragment_indices": [0, 1, 2, 3, 4, 5, 6, 7]},
         ],
         "crops": [{"x": 119, "y": 417, "w": 693, "h": 968}],
     },
@@ -241,6 +241,12 @@ DEMO_INGEST_SAMPLES = [
         # Unicode artist bug in _resolve_candidates causes empty scryfall_matches.
         "fixture": "sample-brimstone-mage.jpg",
         "stored_name": "sample_brimstone_mage.jpg",
+        "status": "READY_FOR_OCR",
+    },
+    {
+        # Michiko's Reign of Truth — double-faced saga from NEO.
+        "fixture": "sample-michikos-reign-of-truth.jpg",
+        "stored_name": "sample_michikos_reign_of_truth.jpg",
         "status": "READY_FOR_OCR",
     },
     {
@@ -260,14 +266,14 @@ DEMO_INGEST_SAMPLES = [
             {"text": "2/1", "bbox": {"x": 653.0, "y": 1230.0, "w": 54.0, "h": 35.0}, "confidence": 0.995},
         ],
         "claude_result": [
-            {"name": "Canyon Wildcat", "set_code": "ddh", "collector_number": "6", "fragment_indices": [0, 2, 3, 4, 5]},
-            {"name": "Canyon Wildcat", "set_code": "tmp", "collector_number": "167", "fragment_indices": [0, 2, 3, 4, 5]},
-            {"name": "Canyon Wildcat", "set_code": "8ed", "collector_number": "181", "fragment_indices": [0, 2, 3, 4, 5]},
-            {"name": "Canyon Wildcat", "set_code": "8ed", "collector_number": "181\u2605", "fragment_indices": [0, 2, 3, 4, 5]},
-            {"name": "Canyon Wildcat", "set_code": "tpr", "collector_number": "127", "fragment_indices": [0, 2, 3, 4, 5]},
+            {"name": "Canyon Wildcat", "printing_ids": ["ef69547a-c060-45ac-9478-10fbe324cd42", "0169e52b-7909-4a8f-8ca2-62f030f9a85a", "7a761bfc-71dc-40be-8184-6e0be2f25d07", "f6acfd70-b866-44c8-862d-f66e28fb61bf"], "fragment_indices": [0, 2, 3, 4, 5]},
         ],
         "crops": [{"x": 143, "y": 434, "w": 649, "h": 906}],
     },
+    # --- Additional test card photos (READY_FOR_OCR — processed by agent on startup) ---
+    {"fixture": "camera_2026-03-05T04-45-53_184.jpg", "stored_name": "camera_2026_03_05_04_45_53_184.jpg", "status": "READY_FOR_OCR"},  # TMT Swamp
+    {"fixture": "camera_2026-03-05T17-20-15_11.jpg", "stored_name": "camera_2026_03_05_17_20_15_11.jpg", "status": "READY_FOR_OCR"},  # Era of Enlightenment
+    {"fixture": "signal-2026-03-05-101048.jpeg", "stored_name": "signal_2026_03_05_101048.jpeg", "status": "READY_FOR_OCR"},  # Zen Plains
 ]
 
 # Demo saved views
@@ -327,10 +333,8 @@ def _load_demo_ingest(conn, ts):
         md5 = hashlib.md5(image_path.read_bytes()).hexdigest()
 
         # Unprocessed: insert as just-uploaded, then run the processing
-        # pipeline immediately (fake agent for card ID, real OCR for crops).
+        # pipeline immediately.
         if sample["status"] == "READY_FOR_OCR":
-            import os
-
             from mtg_collector.cli.crack_pack_server import _process_image_background
 
             cursor = conn.execute(
@@ -343,8 +347,6 @@ def _load_demo_ingest(conn, ts):
             image_id = cursor.lastrowid
             conn.commit()
 
-            # Force fake agent mode so no API key is needed
-            os.environ["MTGC_FAKE_AGENT"] = "1"
             db_path = conn.execute("PRAGMA database_list").fetchone()[2]
             _process_image_background(db_path, image_id)
 

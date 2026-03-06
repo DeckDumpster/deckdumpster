@@ -18,44 +18,14 @@ DEFAULT_MAX_CALLS = 12
 LARGE_FRAGMENT_THRESHOLD = 70
 CONTEXT_UPGRADE_THRESHOLD = 8_000  # input tokens; switch Haiku → Sonnet if context grows large
 
-SYSTEM_PROMPT = """\
-You are an expert Magic: The Gathering card identifier running in an automated pipeline.
-You receive OCR text fragments from a photo of a single MTG card. The text
-fragments indicate position via bounding boxes,
-text in those boxes, and confidence scores from OCR.
-
-You are NOT interactive. Do not address the user, ask questions, or make suggestions like
-"if you can see..." or "you could check...". Do not use markdown formatting, bold text, or
-headers. Just reason concisely and call tools.
-
-YOUR JOB:
-Identify the card and return ALL plausible printing candidates so a human can pick the right one.
-OCR may have detected partial text fragments from other cards or sources
-in the background that you should ignore.
-
-Strategy:
-1. Interpret OCR fragments to find card data. The most important indicators are name, set code, and collector number.
-2. Search to verify using query_local_db — when disambiguating printings, JOIN sets to get
-   set_name and released_at so you can reason about which sets are plausible.
-3. If OCR and DB queries leave multiple plausible printings, consider calling analyze_image.
-   Always search the DB first so you have context to interpret the vision results.
-   Do NOT use analyze_image to distinguish older set reprints that differ only by border color,
-   set symbol, or frame era (e.g. 3ed vs 4ed vs 5ed, Alpha vs Beta) — just return all of those.
-   It IS useful when candidates differ in ways OCR cannot capture, like full-art vs normal frame,
-   alternate art, or promo vs regular versions of newer cards.
-4. Stop calling tools and list ALL remaining candidate card matches.
-
-OCR BOUNDING BOXES
-
-Cards will ALWAYS be positioned vertically in an image. The aspect ratio of a Magic card is 63:88 (wide:tall).
-
+CARD_STRUCTURE = """\
 CARD LAYOUT (top to bottom):
   - Title (top left of card)
   - Colorless portion of a mana cost (optional; top right of card)
   - Type and Subtype (middle left of card, below the art; subtype optional)
   - Rules text (below type line — may be blank on vanilla creatures)
   - Flavor text (italic, below rules, not always present)
-  - Bottom-left corner: collector number, set code, artist name (on newer cards: see Collector Numbers below)
+  - Bottom-left info area (format varies by era — see BOTTOM-LEFT INFO below)
   - Bottom-right corner: power/toughness (creatures only)
 
 Some cards have wildly different faces, like titles at the bottom or rules text directly below the title.
@@ -70,13 +40,79 @@ There may be large vertical gaps between the title and the type line — that is
 Cards with no rules text will have another gap between the type line and the collector info.
 All of these text regions belong to the SAME card.
 
-Collector numbers — the printed format has changed over Magic's history:
-  - Pre-1998 (before Exodus): NO collector number printed on card at all.
-  - 1998–2014 (Exodus through M15): printed as "CN/TOTAL" (e.g., "10/250"), 1-3 digit CN.
-  - 2015–2023 (M15 frame through Phyrexia): CN on its own line, 1-3 digits, no leading zeros.
-  - 2023+ (March of the Machine onward): exactly 4 digits with leading zeros (e.g., 0092, 0161).
-    If you see fewer than 4 digits from a 4-digit-era card, the OCR is truncated — omit it.
-  - Some cards across all eras have letter suffixes (a, b, s, z) or prefixes (A-) for variants.
+BOTTOM-LEFT INFO — this area has changed across Magic's history. All info below is on
+separate lines from each other; items are NOT adjacent on the same line.
+
+Era 1: Alpha through Alliances (1993–1996)
+  - "Illus. <Artist Name>" (centered below text box)
+  - Copyright line (year added from Legends onward)
+  - NO collector number, NO set code
+
+Era 2: Exodus through 7th Edition (1998–2002) — pre-modern frame
+  - "Illus. <Artist Name>" (centered)
+  - "CN/TOTAL" collector number (e.g. "47/143") + copyright/trademark on same line
+  - NO set code printed
+
+Era 3: 8th Edition through Magic 2014 (2003–2013) — modern frame
+  - "Illus. <Artist Name>" (left-aligned)
+  - "CN/TOTAL" collector number + copyright/trademark
+  - NO set code printed
+
+Era 4: Magic 2015 through Phyrexia: All Will Be One (2014–2023) — M15 frame
+  - Black info bar at bottom of card (the "OCR area")
+  - Line 1: "CN/TOTAL RARITY" (e.g. "122/269 R") — rarity is C/U/R/M
+  - Line 2: "SET . LANG" (e.g. "M15 . EN") — 3-letter set code, 2-letter language
+  - Line 3: paintbrush icon + Artist Name (replaces "Illus.")
+  - Copyright/trademark on right side of black bar
+
+Era 5: March of the Machine onward (2023–present)
+  - Same black info bar as Era 4
+  - Line 1: "RARITY+4DIGIT_CN" (e.g. "R0092", "C0145") — rarity prefix, 4-digit padded CN
+  - Line 2: "SET . LANG" (same as Era 4)
+  - Line 3: paintbrush icon + Artist Name
+  - The fraction format "CN/TOTAL" was abandoned
+
+Across all eras, some collector numbers have letter suffixes (a, b, s, z) or prefixes (A-).
+The paintbrush icon before the artist name may be misread as digits (e.g. "00661") — if you
+see unexpected digits directly before an artist name, they are likely the paintbrush icon,
+not a real number."""
+
+SYSTEM_PROMPT = """\
+You are an expert Magic: The Gathering card identifier running in an automated pipeline.
+You receive OCR text fragments from a photo of a single MTG card. The text
+fragments indicate position via bounding boxes,
+text in those boxes, and confidence scores from OCR.
+
+You are NOT interactive. Do not address the user, ask questions, or make suggestions like
+"if you can see..." or "you could check...". Do not use markdown formatting, bold text, or
+headers. Just reason concisely and call tools.
+
+YOUR JOB:
+Identify the card and return ALL plausible printing candidates as DATABASE PRINTING IDs
+so a human can pick the right one.
+OCR may have detected partial text fragments from other cards or sources
+in the background that you should ignore.
+
+Strategy:
+1. Interpret OCR fragments to find card data. The most important indicators are name, set code, and collector number.
+2. Search to verify using query_local_db — when disambiguating printings, JOIN sets to get
+   set_name and released_at so you can reason about which sets are plausible.
+   ALWAYS SELECT printing_id in your queries — you will need these IDs for your final output.
+3. If OCR and DB queries leave multiple plausible printings, consider calling analyze_image.
+   Always search the DB first so you have context to interpret the vision results.
+   Do NOT use analyze_image to distinguish older set reprints that differ only by border color,
+   set symbol, or frame era (e.g. 3ed vs 4ed vs 5ed, Alpha vs Beta) — just return all of those.
+   It IS useful when candidates differ in ways OCR cannot capture, like full-art vs normal frame,
+   alternate art, or promo vs regular versions of newer cards.
+4. If you have found zero candidates, call analyze_image before giving up. Never return
+   an empty result without trying vision first.
+5. Stop calling tools and emit ALL remaining candidate printing_ids.
+
+OCR BOUNDING BOXES
+
+Cards will ALWAYS be positioned vertically in an image. The aspect ratio of a Magic card is 63:88 (wide:tall).
+
+""" + CARD_STRUCTURE + """
 
 USING OCR DATA TO SEARCH
 The most reliable indicators of a card are its name, set code, and collector number.
@@ -85,20 +121,20 @@ the best tools to narrow potential printings. If a date is present
 Card text can be used also, but older card rules text wording may not match the card database.
 
 DISAMBIGUATION RULE — this is critical:
-If you cannot distinguish between printings of a card, you MUST return one entry for EVERY
-plausible printing. This is not a failure — returning
-multiple candidates IS the correct output. A human will pick the right one.
+If you cannot distinguish between printings of a card, you MUST return ALL plausible
+printing_ids. This is not a failure — returning multiple candidates IS the correct output.
+A human will pick the right one.
 In particular, you can NEVER tell "foil" from "nonfoil" from OCR text alone. In these
 cases, return both options.
 
 Example: OCR shows card name "Grizzly Bears" with artist "Jeff A. Menges" and no date.
 DB query returns many printings, all with identical features: Unlimited (2ed), Revised (3ed)
 both do not have dates, and on several sets, dates are extremely small: OCR may have just missed it.
-CORRECT: return ALL the separate printings.
-WRONG: return a single entry with set_code="sum".
+CORRECT: return ALL printing_ids from the query.
+WRONG: return a single printing_id and hope it's right.
 
 This rule applies even after calling analyze_image — if vision analysis cannot definitively
-resolve the printing, still return all remaining plausible candidates.
+resolve the printing, still return all remaining plausible printing_ids.
 
 KNOWN HARD CASES
 The DISAMBIGUATION RULE applies in these cases: Return all reasonable candidates.
@@ -128,17 +164,17 @@ OUTPUT_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
-                    "set_code": {"type": "string"},
-                    "collector_number": {"type": "string"},
+                    "printing_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
                     "fragment_indices": {
                         "type": "array",
                         "items": {"type": "integer"},
                     },
                     "notes": {"type": "string"},
-                    "type": {"type": "string"},
-                    "artist": {"type": "string"},
                 },
-                "required": ["name", "set_code", "collector_number", "fragment_indices"],
+                "required": ["name", "printing_ids", "fragment_indices"],
                 "additionalProperties": False,
             },
         }
@@ -151,6 +187,8 @@ _QUERY_TOOL_NOTES = (
     "When listing candidate printings for disambiguation, JOIN sets to include "
     "set_name and released_at — this helps reason about which sets are plausible. "
     "Always use LEFT JOIN since not all sets are guaranteed to have a row.\n\n"
+    "CRITICAL: Always SELECT p.printing_id in your queries. Your final output must "
+    "contain printing_id values from the database. These are UUID strings.\n\n"
     "Common mistakes to avoid:\n"
     "- There is NO 'name' column on printings — name is on cards. JOIN cards to get it.\n"
     "- There is NO 'foil' column — use finishes (JSON TEXT, e.g. '[\"nonfoil\"]')\n"
@@ -298,11 +336,28 @@ def _tool_analyze_image(image_path: str, client: anthropic.Anthropic) -> tuple[s
                         "type": "text",
                         "text": (
                             "This is a photo of a single Magic: The Gathering card. "
-                            "Describe everything clearly visible that would help "
-                            "identify it and its specific printing — card text, border color, frame "
-                            "style, set symbol, any numbers or codes, artist line, and anything else "
-                            "you notice. Only describe what you can clearly see; if something is "
-                            "unclear or not visible, say so explicitly rather than guessing."
+                            "Only describe what you can clearly see; if something is "
+                            "unclear or not visible, write \"not visible\" for that field. "
+                            "If text is very small, you should assume it is not visible. "
+                            "If you recognize a set icon, that is valuable if you are certain.\n\n"
+                            "Respond in this exact format:\n\n"
+                            "CARD NAME:\nMANA COST:\nTYPE LINE:\n"
+                            "RULES TEXT (first line or key phrases):\n"
+                            "FLAVOR TEXT (if visible):\n"
+                            "POWER/TOUGHNESS or LOYALTY:\n\n"
+                            "FRAME AND STRUCTURE:\n"
+                            "  Face structure: [normal / full-art / borderless / extended art / "
+                            "split / flip / saga / class / adventure / leveler / battle / planeswalker]\n"
+                            "  Frame era: [pre-8th / modern (8th-M14) / M15+ / other]\n\n"
+                            "SET IDENTIFICATION:\n"
+                            "  Set symbol description:\n"
+                            "  Set symbol rarity color: [black(common) / silver(uncommon) / "
+                            "gold(rare) / orange-red(mythic) / not visible]\n"
+                            "  Collector number:\n"
+                            "  Set code:\n\n"
+                            "ARTIST:\n\n"
+                            "ART DESCRIPTION (2-3 sentences, focus on what makes this art unique):\n\n"
+                            + CARD_STRUCTURE
                         ),
                     },
                 ],
@@ -413,6 +468,7 @@ def run_agent(
     tool_call_count = 0
     vision_used = [False]
     vision_cached_result = [None]
+    nudge_sent = False
     response = None
 
     while tool_call_count < max_calls:
@@ -485,9 +541,12 @@ def run_agent(
             else:
                 result = f"Unknown tool: {name}"
 
+            if name == "analyze_image":
+                trace_result = result
+            else:
+                trace_result = f"{result[:500]}{'...' if len(result) > 500 else ''}"
             _trace(
-                f"[TOOL RESULT] {name}: "
-                f"{result[:500]}{'...' if len(result) > 500 else ''}",
+                f"[TOOL RESULT] {name}: {trace_result}",
                 status_callback,
                 trace_lines,
             )
@@ -500,14 +559,26 @@ def run_agent(
             )
 
         messages.append({"role": "assistant", "content": response.content})
+
+        # Nudge the agent if it's struggling
+        if tool_call_count >= 6 and not vision_used[0] and not nudge_sent:
+            nudge = (
+                f"You've used {tool_call_count} tool calls. If you're having trouble, "
+                f"try Claude Vision, followed by more SQL queries using the data it returns."
+            )
+            tool_results.append({"type": "text", "text": nudge})
+            nudge_sent = True
+            _trace(f"[AGENT] Injected nudge at {tool_call_count} tool calls", status_callback, trace_lines)
+
         messages.append({"role": "user", "content": tool_results})
 
     _trace(f"[FINAL] Tool calls used: {tool_call_count}/{max_calls}", status_callback, trace_lines)
 
     FINAL_PROMPT = (
-        "Output ALL IDENTIFIED CANDIDATES for the card now "
-        "Include one entry per plausible printing! "
-        "IMPORTANT: Most likely printing FIRST, then the rest. "
+        "Output ALL IDENTIFIED CANDIDATES for the card now. "
+        "Each card entry must include a printing_ids array with ALL plausible "
+        "printing_id values from the database, most likely first. "
+        "Include the card name for reference. "
     )
     # If the last response was end_turn it hasn't been appended to messages yet.
     # Add it so the conversation is complete, then ask for the final answer.

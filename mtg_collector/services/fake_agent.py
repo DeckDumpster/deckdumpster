@@ -12,21 +12,12 @@ RESPONSES = {
         "cards": [
             {
                 "name": "Brimstone Mage",
-                "set_code": "roe",
-                "collector_number": "137",
+                "printing_ids": [
+                    "1f65ebef-e159-4698-8852-650b7b6a08d3",  # ROE original
+                    "7a640c53-e820-4d65-9158-252575be5168",  # The List reprint
+                ],
                 "fragment_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-                "notes": "Original printing from Rise of the Eldrazi",
-                "type": "Creature \u2014 Human Shaman",
-                "artist": "Volkan Baga",
-            },
-            {
-                "name": "Brimstone Mage",
-                "set_code": "plst",
-                "collector_number": "ROE-137",
-                "fragment_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-                "notes": "Reprint from The List",
-                "type": "Creature \u2014 Human Shaman",
-                "artist": "Volkan Baga",
+                "notes": "Rise of the Eldrazi original and The List reprint",
             },
         ],
         "trace": [
@@ -39,11 +30,57 @@ RESPONSES = {
             "[FINAL] Requesting structured output...",
         ],
         "usage": {
-            "haiku": {"input": 10432, "output": 561},
-            "sonnet": {"input": 0, "output": 0},
-            "opus": {"input": 0, "output": 0},
-            "cache_read": 0,
-            "cache_creation": 0,
+            "haiku": {"input": 10432, "output": 561, "cache_read": 0, "cache_creation": 0},
+            "sonnet": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+            "opus": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+        },
+    },
+    "82b254b85420cdd8ec70d034cf1e1300": {  # Michiko's Reign of Truth
+        "cards": [
+            {
+                "name": "Michiko's Reign of Truth // Portrait of Michiko",
+                "printing_ids": ["74f12c23-5c15-4ae6-8f4d-c5e6c1878817"],
+                "fragment_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+                "notes": "NEO saga, only one printing",
+            },
+        ],
+        "trace": ["[AGENT] fake"],
+        "usage": {
+            "haiku": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+            "sonnet": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+            "opus": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+        },
+    },
+    "46dc7e8f7dfa15ecc1fd17ee9328eea2": {  # Swamp (TMT)
+        "cards": [
+            {
+                "name": "Swamp",
+                "printing_ids": ["41c7688d-8155-45fd-83ba-ff9be4d414a3"],
+                "fragment_indices": [0, 1, 2, 3, 4, 5],
+                "notes": "TMNT set (tmt) #193",
+            },
+        ],
+        "trace": ["[AGENT] fake"],
+        "usage": {
+            "haiku": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+            "sonnet": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+            "opus": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+        },
+    },
+    "ecb10ffde357eeddcd5c935728372683": {  # Era of Enlightenment
+        "cards": [
+            {
+                "name": "Era of Enlightenment // Hand of Enlightenment",
+                "printing_ids": ["74f43827-2b9b-4fc9-a6e2-c682dfbf14f7"],
+                "fragment_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                "notes": "",
+            },
+        ],
+        "trace": ["[AGENT] fake"],
+        "usage": {
+            "haiku": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+            "sonnet": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
+            "opus": {"input": 0, "output": 0, "cache_read": 0, "cache_creation": 0},
         },
     },
 }
