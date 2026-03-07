@@ -1,0 +1,11 @@
+# Scenario: Receive an ordered copy on the card detail page
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  On the card detail page, an ordered copy shows a "Receive" button.
+  Clicking it transitions the copy's status from "ordered" to "owned",
+  and the copy section updates to show owned-status controls (dispose
+  dropdown, deck/binder assignment) instead of the Receive button.

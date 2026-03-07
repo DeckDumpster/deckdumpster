@@ -86,9 +86,11 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `binders` — Named binders with color, type, storage location.
 - `collection_views` — Saved filter/search configurations for the collection page.
 - `status_log` — Append-only audit of collection status changes.
+- `movement_log` — Append-only audit of deck/binder assignment changes (from/to deck, binder, zone).
 - `settings` — Key-value config (e.g. `price_sources`, `image_display`).
-- Schema v26 with auto-migrations in `schema.py`.
-- Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`.
+- `corner_batches` — Corner-ingest session groupings with optional deck assignment.
+- Schema v29 with auto-migrations in `schema.py`.
+- Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `CornerBatchRepository`.
 - **Deck/binder exclusivity**: A collection entry can be in one deck OR one binder, not both. `deck_id` and `binder_id` are mutually exclusive (enforced by repository logic, returns HTTP 409 on conflict). Use `move_cards()` to atomically reassign.
 
 Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` env).
@@ -105,9 +107,17 @@ Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` 
 
 `collection.html` is the canonical reference for how cards are displayed. Card images come from Scryfall CDN via `printings.image_uri`. The `image_display` setting (`crop` or `normal`) controls which Scryfall image size is used.
 
+### Card detail page
+
+Standalone page at `/card/:set/:cn` (e.g. `/card/lci/150`). Served by `card_detail.html`, with page-specific styles in `card-detail.css` and logic in `card-detail.js`. First consumer of the shared CSS/JS foundation. API endpoint: `GET /api/card/by-set-cn?set=X&cn=Y`. Linked from the collection modal via "Full page" badge.
+
+### Shared CSS/JS foundation
+
+`shared.css` and `shared.js` in `mtg_collector/static/` consolidate common styles and utilities duplicated across pages. New pages should import these; existing pages are untouched. `shared.css` uses CSS custom properties (`:root` variables) and `.site-header` (not bare `header`) to avoid collisions. `shared.js` exports: `esc()`, `parseJsonField()`, `renderMana()`, `getRarityColor()`, `RARITY_COLORS`, `DFC_LAYOUTS`, `getCkUrl()`.
+
 ### Rarity/set border gradients
 
-Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-gradient(to bottom, ...)`. Shared JS helpers in `crack_pack.html`: `getRarityColor(rarity)`, `getSetColor(cardSetCode, packSetCode)`. `buildCardBadges(card, packSetCode)` generates SF/CK price links, foil/treatment badges. `buildBadges(card, packSetCode)` wraps it with a zoom badge for the pack grid. Use these for any new card display.
+Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-gradient(to bottom, ...)`. Shared JS helpers in `shared.js`: `getRarityColor(rarity)`, `RARITY_COLORS`. Also available in `crack_pack.html`: `getSetColor(cardSetCode, packSetCode)`, `buildCardBadges(card, packSetCode)`, `buildBadges(card, packSetCode)`. Use these for any new card display.
 
 ### Collection page filtering
 
@@ -151,7 +161,7 @@ Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in
 - **JSON arrays stored as TEXT.** `colors`, `finishes`, `promo_types` are JSON-encoded strings. Use `json.loads()`, never SQL array operations.
 - **Card not in local DB → tell user to run `mtg cache all`.** Do not fall back to Scryfall API. The card simply isn't cached yet.
 - **Test fixture goes stale after schema migrations.** Regenerate with `uv run python scripts/build_test_fixture.py`, then recreate seed volume with `bash deploy/seed.sh --force`.
-- **HTML pages share no JS imports.** Helpers like `getRarityColor()` are copy-pasted between pages. Changes to shared patterns must be updated in each page that uses them.
+- **HTML pages share no JS imports (legacy).** Helpers like `getRarityColor()` are copy-pasted between existing pages. New pages should use `shared.css` + `shared.js` instead. The card detail page (`card_detail.html`) is the first to do so.
 
 ## Deployment
 

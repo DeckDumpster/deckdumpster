@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 29
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -141,6 +141,21 @@ CREATE TABLE IF NOT EXISTS status_log (
 );
 CREATE INDEX IF NOT EXISTS idx_status_log_collection ON status_log(collection_id);
 
+-- Movement audit log (append-only — tracks deck/binder assignment changes)
+CREATE TABLE IF NOT EXISTS movement_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
+    from_deck_id INTEGER REFERENCES decks(id),
+    to_deck_id INTEGER REFERENCES decks(id),
+    from_binder_id INTEGER REFERENCES binders(id),
+    to_binder_id INTEGER REFERENCES binders(id),
+    from_zone TEXT,
+    to_zone TEXT,
+    changed_at TEXT NOT NULL,
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_movement_log_collection ON movement_log(collection_id);
+
 -- Wishlist (separate entity — can be oracle-level or printing-specific)
 CREATE TABLE IF NOT EXISTS wishlist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,6 +182,18 @@ CREATE TABLE IF NOT EXISTS ingest_cache (
     created_at TEXT NOT NULL
 );
 
+-- Corner batches: group corner-ingest sessions
+CREATE TABLE IF NOT EXISTS corner_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_uuid TEXT NOT NULL UNIQUE,
+    name TEXT,
+    deck_id INTEGER REFERENCES decks(id),
+    deck_zone TEXT,
+    card_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
 -- Ingest lineage: track which card came from which image
 CREATE TABLE IF NOT EXISTS ingest_lineage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,11 +201,13 @@ CREATE TABLE IF NOT EXISTS ingest_lineage (
     image_md5 TEXT NOT NULL,
     image_path TEXT NOT NULL,
     card_index INTEGER NOT NULL,
+    batch_id INTEGER REFERENCES corner_batches(id),
     created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_lineage_md5 ON ingest_lineage(image_md5);
 CREATE INDEX IF NOT EXISTS idx_lineage_collection ON ingest_lineage(collection_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_batch ON ingest_lineage(batch_id);
 
 -- Ingest images: persistent ingest pipeline state
 CREATE TABLE IF NOT EXISTS ingest_images (
@@ -552,6 +581,10 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v25_to_v26(conn)
         if current < 27:
             _migrate_v26_to_v27(conn)
+        if current < 28:
+            _migrate_v27_to_v28(conn)
+        if current < 29:
+            _migrate_v28_to_v29(conn)
 
     # Record schema version
     conn.execute(
@@ -1594,6 +1627,67 @@ def _migrate_v26_to_v27(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE ingest_images ADD COLUMN set_hint TEXT")
 
 
+def _migrate_v27_to_v28(conn: sqlite3.Connection):
+    """Add corner_batches table and batch_id column to ingest_lineage."""
+    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    if "corner_batches" not in tables:
+        conn.execute("""
+            CREATE TABLE corner_batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_uuid TEXT NOT NULL UNIQUE,
+                name TEXT,
+                deck_id INTEGER REFERENCES decks(id),
+                deck_zone TEXT,
+                card_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                completed_at TEXT
+            )
+        """)
+    if "ingest_lineage" in tables:
+        cursor = conn.execute("PRAGMA table_info(ingest_lineage)")
+        cols = [r[1] for r in cursor.fetchall()]
+        if "batch_id" not in cols:
+            conn.execute("ALTER TABLE ingest_lineage ADD COLUMN batch_id INTEGER REFERENCES corner_batches(id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_lineage_batch ON ingest_lineage(batch_id)")
+
+
+def _migrate_v28_to_v29(conn: sqlite3.Connection):
+    """Add movement_log table and backfill current deck/binder assignments."""
+    from mtg_collector.utils import now_iso
+
+    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    if "movement_log" not in tables:
+        conn.execute("""
+            CREATE TABLE movement_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
+                from_deck_id INTEGER REFERENCES decks(id),
+                to_deck_id INTEGER REFERENCES decks(id),
+                from_binder_id INTEGER REFERENCES binders(id),
+                to_binder_id INTEGER REFERENCES binders(id),
+                from_zone TEXT,
+                to_zone TEXT,
+                changed_at TEXT NOT NULL,
+                note TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_movement_log_collection ON movement_log(collection_id)")
+
+    # Backfill: snapshot current deck/binder assignments as baseline entries
+    ts = now_iso()
+    rows = conn.execute(
+        "SELECT id, deck_id, binder_id, deck_zone FROM collection "
+        "WHERE deck_id IS NOT NULL OR binder_id IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "INSERT INTO movement_log (collection_id, from_deck_id, to_deck_id, "
+            "from_binder_id, to_binder_id, from_zone, to_zone, changed_at, note) "
+            "VALUES (?, NULL, ?, NULL, ?, NULL, ?, ?, 'backfill')",
+            (row[0], row[1], row[2], row[3], ts),
+        )
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -1611,11 +1705,13 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS mtgjson_booster_sheets;
         DROP TABLE IF EXISTS mtgjson_printings;
         DROP TABLE IF EXISTS mtgjson_uuid_map;
+        DROP TABLE IF EXISTS movement_log;
         DROP TABLE IF EXISTS status_log;
         DROP TABLE IF EXISTS wishlist;
         DROP TABLE IF EXISTS settings;
         DROP TABLE IF EXISTS ingest_images;
         DROP TABLE IF EXISTS ingest_lineage;
+        DROP TABLE IF EXISTS corner_batches;
         DROP TABLE IF EXISTS ingest_cache;
         DROP TABLE IF EXISTS collection_views;
         DROP TABLE IF EXISTS collection;

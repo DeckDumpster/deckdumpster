@@ -1,0 +1,223 @@
+/* shared.css — Common styles for all pages.
+   New pages should import this. Existing pages are untouched. */
+
+:root {
+  --bg-primary: #1a1a2e;
+  --bg-secondary: #16213e;
+  --border-color: #0f3460;
+  --accent: #e94560;
+  --accent-hover: #c73651;
+  --text-primary: #e0e0e0;
+  --text-secondary: #888;
+  --success: #4caf50;
+  --link-color: #7ec8e3;
+}
+
+/* Global reset */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+/* Site header — uses .site-header to avoid colliding with existing pages' bare `header` selector */
+.site-header {
+  background: var(--bg-secondary);
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.site-header h1 {
+  font-size: 1.3rem;
+  color: var(--accent);
+  margin-right: 16px;
+  white-space: nowrap;
+}
+
+.site-header a {
+  color: var(--text-primary);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.site-header a:hover { color: var(--accent); }
+
+/* Form controls */
+input[type="text"], input[type="number"], input[type="date"], select, textarea {
+  padding: 8px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+input[type="text"]:focus, input[type="number"]:focus, input[type="date"]:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+}
+
+/* Buttons */
+button {
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover { background: var(--accent-hover); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+button.secondary {
+  background: #333;
+  border-color: #555;
+}
+button.secondary:hover { background: var(--accent); border-color: var(--accent); }
+
+/* Badges */
+.badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.badge.treatment {
+  background: linear-gradient(135deg, #0f2a3e, #0f3460);
+  border: 1px solid #1a5276;
+  color: var(--link-color);
+}
+
+a.badge.link {
+  background: #333;
+  border: 1px solid #555;
+  color: #aaa;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
+
+/* Treatment tags */
+.foil-tag, .treat-tag, .promo-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.foil-tag {
+  background: linear-gradient(135deg, #2a1a3e, #1a2a4e);
+  border: 1px solid #5c2d91;
+  color: #c8a0e8;
+}
+
+.treat-tag {
+  background: linear-gradient(135deg, #0f2a3e, #0f3460);
+  border: 1px solid #1a5276;
+  color: var(--link-color);
+}
+
+.promo-tag {
+  background: linear-gradient(135deg, #3e2a0f, #4e3a1a);
+  border: 1px solid #76521a;
+  color: #e3c87e;
+}
+
+/* Card image wrapper with rarity border gradient */
+.sheet-card-img-wrap {
+  width: 100%;
+  aspect-ratio: 488 / 680;
+  border-radius: 8px;
+  position: relative;
+  overflow: hidden;
+  --rarity-color: #111;
+  --set-color: #111;
+  background: linear-gradient(to bottom, var(--rarity-color), var(--set-color));
+}
+
+.sheet-card-img-wrap img {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
+  object-fit: cover;
+  border-radius: 6px;
+  image-rendering: high-quality;
+}
+
+/* Foil shimmer */
+.sheet-card-img-wrap.foil::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(255,0,0,0.08),
+    rgba(255,165,0,0.08) 5%,
+    rgba(255,255,0,0.08) 10%,
+    rgba(0,200,0,0.08) 15%,
+    rgba(0,140,255,0.08) 20%,
+    rgba(130,0,255,0.08) 25%,
+    rgba(255,0,200,0.08) 30%,
+    rgba(255,0,0,0.08) 33.33%
+  );
+  mix-blend-mode: color;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sheet-card-img-wrap.foil::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background:
+    linear-gradient(135deg, transparent 46%, rgba(255,255,255,0.12) 49%, rgba(255,255,255,0.12) 51%, transparent 54%)
+    100% 100% / 240% 240%;
+  pointer-events: none;
+  z-index: 2;
+  animation: foil-streak 3s ease-in-out infinite;
+}
+
+@keyframes foil-streak {
+  0% { background-position: 100% 100%; }
+  15%, 100% { background-position: 0 0; }
+}
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Empty state */
+.empty-state {
+  color: #555;
+  font-style: italic;
+  font-size: 0.9rem;
+  padding: 32px;
+  text-align: center;
+}

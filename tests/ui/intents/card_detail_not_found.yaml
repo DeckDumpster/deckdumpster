@@ -1,0 +1,10 @@
+# Scenario: Card detail page shows error for invalid card
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  When I navigate to a card detail URL with an invalid set code or
+  collector number, the page shows an error message instead of card
+  details. The error text says "Card not found".

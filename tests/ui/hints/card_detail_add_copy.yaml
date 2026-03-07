@@ -1,0 +1,14 @@
+start_page: /card/blb/124
+involves:
+  - '"Add" button in the detail links row'
+  - 'add-collection-form with date, price, source inputs'
+  - '"Confirm" button submits the form'
+  - 'Copies section updates to show the new copy'
+fixture_data:
+  price: "3.50"
+  source: "LGS"
+notes: >
+  1. Navigate to /card/blb/124. 2. Click "Add" button. 3. The form appears
+  with date pre-filled to today. 4. Fill in price "3.50" and source "LGS".
+  5. Click "Confirm". 6. The form disappears and a Copies section appears
+  showing 1 copy with the price and source.

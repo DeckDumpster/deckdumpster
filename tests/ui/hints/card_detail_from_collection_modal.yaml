@@ -1,0 +1,11 @@
+start_page: /collection
+involves:
+  - card grid or table view in collection
+  - card detail modal opens on card click
+  - '"Full page" badge link in the modal links row'
+  - card detail page loads with same card info
+notes: >
+  1. Wait for collection to load. 2. Switch to grid view. 3. Click a card
+  to open the detail modal. 4. In the modal's link row (next to SF and CK
+  badges), click "Full page →". 5. The browser navigates to /card/:set/:cn.
+  6. Verify the card detail page shows the card name.

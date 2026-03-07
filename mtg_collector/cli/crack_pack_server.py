@@ -948,6 +948,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("binders.html")
         elif path == "/set-value":
             self._serve_static("set_value.html")
+        elif path.startswith("/card/"):
+            # /card/:set/:cn → card detail page
+            self._serve_static("card_detail.html")
         elif path == "/upload":
             self._serve_static("upload.html")
         elif path == "/recent":
@@ -967,12 +970,20 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             set_code = params.get("set", [""])[0]
             product = params.get("product", [""])[0]
             self._api_sheets(set_code, product)
+        elif path.startswith("/api/collection/") and path.endswith("/history"):
+            cid = path[len("/api/collection/"):-len("/history")]
+            if cid.isdigit():
+                self._api_collection_history(int(cid))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path == "/api/collection/copies":
             self._api_collection_copies(params)
         elif path == "/api/collection":
             self._api_collection(params)
         elif path == "/api/wishlist":
             self._api_wishlist_list(params)
+        elif path == "/api/card/by-set-cn":
+            self._api_card_by_set_cn(params)
         elif path.startswith("/api/card/"):
             printing_id = path[len("/api/card/"):]
             self._api_card(printing_id)
@@ -981,6 +992,16 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_set_browse(set_code, params)
         elif path == "/ingest-corners":
             self._serve_static("ingest_corners.html")
+        elif path == "/corner-batches":
+            self._serve_static("corner_batches.html")
+        elif path == "/api/corner-batches":
+            self._api_corner_batches_list()
+        elif path.startswith("/api/corner-batches/") and path.endswith("/cards"):
+            bid = path[len("/api/corner-batches/"):-len("/cards")]
+            if bid.isdigit():
+                self._api_corner_batch_cards(int(bid))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path == "/ingestor-ids":
             self._serve_static("ingest_ids.html")
         elif path == "/ingestor-order":
@@ -1157,6 +1178,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_corners_detect()
         elif path == "/api/corners/commit":
             self._api_corners_commit()
+        elif path.startswith("/api/corner-batches/") and path.endswith("/assign-deck"):
+            bid = path[len("/api/corner-batches/"):-len("/assign-deck")]
+            if bid.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_corner_batch_assign_deck(int(bid), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path == "/api/ingest-ids/resolve":
             self._api_ingest_ids_resolve()
         elif path == "/api/ingest-ids/commit":
@@ -1414,6 +1444,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     _CONTENT_TYPES = {
         ".html": "text/html; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8",
         ".ico": "image/x-icon",
         ".jpeg": "image/jpeg",
         ".jpg": "image/jpeg",
@@ -1995,6 +2027,83 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         cn = row["collector_number"]
         result["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", "buylist_normal")
         result["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", "normal")
+        result["ck_url"] = self.generator.get_ck_url(printing_id, False) if self.generator else ""
+
+        conn.close()
+        self._send_json(result)
+
+    def _api_card_by_set_cn(self, params):
+        """Return full card data for a printing looked up by set_code + collector_number."""
+        set_code = params.get("set", [""])[0].lower()
+        cn = params.get("cn", [""])[0]
+        if not set_code or not cn:
+            self._send_json({"error": "Missing set or cn parameter"}, 400)
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        row = conn.execute(
+            """
+            SELECT
+                card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
+                card.colors, card.color_identity,
+                p.set_code, s.set_name, p.collector_number, p.rarity,
+                p.printing_id, p.image_uri, p.artist,
+                p.frame_effects, p.border_color, p.full_art, p.promo,
+                p.promo_types, p.finishes,
+                COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
+                json_extract(p.raw_json, '$.layout') as layout,
+                json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
+                json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana
+            FROM printings p
+            JOIN cards card ON p.oracle_id = card.oracle_id
+            JOIN sets s ON p.set_code = s.set_code
+            WHERE p.set_code = ? AND p.collector_number = ?
+            """,
+            (set_code, cn),
+        ).fetchone()
+
+        if not row:
+            conn.close()
+            self._send_json({"error": "Card not found"}, 404)
+            return
+
+        mana_cost = row["mana_cost"]
+        if not mana_cost:
+            face0 = row["face0_mana"] or ""
+            face1 = row["face1_mana"] or ""
+            if face0 or face1:
+                mana_cost = " // ".join(p for p in [face0, face1] if p)
+
+        result = {
+            "oracle_id": row["oracle_id"],
+            "name": row["flavor_name"] or row["name"],
+            "oracle_name": row["name"] if row["flavor_name"] and row["flavor_name"] != row["name"] else None,
+            "type_line": row["type_line"],
+            "mana_cost": mana_cost,
+            "cmc": row["cmc"],
+            "colors": row["colors"],
+            "color_identity": row["color_identity"],
+            "set_code": row["set_code"],
+            "set_name": row["set_name"],
+            "collector_number": row["collector_number"],
+            "rarity": row["rarity"],
+            "printing_id": row["printing_id"],
+            "image_uri": row["image_uri"],
+            "artist": row["artist"],
+            "frame_effects": row["frame_effects"],
+            "border_color": row["border_color"],
+            "full_art": bool(row["full_art"]),
+            "promo": bool(row["promo"]),
+            "promo_types": row["promo_types"],
+            "finishes": row["finishes"],
+            "layout": row["layout"] or "normal",
+        }
+
+        printing_id = row["printing_id"]
+        result["ck_price"] = _get_sqlite_price(self.db_path, set_code, cn, "cardkingdom", "buylist_normal")
+        result["tcg_price"] = _get_sqlite_price(self.db_path, set_code, cn, "tcgplayer", "normal")
         result["ck_url"] = self.generator.get_ck_url(printing_id, False) if self.generator else ""
 
         conn.close()
@@ -3688,6 +3797,46 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.close()
         self._send_json(summary)
 
+    def _api_collection_history(self, collection_id: int):
+        """Return combined status + movement history for a collection entry."""
+        from mtg_collector.db.models import CollectionRepository
+        from mtg_collector.db.schema import init_db
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        repo = CollectionRepository(conn)
+
+        # Status history
+        status_rows = conn.execute(
+            "SELECT * FROM status_log WHERE collection_id = ? ORDER BY changed_at, id",
+            (collection_id,),
+        ).fetchall()
+        status_history = [
+            {"type": "status", "id": r["id"], "collection_id": r["collection_id"],
+             "from_status": r["from_status"], "to_status": r["to_status"],
+             "changed_at": r["changed_at"], "note": r["note"]}
+            for r in status_rows
+        ]
+
+        # Movement history
+        movement_history = [
+            dict(row, type="movement")
+            for row in repo.get_movement_history(collection_id)
+        ]
+
+        # Combined chronological
+        combined = sorted(
+            status_history + movement_history,
+            key=lambda x: (x["changed_at"], x["id"]),
+        )
+
+        conn.close()
+        self._send_json({
+            "status_history": status_history,
+            "movement_history": movement_history,
+            "combined": combined,
+        })
+
     def _api_collection_copies(self, params: dict):
         """Return individual collection rows for a printing, with order data."""
         from mtg_collector.db.models import CollectionRepository
@@ -3887,6 +4036,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         from mtg_collector.db.models import (
             CollectionEntry,
             CollectionRepository,
+            CornerBatch,
+            CornerBatchRepository,
+            DeckRepository,
             PrintingRepository,
         )
         from mtg_collector.db.schema import init_db
@@ -3903,6 +4055,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         image_key = data.get("image_key")
         cards = data.get("cards", [])
+        batch_uuid = data.get("batch_uuid")
+        deck_id = data.get("deck_id")
+        deck_zone = data.get("deck_zone", "mainboard")
 
         if not cards:
             self._send_json({"error": "No cards to commit"}, 400)
@@ -3914,6 +4069,21 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         collection_repo = CollectionRepository(conn)
         printing_repo = PrintingRepository(conn)
+        batch_repo = CornerBatchRepository(conn)
+
+        # Look up or create batch by UUID
+        batch_id = None
+        if batch_uuid:
+            existing = batch_repo.get_by_uuid(batch_uuid)
+            if existing:
+                batch_id = existing["id"]
+            else:
+                batch_id = batch_repo.create(CornerBatch(
+                    id=None,
+                    batch_uuid=batch_uuid,
+                    deck_id=deck_id if deck_id else None,
+                    deck_zone=deck_zone if deck_id else None,
+                ))
 
         # Store source image permanently if image_key provided
         source_image = None
@@ -3923,6 +4093,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 source_image = store_source_image(str(src_path))
 
         added = []
+        entry_ids = []
         for i, card in enumerate(cards):
             printing_id = card.get("printing_id")
             if not printing_id:
@@ -3945,13 +4116,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 source_image=source_image,
             )
             entry_id = collection_repo.add(entry)
+            entry_ids.append(entry_id)
 
-            # Insert lineage record
+            # Insert lineage record with batch_id
             md5 = _md5_file(str(_get_ingest_images_dir() / image_key)) if image_key else ""
             conn.execute(
-                """INSERT INTO ingest_lineage (collection_id, image_md5, image_path, card_index, created_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (entry_id, md5, image_key or "", i, now_iso()),
+                """INSERT INTO ingest_lineage (collection_id, image_md5, image_path, card_index, batch_id, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (entry_id, md5, image_key or "", i, batch_id, now_iso()),
             )
 
             name = "???"
@@ -3966,10 +4138,104 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
             _log_ingest(f"Corner commit: {name} ({printing.set_code.upper()} #{printing.collector_number}) -> collection ID {entry_id}")
 
+        # Update batch card count
+        if batch_id and entry_ids:
+            batch_repo.increment_card_count(batch_id, len(entry_ids))
+
+        # Assign cards to deck if requested
+        if deck_id and entry_ids:
+            deck_repo = DeckRepository(conn)
+            try:
+                deck_repo.add_cards(int(deck_id), entry_ids, zone=deck_zone)
+            except ValueError as e:
+                conn.rollback()
+                conn.close()
+                self._send_json({"error": str(e)}, 409)
+                return
+
         conn.commit()
         conn.close()
 
-        self._send_json({"added": added})
+        self._send_json({"added": added, "batch_id": batch_id})
+
+    # ── Corner Batch API endpoints ──
+
+    def _api_corner_batches_list(self):
+        """List all corner batches."""
+        from mtg_collector.db.models import CornerBatchRepository
+        from mtg_collector.db.schema import init_db
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        repo = CornerBatchRepository(conn)
+        self._send_json(repo.list_all())
+        conn.close()
+
+    def _api_corner_batch_cards(self, batch_id: int):
+        """Get cards in a corner batch."""
+        from mtg_collector.db.models import CornerBatchRepository
+        from mtg_collector.db.schema import init_db
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        repo = CornerBatchRepository(conn)
+        batch = repo.get(batch_id)
+        if not batch:
+            conn.close()
+            self._send_json({"error": "Batch not found"}, 404)
+            return
+        cards = repo.get_cards(batch_id)
+        conn.close()
+        self._send_json({"batch": batch, "cards": cards})
+
+    def _api_corner_batch_assign_deck(self, batch_id: int, data: dict):
+        """Retroactively assign a batch's cards to a deck."""
+        from mtg_collector.db.models import (
+            CornerBatchRepository,
+            DeckRepository,
+        )
+        from mtg_collector.db.schema import init_db
+
+        deck_id = data.get("deck_id")
+        deck_zone = data.get("deck_zone", "mainboard")
+        if not deck_id:
+            self._send_json({"error": "deck_id required"}, 400)
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        batch_repo = CornerBatchRepository(conn)
+        deck_repo = DeckRepository(conn)
+
+        batch = batch_repo.get(batch_id)
+        if not batch:
+            conn.close()
+            self._send_json({"error": "Batch not found"}, 404)
+            return
+
+        # Get collection IDs for this batch
+        cards = batch_repo.get_cards(batch_id)
+        collection_ids = [c["id"] for c in cards]
+
+        if not collection_ids:
+            conn.close()
+            self._send_json({"error": "No cards in batch"}, 400)
+            return
+
+        try:
+            deck_repo.add_cards(int(deck_id), collection_ids, zone=deck_zone)
+        except ValueError as e:
+            conn.close()
+            self._send_json({"error": str(e)}, 409)
+            return
+
+        batch_repo.set_deck(batch_id, int(deck_id), deck_zone)
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True, "assigned": len(collection_ids)})
 
     # ── Manual ID Ingest API endpoints ──
 

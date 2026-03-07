@@ -1,0 +1,16 @@
+# Scenario: Price history chart on the card detail page
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+#
+# Prerequisites:
+#   The test instance must have price history data in the `prices` table.
+#   The default --test fixture has minimal price rows; the implementation
+#   seeds additional data via podman exec if needed.
+
+description: >
+  When I view a card's detail page for a card that has price history, a
+  Price History section appears with a Chart.js chart and time-range pills
+  (1M, 3M, 6M, 1Y, ALL). Clicking a different pill re-filters the chart.
+  For a card with no price data, the chart section stays hidden.

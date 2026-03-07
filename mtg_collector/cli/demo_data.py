@@ -31,6 +31,8 @@ from mtg_collector.db.models import (
     CollectionRepository,
     CollectionView,
     CollectionViewRepository,
+    CornerBatch,
+    CornerBatchRepository,
     Deck,
     DeckRepository,
     Order,
@@ -274,6 +276,24 @@ DEMO_INGEST_SAMPLES = [
     {"fixture": "camera_2026-03-05T04-45-53_184.jpg", "stored_name": "camera_2026_03_05_04_45_53_184.jpg", "status": "READY_FOR_OCR"},  # TMT Swamp
     {"fixture": "camera_2026-03-05T17-20-15_11.jpg", "stored_name": "camera_2026_03_05_17_20_15_11.jpg", "status": "READY_FOR_OCR"},  # Era of Enlightenment
     {"fixture": "signal-2026-03-05-101048.jpeg", "stored_name": "signal_2026_03_05_101048.jpeg", "status": "READY_FOR_OCR"},  # Zen Plains
+]
+
+# Demo corner batches — uses unassigned owned cards by DEMO_CARDS index
+# Batch 1: assigned to "Bolt Tribal" deck (cards 26-28)
+# Batch 2: unassigned (cards 29-32), for retroactive assignment test
+DEMO_CORNER_BATCHES = [
+    {
+        "batch_uuid": "demo-batch-001",
+        "name": "Wednesday evening scan",
+        "assign_to_deck": "Bolt Tribal",
+        "deck_zone": "sideboard",
+        "cards_slice": slice(26, 29),  # SPG + WOE cards
+    },
+    {
+        "batch_uuid": "demo-batch-002",
+        "name": "New cards from LGS",
+        "cards_slice": slice(29, 33),  # LCI + MKM cards
+    },
 ]
 
 # Demo saved views
@@ -618,6 +638,52 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
             binder_repo.add_cards(binder_id, card_ids)
         binders_created += 1
 
+    # Create demo corner batches
+    batch_repo = CornerBatchRepository(conn)
+    batches_created = 0
+    for batch_def in DEMO_CORNER_BATCHES:
+        # Find deck ID if batch should be assigned
+        assign_deck_id = None
+        if "assign_to_deck" in batch_def:
+            row = conn.execute(
+                "SELECT id FROM decks WHERE name = ?", (batch_def["assign_to_deck"],)
+            ).fetchone()
+            if row:
+                assign_deck_id = row["id"]
+
+        batch = CornerBatch(
+            id=None,
+            batch_uuid=batch_def["batch_uuid"],
+            name=batch_def.get("name"),
+            deck_id=assign_deck_id,
+            deck_zone=batch_def.get("deck_zone") if assign_deck_id else None,
+        )
+        batch_id = batch_repo.create(batch)
+
+        s = batch_def["cards_slice"]
+        batch_card_ids = []
+        for ci in range(s.start, s.stop):
+            if ci in collection_id_by_card_idx:
+                cid = collection_id_by_card_idx[ci]
+                batch_card_ids.append(cid)
+                # Create lineage record linking to batch
+                conn.execute(
+                    """INSERT INTO ingest_lineage
+                       (collection_id, image_md5, image_path, card_index, batch_id, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (cid, "demo", "demo.jpg", ci - s.start, batch_id, ts),
+                )
+
+        if batch_card_ids:
+            batch_repo.increment_card_count(batch_id, len(batch_card_ids))
+
+        # Assign cards to deck if specified
+        if assign_deck_id and batch_card_ids:
+            deck_repo.add_cards(assign_deck_id, batch_card_ids,
+                                zone=batch_def.get("deck_zone", "mainboard"))
+
+        batches_created += 1
+
     # Create demo saved views
     view_repo = CollectionViewRepository(conn)
     views_created = 0
@@ -647,6 +713,7 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
     print(f"  Added {wishlist_added} wishlist entries")
     print(f"  Created {decks_created} demo decks")
     print(f"  Created {binders_created} demo binders")
+    print(f"  Created {batches_created} demo corner batches")
     print(f"  Created {views_created} demo views")
     print(f"  Added {ingest_added} demo ingest samples")
 

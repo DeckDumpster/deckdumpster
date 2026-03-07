@@ -1,0 +1,11 @@
+# Scenario: View movement history timeline for a copy
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  On the card detail page, each copy in the Copies section has a
+  "History" toggle button. Clicking it expands a timeline showing the
+  copy's status changes and deck/binder movements in chronological order.
+  Clicking it again collapses the timeline.

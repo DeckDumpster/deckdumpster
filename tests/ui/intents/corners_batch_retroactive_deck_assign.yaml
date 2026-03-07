@@ -1,0 +1,10 @@
+# Scenario: Retroactively assign a corner batch to a deck
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  From the corner batches page, I can select an unassigned batch and assign
+  it to an existing deck. The batch then shows the deck name in the list
+  and the cards appear in that deck's card list.

@@ -1,0 +1,17 @@
+start_page: /card/woe/171
+involves:
+  - 'dispose dropdown (.dispose-select) with options: Sold, Traded, Gifted, Lost'
+  - 'price input (.dispose-price) and note input (.dispose-note)'
+  - '"Dispose" button (.dispose-btn)'
+  - 'disposition badge (.disposition-badge) appears after disposal'
+fixture_data:
+  card_name: "Graceful Takedown"
+  disposition: "sold"
+  sale_price: "5.00"
+  note: "eBay sale"
+notes: >
+  WOE 171 (Graceful Takedown) has an unassigned owned copy in demo data
+  (entry #28). Navigate to /card/woe/171 and wait for copies to load.
+  Select "Sold" from the dispose dropdown, fill in price "5.00" and
+  note "eBay sale", click "Dispose". The copies section reloads showing
+  the copy with a "SOLD" disposition badge.

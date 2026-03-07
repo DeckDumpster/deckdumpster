@@ -44,6 +44,7 @@ _PAGE_TO_HTML = {
     "/binders": "binders.html",
     "/process": "process.html",
     "/upload": "upload.html",
+    "/card/": "card_detail.html",
 }
 
 STATIC_DIR = Path(__file__).parents[2] / "mtg_collector" / "static"
@@ -80,6 +81,12 @@ def _find_html_for_url(page_url: str, base_url: str) -> Path | None:
     # Strip query string.
     path = path.split("?")[0]
     filename = _PAGE_TO_HTML.get(path)
+    if not filename:
+        # Try prefix matching for parameterized routes (e.g. /card/:set/:cn).
+        for prefix, fname in _PAGE_TO_HTML.items():
+            if prefix.endswith("/") and path.startswith(prefix):
+                filename = fname
+                break
     if filename:
         html_path = STATIC_DIR / filename
         if html_path.exists():

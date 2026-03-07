@@ -1,0 +1,12 @@
+# Scenario: Navigate directly to a card detail page via URL
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  I can navigate directly to a card's detail page at /card/:set/:cn and
+  see the card image on the left and a details panel on the right showing
+  the card's name, mana cost, type line, set with keyrune icon, collector
+  number, rarity, and artist. External links to Scryfall and Card Kingdom
+  appear as badges. The site header shows navigation links.

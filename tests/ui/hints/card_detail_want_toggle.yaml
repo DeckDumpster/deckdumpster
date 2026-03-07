@@ -1,0 +1,10 @@
+start_page: /card/blb/124
+involves:
+  - '"Want" button (.want-btn) in the detail links row'
+  - button changes text to "Wanted" and gains .wanted class on click
+  - second click removes from wishlist, reverts to "Want"
+notes: >
+  1. Navigate to /card/blb/124. 2. Click the "Want" button. 3. Button
+  text changes to "Wanted" and gets a green style (.wanted class).
+  4. Click the "Wanted" button again. 5. Button reverts to "Want" and
+  loses the .wanted class.

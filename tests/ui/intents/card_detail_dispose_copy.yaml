@@ -1,0 +1,11 @@
+# Scenario: Dispose of a copy from the card detail page
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  On the card detail page, I can dispose of a copy by selecting a
+  disposition (sold, traded, gifted, lost) from the dropdown, optionally
+  entering a sale price and note, and clicking "Dispose". The copy's
+  status badge updates to reflect the new disposition.

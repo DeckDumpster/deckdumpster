@@ -1,0 +1,11 @@
+# Scenario: Deck selector on corner ingest page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the ingest corners page, I can see a deck selector dropdown that lists
+  existing decks and has a "Create new deck" option. I can create a new deck
+  inline and it appears in the dropdown. The zone selector allows choosing
+  between Mainboard, Sideboard, and Commander.

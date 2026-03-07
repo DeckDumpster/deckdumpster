@@ -1,0 +1,10 @@
+# Scenario: Navigate to card detail page from collection modal
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  From the collection page, I can open a card's detail modal and click the
+  "Full page" link to navigate to the standalone card detail page. The card
+  detail page shows the same card with its full details.

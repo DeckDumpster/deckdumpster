@@ -1,0 +1,13 @@
+start_page: /card/lci/113
+involves:
+  - 'owned copy with "Delete" button (.delete-copy-btn) in the dispose controls'
+  - 'browser confirm dialog appears on click'
+  - 'copy section disappears from the Copies list after deletion'
+fixture_data:
+  card_name: "Preacher of the Schism"
+notes: >
+  LCI 113 (Preacher of the Schism) has an unassigned owned copy in demo data
+  (entry #30). Navigate to /card/lci/113 and wait for copies to load. Click
+  the "Delete" button. The implementation must handle the browser confirm()
+  dialog (harness.page.once('dialog', ...)) by accepting it. After the dialog
+  is accepted, the copies section reloads and the copy is gone.

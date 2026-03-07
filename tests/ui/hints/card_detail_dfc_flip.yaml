@@ -1,0 +1,14 @@
+start_page: /card/lci/158
+involves:
+  - 'transform card (Ojer Axonil, Deepest Might // Temple of Power)'
+  - flip button (circular button with ↻ icon) in bottom-right of image
+  - '.card-flip-container gets .flipped class on click'
+  - details panel updates to show back face name and type
+fixture_data:
+  front_face: "Ojer Axonil, Deepest Might"
+  back_face: "Temple of Power"
+notes: >
+  Navigate to /card/lci/158 (a transform card from The Lost Caverns of
+  Ixalan). Verify front face name "Ojer Axonil, Deepest Might" is shown.
+  Click the flip button. The card image flips and the details panel should
+  now show "Temple of Power" as the heading with type "Land".

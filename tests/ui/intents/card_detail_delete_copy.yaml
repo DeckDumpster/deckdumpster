@@ -1,0 +1,10 @@
+# Scenario: Delete a copy from the card detail page
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  On the card detail page, I can delete a copy by clicking the "Delete"
+  button in the copy's dispose controls. A confirmation dialog appears,
+  and after confirming, the copy is removed from the Copies section.

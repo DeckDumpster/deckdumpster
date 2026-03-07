@@ -1,0 +1,16 @@
+start_page: /card/blb/188
+involves:
+  - 'ordered copy showing "Receive" button (.receive-btn)'
+  - 'clicking Receive calls POST /api/collection/:id/receive'
+  - 'copy section reloads showing owned-status controls instead of Receive button'
+  - 'dispose dropdown and deck/binder assignment dropdowns appear'
+fixture_data:
+  card_name: "Peerless Recycling"
+  order: "DEMO-CK-001"
+notes: >
+  BLB 188 (Peerless Recycling) has an ordered copy in demo data (entry #43,
+  order DEMO-CK-001). Navigate to /card/blb/188 and wait for copies to load.
+  The copy shows a "Receive" button because status is "ordered". Click the
+  Receive button. The copy section reloads. The Receive button is gone and
+  the copy now shows dispose controls (Dispose dropdown, Delete button) and
+  location assignment dropdowns (Add to Deck, Add to Binder).

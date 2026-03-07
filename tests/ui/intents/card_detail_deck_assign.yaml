@@ -1,0 +1,11 @@
+# Scenario: Assign a copy to a deck from the card detail page
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  On the card detail page, an unassigned copy shows "Add to Deck" and
+  "Add to Binder" dropdowns. I can select a deck from the dropdown to
+  assign the copy. After assignment, the copy shows the deck name with
+  a "Remove" link instead of the dropdowns.

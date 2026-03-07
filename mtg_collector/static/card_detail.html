@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Card Detail</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/keyrune@latest/css/keyrune.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mana-font@latest/css/mana.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<link rel="stylesheet" href="/static/shared.css">
+<link rel="stylesheet" href="/static/card-detail.css">
+</head>
+<body>
+
+<div class="site-header">
+  <h1><a href="/" style="color:inherit;text-decoration:none;">DeckDumpster</a></h1>
+  <a href="/collection">Collection</a>
+  <a href="/decks">Decks</a>
+  <a href="/binders">Binders</a>
+  <a href="/sealed">Sealed</a>
+</div>
+
+<div class="card-detail-layout" id="card-detail-layout">
+  <div class="loading-state" id="loading-state">
+    <span class="spinner"></span> Loading card...
+  </div>
+</div>
+
+<script src="/static/shared.js"></script>
+<script src="/static/card-detail.js"></script>
+</body>
+</html>

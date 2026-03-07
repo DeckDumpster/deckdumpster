@@ -184,6 +184,59 @@ button.danger:hover { background: #b71c1c; }
   align-items: center;
 }
 
+#deck-selector {
+  margin: 8px;
+  padding: 12px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  display: none;
+}
+#deck-selector label {
+  font-size: 0.85rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+#deck-selector select {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  margin-left: 8px;
+}
+#deck-selector .deck-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+#new-deck-form {
+  display: none;
+  margin-top: 8px;
+  padding: 8px;
+  background: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+}
+#new-deck-form input, #new-deck-form select {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+#new-deck-form .form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .skipped-info {
   margin: 8px;
   padding: 8px 12px;
@@ -232,6 +285,8 @@ button.danger:hover { background: #b71c1c; }
   <a href="/">Home</a>
   <a href="/upload">Upload OCR</a>
   <a href="/collection">Collection</a>
+  <a href="/corner-batches">Batches</a>
+  <button class="secondary" onclick="newSession()" style="margin-left:auto;padding:4px 10px;font-size:0.75rem;">New Session</button>
 </header>
 
 <div id="camera-placeholder">
@@ -276,6 +331,37 @@ button.danger:hover { background: #b71c1c; }
     </thead>
     <tbody id="results-body"></tbody>
   </table>
+  <div id="deck-selector">
+    <div class="deck-row">
+      <label>Assign to Deck</label>
+      <select id="deck-select" onchange="onDeckSelectChange()">
+        <option value="">None</option>
+        <option value="__new__">+ Create new deck...</option>
+      </select>
+      <select id="zone-select">
+        <option value="mainboard">Mainboard</option>
+        <option value="sideboard">Sideboard</option>
+        <option value="commander">Commander</option>
+      </select>
+    </div>
+    <div id="new-deck-form">
+      <div class="form-row">
+        <input type="text" id="new-deck-name" placeholder="Deck name">
+        <select id="new-deck-format">
+          <option value="">No format</option>
+          <option value="standard">Standard</option>
+          <option value="modern">Modern</option>
+          <option value="commander">Commander</option>
+          <option value="pioneer">Pioneer</option>
+          <option value="legacy">Legacy</option>
+          <option value="vintage">Vintage</option>
+          <option value="pauper">Pauper</option>
+        </select>
+        <button onclick="createDeck()" style="padding:4px 12px;font-size:0.8rem;">Create</button>
+        <button class="secondary" onclick="cancelNewDeck()" style="padding:4px 12px;font-size:0.8rem;">Cancel</button>
+      </div>
+    </div>
+  </div>
   <div class="actions" id="results-actions">
     <button id="commit-btn" onclick="commitCards()">Add to Collection</button>
     <button class="danger" onclick="discardResults()">Discard</button>
@@ -295,6 +381,66 @@ let cameraStream = null;
 let photoCounter = 0;
 let currentCards = [];
 let currentImageKey = null;
+let batchUuid = crypto.randomUUID();
+let decks = [];
+
+// ── Load decks for selector ──
+async function loadDecks() {
+  try {
+    const resp = await fetch('/api/decks');
+    decks = await resp.json();
+    const sel = document.getElementById('deck-select');
+    // Remove old deck options (keep None and + Create)
+    while (sel.options.length > 2) sel.remove(2);
+    for (const d of decks) {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = d.name + (d.format ? ` (${d.format})` : '');
+      sel.appendChild(opt);
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function onDeckSelectChange() {
+  const val = document.getElementById('deck-select').value;
+  document.getElementById('new-deck-form').style.display = val === '__new__' ? 'block' : 'none';
+}
+
+async function createDeck() {
+  const name = document.getElementById('new-deck-name').value.trim();
+  if (!name) return;
+  const format = document.getElementById('new-deck-format').value || null;
+  try {
+    const resp = await fetch('/api/decks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, format }),
+    });
+    if (!resp.ok) { showError('Failed to create deck'); return; }
+    const data = await resp.json();
+    await loadDecks();
+    document.getElementById('deck-select').value = data.id;
+    document.getElementById('new-deck-form').style.display = 'none';
+    document.getElementById('new-deck-name').value = '';
+  } catch (e) { showError('Network error: ' + e.message); }
+}
+
+function cancelNewDeck() {
+  document.getElementById('deck-select').value = '';
+  document.getElementById('new-deck-form').style.display = 'none';
+}
+
+function newSession() {
+  batchUuid = crypto.randomUUID();
+  currentCards = [];
+  currentImageKey = null;
+  photoCounter = 0;
+  resultsSection.style.display = 'none';
+  clearMessages();
+  showSuccess('New session started');
+}
+
+loadDecks();
 
 // ── Drop zone ──
 dropZone.addEventListener('click', () => fileInput.click());
@@ -466,6 +612,7 @@ function renderResults() {
 
   document.getElementById('results-count').textContent = `${currentCards.length} card(s)`;
   resultsSection.style.display = 'block';
+  document.getElementById('deck-selector').style.display = 'block';
 }
 
 function removeCard(idx) {
@@ -481,6 +628,7 @@ function discardResults() {
   currentCards = [];
   currentImageKey = null;
   resultsSection.style.display = 'none';
+  document.getElementById('deck-selector').style.display = 'none';
 }
 
 // ── Commit ──
@@ -491,14 +639,23 @@ async function commitCards() {
   commitBtn.disabled = true;
   commitBtn.textContent = 'Adding...';
 
+  const deckSelect = document.getElementById('deck-select');
+  const deckId = deckSelect.value && deckSelect.value !== '__new__' ? parseInt(deckSelect.value) : null;
+  const deckZone = document.getElementById('zone-select').value;
+
   const payload = {
     image_key: currentImageKey,
+    batch_uuid: batchUuid,
     cards: currentCards.map(c => ({
       printing_id: c.printing_id,
       foil: c.foil,
       condition: c.condition || 'Near Mint',
     })),
   };
+  if (deckId) {
+    payload.deck_id = deckId;
+    payload.deck_zone = deckZone;
+  }
 
   try {
     const resp = await fetch('/api/corners/commit', {
@@ -516,10 +673,16 @@ async function commitCards() {
     }
 
     const names = data.added.map(a => a.name).join(', ');
-    showSuccess(`Added ${data.added.length} card(s) to collection: ${names}`);
+    let msg = `Added ${data.added.length} card(s) to collection: ${names}`;
+    if (deckId) {
+      const deckName = deckSelect.options[deckSelect.selectedIndex].textContent;
+      msg += ` — assigned to ${deckName}`;
+    }
+    showSuccess(msg);
     currentCards = [];
     currentImageKey = null;
     resultsSection.style.display = 'none';
+    document.getElementById('deck-selector').style.display = 'none';
   } catch (e) {
     showError('Network error: ' + e.message);
   }

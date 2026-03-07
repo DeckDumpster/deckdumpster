@@ -1,0 +1,11 @@
+# Scenario: Flip a double-faced card on the detail page
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  When I view a double-faced card on its detail page, I can click the
+  flip button to see the back face. The card image flips with a 3D
+  animation, and the details panel updates to show the back face's name,
+  type line, and mana cost.

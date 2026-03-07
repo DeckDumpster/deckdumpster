@@ -1,0 +1,10 @@
+# Scenario: Browse corner ingestion batches
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can navigate to the corner batches page and see a list of past corner
+  ingestion batches showing date, card count, and deck assignment. I can
+  click a batch to see its cards with image thumbnails and names.

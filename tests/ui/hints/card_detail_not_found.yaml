@@ -1,0 +1,9 @@
+start_page: /card/zzz/999
+involves:
+  - card detail page with invalid URL
+  - '"Card not found" error message in .empty-state element'
+  - no card image or details panel visible
+notes: >
+  Navigate to /card/zzz/999 (a nonexistent set/CN). The loading state
+  should disappear and be replaced by a "Card not found" error message.
+  The page should still show the site header nav bar.

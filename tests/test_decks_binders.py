@@ -12,13 +12,12 @@ Tests the repository layer for:
 To run: uv run pytest tests/test_decks_binders.py -v
 """
 
+import os
 import sqlite3
 import tempfile
-import os
 
 import pytest
 
-from mtg_collector.db.schema import init_db, get_current_version
 from mtg_collector.db.models import (
     Binder,
     BinderRepository,
@@ -35,6 +34,7 @@ from mtg_collector.db.models import (
     Set,
     SetRepository,
 )
+from mtg_collector.db.schema import get_current_version, init_db
 
 
 @pytest.fixture
@@ -84,8 +84,8 @@ def seeded_db(db):
 # =============================================================================
 
 class TestMigration:
-    def test_fresh_install_has_v27(self, db):
-        assert get_current_version(db) == 27
+    def test_fresh_install_has_v28(self, db):
+        assert get_current_version(db) == 29
 
     def test_tables_exist(self, db):
         tables = [r[0] for r in db.execute(
@@ -399,3 +399,349 @@ class TestCollectionEntryFields:
         assert entry.deck_id == deck_id
         assert entry.deck_zone == "commander"
         assert entry.binder_id is None
+
+
+# =============================================================================
+# Helpers for movement_log tests
+# =============================================================================
+
+def _get_movement_logs(db, collection_id):
+    """Return all movement_log rows for a collection entry."""
+    return [dict(r) for r in db.execute(
+        "SELECT * FROM movement_log WHERE collection_id = ? ORDER BY id",
+        (collection_id,),
+    ).fetchall()]
+
+
+# =============================================================================
+# Schema: movement_log table
+# =============================================================================
+
+class TestMovementLogSchema:
+    def test_movement_log_table_exists(self, db):
+        tables = [r[0] for r in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()]
+        assert "movement_log" in tables
+
+    def test_movement_log_columns(self, db):
+        cols = [r[1] for r in db.execute("PRAGMA table_info(movement_log)").fetchall()]
+        assert "collection_id" in cols
+        assert "from_deck_id" in cols
+        assert "to_deck_id" in cols
+        assert "from_binder_id" in cols
+        assert "to_binder_id" in cols
+        assert "from_zone" in cols
+        assert "to_zone" in cols
+        assert "changed_at" in cols
+        assert "note" in cols
+
+    def test_movement_log_index_exists(self, db):
+        indexes = [r[1] for r in db.execute(
+            "SELECT * FROM sqlite_master WHERE type='index'"
+        ).fetchall()]
+        assert "idx_movement_log_collection" in indexes
+
+
+# =============================================================================
+# Migration backfill
+# =============================================================================
+
+class TestMovementLogBackfill:
+    def test_backfill_creates_entries_for_assigned_cards(self):
+        """Simulate a v28 DB with assigned cards, migrate to v29, verify backfill."""
+        from mtg_collector.db.schema import SCHEMA_SQL, _migrate_v28_to_v29
+
+        with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+            db_path = f.name
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Create schema without movement_log (simulate v28)
+        # Use the full schema SQL but drop the movement_log table after
+        conn.executescript(SCHEMA_SQL)
+        conn.execute("DROP TABLE IF EXISTS movement_log")
+        conn.commit()
+
+        # Seed test data: a card assigned to a deck
+        conn.execute("INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test')")
+        conn.execute("INSERT INTO cards (oracle_id, name) VALUES ('o1', 'Bolt')")
+        conn.execute("INSERT INTO printings (printing_id, oracle_id, set_code, collector_number) "
+                      "VALUES ('p1', 'o1', 'tst', '1')")
+        conn.execute("INSERT INTO decks (name, created_at, updated_at) VALUES ('D1', '2025-01-01', '2025-01-01')")
+        conn.execute("INSERT INTO binders (name, created_at, updated_at) VALUES ('B1', '2025-01-01', '2025-01-01')")
+        conn.execute("INSERT INTO collection (printing_id, finish, acquired_at, source, deck_id, deck_zone) "
+                      "VALUES ('p1', 'nonfoil', '2025-01-01', 'manual', 1, 'mainboard')")
+        conn.execute("INSERT INTO collection (printing_id, finish, acquired_at, source, binder_id) "
+                      "VALUES ('p1', 'foil', '2025-01-01', 'manual', 1)")
+        conn.execute("INSERT INTO collection (printing_id, finish, acquired_at, source) "
+                      "VALUES ('p1', 'nonfoil', '2025-01-01', 'manual')")
+        conn.commit()
+
+        _migrate_v28_to_v29(conn)
+        conn.commit()
+
+        logs = [dict(r) for r in conn.execute("SELECT * FROM movement_log ORDER BY id").fetchall()]
+        # Only the 2 assigned cards should get backfill entries (not the unassigned one)
+        assert len(logs) == 2
+        # Deck-assigned card
+        assert logs[0]["collection_id"] == 1
+        assert logs[0]["to_deck_id"] == 1
+        assert logs[0]["to_zone"] == "mainboard"
+        assert logs[0]["from_deck_id"] is None
+        assert logs[0]["note"] == "backfill"
+        # Binder-assigned card
+        assert logs[1]["collection_id"] == 2
+        assert logs[1]["to_binder_id"] == 1
+        assert logs[1]["from_binder_id"] is None
+        assert logs[1]["note"] == "backfill"
+
+        conn.close()
+        os.unlink(db_path)
+
+
+# =============================================================================
+# DeckRepository movement logging
+# =============================================================================
+
+class TestDeckMovementLog:
+    def test_add_cards_logs_movement(self, seeded_db):
+        db, card_ids = seeded_db
+        deck_repo = DeckRepository(db)
+        deck_id = deck_repo.add(Deck(id=None, name="D1"))
+        deck_repo.add_cards(deck_id, card_ids[:2], zone="sideboard")
+        db.commit()
+
+        for cid in card_ids[:2]:
+            logs = _get_movement_logs(db, cid)
+            assert len(logs) == 1
+            assert logs[0]["from_deck_id"] is None
+            assert logs[0]["to_deck_id"] == deck_id
+            assert logs[0]["from_zone"] is None
+            assert logs[0]["to_zone"] == "sideboard"
+
+        # Unassigned card has no logs
+        assert _get_movement_logs(db, card_ids[2]) == []
+
+    def test_remove_cards_logs_movement(self, seeded_db):
+        db, card_ids = seeded_db
+        deck_repo = DeckRepository(db)
+        deck_id = deck_repo.add(Deck(id=None, name="D1"))
+        deck_repo.add_cards(deck_id, card_ids[:2], zone="mainboard")
+        db.commit()
+
+        deck_repo.remove_cards(deck_id, [card_ids[0]])
+        db.commit()
+
+        logs = _get_movement_logs(db, card_ids[0])
+        assert len(logs) == 2  # add + remove
+        remove_log = logs[1]
+        assert remove_log["from_deck_id"] == deck_id
+        assert remove_log["to_deck_id"] is None
+        assert remove_log["from_zone"] == "mainboard"
+        assert remove_log["to_zone"] is None
+
+    def test_move_cards_deck_to_deck(self, seeded_db):
+        db, card_ids = seeded_db
+        deck_repo = DeckRepository(db)
+        d1 = deck_repo.add(Deck(id=None, name="Deck A"))
+        d2 = deck_repo.add(Deck(id=None, name="Deck B"))
+        deck_repo.add_cards(d1, [card_ids[0]], zone="mainboard")
+        db.commit()
+
+        deck_repo.move_cards([card_ids[0]], d2, zone="sideboard")
+        db.commit()
+
+        logs = _get_movement_logs(db, card_ids[0])
+        assert len(logs) == 2  # add to d1 + move to d2
+        move_log = logs[1]
+        assert move_log["from_deck_id"] == d1
+        assert move_log["to_deck_id"] == d2
+        assert move_log["from_zone"] == "mainboard"
+        assert move_log["to_zone"] == "sideboard"
+
+    def test_move_cards_binder_to_deck(self, seeded_db):
+        db, card_ids = seeded_db
+        binder_repo = BinderRepository(db)
+        deck_repo = DeckRepository(db)
+        b1 = binder_repo.add(Binder(id=None, name="B1"))
+        binder_repo.add_cards(b1, [card_ids[0]])
+        db.commit()
+
+        d1 = deck_repo.add(Deck(id=None, name="D1"))
+        deck_repo.move_cards([card_ids[0]], d1, zone="commander")
+        db.commit()
+
+        logs = _get_movement_logs(db, card_ids[0])
+        assert len(logs) == 2  # add to binder + move to deck
+        move_log = logs[1]
+        assert move_log["from_binder_id"] == b1
+        assert move_log["to_binder_id"] is None
+        assert move_log["from_deck_id"] is None
+        assert move_log["to_deck_id"] == d1
+        assert move_log["to_zone"] == "commander"
+
+    def test_delete_deck_logs_all_cards(self, seeded_db):
+        db, card_ids = seeded_db
+        deck_repo = DeckRepository(db)
+        deck_id = deck_repo.add(Deck(id=None, name="To Delete"))
+        deck_repo.add_cards(deck_id, card_ids, zone="mainboard")
+        db.commit()
+
+        deck_repo.delete(deck_id)
+        db.commit()
+
+        for cid in card_ids:
+            logs = _get_movement_logs(db, cid)
+            assert len(logs) == 2  # add + delete
+            delete_log = logs[1]
+            assert delete_log["from_deck_id"] == deck_id
+            assert delete_log["to_deck_id"] is None
+            assert delete_log["from_zone"] == "mainboard"
+            assert delete_log["to_zone"] is None
+            assert delete_log["note"] == "deck deleted"
+
+
+# =============================================================================
+# BinderRepository movement logging
+# =============================================================================
+
+class TestBinderMovementLog:
+    def test_add_cards_logs_movement(self, seeded_db):
+        db, card_ids = seeded_db
+        binder_repo = BinderRepository(db)
+        binder_id = binder_repo.add(Binder(id=None, name="B1"))
+        binder_repo.add_cards(binder_id, card_ids[:2])
+        db.commit()
+
+        for cid in card_ids[:2]:
+            logs = _get_movement_logs(db, cid)
+            assert len(logs) == 1
+            assert logs[0]["from_binder_id"] is None
+            assert logs[0]["to_binder_id"] == binder_id
+            assert logs[0]["from_deck_id"] is None
+            assert logs[0]["to_deck_id"] is None
+
+    def test_remove_cards_logs_movement(self, seeded_db):
+        db, card_ids = seeded_db
+        binder_repo = BinderRepository(db)
+        binder_id = binder_repo.add(Binder(id=None, name="B1"))
+        binder_repo.add_cards(binder_id, card_ids[:1])
+        db.commit()
+
+        binder_repo.remove_cards(binder_id, card_ids[:1])
+        db.commit()
+
+        logs = _get_movement_logs(db, card_ids[0])
+        assert len(logs) == 2  # add + remove
+        remove_log = logs[1]
+        assert remove_log["from_binder_id"] == binder_id
+        assert remove_log["to_binder_id"] is None
+
+    def test_move_cards_deck_to_binder(self, seeded_db):
+        db, card_ids = seeded_db
+        deck_repo = DeckRepository(db)
+        binder_repo = BinderRepository(db)
+        d1 = deck_repo.add(Deck(id=None, name="D1"))
+        deck_repo.add_cards(d1, [card_ids[0]], zone="mainboard")
+        db.commit()
+
+        b1 = binder_repo.add(Binder(id=None, name="B1"))
+        binder_repo.move_cards([card_ids[0]], b1)
+        db.commit()
+
+        logs = _get_movement_logs(db, card_ids[0])
+        assert len(logs) == 2
+        move_log = logs[1]
+        assert move_log["from_deck_id"] == d1
+        assert move_log["to_deck_id"] is None
+        assert move_log["from_binder_id"] is None
+        assert move_log["to_binder_id"] == b1
+        assert move_log["from_zone"] == "mainboard"
+        assert move_log["to_zone"] is None
+
+    def test_move_cards_binder_to_binder(self, seeded_db):
+        db, card_ids = seeded_db
+        binder_repo = BinderRepository(db)
+        b1 = binder_repo.add(Binder(id=None, name="B1"))
+        b2 = binder_repo.add(Binder(id=None, name="B2"))
+        binder_repo.add_cards(b1, [card_ids[0]])
+        db.commit()
+
+        binder_repo.move_cards([card_ids[0]], b2)
+        db.commit()
+
+        logs = _get_movement_logs(db, card_ids[0])
+        assert len(logs) == 2
+        move_log = logs[1]
+        assert move_log["from_binder_id"] == b1
+        assert move_log["to_binder_id"] == b2
+
+    def test_delete_binder_logs_all_cards(self, seeded_db):
+        db, card_ids = seeded_db
+        binder_repo = BinderRepository(db)
+        binder_id = binder_repo.add(Binder(id=None, name="To Delete"))
+        binder_repo.add_cards(binder_id, card_ids)
+        db.commit()
+
+        binder_repo.delete(binder_id)
+        db.commit()
+
+        for cid in card_ids:
+            logs = _get_movement_logs(db, cid)
+            assert len(logs) == 2  # add + delete
+            delete_log = logs[1]
+            assert delete_log["from_binder_id"] == binder_id
+            assert delete_log["to_binder_id"] is None
+            assert delete_log["note"] == "binder deleted"
+
+
+# =============================================================================
+# CollectionRepository.get_movement_history
+# =============================================================================
+
+class TestGetMovementHistory:
+    def test_returns_empty_for_unmoved_card(self, seeded_db):
+        db, card_ids = seeded_db
+        repo = CollectionRepository(db)
+        assert repo.get_movement_history(card_ids[0]) == []
+
+    def test_returns_chronological_entries(self, seeded_db):
+        db, card_ids = seeded_db
+        deck_repo = DeckRepository(db)
+        d1 = deck_repo.add(Deck(id=None, name="D1"))
+        d2 = deck_repo.add(Deck(id=None, name="D2"))
+        deck_repo.add_cards(d1, [card_ids[0]], zone="mainboard")
+        deck_repo.move_cards([card_ids[0]], d2, zone="sideboard")
+        deck_repo.remove_cards(d2, [card_ids[0]])
+        db.commit()
+
+        repo = CollectionRepository(db)
+        history = repo.get_movement_history(card_ids[0])
+        assert len(history) == 3
+        # Verify chronological order by id
+        assert history[0]["id"] < history[1]["id"] < history[2]["id"]
+
+    def test_joins_deck_and_binder_names(self, seeded_db):
+        db, card_ids = seeded_db
+        deck_repo = DeckRepository(db)
+        binder_repo = BinderRepository(db)
+        d1 = deck_repo.add(Deck(id=None, name="Red Deck"))
+        deck_repo.add_cards(d1, [card_ids[0]], zone="mainboard")
+        db.commit()
+
+        b1 = binder_repo.add(Binder(id=None, name="Trade Binder"))
+        binder_repo.move_cards([card_ids[0]], b1)
+        db.commit()
+
+        repo = CollectionRepository(db)
+        history = repo.get_movement_history(card_ids[0])
+        assert len(history) == 2
+
+        # First: added to deck
+        assert history[0]["to_deck_name"] == "Red Deck"
+        assert history[0]["from_deck_name"] is None
+
+        # Second: moved deck -> binder
+        assert history[1]["from_deck_name"] == "Red Deck"
+        assert history[1]["to_binder_name"] == "Trade Binder"

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corner Batches - MTG Collection</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+header {
+  background: #16213e;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid #0f3460;
+}
+header h1 { font-size: 1.1rem; color: #e94560; }
+header a { color: #888; text-decoration: none; font-size: 0.8rem; }
+header a:hover { color: #e94560; }
+button {
+  padding: 8px 16px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+button:hover { background: #c73651; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.secondary { background: #333; border-color: #555; }
+button.secondary:hover { background: #444; }
+select, input {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+select:focus, input:focus { outline: 2px solid #e94560; }
+
+/* List view */
+#list-view { padding: 12px; }
+.batch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+.batch-card {
+  background: #16213e;
+  border: 2px solid #0f3460;
+  border-radius: 10px;
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.batch-card:hover {
+  border-color: #e94560;
+  background: #1a1a3e;
+}
+.batch-card .batch-date { color: #888; font-size: 0.8rem; }
+.batch-card .batch-count { color: #e94560; font-weight: 600; font-size: 1.1rem; }
+.batch-card .batch-deck { color: #4caf50; font-size: 0.85rem; margin-top: 4px; }
+.batch-card .batch-name { font-weight: 600; margin-bottom: 4px; }
+.empty-state {
+  text-align: center;
+  padding: 60px 24px;
+  color: #666;
+}
+
+/* Detail view */
+#detail-view { display: none; padding: 12px; }
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.detail-header h2 { color: #e94560; font-size: 1.1rem; }
+.detail-meta { color: #888; font-size: 0.85rem; }
+
+.assign-section {
+  margin: 12px 0;
+  padding: 12px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+}
+.assign-section label {
+  font-size: 0.85rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.assign-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.assign-status {
+  color: #4caf50;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.card-item {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  overflow: hidden;
+  text-align: center;
+}
+.card-item img {
+  width: 100%;
+  aspect-ratio: 5/7;
+  object-fit: cover;
+  display: block;
+}
+.card-item .card-info {
+  padding: 6px 8px;
+  font-size: 0.75rem;
+}
+.card-item .card-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-item .card-set { color: #888; }
+
+.success-msg {
+  margin: 8px 0;
+  padding: 12px 16px;
+  background: #1b3e1b;
+  border: 1px solid #4caf50;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #4caf50;
+}
+.error-msg {
+  margin: 8px 0;
+  padding: 12px 16px;
+  background: #5e1b1b;
+  border: 1px solid #e94560;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #e94560;
+}
+
+@media (max-width: 768px) {
+  .batch-grid { grid-template-columns: 1fr; }
+  .cards-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Corner Batches</h1>
+  <a href="/">Home</a>
+  <a href="/ingest-corners">Ingest Corners</a>
+  <a href="/collection">Collection</a>
+</header>
+
+<div id="list-view"></div>
+<div id="detail-view"></div>
+<div id="messages"></div>
+
+<script>
+let batches = [];
+let currentBatch = null;
+let currentCards = [];
+let decks = [];
+
+async function loadBatches() {
+  const resp = await fetch('/api/corner-batches');
+  batches = await resp.json();
+  renderList();
+}
+
+function renderList() {
+  const view = document.getElementById('list-view');
+  document.getElementById('detail-view').style.display = 'none';
+  view.style.display = 'block';
+
+  if (batches.length === 0) {
+    view.innerHTML = '<div class="empty-state">No corner batches yet. Scan some cards on the <a href="/ingest-corners" style="color:#e94560">Ingest Corners</a> page.</div>';
+    return;
+  }
+
+  let html = '<div class="batch-grid">';
+  for (const b of batches) {
+    const date = b.created_at ? new Date(b.created_at).toLocaleString() : 'Unknown';
+    const deckLabel = b.deck_name ? `Deck: ${b.deck_name}` : 'Unassigned';
+    const name = b.name || `Batch #${b.id}`;
+    html += `
+      <div class="batch-card" onclick="showBatch(${b.id})">
+        <div class="batch-name">${esc(name)}</div>
+        <div class="batch-date">${esc(date)}</div>
+        <div class="batch-count">${b.card_count} card(s)</div>
+        <div class="batch-deck">${esc(deckLabel)}</div>
+      </div>`;
+  }
+  html += '</div>';
+  view.innerHTML = html;
+}
+
+async function showBatch(batchId) {
+  const resp = await fetch(`/api/corner-batches/${batchId}/cards`);
+  const data = await resp.json();
+  currentBatch = data.batch;
+  currentCards = data.cards;
+
+  // Load decks for assignment
+  const dresp = await fetch('/api/decks');
+  decks = await dresp.json();
+
+  renderDetail();
+}
+
+function renderDetail() {
+  const view = document.getElementById('detail-view');
+  document.getElementById('list-view').style.display = 'none';
+  view.style.display = 'block';
+
+  const b = currentBatch;
+  const date = b.created_at ? new Date(b.created_at).toLocaleString() : 'Unknown';
+  const name = b.name || `Batch #${b.id}`;
+
+  let assignHtml = '';
+  if (b.deck_id) {
+    const deck = decks.find(d => d.id === b.deck_id);
+    const deckName = deck ? deck.name : `Deck #${b.deck_id}`;
+    assignHtml = `<div class="assign-status">Assigned to: ${esc(deckName)} (${esc(b.deck_zone || 'mainboard')})</div>`;
+  } else {
+    let deckOptions = '<option value="">Select a deck...</option>';
+    for (const d of decks) {
+      deckOptions += `<option value="${d.id}">${esc(d.name)}${d.format ? ` (${d.format})` : ''}</option>`;
+    }
+    assignHtml = `
+      <label>Assign to Deck</label>
+      <div class="assign-row">
+        <select id="assign-deck-select">${deckOptions}</select>
+        <select id="assign-zone-select">
+          <option value="mainboard">Mainboard</option>
+          <option value="sideboard">Sideboard</option>
+          <option value="commander">Commander</option>
+        </select>
+        <button onclick="assignDeck()">Assign</button>
+      </div>`;
+  }
+
+  let cardsHtml = '';
+  for (const c of currentCards) {
+    const img = c.image_uri || '/static/card_back.jpeg';
+    cardsHtml += `
+      <div class="card-item">
+        <img src="${img}" alt="${esc(c.name)}" loading="lazy">
+        <div class="card-info">
+          <div class="card-name" title="${esc(c.name)}">${esc(c.name)}</div>
+          <div class="card-set">${(c.set_code || '').toUpperCase()} #${c.collector_number || ''}</div>
+        </div>
+      </div>`;
+  }
+
+  view.innerHTML = `
+    <div class="detail-header">
+      <button class="secondary" onclick="backToList()" style="padding:4px 12px;font-size:0.8rem;">Back</button>
+      <h2>${esc(name)}</h2>
+      <span class="detail-meta">${esc(date)} — ${currentCards.length} card(s)</span>
+    </div>
+    <div class="assign-section">${assignHtml}</div>
+    <div id="detail-messages"></div>
+    <div class="cards-grid">${cardsHtml}</div>`;
+}
+
+async function assignDeck() {
+  const deckId = document.getElementById('assign-deck-select').value;
+  const zone = document.getElementById('assign-zone-select').value;
+  if (!deckId) return;
+
+  try {
+    const resp = await fetch(`/api/corner-batches/${currentBatch.id}/assign-deck`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: parseInt(deckId), deck_zone: zone }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showDetailError(data.error || 'Assignment failed');
+      return;
+    }
+    currentBatch.deck_id = parseInt(deckId);
+    currentBatch.deck_zone = zone;
+    showDetailSuccess(`Assigned ${data.assigned} card(s) to deck`);
+    renderDetail();
+    // Also reload batch list
+    loadBatches();
+  } catch (e) {
+    showDetailError('Network error: ' + e.message);
+  }
+}
+
+function backToList() {
+  document.getElementById('detail-view').style.display = 'none';
+  document.getElementById('list-view').style.display = 'block';
+}
+
+function showDetailError(msg) {
+  const el = document.getElementById('detail-messages');
+  const div = document.createElement('div');
+  div.className = 'error-msg';
+  div.textContent = msg;
+  el.appendChild(div);
+  setTimeout(() => div.remove(), 10000);
+}
+
+function showDetailSuccess(msg) {
+  const el = document.getElementById('detail-messages');
+  const div = document.createElement('div');
+  div.className = 'success-msg';
+  div.textContent = msg;
+  el.appendChild(div);
+  setTimeout(() => div.remove(), 10000);
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+loadBatches();
+</script>
+</body>
+</html>

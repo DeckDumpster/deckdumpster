@@ -1,0 +1,18 @@
+start_page: /card/blb/124
+involves:
+  - card image in the left column
+  - card name as h2 heading
+  - mana cost icons (mana-font)
+  - 'Type section with type line'
+  - 'Printing section with set icon (keyrune), collector number, rarity, artist'
+  - 'SF and CK price link badges in the detail-links row'
+  - 'site header with DeckDumpster title and nav links'
+fixture_data:
+  card_name: "Artist's Talent"
+notes: >
+  Navigate directly to /card/blb/124. The page should load the card data
+  via /api/card/by-set-cn and display it. Verify "Artist's Talent" appears
+  as a heading. Verify the type line is shown. Verify the Printing section
+  shows Bloomburrow set info. Verify SF and CK badge links are present.
+  The nav header should show DeckDumpster with links to Collection, Decks,
+  Binders, Sealed.

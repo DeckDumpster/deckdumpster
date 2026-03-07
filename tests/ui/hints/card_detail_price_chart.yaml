@@ -1,0 +1,16 @@
+start_page: /card/blb/124
+involves:
+  - '.price-chart-section initially hidden, becomes .visible when data loads'
+  - Chart.js canvas (#price-chart-canvas)
+  - time-range pill buttons (1M, 3M, 6M, 1Y, ALL)
+  - clicking a pill updates .active class
+notes: >
+  The --test fixture has no price rows. The implementation must inject
+  price data into the container DB before navigating. Use podman exec
+  to INSERT INTO prices for blb/124. After seeding, navigate to the card
+  and verify the Price History section is visible with a canvas element.
+  The card detail page activates the first non-disabled range pill
+  (typically 1M for recently seeded data). Click a different pill (e.g.
+  ALL) and verify it gains .active while the previous pill loses it.
+  Then navigate to a card with no price data (e.g. /card/lci/68) and
+  verify the chart section is not visible.

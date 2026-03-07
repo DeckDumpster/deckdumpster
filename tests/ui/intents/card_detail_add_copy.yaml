@@ -1,0 +1,10 @@
+# Scenario: Add a copy to collection from the card detail page
+#
+# Related:
+#   issues: [188]
+#   pull_requests: []
+
+description: >
+  On the card detail page, I can click the "Add" button to expand a
+  purchase form with date, price, and source fields. After filling in
+  details and clicking "Confirm", a new copy appears in the Copies section.

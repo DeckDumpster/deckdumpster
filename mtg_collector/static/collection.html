@@ -2247,6 +2247,7 @@ function showCardModal(card) {
       <div class="modal-links">
         <a class="badge link" href="${sfUrl}" target="_blank" rel="noopener">SF${tcgPrice !== '—' ? ' ' + tcgPrice : ''}</a>
         <a class="badge link" href="${ckUrl}" target="_blank" rel="noopener">CK${ckPrice !== '—' ? ' ' + ckPrice : ''}</a>
+        <a class="badge link" href="/card/${card.set_code.toLowerCase()}/${card.collector_number}">Full page &rarr;</a>
         <button class="want-btn${getWishlistEntry(card) ? ' wanted' : ''}" id="modal-want-btn">${getWishlistEntry(card) ? 'Wanted' : 'Want'}</button>
         <button class="add-collection-btn" id="modal-add-btn">Add</button>
       </div>

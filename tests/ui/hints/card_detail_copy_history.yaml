@@ -1,0 +1,14 @@
+start_page: /card/blb/124
+involves:
+  - 'Copies section with an existing copy from demo data'
+  - '"History ▾" toggle button on each copy section'
+  - history timeline (.history-timeline) with status and movement events
+  - clicking toggle again collapses the timeline
+fixture_data:
+  card_name: "Artist's Talent"
+notes: >
+  BLB 124 (Artist's Talent) already has an owned copy in demo data
+  assigned to the Foil Collection binder. Navigate to /card/blb/124
+  and wait for copies to load. Click "History ▾" on the existing copy.
+  The timeline should show at least the initial status change and the
+  binder assignment. Click the toggle again to collapse it.
