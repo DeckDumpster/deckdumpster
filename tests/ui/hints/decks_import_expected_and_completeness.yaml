@@ -1,0 +1,20 @@
+start_page: /decks
+involves:
+  - '"Bolt Tribal" deck card in the deck list'
+  - '"Import Expected List" button in detail-controls header'
+  - 'expected-modal with textarea (id=f-expected-list)'
+  - '"Import" button in the expected modal'
+  - 'completeness-section appears below the card table'
+  - 'summary span (id=completeness-summary) with present/missing/extra counts'
+  - 'completeness-body with Present (green) and Missing (red) groups'
+fixture_data:
+  deck_name: "Bolt Tribal"
+  decklist: "1 Beast-Kin Ranger (FDN) 100\n1 Cathar Commando (FDN) 139"
+notes: >
+  1. Click "Bolt Tribal" to open detail view. 2. Click "Import Expected
+  List". 3. Paste "1 Beast-Kin Ranger (FDN) 100\n1 Cathar Commando (FDN) 139"
+  into the textarea. Beast-Kin Ranger is in the deck; Cathar Commando is
+  unassigned in the collection. 4. Click "Import". 5. Modal closes. 6.
+  "Expected Cards" section appears with summary "(1/2 present, 1 missing,
+  ...)". 7. "Present" group shows Beast-Kin Ranger. 8. "Missing" group
+  shows Cathar Commando with an "Unassigned" location tag. Done.

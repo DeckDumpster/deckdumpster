@@ -1,0 +1,18 @@
+# Scenario: Reassemble unassigned missing cards back into a precon deck
+#
+# Related:
+#   issues: [190]
+#   pull_requests: []
+#
+# Prerequisites:
+#   The "Bolt Tribal" demo deck must exist. The collection must have
+#   unassigned copies of cards that can be added to the expected list.
+
+description: >
+  I open the "Bolt Tribal" deck, import an expected list that includes
+  a card not in the deck but unassigned in my collection. The
+  completeness section shows it under "Missing" with a green
+  "Unassigned" location tag. I click the "Reassemble" button to move
+  the unassigned card into the deck. After reassembly, the card moves
+  from "Missing" to "Present" in the completeness display and the
+  deck's card count increases.
