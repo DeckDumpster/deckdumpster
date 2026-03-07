@@ -1,0 +1,347 @@
+/* card-detail.css — Page-specific styles for the card detail page. */
+
+/* Two-column layout */
+.card-detail-layout {
+  display: flex;
+  gap: 0;
+  max-width: 1100px;
+  margin: 0 auto;
+  min-height: calc(100vh - 60px);
+}
+
+/* Left column: card image */
+.card-image-section {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background: #0a0a1a;
+  padding: 24px;
+  perspective: 1200px;
+  position: relative;
+}
+
+.card-flip-container {
+  transform-style: preserve-3d;
+  transition: transform 0.6s;
+}
+
+.card-flip-container.flipped { transform: rotateY(180deg); }
+
+.card-flip-front, .card-flip-back {
+  backface-visibility: hidden;
+}
+
+.card-flip-back {
+  position: absolute;
+  top: 0; left: 0;
+  transform: rotateY(180deg);
+}
+
+.card-flip-front img, .card-flip-back img {
+  height: 72vh;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  display: block;
+}
+
+.flip-btn {
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.7);
+  border: 1px solid #555;
+  color: var(--text-primary);
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  padding: 0;
+}
+
+.flip-btn:hover { background: rgba(233,69,96,0.8); border-color: var(--accent); }
+
+/* Right column: details panel */
+.card-details-panel {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  max-height: calc(100vh - 60px);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.card-details-panel h2 {
+  font-size: 1.4rem;
+  color: #fff;
+  margin: 0;
+  line-height: 1.3;
+}
+
+/* Detail sections (adapted from modal-section / modal-row) */
+.detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.detail-section:last-child { border-bottom: none; }
+
+.detail-section-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #666;
+  font-weight: 600;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.detail-row .label { color: var(--text-secondary); }
+.detail-row .value { color: var(--text-primary); font-weight: 500; }
+.detail-row .value a { color: var(--link-color); text-decoration: none; }
+.detail-row .value a:hover { text-decoration: underline; }
+
+.detail-mana { margin-top: 2px; }
+.detail-mana .ms { font-size: 1rem; }
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Links row */
+.detail-links {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.detail-links a.badge.link {
+  font-size: 0.75rem;
+  padding: 3px 8px;
+}
+
+/* Want / Add buttons */
+.want-btn {
+  padding: 3px 10px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid #555;
+  background: #333;
+  color: #aaa;
+}
+.want-btn:hover { color: #fff; background: #555; border-color: #777; }
+.want-btn.wanted {
+  background: #1a5c3a;
+  border-color: #2a8c5a;
+  color: #7ee8b0;
+}
+.want-btn.wanted:hover { background: var(--accent-hover); border-color: var(--accent); color: #fff; }
+
+.add-collection-btn {
+  padding: 3px 10px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid #555;
+  background: #333;
+  color: #aaa;
+}
+.add-collection-btn:hover { color: #fff; background: #555; border-color: #777; }
+
+.add-collection-form {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 6px;
+}
+.add-collection-form input {
+  padding: 3px 6px;
+  border-radius: 3px;
+  border: 1px solid #555;
+  background: #222;
+  color: #ddd;
+  font-size: 0.75rem;
+}
+.add-collection-form input[type="date"] { width: 120px; }
+.add-collection-form input[type="number"] { width: 70px; }
+.add-collection-form input[type="text"] { width: 100px; }
+.add-collection-form button {
+  padding: 3px 10px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid #2a8c5a;
+  background: #1a5c3a;
+  color: #7ee8b0;
+}
+.add-collection-form button:hover { background: #2a8c5a; }
+
+/* Copy section styles */
+.copy-section {
+  background: var(--bg-primary);
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+.copy-section .copy-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+}
+.copy-section .copy-header .copy-id { color: var(--text-secondary); font-size: 0.75rem; }
+
+.disposition-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.disposition-badge.sold { background: #1a5c3a; color: #7ee8b0; }
+.disposition-badge.traded { background: #5c4a1a; color: #e8d07e; }
+.disposition-badge.gifted { background: #1a3a5c; color: #7eb8e8; }
+.disposition-badge.lost { background: #5c1a1a; color: #e87e7e; }
+.disposition-badge.listed { background: #3a1a5c; color: #b87ee8; }
+
+.dispose-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+.dispose-controls select, .dispose-controls input {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 4px;
+}
+.dispose-controls input { width: 80px; }
+
+.dispose-btn {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  background: var(--border-color);
+  border: 1px solid var(--border-color);
+  color: var(--link-color);
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.dispose-btn:hover { background: #1a4a7a; }
+
+.delete-copy-btn {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  background: #5c1a1a;
+  border: 1px solid #7a2a2a;
+  color: #e87e7e;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.delete-copy-btn:hover { background: #7a2a2a; color: #fff; }
+
+/* Price chart */
+.price-chart-section { padding-top: 8px; display: none; }
+.price-chart-section.visible { display: block; }
+.price-range-pills { display: flex; gap: 4px; margin-bottom: 6px; }
+.price-range-pill {
+  background: var(--border-color); color: #ccc; border: none; border-radius: 12px;
+  padding: 2px 10px; font-size: 0.7rem; cursor: pointer; transition: background 0.15s;
+}
+.price-range-pill:hover { background: #163d6f; }
+.price-range-pill.active { background: var(--accent); color: #fff; }
+.price-range-pill.disabled { opacity: 0.3; pointer-events: none; }
+.price-chart-canvas-wrap { height: 180px; position: relative; }
+
+/* History timeline */
+.history-toggle {
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  background: transparent;
+  border: 1px solid #555;
+  color: var(--text-secondary);
+  border-radius: 3px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.history-toggle:hover { color: var(--text-primary); border-color: #777; }
+
+.history-timeline {
+  border-left: 2px solid var(--border-color);
+  padding-left: 12px;
+  margin-top: 6px;
+}
+
+.history-event {
+  position: relative;
+  padding: 4px 0 8px 16px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.history-event::before {
+  content: '';
+  position: absolute;
+  left: -18px;
+  top: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid #555;
+  background: var(--bg-primary);
+}
+
+.history-event.status::before { border-color: var(--success); }
+.history-event.movement::before { border-color: var(--link-color); }
+
+.history-date { color: #666; font-size: 0.75rem; }
+.history-desc { color: var(--text-primary); }
+
+/* Loading state */
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .card-detail-layout { flex-direction: column; }
+  .card-image-section { padding: 16px; }
+  .card-flip-front img, .card-flip-back img { height: auto; width: 70vw; }
+  .card-details-panel { max-height: none; }
+}

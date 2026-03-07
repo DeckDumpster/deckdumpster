@@ -948,6 +948,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("binders.html")
         elif path == "/set-value":
             self._serve_static("set_value.html")
+        elif path.startswith("/card/"):
+            # /card/:set/:cn → card detail page
+            self._serve_static("card_detail.html")
         elif path == "/upload":
             self._serve_static("upload.html")
         elif path == "/recent":
@@ -979,6 +982,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_collection(params)
         elif path == "/api/wishlist":
             self._api_wishlist_list(params)
+        elif path == "/api/card/by-set-cn":
+            self._api_card_by_set_cn(params)
         elif path.startswith("/api/card/"):
             printing_id = path[len("/api/card/"):]
             self._api_card(printing_id)
@@ -1439,6 +1444,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     _CONTENT_TYPES = {
         ".html": "text/html; charset=utf-8",
+        ".css": "text/css; charset=utf-8",
+        ".js": "text/javascript; charset=utf-8",
         ".ico": "image/x-icon",
         ".jpeg": "image/jpeg",
         ".jpg": "image/jpeg",
@@ -2020,6 +2027,83 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         cn = row["collector_number"]
         result["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", "buylist_normal")
         result["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", "normal")
+        result["ck_url"] = self.generator.get_ck_url(printing_id, False) if self.generator else ""
+
+        conn.close()
+        self._send_json(result)
+
+    def _api_card_by_set_cn(self, params):
+        """Return full card data for a printing looked up by set_code + collector_number."""
+        set_code = params.get("set", [""])[0].lower()
+        cn = params.get("cn", [""])[0]
+        if not set_code or not cn:
+            self._send_json({"error": "Missing set or cn parameter"}, 400)
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        row = conn.execute(
+            """
+            SELECT
+                card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
+                card.colors, card.color_identity,
+                p.set_code, s.set_name, p.collector_number, p.rarity,
+                p.printing_id, p.image_uri, p.artist,
+                p.frame_effects, p.border_color, p.full_art, p.promo,
+                p.promo_types, p.finishes,
+                COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
+                json_extract(p.raw_json, '$.layout') as layout,
+                json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
+                json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana
+            FROM printings p
+            JOIN cards card ON p.oracle_id = card.oracle_id
+            JOIN sets s ON p.set_code = s.set_code
+            WHERE p.set_code = ? AND p.collector_number = ?
+            """,
+            (set_code, cn),
+        ).fetchone()
+
+        if not row:
+            conn.close()
+            self._send_json({"error": "Card not found"}, 404)
+            return
+
+        mana_cost = row["mana_cost"]
+        if not mana_cost:
+            face0 = row["face0_mana"] or ""
+            face1 = row["face1_mana"] or ""
+            if face0 or face1:
+                mana_cost = " // ".join(p for p in [face0, face1] if p)
+
+        result = {
+            "oracle_id": row["oracle_id"],
+            "name": row["flavor_name"] or row["name"],
+            "oracle_name": row["name"] if row["flavor_name"] and row["flavor_name"] != row["name"] else None,
+            "type_line": row["type_line"],
+            "mana_cost": mana_cost,
+            "cmc": row["cmc"],
+            "colors": row["colors"],
+            "color_identity": row["color_identity"],
+            "set_code": row["set_code"],
+            "set_name": row["set_name"],
+            "collector_number": row["collector_number"],
+            "rarity": row["rarity"],
+            "printing_id": row["printing_id"],
+            "image_uri": row["image_uri"],
+            "artist": row["artist"],
+            "frame_effects": row["frame_effects"],
+            "border_color": row["border_color"],
+            "full_art": bool(row["full_art"]),
+            "promo": bool(row["promo"]),
+            "promo_types": row["promo_types"],
+            "finishes": row["finishes"],
+            "layout": row["layout"] or "normal",
+        }
+
+        printing_id = row["printing_id"]
+        result["ck_price"] = _get_sqlite_price(self.db_path, set_code, cn, "cardkingdom", "buylist_normal")
+        result["tcg_price"] = _get_sqlite_price(self.db_path, set_code, cn, "tcgplayer", "normal")
         result["ck_url"] = self.generator.get_ck_url(printing_id, False) if self.generator else ""
 
         conn.close()
