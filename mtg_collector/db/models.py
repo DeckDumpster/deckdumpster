@@ -142,6 +142,19 @@ class CollectionView:
 
 
 @dataclass
+class CornerBatch:
+    """A corner-ingest session batch."""
+    id: Optional[int]
+    batch_uuid: str
+    name: Optional[str] = None
+    deck_id: Optional[int] = None
+    deck_zone: Optional[str] = None
+    card_count: int = 0
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+@dataclass
 class SealedProduct:
     """A sealed MTG product (booster box, bundle, deck, etc.)."""
     uuid: str
@@ -1998,3 +2011,76 @@ class CollectionViewRepository:
             "SELECT * FROM collection_views ORDER BY name"
         )
         return [dict(row) for row in cursor]
+
+
+class CornerBatchRepository:
+    """CRUD operations for corner_batches table."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def create(self, batch: "CornerBatch") -> int:
+        ts = now_iso()
+        cursor = self.conn.execute(
+            """INSERT INTO corner_batches (batch_uuid, name, deck_id, deck_zone,
+               card_count, created_at) VALUES (?, ?, ?, ?, ?, ?)""",
+            (batch.batch_uuid, batch.name, batch.deck_id, batch.deck_zone,
+             batch.card_count, ts),
+        )
+        return cursor.lastrowid
+
+    def get(self, batch_id: int) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM corner_batches WHERE id = ?", (batch_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_by_uuid(self, batch_uuid: str) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM corner_batches WHERE batch_uuid = ?", (batch_uuid,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_all(self) -> List[Dict[str, Any]]:
+        cursor = self.conn.execute(
+            """SELECT cb.*, d.name as deck_name
+               FROM corner_batches cb
+               LEFT JOIN decks d ON cb.deck_id = d.id
+               ORDER BY cb.created_at DESC"""
+        )
+        return [dict(row) for row in cursor]
+
+    def get_cards(self, batch_id: int) -> List[Dict[str, Any]]:
+        cursor = self.conn.execute(
+            """SELECT c.id, c.printing_id, c.finish, c.condition,
+                      p.set_code, p.collector_number, p.rarity, p.image_uri,
+                      card.name, card.type_line, card.mana_cost,
+                      s.set_name
+               FROM ingest_lineage il
+               JOIN collection c ON il.collection_id = c.id
+               JOIN printings p ON c.printing_id = p.printing_id
+               JOIN cards card ON p.oracle_id = card.oracle_id
+               JOIN sets s ON p.set_code = s.set_code
+               WHERE il.batch_id = ?
+               ORDER BY il.card_index""",
+            (batch_id,),
+        )
+        return [dict(row) for row in cursor]
+
+    def increment_card_count(self, batch_id: int, count: int = 1) -> None:
+        self.conn.execute(
+            "UPDATE corner_batches SET card_count = card_count + ? WHERE id = ?",
+            (count, batch_id),
+        )
+
+    def set_deck(self, batch_id: int, deck_id: int, deck_zone: str = "mainboard") -> None:
+        self.conn.execute(
+            "UPDATE corner_batches SET deck_id = ?, deck_zone = ? WHERE id = ?",
+            (deck_id, deck_zone, batch_id),
+        )
+
+    def complete(self, batch_id: int) -> None:
+        self.conn.execute(
+            "UPDATE corner_batches SET completed_at = ? WHERE id = ?",
+            (now_iso(), batch_id),
+        )

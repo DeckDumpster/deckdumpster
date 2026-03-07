@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -167,6 +167,18 @@ CREATE TABLE IF NOT EXISTS ingest_cache (
     created_at TEXT NOT NULL
 );
 
+-- Corner batches: group corner-ingest sessions
+CREATE TABLE IF NOT EXISTS corner_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_uuid TEXT NOT NULL UNIQUE,
+    name TEXT,
+    deck_id INTEGER REFERENCES decks(id),
+    deck_zone TEXT,
+    card_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
 -- Ingest lineage: track which card came from which image
 CREATE TABLE IF NOT EXISTS ingest_lineage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,11 +186,13 @@ CREATE TABLE IF NOT EXISTS ingest_lineage (
     image_md5 TEXT NOT NULL,
     image_path TEXT NOT NULL,
     card_index INTEGER NOT NULL,
+    batch_id INTEGER REFERENCES corner_batches(id),
     created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_lineage_md5 ON ingest_lineage(image_md5);
 CREATE INDEX IF NOT EXISTS idx_lineage_collection ON ingest_lineage(collection_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_batch ON ingest_lineage(batch_id);
 
 -- Ingest images: persistent ingest pipeline state
 CREATE TABLE IF NOT EXISTS ingest_images (
@@ -552,6 +566,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v25_to_v26(conn)
         if current < 27:
             _migrate_v26_to_v27(conn)
+        if current < 28:
+            _migrate_v27_to_v28(conn)
 
     # Record schema version
     conn.execute(
@@ -1594,6 +1610,30 @@ def _migrate_v26_to_v27(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE ingest_images ADD COLUMN set_hint TEXT")
 
 
+def _migrate_v27_to_v28(conn: sqlite3.Connection):
+    """Add corner_batches table and batch_id column to ingest_lineage."""
+    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    if "corner_batches" not in tables:
+        conn.execute("""
+            CREATE TABLE corner_batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_uuid TEXT NOT NULL UNIQUE,
+                name TEXT,
+                deck_id INTEGER REFERENCES decks(id),
+                deck_zone TEXT,
+                card_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                completed_at TEXT
+            )
+        """)
+    if "ingest_lineage" in tables:
+        cursor = conn.execute("PRAGMA table_info(ingest_lineage)")
+        cols = [r[1] for r in cursor.fetchall()]
+        if "batch_id" not in cols:
+            conn.execute("ALTER TABLE ingest_lineage ADD COLUMN batch_id INTEGER REFERENCES corner_batches(id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_lineage_batch ON ingest_lineage(batch_id)")
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -1616,6 +1656,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS settings;
         DROP TABLE IF EXISTS ingest_images;
         DROP TABLE IF EXISTS ingest_lineage;
+        DROP TABLE IF EXISTS corner_batches;
         DROP TABLE IF EXISTS ingest_cache;
         DROP TABLE IF EXISTS collection_views;
         DROP TABLE IF EXISTS collection;
