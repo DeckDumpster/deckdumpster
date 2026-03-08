@@ -1,0 +1,14 @@
+# Scenario: Navigate directly to standalone deck detail page
+#
+# Related:
+#   issues: [191]
+#
+# Prerequisites:
+#   A deck with cards must exist (demo data provides "Bolt Tribal" deck)
+
+description: >
+  I can navigate directly to a deck's standalone detail page at /decks/:id.
+  I see the deck name, metadata (format, card count), zone tabs (Mainboard,
+  Sideboard, Commander) with card counts, and a card table listing the deck's
+  cards with names, sets, mana costs, types, finish, and condition columns.
+  The page title updates to include the deck name.

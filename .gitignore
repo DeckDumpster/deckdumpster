@@ -34,3 +34,4 @@ plans/
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
+!.claude/skills/

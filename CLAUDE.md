@@ -14,6 +14,7 @@ MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gath
 - Tests use pre-populated `tests/fixtures/test-cards.sqlite` for offline testing. Corner identification tests require `ANTHROPIC_API_KEY`.
 - Aggressively limit modality. Defaults are good enough for everyone.
 - **Tests that demonstrate bugs must fail.** If a test exists to reproduce a known bug, it should assert the correct/fixed behavior — not the broken behavior. A passing test means the bug is fixed; a failing test means the bug still exists. Never write a test that passes when the bug is present.
+- **After implementing any feature with UI changes, run `/qa-finish`** to generate UI scenario tests (intents, hints, implementations). This is a skill defined in `.claude/skills/qa-finish/SKILL.md`. It deploys a test container, walks the feature, and writes test artifacts under `tests/ui/`.
 
 ## Commands
 
@@ -110,6 +111,10 @@ Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` 
 ### Card detail page
 
 Standalone page at `/card/:set/:cn` (e.g. `/card/lci/150`). Served by `card_detail.html`, with page-specific styles in `card-detail.css` and logic in `card-detail.js`. First consumer of the shared CSS/JS foundation. API endpoint: `GET /api/card/by-set-cn?set=X&cn=Y`. Linked from the collection modal via "Full page" badge.
+
+### Deck detail page
+
+Standalone page at `/decks/:id` (e.g. `/decks/1`). Served by `deck_detail.html`, with page-specific styles in `deck-detail.css` and logic in `deck-detail.js`. Uses `shared.css` + `shared.js`. All deck detail logic (zone tabs, card table, edit/delete, add/remove cards, import expected list, completeness, reassemble) ported from `decks.html` inline view. Card names in the table link to `/card/:set/:cn`. Deck list page (`decks.html`) links to this standalone page. No new API endpoints — uses existing `/api/decks/` routes.
 
 ### Shared CSS/JS foundation
 
@@ -306,5 +311,10 @@ Data-driven UX regression tests using Claude Vision + Playwright. Excluded from 
 uv run pytest tests/ui/ -v --instance <instance>
 ```
 
-Do NOT create or modify UI scenario tests in automated workflows. They are managed by humans.
+**Creating new UI tests:** After implementing any feature with UI changes, run the `/qa-finish` skill (defined in `.claude/skills/qa-finish/SKILL.md`). This skill:
+1. Uses a subagent to analyze the diff and propose 2-5 intent-based scenarios
+2. Deploys a test container and walks the feature with `curl`
+3. Writes intent YAML (`tests/ui/intents/`), hint YAML (`tests/ui/hints/`), and implementation Python (`tests/ui/implementations/`)
+
+Do NOT create or modify UI scenario tests outside of the `/qa-finish` workflow.
 

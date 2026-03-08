@@ -1,0 +1,13 @@
+# Scenario: Deleting deck from standalone page redirects to list
+#
+# Related:
+#   issues: [191]
+#
+# Prerequisites:
+#   A deck must exist to delete (test creates one first)
+
+description: >
+  When I open a deck's standalone detail page and click the "Delete Deck"
+  button, a confirmation dialog appears. After confirming, the browser
+  redirects back to the deck list at /decks and the deleted deck no longer
+  appears in the list.

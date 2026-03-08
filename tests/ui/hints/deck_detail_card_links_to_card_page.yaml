@@ -1,0 +1,17 @@
+start_page: /decks/1
+involves:
+  - "#card-tbody a elements linking card names to /card/:set/:cn"
+  - "Card detail page at /card/fdn/100 for Beast-Kin Ranger"
+  - ".card-detail-layout on card detail page"
+fixture_data:
+  deck_id: 1
+  card_name: "Beast-Kin Ranger"
+  card_set: "fdn"
+  card_cn: "100"
+  card_url: "/card/fdn/100"
+notes: >
+  Navigate to /decks/1. Wait for the card table to load (wait for
+  "Beast-Kin Ranger" text). Click the "Beast-Kin Ranger" link in the
+  card table. Verify the browser navigates to /card/fdn/100. Wait
+  for the card detail page to load. Verify the card name appears on
+  the detail page. Take a screenshot.

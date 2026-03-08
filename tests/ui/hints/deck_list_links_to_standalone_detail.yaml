@@ -1,0 +1,14 @@
+start_page: /decks
+involves:
+  - ".deck-card a elements in #deck-grid linking to /decks/:id"
+  - "Deck detail page with h2#deck-name"
+  - ".zone-tabs and .card-table on detail page"
+fixture_data:
+  deck_name: "Bolt Tribal"
+  deck_id: 1
+notes: >
+  Navigate to /decks. Wait for the deck grid to load (wait for "Bolt
+  Tribal" text). Click the "Bolt Tribal" deck card. Verify the browser
+  navigates to /decks/1. Wait for the deck detail page to load (wait
+  for h2#deck-name). Verify the deck name shows "Bolt Tribal". Verify
+  zone tabs and card table are visible. Take a screenshot.

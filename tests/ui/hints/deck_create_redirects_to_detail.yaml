@@ -1,0 +1,18 @@
+start_page: /decks
+involves:
+  - "\"New Deck\" button in header controls"
+  - "#deck-modal with form fields: #f-name, #f-format"
+  - "\"Save\" button in modal"
+  - "Redirect to /decks/:id standalone detail page"
+  - "h2#deck-name on detail page"
+fixture_data:
+  new_deck_name: "Test Redirect Deck"
+  new_deck_format: "pioneer"
+notes: >
+  Navigate to /decks. Click the "New Deck" button. Wait for the modal
+  to appear (#deck-modal.active). Fill in the name field with "Test
+  Redirect Deck". Select "Pioneer" format. Click Save. Wait for the
+  browser to navigate to the new deck's detail page. Verify the URL
+  contains /decks/ followed by a number. Verify the deck name shows
+  "Test Redirect Deck". Verify an empty card table is present. Take
+  a screenshot.

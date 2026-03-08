@@ -1,0 +1,11 @@
+# Scenario: Creating a new deck redirects to standalone detail page
+#
+# Related:
+#   issues: [191]
+
+description: >
+  When I create a new deck from the /decks page by clicking "New Deck",
+  filling in the name and format, and clicking Save, the browser redirects
+  to the new deck's standalone detail page at /decks/:id. I can see the
+  deck name I entered, the metadata, and an empty card table ready for
+  cards to be added.

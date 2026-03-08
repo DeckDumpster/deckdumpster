@@ -1,0 +1,13 @@
+# Scenario: Card names in deck detail link to card detail page
+#
+# Related:
+#   issues: [191]
+#
+# Prerequisites:
+#   A deck with cards must exist (demo data provides "Bolt Tribal" deck)
+
+description: >
+  When I view a deck's standalone detail page, each card name in the card
+  table is a clickable link. I can click a card name and navigate to the
+  card detail page at /card/:set/:cn, where I see that card's image and
+  details. The browser URL reflects the card's set and collector number.

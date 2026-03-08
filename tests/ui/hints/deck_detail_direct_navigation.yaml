@@ -1,0 +1,19 @@
+start_page: /decks/1
+involves:
+  - "h2#deck-name showing deck name"
+  - ".deck-meta-grid with label/value pairs (Format, Cards, etc.)"
+  - ".zone-tabs with Mainboard, Sideboard, Commander tabs"
+  - "#count-mainboard, #count-sideboard, #count-commander showing counts"
+  - "table.card-table with thead columns: checkbox, Name, Set, Mana, Type, Finish, Condition"
+  - "#card-tbody with card rows"
+  - ".site-header nav with links to Collection, Decks, Binders, Sealed"
+fixture_data:
+  deck_name: "Bolt Tribal"
+  deck_format: "modern"
+  deck_id: 1
+notes: >
+  Navigate directly to /decks/1. Wait for the deck name to appear.
+  Verify the page title contains the deck name. Check that the metadata
+  grid shows format and card count. Verify zone tabs are visible with
+  the Mainboard tab active. Check that the card table has rows with
+  card names. Take a screenshot of the fully loaded page.

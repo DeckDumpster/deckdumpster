@@ -1,0 +1,13 @@
+# Scenario: Deck list cards link to standalone detail page
+#
+# Related:
+#   issues: [191]
+#
+# Prerequisites:
+#   At least one deck must exist (demo data provides two decks)
+
+description: >
+  When I visit the decks list page at /decks, each deck is rendered as a
+  clickable card that links to /decks/:id. I can click a deck card and
+  navigate to the standalone deck detail page, where I see that deck's
+  full information including name, metadata, zone tabs, and card table.
