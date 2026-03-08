@@ -1,0 +1,15 @@
+start_page: /crack
+involves:
+  - "set search input #set-input"
+  - "surprise mode checkbox #open-mode (unchecked)"
+  - "open pack button #open-btn"
+  - "pack grid #pack-grid with .card-slot elements (all face-up)"
+  - "pack header #pack-header showing set and card count"
+fixture_data:
+  set: "fdn"
+  set_name: "Foundations"
+notes: >
+  Navigate to /crack. Wait for #set-input. Type "Foundations". Click first
+  #set-dropdown li. Wait for product radios. Click #open-mode to uncheck
+  surprise. Click #open-btn. Wait for .card-slot. Verify no
+  .card-slot.face-down exist. Verify pack header shows "fdn".

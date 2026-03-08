@@ -1,0 +1,16 @@
+start_page: /crack
+involves:
+  - "set search input #set-input"
+  - "surprise mode checkbox #open-mode (uncheck for normal mode)"
+  - "open pack button #open-btn"
+  - "pack grid .card-slot elements (clickable to pick)"
+  - "pick list #pick-list with .pick-item entries"
+  - "pick count #pick-count showing (N)"
+fixture_data:
+  set: "fdn"
+  set_name: "Foundations"
+notes: >
+  Navigate to /crack. Wait for #set-input. Type "Foundations". Click first
+  #set-dropdown li. Wait for product radios. Click #open-mode to uncheck
+  surprise mode. Click #open-btn. Wait for .card-slot. Click a .card-slot
+  to pick it. Verify #pick-list .pick-item appears and text "(1)" is present.

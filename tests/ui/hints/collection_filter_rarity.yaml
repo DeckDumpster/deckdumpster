@@ -1,0 +1,12 @@
+start_page: /collection
+involves:
+  - "sidebar toggle #sidebar-toggle-btn"
+  - "filter sidebar #sidebar"
+  - "rarity checkboxes #rf-common, #rf-uncommon, #rf-rare, #rf-mythic"
+  - "clear filters button #clear-filters-btn"
+  - "sidebar close button #sidebar-close-btn"
+fixture_data: {}
+notes: >
+  Navigate to /collection. Wait for .sheet-card. Click #sidebar-toggle-btn
+  to open filters. Wait for #sidebar. Click #rf-mythic to filter by mythic.
+  Screenshot. Click #clear-filters-btn to reset. Click #sidebar-close-btn.

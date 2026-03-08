@@ -1,0 +1,9 @@
+# Scenario: Toggle between grid and table view in collection
+#
+# Related:
+#   issues: [200]
+
+description: >
+  On the Collection page, I can switch between grid view (card images) and
+  table view (sortable rows) using the view toggle buttons. Both views
+  display the same collection data in different formats.

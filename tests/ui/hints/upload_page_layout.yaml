@@ -1,0 +1,11 @@
+start_page: /upload
+involves:
+  - "drop zone #drop-zone for file uploads"
+  - "file input #file-input (hidden)"
+  - "set hint input #set-hint"
+  - "camera button #camera-btn"
+fixture_data: {}
+notes: >
+  Navigate to /upload. Verify #drop-zone is visible. Verify #set-hint is
+  visible with placeholder. Verify #camera-btn is visible. Fill #set-hint
+  with "FDN" to confirm input is interactive.

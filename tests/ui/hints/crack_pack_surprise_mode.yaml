@@ -1,0 +1,18 @@
+start_page: /crack
+involves:
+  - "set search input #set-input"
+  - "set dropdown #set-dropdown with li items"
+  - "surprise mode checkbox #open-mode (checked by default)"
+  - "open pack button #open-btn"
+  - "pack grid #pack-grid with .card-slot elements"
+  - "reveal all button #reveal-all-btn"
+fixture_data:
+  set: "fdn"
+  set_name: "Foundations"
+notes: >
+  Navigate to /crack. Wait for #set-input. Type "Foundations" to filter sets.
+  Wait for #set-dropdown li. Click first dropdown item. Wait for
+  #product-radios input. Surprise mode is checked by default. Click #open-btn.
+  Wait for .card-slot.face-down. Screenshot. Click one .card-slot.face-down
+  to reveal it. Click #reveal-all-btn. Wait for .card-slot.face-down to
+  disappear.

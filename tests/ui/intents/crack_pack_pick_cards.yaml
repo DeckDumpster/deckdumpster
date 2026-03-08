@@ -1,0 +1,9 @@
+# Scenario: Pick cards from an opened pack
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When I open a pack in normal mode, I can click on cards to add them to my
+  pick list. Picked cards show a visual indicator and appear in the picks
+  sidebar panel with a count badge.

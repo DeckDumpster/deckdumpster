@@ -1,0 +1,12 @@
+# Scenario: View recent ingest images with status indicators
+#
+# Related:
+#   issues: [200]
+#
+# Prerequisites:
+#   Demo ingest samples must be loaded (added during --test setup)
+
+description: >
+  When I navigate to the Recent Images page, I see ingest pipeline images with
+  their processing status. Images show status-colored borders (green for done,
+  red for errors) and I can see the image grid with card information.

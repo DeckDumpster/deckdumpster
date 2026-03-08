@@ -1,0 +1,9 @@
+# Scenario: Parse and review an order import
+#
+# Related:
+#   issues: [200]
+
+description: >
+  I can paste order text into the Order Ingestion page, click Parse, and see
+  the resolved results grouped by seller. Successfully resolved cards show
+  thumbnails with set and collector number information.
