@@ -55,7 +55,8 @@ if [ ! -f "$BACKUP_FILE" ]; then
 fi
 
 # Quick sanity check — tarball should contain our expected files
-if ! tar tzf "$BACKUP_FILE" | grep -q "collection.sqlite"; then
+TARBALL_CONTENTS=$(tar tzf "$BACKUP_FILE" 2>/dev/null || true)
+if ! echo "$TARBALL_CONTENTS" | grep -q "collection.sqlite"; then
     echo "ERROR: Backup tarball does not contain collection.sqlite"
     echo "    This doesn't look like a valid MTGC backup."
     exit 1
