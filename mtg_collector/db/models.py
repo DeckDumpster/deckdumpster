@@ -113,6 +113,9 @@ class Deck:
     sleeve_color: Optional[str] = None
     deck_box: Optional[str] = None
     storage_location: Optional[str] = None
+    origin_set_code: Optional[str] = None
+    origin_theme: Optional[str] = None
+    origin_variation: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -1730,13 +1733,17 @@ class DeckRepository:
 
     def add(self, deck: Deck) -> int:
         ts = now_iso()
+        is_precon = 1 if (deck.is_precon or deck.origin_set_code) else 0
         cursor = self.conn.execute(
             """INSERT INTO decks (name, description, format, is_precon,
-               sleeve_color, deck_box, storage_location, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (deck.name, deck.description, deck.format,
-             1 if deck.is_precon else 0, deck.sleeve_color,
-             deck.deck_box, deck.storage_location, ts, ts),
+               sleeve_color, deck_box, storage_location,
+               origin_set_code, origin_theme, origin_variation,
+               created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (deck.name, deck.description, deck.format, is_precon,
+             deck.sleeve_color, deck.deck_box, deck.storage_location,
+             deck.origin_set_code, deck.origin_theme, deck.origin_variation,
+             ts, ts),
         )
         return cursor.lastrowid
 
@@ -1757,7 +1764,8 @@ class DeckRepository:
         fields = []
         params = []
         allowed = ("name", "description", "format", "is_precon",
-                    "sleeve_color", "deck_box", "storage_location")
+                    "sleeve_color", "deck_box", "storage_location",
+                    "origin_set_code", "origin_theme", "origin_variation")
         for key in allowed:
             if key in data:
                 fields.append(f"{key} = ?")
@@ -1765,6 +1773,11 @@ class DeckRepository:
                 if key == "is_precon":
                     val = 1 if val else 0
                 params.append(val)
+        # Auto-set is_precon when origin_set_code is provided
+        if "origin_set_code" in data and data["origin_set_code"]:
+            if "is_precon" not in data:
+                fields.append("is_precon = ?")
+                params.append(1)
         if not fields:
             return False
         fields.append("updated_at = ?")
@@ -1884,6 +1897,110 @@ class DeckRepository:
             _log_movement(self.conn, row["id"], row["deck_id"], target_deck_id,
                           row["binder_id"], None, row["deck_zone"], zone)
         return cursor.rowcount
+
+
+    def set_expected_cards(self, deck_id: int, cards: List[Dict]) -> int:
+        """Replace the expected card list for a deck.
+
+        Each dict: {oracle_id, zone, quantity}.
+        Returns number of cards inserted.
+        """
+        self.conn.execute(
+            "DELETE FROM deck_expected_cards WHERE deck_id = ?", (deck_id,)
+        )
+        count = 0
+        for card in cards:
+            self.conn.execute(
+                "INSERT INTO deck_expected_cards (deck_id, oracle_id, zone, quantity) "
+                "VALUES (?, ?, ?, ?)",
+                (deck_id, card["oracle_id"], card.get("zone", "mainboard"),
+                 card.get("quantity", 1)),
+            )
+            count += 1
+        return count
+
+    def get_expected_cards(self, deck_id: int) -> List[Dict]:
+        """Return the expected card list with card names joined from cards table."""
+        rows = self.conn.execute(
+            "SELECT e.oracle_id, c.name, e.zone, e.quantity "
+            "FROM deck_expected_cards e "
+            "JOIN cards c ON e.oracle_id = c.oracle_id "
+            "WHERE e.deck_id = ? ORDER BY c.name",
+            (deck_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_deck_completeness(self, deck_id: int) -> Dict:
+        """Compare expected cards against actual deck contents.
+
+        Returns {present, missing, extra} with location info for missing cards.
+        """
+        expected = self.conn.execute(
+            "SELECT e.oracle_id, c.name, e.zone, e.quantity "
+            "FROM deck_expected_cards e "
+            "JOIN cards c ON e.oracle_id = c.oracle_id "
+            "WHERE e.deck_id = ?",
+            (deck_id,),
+        ).fetchall()
+
+        # Count actual cards by oracle_id+zone in this deck
+        actual_rows = self.conn.execute(
+            "SELECT p.oracle_id, card.name, col.deck_zone, COUNT(*) as qty "
+            "FROM collection col "
+            "JOIN printings p ON col.printing_id = p.printing_id "
+            "JOIN cards card ON p.oracle_id = card.oracle_id "
+            "WHERE col.deck_id = ? "
+            "GROUP BY p.oracle_id, col.deck_zone",
+            (deck_id,),
+        ).fetchall()
+        actual_map: Dict[str, int] = {}
+        actual_names: Dict[str, str] = {}
+        for r in actual_rows:
+            key = f"{r['oracle_id']}|{r['deck_zone']}"
+            actual_map[key] = r["qty"]
+            actual_names[r["oracle_id"]] = r["name"]
+
+        expected_keys = set()
+        present = []
+        missing = []
+
+        for r in expected:
+            key = f"{r['oracle_id']}|{r['zone']}"
+            expected_keys.add(key)
+            actual_qty = actual_map.get(key, 0)
+            entry = {
+                "oracle_id": r["oracle_id"], "name": r["name"],
+                "zone": r["zone"], "expected_qty": r["quantity"],
+                "actual_qty": actual_qty,
+            }
+            if actual_qty >= r["quantity"]:
+                present.append(entry)
+            else:
+                # Find where missing copies are in the collection
+                locations = self.conn.execute(
+                    "SELECT col.id as collection_id, "
+                    "d.name as deck_name, b.name as binder_name, col.status "
+                    "FROM collection col "
+                    "JOIN printings p ON col.printing_id = p.printing_id "
+                    "LEFT JOIN decks d ON col.deck_id = d.id "
+                    "LEFT JOIN binders b ON col.binder_id = b.id "
+                    "WHERE p.oracle_id = ? AND (col.deck_id IS NULL OR col.deck_id != ?)",
+                    (r["oracle_id"], deck_id),
+                ).fetchall()
+                entry["locations"] = [dict(loc) for loc in locations]
+                missing.append(entry)
+
+        # Extra: cards in the deck not on the expected list
+        extra = []
+        for r in actual_rows:
+            key = f"{r['oracle_id']}|{r['deck_zone']}"
+            if key not in expected_keys:
+                extra.append({
+                    "oracle_id": r["oracle_id"], "name": r["name"],
+                    "zone": r["deck_zone"], "actual_qty": r["qty"],
+                })
+
+        return {"present": present, "missing": missing, "extra": extra}
 
 
 class BinderRepository:

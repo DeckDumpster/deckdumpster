@@ -82,14 +82,15 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `ingest_cache` — Cached OCR + Claude results by image MD5 (avoids reprocessing).
 - `ingest_images` — Persistent web UI ingest pipeline state (READY_FOR_OCR → PROCESSING → DONE/ERROR).
 - `ingest_lineage` — Maps collection entries back to source images.
-- `decks` — Named decks with format, sleeve color, deck box, storage location.
+- `decks` — Named decks with format, sleeve color, deck box, storage location. Origin metadata: `origin_set_code`, `origin_theme`, `origin_variation` for Jumpstart/precon tracking.
+- `deck_expected_cards` — Expected card list for precon/Jumpstart decks (keyed on `oracle_id`, not `printing_id`). Used for completeness tracking and reassembly.
 - `binders` — Named binders with color, type, storage location.
 - `collection_views` — Saved filter/search configurations for the collection page.
 - `status_log` — Append-only audit of collection status changes.
 - `movement_log` — Append-only audit of deck/binder assignment changes (from/to deck, binder, zone).
 - `settings` — Key-value config (e.g. `price_sources`, `image_display`).
 - `corner_batches` — Corner-ingest session groupings with optional deck assignment.
-- Schema v29 with auto-migrations in `schema.py`.
+- Schema v30 with auto-migrations in `schema.py`.
 - Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `CornerBatchRepository`.
 - **Deck/binder exclusivity**: A collection entry can be in one deck OR one binder, not both. `deck_id` and `binder_id` are mutually exclusive (enforced by repository logic, returns HTTP 409 on conflict). Use `move_cards()` to atomically reassign.
 

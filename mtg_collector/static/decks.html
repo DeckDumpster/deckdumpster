@@ -274,6 +274,61 @@ main { padding: 24px; }
 
 /* Checkbox in table */
 .card-table input[type="checkbox"] { cursor: pointer; }
+
+/* Precon origin fields */
+.precon-fields { margin-top: 8px; padding-left: 20px; }
+
+/* Completeness section */
+.completeness-section {
+  margin-top: 24px;
+  border: 1px solid #0f3460;
+  border-radius: 10px;
+  overflow: hidden;
+}
+.completeness-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #16213e;
+  cursor: pointer;
+  user-select: none;
+}
+.completeness-header h3 { color: #e94560; font-size: 1rem; margin: 0; }
+.completeness-body { padding: 16px; }
+.completeness-body.collapsed { display: none; }
+.completeness-group { margin-bottom: 16px; }
+.completeness-group h4 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #0f3460;
+}
+.completeness-group h4.present { color: #27ae60; }
+.completeness-group h4.missing { color: #e74c3c; }
+.completeness-group h4.extra { color: #888; }
+.completeness-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 0.9rem;
+  flex-wrap: wrap;
+}
+.completeness-card .qty { color: #888; min-width: 50px; }
+.location-tag {
+  display: inline-block;
+  background: #0f3460;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: #e0e0e0;
+  cursor: pointer;
+}
+.location-tag:hover { background: #e94560; }
+.location-tag.unassigned { background: #27ae60; }
 </style>
 </head>
 <body>
@@ -286,6 +341,7 @@ main { padding: 24px; }
     <button class="secondary" onclick="showList()">Back to Decks</button>
     <button onclick="showAddCardsModal()">Add Cards</button>
     <button class="secondary" onclick="removeSelectedCards()">Remove Selected</button>
+    <button class="secondary" onclick="showExpectedModal()">Import Expected List</button>
   </div>
   <span id="status"></span>
 </header>
@@ -332,6 +388,14 @@ main { padding: 24px; }
       </thead>
       <tbody id="card-tbody"></tbody>
     </table>
+
+    <div class="completeness-section" id="completeness-section" style="display:none">
+      <div class="completeness-header" onclick="toggleCompleteness()">
+        <h3>Expected Cards <span id="completeness-summary"></span></h3>
+        <span id="completeness-toggle">&#9660;</span>
+      </div>
+      <div class="completeness-body" id="completeness-body"></div>
+    </div>
   </div>
 </main>
 
@@ -361,7 +425,26 @@ main { padding: 24px; }
       <textarea id="f-description" rows="2"></textarea>
     </div>
     <div class="form-group">
-      <label><input type="checkbox" id="f-precon"> Preconstructed deck</label>
+      <label><input type="checkbox" id="f-precon" onchange="togglePreconFields()"> Preconstructed deck</label>
+    </div>
+    <div class="precon-fields" id="precon-fields" style="display:none">
+      <div class="form-group">
+        <label>Origin Set</label>
+        <select id="f-origin-set">
+          <option value="">-- None --</option>
+          <option value="jmp">Jumpstart (JMP)</option>
+          <option value="j22">Jumpstart 2022 (J22)</option>
+          <option value="j25">Jumpstart 2025 (J25)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Theme</label>
+        <input type="text" id="f-origin-theme" placeholder="e.g. Goblins, Angels">
+      </div>
+      <div class="form-group">
+        <label>Variation</label>
+        <input type="number" id="f-origin-variation" min="1" max="4" placeholder="1-4">
+      </div>
     </div>
     <div class="form-group">
       <label>Sleeve Color</label>
@@ -402,6 +485,22 @@ main { padding: 24px; }
     <div class="form-actions">
       <button onclick="addSelectedPickerCards()">Add Selected</button>
       <button class="secondary" onclick="closeModal('add-cards-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Expected List Import Modal -->
+<div class="modal-backdrop" id="expected-modal">
+  <div class="modal">
+    <h3>Import Expected Card List</h3>
+    <div class="form-group">
+      <label>Paste decklist (one card per line)</label>
+      <textarea id="f-expected-list" rows="10" placeholder="1 Goblin Bushwhacker (ZEN) 125&#10;1 Raging Goblin (M10) 153&#10;6 Mountain (JMP) 62"></textarea>
+    </div>
+    <div id="expected-errors" style="color:#e74c3c;font-size:0.85rem;margin-bottom:8px"></div>
+    <div class="form-actions">
+      <button onclick="importExpectedList()">Import</button>
+      <button class="secondary" onclick="closeModal('expected-modal')">Cancel</button>
     </div>
   </div>
 </div>
@@ -483,6 +582,9 @@ function renderDeckDetail() {
   const meta = [];
   if (d.format) meta.push(`<span class="label">Format</span><span>${esc(d.format)}</span>`);
   if (d.is_precon) meta.push(`<span class="label">Type</span><span>Preconstructed</span>`);
+  if (d.origin_set_code) meta.push(`<span class="label">Set</span><span>${esc(d.origin_set_code.toUpperCase())}</span>`);
+  if (d.origin_theme) meta.push(`<span class="label">Theme</span><span>${esc(d.origin_theme)}</span>`);
+  if (d.origin_variation) meta.push(`<span class="label">Variation</span><span>${d.origin_variation}</span>`);
   if (d.sleeve_color) meta.push(`<span class="label">Sleeves</span><span>${esc(d.sleeve_color)}</span>`);
   if (d.deck_box) meta.push(`<span class="label">Deck Box</span><span>${esc(d.deck_box)}</span>`);
   if (d.storage_location) meta.push(`<span class="label">Location</span><span>${esc(d.storage_location)}</span>`);
@@ -490,6 +592,7 @@ function renderDeckDetail() {
   meta.push(`<span class="label">Cards</span><span>${d.card_count}</span>`);
   if (d.total_value) meta.push(`<span class="label">Value</span><span>$${Number(d.total_value).toFixed(2)}</span>`);
   document.getElementById('deck-meta').innerHTML = meta.join('');
+  loadCompleteness();
 }
 
 async function switchZone(zone) {
@@ -557,6 +660,10 @@ function showCreateModal() {
   document.getElementById('f-format').value = '';
   document.getElementById('f-description').value = '';
   document.getElementById('f-precon').checked = false;
+  document.getElementById('f-origin-set').value = '';
+  document.getElementById('f-origin-theme').value = '';
+  document.getElementById('f-origin-variation').value = '';
+  document.getElementById('precon-fields').style.display = 'none';
   document.getElementById('f-sleeve').value = '';
   document.getElementById('f-deckbox').value = '';
   document.getElementById('f-location').value = '';
@@ -571,6 +678,10 @@ function showEditModal() {
   document.getElementById('f-format').value = currentDeck.format || '';
   document.getElementById('f-description').value = currentDeck.description || '';
   document.getElementById('f-precon').checked = !!currentDeck.is_precon;
+  document.getElementById('f-origin-set').value = currentDeck.origin_set_code || '';
+  document.getElementById('f-origin-theme').value = currentDeck.origin_theme || '';
+  document.getElementById('f-origin-variation').value = currentDeck.origin_variation || '';
+  document.getElementById('precon-fields').style.display = currentDeck.is_precon ? '' : 'none';
   document.getElementById('f-sleeve').value = currentDeck.sleeve_color || '';
   document.getElementById('f-deckbox').value = currentDeck.deck_box || '';
   document.getElementById('f-location').value = currentDeck.storage_location || '';
@@ -586,6 +697,9 @@ async function saveDeck() {
     sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
     deck_box: document.getElementById('f-deckbox').value.trim() || null,
     storage_location: document.getElementById('f-location').value.trim() || null,
+    origin_set_code: document.getElementById('f-origin-set').value || null,
+    origin_theme: document.getElementById('f-origin-theme').value.trim() || null,
+    origin_variation: document.getElementById('f-origin-variation').value ? parseInt(document.getElementById('f-origin-variation').value) : null,
   };
   if (!data.name) { alert('Name is required'); return; }
 
@@ -715,6 +829,162 @@ async function addSelectedPickerCards() {
   closeModal('add-cards-modal');
 
   // Refresh
+  const deckRes = await fetch(`/api/decks/${currentDeck.id}`);
+  currentDeck = await deckRes.json();
+  renderDeckDetail();
+  await loadDeckCards();
+}
+
+// ===== Precon Fields =====
+
+function togglePreconFields() {
+  const show = document.getElementById('f-precon').checked;
+  document.getElementById('precon-fields').style.display = show ? '' : 'none';
+}
+
+// ===== Expected List & Completeness =====
+
+function showExpectedModal() {
+  document.getElementById('f-expected-list').value = '';
+  document.getElementById('expected-errors').textContent = '';
+  document.getElementById('expected-modal').classList.add('active');
+}
+
+async function importExpectedList() {
+  const text = document.getElementById('f-expected-list').value.trim();
+  if (!text) { alert('Paste a decklist first'); return; }
+
+  const res = await fetch(`/api/decks/${currentDeck.id}/expected`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ decklist: text }),
+  });
+  const result = await res.json();
+  if (result.error) {
+    const errEl = document.getElementById('expected-errors');
+    errEl.textContent = result.error;
+    if (result.details) errEl.textContent += '\n' + result.details.join('\n');
+    return;
+  }
+  closeModal('expected-modal');
+  loadCompleteness();
+}
+
+async function loadCompleteness() {
+  if (!currentDeck) return;
+  const section = document.getElementById('completeness-section');
+
+  // Check if there are expected cards
+  const expRes = await fetch(`/api/decks/${currentDeck.id}/expected`);
+  const expected = await expRes.json();
+  if (!expected.length && !currentDeck.is_precon) {
+    section.style.display = 'none';
+    return;
+  }
+  if (!expected.length) {
+    section.style.display = '';
+    document.getElementById('completeness-summary').textContent = '(no expected list set)';
+    document.getElementById('completeness-body').innerHTML =
+      '<p style="color:#888;padding:8px">Use "Import Expected List" to define the expected cards for this deck.</p>';
+    return;
+  }
+
+  const res = await fetch(`/api/decks/${currentDeck.id}/completeness`);
+  const data = await res.json();
+  section.style.display = '';
+
+  const total = data.present.length + data.missing.length;
+  document.getElementById('completeness-summary').textContent =
+    `(${data.present.length}/${total} present, ${data.missing.length} missing, ${data.extra.length} extra)`;
+
+  let html = '';
+
+  if (data.present.length) {
+    html += '<div class="completeness-group"><h4 class="present">Present (' + data.present.length + ')</h4>';
+    for (const c of data.present) {
+      html += `<div class="completeness-card"><span class="qty">${c.actual_qty}/${c.expected_qty}</span><span>${esc(c.name)}</span></div>`;
+    }
+    html += '</div>';
+  }
+
+  if (data.missing.length) {
+    html += '<div class="completeness-group"><h4 class="missing">Missing (' + data.missing.length + ')</h4>';
+    for (const c of data.missing) {
+      html += `<div class="completeness-card"><span class="qty">${c.actual_qty}/${c.expected_qty}</span><span>${esc(c.name)}</span>`;
+      for (const loc of c.locations) {
+        const label = loc.deck_name ? `Deck: ${loc.deck_name}` : loc.binder_name ? `Binder: ${loc.binder_name}` : 'Unassigned';
+        const cls = (!loc.deck_name && !loc.binder_name) ? 'location-tag unassigned' : 'location-tag';
+        html += ` <span class="${cls}" data-cid="${loc.collection_id}" onclick="reassembleCard(${loc.collection_id})">${esc(label)}</span>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Reassemble button for unassigned cards
+    const unassignedIds = [];
+    for (const c of data.missing) {
+      for (const loc of c.locations) {
+        if (!loc.deck_name && !loc.binder_name) unassignedIds.push(loc.collection_id);
+      }
+    }
+    if (unassignedIds.length) {
+      html += `<button onclick="reassembleAll()" style="margin-bottom:8px">Reassemble ${unassignedIds.length} Unassigned Card${unassignedIds.length > 1 ? 's' : ''}</button>`;
+    }
+  }
+
+  if (data.extra.length) {
+    html += '<div class="completeness-group"><h4 class="extra">Extra (' + data.extra.length + ')</h4>';
+    for (const c of data.extra) {
+      html += `<div class="completeness-card"><span class="qty">x${c.actual_qty}</span><span>${esc(c.name)}</span></div>`;
+    }
+    html += '</div>';
+  }
+
+  document.getElementById('completeness-body').innerHTML = html;
+}
+
+function toggleCompleteness() {
+  const body = document.getElementById('completeness-body');
+  const toggle = document.getElementById('completeness-toggle');
+  body.classList.toggle('collapsed');
+  toggle.innerHTML = body.classList.contains('collapsed') ? '&#9654;' : '&#9660;';
+}
+
+async function reassembleCard(collectionId) {
+  const res = await fetch(`/api/decks/${currentDeck.id}/reassemble`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ collection_ids: [collectionId] }),
+  });
+  const result = await res.json();
+  if (result.error) { alert(result.error); return; }
+  // Refresh
+  const deckRes = await fetch(`/api/decks/${currentDeck.id}`);
+  currentDeck = await deckRes.json();
+  renderDeckDetail();
+  await loadDeckCards();
+}
+
+async function reassembleAll() {
+  // Collect all unassigned missing card IDs
+  const res = await fetch(`/api/decks/${currentDeck.id}/completeness`);
+  const data = await res.json();
+  const ids = [];
+  for (const c of data.missing) {
+    for (const loc of c.locations) {
+      if (!loc.deck_name && !loc.binder_name) ids.push(loc.collection_id);
+    }
+  }
+  if (!ids.length) { alert('No unassigned cards to reassemble'); return; }
+
+  const moveRes = await fetch(`/api/decks/${currentDeck.id}/reassemble`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ collection_ids: ids }),
+  });
+  const result = await moveRes.json();
+  if (result.error) { alert(result.error); return; }
+
   const deckRes = await fetch(`/api/decks/${currentDeck.id}`);
   currentDeck = await deckRes.json();
   renderDeckDetail();

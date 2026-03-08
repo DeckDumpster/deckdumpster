@@ -1,0 +1,23 @@
+start_page: /decks
+involves:
+  - '"New Deck" button opens the deck-modal'
+  - 'name input placeholder "My Commander Deck"'
+  - '"Preconstructed deck" checkbox (id=f-precon) toggles precon-fields visibility'
+  - 'Origin Set dropdown (id=f-origin-set) with options JMP, J22, J25'
+  - 'Theme text input (id=f-origin-theme)'
+  - 'Variation number input (id=f-origin-variation)'
+  - 'deck detail metadata grid shows Set, Theme, Variation entries'
+fixture_data:
+  deck_name: "Goblins JMP"
+  origin_set: "jmp"
+  origin_set_label: "Jumpstart (JMP)"
+  origin_theme: "Goblins"
+  origin_variation: "1"
+notes: >
+  1. Click "New Deck". 2. Fill name "Goblins JMP". 3. Check
+  "Preconstructed deck" checkbox — origin fields appear. 4. Select
+  "Jumpstart (JMP)" from Origin Set dropdown. 5. Type "Goblins" in
+  Theme input. 6. Type "1" in Variation input. 7. Click "Save". 8.
+  The new deck appears in the list — click it. 9. The detail view
+  shows metadata: Type=Preconstructed, Set=JMP, Theme=Goblins,
+  Variation=1. Done.

@@ -1,0 +1,12 @@
+# Scenario: Create a precon deck with Jumpstart origin metadata
+#
+# Related:
+#   issues: [190]
+#   pull_requests: []
+
+description: >
+  I can create a new deck, check the "Preconstructed deck" checkbox to
+  reveal origin fields, select "Jumpstart (JMP)" as the set, type
+  "Goblins" as the theme, enter "1" as the variation, and save. The
+  deck detail view shows the origin metadata: "Type: Preconstructed",
+  "Set: JMP", "Theme: Goblins", and "Variation: 1".

@@ -1,0 +1,19 @@
+start_page: /decks
+involves:
+  - '"Bolt Tribal" deck in the list'
+  - '"Import Expected List" button and expected-modal'
+  - 'completeness-section with missing cards'
+  - 'green "Unassigned" location-tag on missing cards'
+  - '"Reassemble" button that appears when unassigned missing cards exist'
+  - 'card count update in deck-meta after reassembly'
+fixture_data:
+  deck_name: "Bolt Tribal"
+  decklist: "1 Cathar Commando (FDN) 139"
+  missing_card: "Cathar Commando"
+notes: >
+  1. Click "Bolt Tribal". 2. Click "Import Expected List". 3. Paste
+  "1 Cathar Commando (FDN) 139" (unassigned in collection, not in deck).
+  4. Click "Import". 5. Completeness section shows Cathar Commando under
+  "Missing" with a green "Unassigned" tag. 6. Click the "Reassemble 1
+  Unassigned Card" button. 7. Cathar Commando moves to "Present",
+  the deck card count increases. Done.

@@ -1074,6 +1074,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Deck API routes
         elif path == "/api/decks":
             self._api_decks_list()
+        elif path.startswith("/api/decks/") and path.endswith("/expected"):
+            did = path[len("/api/decks/"):-len("/expected")]
+            if did.isdigit():
+                self._api_deck_expected_get(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/completeness"):
+            did = path[len("/api/decks/"):-len("/completeness")]
+            if did.isdigit():
+                self._api_deck_completeness(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/cards"):
             did = path[len("/api/decks/"):-len("/cards")]
             if did.isdigit():
@@ -1265,6 +1277,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_deck_create(data)
+        elif path.startswith("/api/decks/") and path.endswith("/expected"):
+            did = path[len("/api/decks/"):-len("/expected")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_expected_set(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/reassemble"):
+            did = path[len("/api/decks/"):-len("/reassemble")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_reassemble(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/cards/move"):
             did = path[len("/api/decks/"):-len("/cards/move")]
             if did.isdigit():
@@ -4659,11 +4689,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.row_factory = sqlite3.Row
         from mtg_collector.db.models import Deck, DeckRepository
         repo = DeckRepository(conn)
+        origin_var = data.get("origin_variation")
+        if origin_var is not None:
+            origin_var = int(origin_var)
         deck = Deck(
             id=None, name=name, description=data.get("description"),
             format=data.get("format"), is_precon=bool(data.get("is_precon")),
             sleeve_color=data.get("sleeve_color"), deck_box=data.get("deck_box"),
             storage_location=data.get("storage_location"),
+            origin_set_code=data.get("origin_set_code"),
+            origin_theme=data.get("origin_theme"),
+            origin_variation=origin_var,
         )
         deck_id = repo.add(deck)
         conn.commit()
@@ -4757,6 +4793,118 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
         self._send_json({"ok": True, "count": count})
+
+    def _api_deck_expected_get(self, deck_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        cards = repo.get_expected_cards(deck_id)
+        conn.close()
+        self._send_json(cards)
+
+    def _api_deck_expected_set(self, deck_id: int, data: dict):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        if not repo.get(deck_id):
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+
+        if "decklist" in data:
+            # Parse text decklist and resolve to oracle_ids
+            from mtg_collector.db.models import CardRepository, PrintingRepository
+            from mtg_collector.importers.decklist import parse_line
+            card_repo = CardRepository(conn)
+            printing_repo = PrintingRepository(conn)
+            lines = data["decklist"].strip().split("\n")
+            cards = []
+            errors = []
+            for i, line in enumerate(lines, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = parse_line(line, i)
+                except ValueError as e:
+                    errors.append(str(e))
+                    continue
+                name = parsed["Name"]
+                set_code = (parsed.get("Edition") or "").strip().lower() or None
+                cn = parsed.get("Collector Number") or None
+                qty = int(parsed.get("Count", 1))
+                # Resolve card: try set+CN first, then name lookup
+                printing_id = None
+                if set_code and cn:
+                    p = printing_repo.get_by_set_cn(set_code, cn)
+                    if p:
+                        printing_id = p.printing_id
+                if not printing_id:
+                    card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
+                    if card:
+                        printings = printing_repo.get_by_oracle_id(card.oracle_id)
+                        if printings:
+                            printing_id = printings[0].printing_id
+                if not printing_id:
+                    errors.append(f"Line {i}: card not found: {name}")
+                    continue
+                printing = printing_repo.get(printing_id)
+                cards.append({
+                    "oracle_id": printing.oracle_id,
+                    "zone": "mainboard",
+                    "quantity": qty,
+                })
+            if errors:
+                conn.close()
+                self._send_json({"error": "Some cards could not be resolved",
+                                 "details": errors}, 400)
+                return
+            count = repo.set_expected_cards(deck_id, cards)
+        elif "cards" in data:
+            count = repo.set_expected_cards(deck_id, data["cards"])
+        else:
+            conn.close()
+            self._send_json({"error": "Provide 'cards' or 'decklist'"}, 400)
+            return
+
+        conn.commit()
+        result = repo.get_expected_cards(deck_id)
+        conn.close()
+        self._send_json({"ok": True, "count": count, "cards": result})
+
+    def _api_deck_completeness(self, deck_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        if not repo.get(deck_id):
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        result = repo.get_deck_completeness(deck_id)
+        conn.close()
+        self._send_json(result)
+
+    def _api_deck_reassemble(self, deck_id: int, data: dict):
+        collection_ids = data.get("collection_ids", [])
+        if not collection_ids:
+            self._send_json({"error": "collection_ids is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        if not repo.get(deck_id):
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        count = repo.move_cards(collection_ids, deck_id, zone="mainboard")
+        conn.commit()
+        result = repo.get_deck_completeness(deck_id)
+        conn.close()
+        self._send_json({"ok": True, "moved": count, "completeness": result})
 
     # ===== Binder API handlers =====
 

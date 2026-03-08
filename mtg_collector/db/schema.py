@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -74,9 +74,23 @@ CREATE TABLE IF NOT EXISTS decks (
     sleeve_color TEXT,
     deck_box TEXT,
     storage_location TEXT,
+    origin_set_code TEXT,
+    origin_theme TEXT,
+    origin_variation INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Expected card lists for precon/Jumpstart decks
+CREATE TABLE IF NOT EXISTS deck_expected_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+    oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+    zone TEXT NOT NULL DEFAULT 'mainboard',
+    quantity INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(deck_id, oracle_id, zone)
+);
+CREATE INDEX IF NOT EXISTS idx_deck_expected_deck ON deck_expected_cards(deck_id);
 
 -- Binders (physical binder groupings)
 CREATE TABLE IF NOT EXISTS binders (
@@ -585,6 +599,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v27_to_v28(conn)
         if current < 29:
             _migrate_v28_to_v29(conn)
+        if current < 30:
+            _migrate_v29_to_v30(conn)
 
     # Record schema version
     conn.execute(
@@ -1688,6 +1704,34 @@ def _migrate_v28_to_v29(conn: sqlite3.Connection):
         )
 
 
+def _migrate_v29_to_v30(conn: sqlite3.Connection):
+    """Add origin metadata columns to decks and deck_expected_cards table."""
+    columns = [r[1] for r in conn.execute("PRAGMA table_info(decks)").fetchall()]
+    if "origin_set_code" not in columns:
+        conn.execute("ALTER TABLE decks ADD COLUMN origin_set_code TEXT")
+        conn.execute("ALTER TABLE decks ADD COLUMN origin_theme TEXT")
+        conn.execute("ALTER TABLE decks ADD COLUMN origin_variation INTEGER")
+
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()]
+    if "deck_expected_cards" not in tables:
+        conn.execute("""
+            CREATE TABLE deck_expected_cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+                zone TEXT NOT NULL DEFAULT 'mainboard',
+                quantity INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(deck_id, oracle_id, zone)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deck_expected_deck "
+            "ON deck_expected_cards(deck_id)"
+        )
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -1705,6 +1749,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS mtgjson_booster_sheets;
         DROP TABLE IF EXISTS mtgjson_printings;
         DROP TABLE IF EXISTS mtgjson_uuid_map;
+        DROP TABLE IF EXISTS deck_expected_cards;
         DROP TABLE IF EXISTS movement_log;
         DROP TABLE IF EXISTS status_log;
         DROP TABLE IF EXISTS wishlist;

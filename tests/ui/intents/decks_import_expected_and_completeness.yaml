@@ -1,0 +1,18 @@
+# Scenario: Import an expected card list and view completeness breakdown
+#
+# Related:
+#   issues: [190]
+#   pull_requests: []
+#
+# Prerequisites:
+#   The "Bolt Tribal" demo deck must exist with cards assigned to it.
+#   The collection must contain unassigned copies of some cards.
+
+description: >
+  I open the "Bolt Tribal" deck's detail view, click "Import Expected
+  List", and paste a decklist that includes some cards the deck already
+  has and some it does not. After clicking "Import", the modal closes
+  and an "Expected Cards" section appears below the card table. The
+  summary shows how many cards are present versus missing. The section
+  contains cards grouped under "Present" and "Missing" headings with
+  actual/expected quantity counts.
