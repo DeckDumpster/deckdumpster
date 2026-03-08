@@ -1,0 +1,9 @@
+start_page: /disambiguate
+involves:
+  - "empty state container #empty-state"
+  - "message text about no cards to disambiguate"
+  - "link to /upload page"
+fixture_data: {}
+notes: >
+  Navigate to /disambiguate. Wait for #empty-state to be visible. Verify
+  text about no cards to disambiguate is present.

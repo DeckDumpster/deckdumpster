@@ -1,0 +1,9 @@
+# Scenario: Rarity mismatch warning on manual ID entry
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When I add a card by set code and collector number with a rarity that doesn't
+  match the actual card rarity, the resolve results show a yellow warning
+  indicating the expected vs actual rarity.

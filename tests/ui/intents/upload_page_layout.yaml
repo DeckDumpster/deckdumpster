@@ -1,0 +1,9 @@
+# Scenario: Upload page displays expected elements
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When I navigate to the Upload page, I see the drag-and-drop zone for file
+  uploads, the set hint input field, and the camera button. The page is ready
+  to accept card images for OCR processing.

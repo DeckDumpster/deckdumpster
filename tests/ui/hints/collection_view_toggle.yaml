@@ -1,0 +1,11 @@
+start_page: /collection
+involves:
+  - "table view button #view-table-btn"
+  - "grid view button #view-grid-btn"
+  - "collection table .collection-table"
+  - "card grid .sheet-card elements"
+fixture_data: {}
+notes: >
+  Navigate to /collection. Wait for .sheet-card. Click #view-table-btn
+  to switch to table view. Wait for .collection-table. Screenshot. Click
+  #view-grid-btn to return. Wait for .sheet-card.

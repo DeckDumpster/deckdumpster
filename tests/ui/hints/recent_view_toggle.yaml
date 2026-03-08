@@ -1,0 +1,10 @@
+start_page: /recent
+involves:
+  - "view toggle button #view-toggle"
+  - "image grid #grid"
+  - "table mode with .info-row elements"
+fixture_data: {}
+notes: >
+  Navigate to /recent. Wait for #grid and .img-card. Screenshot grid view.
+  Click #view-toggle to switch to table/list mode. Wait for .info-row
+  elements to appear. Screenshot table view.

@@ -1,0 +1,9 @@
+# Scenario: Open card modal from collection grid
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When viewing the collection in grid mode, I can click on a card to open
+  a detail modal showing the card image, name, set, rarity, type line,
+  and other metadata. I can close the modal to return to the collection view.

@@ -1,0 +1,9 @@
+# Scenario: Open a surprise mode pack and reveal cards
+#
+# Related:
+#   issues: [200]
+
+description: >
+  I can open a Crack-a-Pack surprise mode pack by selecting a set and clicking
+  Open Pack. Cards appear face-down in the grid. I can click individual cards
+  to reveal them, then click Reveal All to flip the remaining cards face-up.

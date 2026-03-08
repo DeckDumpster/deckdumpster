@@ -1,0 +1,12 @@
+start_page: /collection
+involves:
+  - "card grid .sheet-card elements"
+  - "card modal overlay #card-modal-overlay"
+  - "card modal #card-modal"
+  - "modal close button #modal-close"
+fixture_data: {}
+notes: >
+  Navigate to /collection. Wait for .sheet-card. Click the first
+  .sheet-card to open card modal. Wait for #card-modal-overlay.active.
+  Verify #card-modal is visible. Screenshot. Click #modal-close.
+  Verify modal is hidden.

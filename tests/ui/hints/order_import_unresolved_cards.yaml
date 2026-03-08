@@ -1,0 +1,12 @@
+start_page: /ingestor-order
+involves:
+  - "order text area #order-text"
+  - "parse button #parse-btn"
+  - "results panel #results with .unresolved rows"
+  - "summary bar showing Failed count in red"
+fixture_data:
+  order_text: "1x Nonexistent Card [Fake Set] - Near Mint"
+notes: >
+  Navigate to /ingestor-order. Paste order text with a fake card name and
+  set. Click #parse-btn. Wait for "Failed" text to appear in results.
+  Verify .unresolved row styling is visible.
