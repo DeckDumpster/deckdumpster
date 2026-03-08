@@ -1536,6 +1536,75 @@ class SealedProductRepository:
         )
 
 
+class SealedProductCardRepository:
+    """Read-only access to pre-resolved sealed product card contents."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def get_cards_for_product(self, sealed_product_uuid: str) -> List[Dict]:
+        """Get resolved card data for a sealed product.
+
+        JOINs through mtgjson_uuid_map → printings → cards to resolve
+        each card to its printing_id, name, set_code, etc.
+        """
+        rows = self.conn.execute("""
+            SELECT
+                spc.mtgjson_uuid,
+                spc.quantity,
+                spc.is_foil,
+                spc.zone,
+                spc.source_type,
+                spc.source_name,
+                um.set_code,
+                um.collector_number,
+                p.printing_id,
+                p.rarity,
+                p.image_uri,
+                c.name AS card_name
+            FROM sealed_product_cards spc
+            LEFT JOIN mtgjson_uuid_map um ON spc.mtgjson_uuid = um.uuid
+            LEFT JOIN printings p ON um.set_code = p.set_code
+                AND um.collector_number = p.collector_number
+            LEFT JOIN cards c ON p.oracle_id = c.oracle_id
+            WHERE spc.sealed_product_uuid = ?
+        """, (sealed_product_uuid,)).fetchall()
+
+        result = []
+        for r in rows:
+            result.append({
+                "mtgjson_uuid": r["mtgjson_uuid"],
+                "quantity": r["quantity"],
+                "is_foil": bool(r["is_foil"]),
+                "zone": r["zone"],
+                "source_type": r["source_type"],
+                "source_name": r["source_name"],
+                "set_code": r["set_code"],
+                "collector_number": r["collector_number"],
+                "printing_id": r["printing_id"],
+                "rarity": r["rarity"],
+                "image_uri": r["image_uri"],
+                "name": r["card_name"],
+            })
+        return result
+
+    def has_cards(self, sealed_product_uuid: str) -> bool:
+        """Check if a sealed product has any pre-resolved card contents."""
+        row = self.conn.execute(
+            "SELECT 1 FROM sealed_product_cards WHERE sealed_product_uuid = ? LIMIT 1",
+            (sealed_product_uuid,),
+        ).fetchone()
+        return row is not None
+
+    def card_count(self, sealed_product_uuid: str) -> int:
+        """Get total card count (sum of quantities) for a sealed product."""
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(quantity), 0) FROM sealed_product_cards WHERE sealed_product_uuid = ?",
+            (sealed_product_uuid,),
+        ).fetchone()
+        return row[0]
+
+
 class SealedCollectionRepository:
     """CRUD operations for sealed_collection table."""
 

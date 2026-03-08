@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 31
+SCHEMA_VERSION = 32
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -390,6 +390,19 @@ CREATE INDEX IF NOT EXISTS idx_sealed_products_set ON sealed_products(set_code);
 CREATE INDEX IF NOT EXISTS idx_sealed_products_tcg ON sealed_products(tcgplayer_product_id);
 CREATE INDEX IF NOT EXISTS idx_sealed_products_category ON sealed_products(category);
 
+-- Pre-resolved card contents for sealed products (populated during MTGJSON import)
+CREATE TABLE IF NOT EXISTS sealed_product_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sealed_product_uuid TEXT NOT NULL REFERENCES sealed_products(uuid),
+    mtgjson_uuid TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    is_foil INTEGER NOT NULL DEFAULT 0,
+    zone TEXT,
+    source_type TEXT NOT NULL,
+    source_name TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_spc_product ON sealed_product_cards(sealed_product_uuid);
+
 -- User's sealed product collection (one row per acquisition)
 CREATE TABLE IF NOT EXISTS sealed_collection (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -615,6 +628,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v29_to_v30(conn)
         if current < 31:
             _migrate_v30_to_v31(conn)
+        if current < 32:
+            _migrate_v31_to_v32(conn)
 
     # Record schema version
     conn.execute(
@@ -1909,6 +1924,23 @@ def _migrate_v30_to_v31(conn: sqlite3.Connection):
     """)
 
 
+def _migrate_v31_to_v32(conn: sqlite3.Connection):
+    """Add sealed_product_cards table for pre-resolved sealed product contents."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sealed_product_cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sealed_product_uuid TEXT NOT NULL REFERENCES sealed_products(uuid),
+            mtgjson_uuid TEXT NOT NULL,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            is_foil INTEGER NOT NULL DEFAULT 0,
+            zone TEXT,
+            source_type TEXT NOT NULL,
+            source_name TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_spc_product ON sealed_product_cards(sealed_product_uuid)")
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -1918,6 +1950,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS latest_prices;
         DROP TABLE IF EXISTS tcgplayer_groups;
         DROP TABLE IF EXISTS sealed_prices;
+        DROP TABLE IF EXISTS sealed_product_cards;
         DROP TABLE IF EXISTS sealed_collection;
         DROP TABLE IF EXISTS sealed_products;
         DROP TABLE IF EXISTS price_fetch_log;

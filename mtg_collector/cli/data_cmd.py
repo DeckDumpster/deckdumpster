@@ -205,6 +205,7 @@ def import_mtgjson(db_path: str):
     conn.execute("DELETE FROM mtgjson_booster_sheets")
     conn.execute("DELETE FROM mtgjson_printings")
     conn.execute("DELETE FROM mtgjson_uuid_map")
+    conn.execute("DELETE FROM sealed_product_cards")
     conn.execute("DELETE FROM sealed_products WHERE source = 'mtgjson'")
 
     imported_at = now_iso()
@@ -213,8 +214,11 @@ def import_mtgjson(db_path: str):
     sheet_rows = []
     config_rows = []
     sealed_rows = []
+    sealed_card_rows = []
     set_count = 0
     sets_with_boosters = []
+    # Deck lookup: (set_code, deck_name) → [{uuid, count, is_foil, zone}]
+    deck_lookup = {}
 
     data = raw.get("data", {})
     for set_code_raw, set_data in data.items():
@@ -271,6 +275,27 @@ def import_mtgjson(db_path: str):
                 imported_at,
                 "mtgjson",
             ))
+
+        # Decks → deck_lookup for resolving sealed product contents
+        for deck in set_data.get("decks", []):
+            deck_name = deck.get("name", "")
+            if not deck_name:
+                continue
+            entries = []
+            for zone_name in ("mainBoard", "sideBoard", "commander"):
+                zone_cards = deck.get(zone_name, [])
+                for card in zone_cards:
+                    card_uuid = card.get("uuid")
+                    if not card_uuid:
+                        continue
+                    entries.append({
+                        "uuid": card_uuid,
+                        "count": card.get("count", 1),
+                        "is_foil": 1 if card.get("isFoil", False) else 0,
+                        "zone": zone_name,
+                    })
+            if entries:
+                deck_lookup[(set_code, deck_name)] = entries
 
         # Booster data
         booster = set_data.get("booster")
@@ -350,6 +375,53 @@ def import_mtgjson(db_path: str):
         sealed_rows,
     )
 
+    # Resolve sealed product contents → sealed_product_cards
+    # MTGJSON contents is {card: [...], deck: [...], sealed: [...], ...}
+    for row in sealed_rows:
+        product_uuid = row[0]
+        product_set = row[2]  # set_code
+        contents_json_str = row[11]  # contents_json
+        if not contents_json_str:
+            continue
+        try:
+            contents = json.loads(contents_json_str)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        # Direct card entries
+        for card_ref in contents.get("card", []):
+            card_uuid = card_ref.get("uuid")
+            if not card_uuid:
+                continue
+            sealed_card_rows.append((
+                product_uuid, card_uuid,
+                card_ref.get("count", 1),
+                1 if card_ref.get("foil", False) else 0,
+                None, "card", None,
+            ))
+
+        # Deck references — resolve via deck_lookup
+        for deck_ref in contents.get("deck", []):
+            deck_name = deck_ref.get("name", "")
+            deck_set = deck_ref.get("set", product_set).lower()
+            lookup_key = (deck_set, deck_name)
+            deck_entries = deck_lookup.get(lookup_key, [])
+            for de in deck_entries:
+                sealed_card_rows.append((
+                    product_uuid, de["uuid"],
+                    de["count"], de["is_foil"],
+                    de["zone"], "deck", deck_name,
+                ))
+
+    if sealed_card_rows:
+        print(f"  Inserting {len(sealed_card_rows)} sealed product card rows ...")
+        conn.executemany(
+            "INSERT INTO sealed_product_cards "
+            "(sealed_product_uuid, mtgjson_uuid, quantity, is_foil, zone, source_type, source_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            sealed_card_rows,
+        )
+
     conn.commit()
     conn.close()
 
@@ -360,6 +432,7 @@ def import_mtgjson(db_path: str):
     print(f"  Booster config rows: {len(config_rows)}")
     print(f"  UUID map rows: {len(uuid_map_rows)}")
     print(f"  Sealed products: {len(sealed_rows)}")
+    print(f"  Sealed product cards: {len(sealed_card_rows)}")
     print(f"  Elapsed: {elapsed:.1f}s")
 
 
