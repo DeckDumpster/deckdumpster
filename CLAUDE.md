@@ -90,9 +90,10 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `status_log` — Append-only audit of collection status changes.
 - `movement_log` — Append-only audit of deck/binder assignment changes (from/to deck, binder, zone).
 - `settings` — Key-value config (e.g. `price_sources`, `image_display`).
-- `batches` — Unified batch groupings for all ingestion flows (corner, OCR, CSV import, manual ID, orders) with optional deck assignment.
-- Schema v31 with auto-migrations in `schema.py`.
-- Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `BatchRepository`.
+- `batches` — Unified batch groupings for all ingestion flows (corner, OCR, CSV import, manual ID, orders, sealed_open) with optional deck assignment.
+- `sealed_product_cards` — Pre-resolved card contents for sealed products. Populated during MTGJSON import by resolving `contents_json` deck/card references. Used by the "Open Product" flow to add known cards to collection.
+- Schema v32 with auto-migrations in `schema.py`.
+- Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `BatchRepository`, `SealedProductCardRepository`.
 - **Deck/binder exclusivity**: A collection entry can be in one deck OR one binder, not both. `deck_id` and `binder_id` are mutually exclusive (enforced by repository logic, returns HTTP 409 on conflict). Use `move_cards()` to atomically reassign.
 
 Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` env).
@@ -166,7 +167,7 @@ Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in
 - **`deck_id` and `binder_id` are mutually exclusive.** A collection entry cannot be in both. The repository returns HTTP 409 on conflict. Use `move_cards()` to reassign atomically.
 - **JSON arrays stored as TEXT.** `colors`, `finishes`, `promo_types` are JSON-encoded strings. Use `json.loads()`, never SQL array operations.
 - **Card not in local DB → tell user to run `mtg cache all`.** Do not fall back to Scryfall API. The card simply isn't cached yet.
-- **Test fixture goes stale after schema migrations.** Regenerate with `uv run python scripts/build_test_fixture.py`, then recreate seed volume with `bash deploy/seed.sh --force`.
+- **Test fixture goes stale after schema migrations.** Regenerate with `uv run python scripts/build_test_fixture.py`, then recreate seed volume with `bash deploy/seed.sh --force`. Full fixture (with sealed product contents) requires `~/.mtgc/AllPrintings.json` — run `mtg data fetch` first.
 - **HTML pages share no JS imports (legacy).** Helpers like `getRarityColor()` are copy-pasted between existing pages. New pages should use `shared.css` + `shared.js` instead. The card detail page (`card_detail.html`) is the first to do so.
 
 ## Deployment

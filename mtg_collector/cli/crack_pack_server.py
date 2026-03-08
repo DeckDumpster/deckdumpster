@@ -1066,6 +1066,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Sealed product API routes
         elif path == "/api/sealed/products/sets":
             self._api_sealed_products_sets()
+        elif path.startswith("/api/sealed/products/") and path.endswith("/contents"):
+            uuid = path[len("/api/sealed/products/"):-len("/contents")]
+            self._api_sealed_product_contents(uuid)
         elif path.startswith("/api/sealed/products/"):
             uuid = path[len("/api/sealed/products/"):]
             self._api_sealed_product_detail(uuid)
@@ -1284,6 +1287,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_sealed_collection_add(data)
+        elif path == "/api/sealed/open":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_sealed_open(data)
         elif path.startswith("/api/sealed/collection/") and path.endswith("/dispose"):
             entry_id = path[len("/api/sealed/collection/"):-len("/dispose")]
             data = self._read_json_body()
@@ -5656,7 +5664,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_sealed_products(self, params: dict):
         """Search/list sealed products (reference data)."""
-        from mtg_collector.db.models import SealedProductRepository
+        from mtg_collector.db.models import SealedProductCardRepository, SealedProductRepository
         from mtg_collector.db.schema import init_db
 
         q = params.get("q", [""])[0]
@@ -5682,6 +5690,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if category:
             products = [p for p in products if p.category == category]
 
+        spc_repo = SealedProductCardRepository(conn)
         result = []
         for p in products[:limit]:
             image_url = None
@@ -5706,6 +5715,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "image_url": image_url,
                 "purchase_url_tcgplayer": p.purchase_url_tcgplayer,
                 "purchase_url_cardkingdom": p.purchase_url_cardkingdom,
+                "has_contents": spc_repo.has_cards(p.uuid),
             })
 
         conn.close()
@@ -5763,6 +5773,239 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "purchase_url_tcgplayer": product.purchase_url_tcgplayer,
             "purchase_url_cardkingdom": product.purchase_url_cardkingdom,
             "contents_json": product.contents_json,
+        })
+
+    def _api_sealed_product_contents(self, uuid: str):
+        """Preview the card contents of a sealed product."""
+        import json as _json
+
+        from mtg_collector.db.models import SealedProductCardRepository, SealedProductRepository
+        from mtg_collector.db.schema import init_db
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+
+        product_repo = SealedProductRepository(conn)
+        product = product_repo.get(uuid)
+        if not product:
+            conn.close()
+            self._send_json({"error": f"Sealed product '{uuid}' not found"}, 404)
+            return
+
+        spc_repo = SealedProductCardRepository(conn)
+        cards = spc_repo.get_cards_for_product(uuid)
+
+        # Separate resolvable vs unresolvable
+        resolvable = []
+        unresolvable = []
+        for card in cards:
+            if card["printing_id"]:
+                resolvable.append(card)
+            else:
+                unresolvable.append({
+                    "mtgjson_uuid": card["mtgjson_uuid"],
+                    "quantity": card["quantity"],
+                    "is_foil": card["is_foil"],
+                    "zone": card["zone"],
+                    "source_type": card["source_type"],
+                    "source_name": card["source_name"],
+                })
+
+        total_cards = sum(c["quantity"] for c in resolvable)
+
+        # Parse sealed sub-products and other items from contents_json
+        sealed_sub_products = []
+        other_items = []
+        if product.contents_json:
+            try:
+                contents = _json.loads(product.contents_json)
+            except (ValueError, TypeError):
+                contents = {}
+
+            for sealed_ref in contents.get("sealed", []):
+                sub_uuid = sealed_ref.get("uuid")
+                found = False
+                if sub_uuid:
+                    found = product_repo.get(sub_uuid) is not None
+                sealed_sub_products.append({
+                    "name": sealed_ref.get("name", "Unknown"),
+                    "count": sealed_ref.get("count", 1),
+                    "uuid": sub_uuid,
+                    "set": sealed_ref.get("set"),
+                    "found_in_catalog": found,
+                })
+
+            for pack_ref in contents.get("pack", []):
+                sealed_sub_products.append({
+                    "name": f"Booster Pack ({pack_ref.get('code', '?')})",
+                    "count": pack_ref.get("count", 1),
+                    "uuid": None,
+                    "set": pack_ref.get("set"),
+                    "found_in_catalog": False,
+                })
+
+            for other_ref in contents.get("other", []):
+                other_items.append({
+                    "name": other_ref.get("name", "Unknown item"),
+                    "count": other_ref.get("count", 1),
+                })
+
+        openable = len(resolvable) > 0
+
+        conn.close()
+        self._send_json({
+            "cards": resolvable,
+            "total_cards": total_cards,
+            "unresolvable": unresolvable,
+            "sealed_sub_products": sealed_sub_products,
+            "other_items": other_items,
+            "openable": openable,
+        })
+
+    def _api_sealed_open(self, data: dict):
+        """Open a sealed product: add its cards to the collection."""
+        import uuid as _uuid
+
+        from mtg_collector.db.models import (
+            Batch,
+            BatchRepository,
+            CollectionEntry,
+            CollectionRepository,
+            SealedCollectionEntry,
+            SealedCollectionRepository,
+            SealedProductCardRepository,
+            SealedProductRepository,
+        )
+        from mtg_collector.db.schema import init_db
+
+        sealed_product_uuid = data.get("sealed_product_uuid")
+        if not sealed_product_uuid:
+            self._send_json({"error": "sealed_product_uuid required"}, 400)
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+
+        product_repo = SealedProductRepository(conn)
+        product = product_repo.get(sealed_product_uuid)
+        if not product:
+            conn.close()
+            self._send_json({"error": f"Sealed product '{sealed_product_uuid}' not found"}, 404)
+            return
+
+        spc_repo = SealedProductCardRepository(conn)
+        cards = spc_repo.get_cards_for_product(sealed_product_uuid)
+        resolvable = [c for c in cards if c["printing_id"]]
+
+        if not resolvable:
+            conn.close()
+            self._send_json({"error": "No resolvable cards in this product"}, 400)
+            return
+
+        condition = data.get("condition", "Near Mint")
+        deck_id = data.get("deck_id")
+        track_in_sealed = data.get("track_in_sealed", False)
+
+        # Create batch
+        batch_repo = BatchRepository(conn)
+        batch = Batch(
+            id=None,
+            batch_uuid=str(_uuid.uuid4()),
+            name=f"Opened: {product.name}",
+            batch_type="sealed_open",
+            product_type=product.category,
+            set_code=product.set_code,
+        )
+        batch_id = batch_repo.create(batch)
+
+        # Add cards to collection
+        collection_repo = CollectionRepository(conn)
+        cards_added = 0
+        errors = []
+        collection_ids = []
+
+        for card in resolvable:
+            finish = "foil" if card["is_foil"] else "nonfoil"
+            for _ in range(card["quantity"]):
+                try:
+                    entry = CollectionEntry(
+                        id=None,
+                        printing_id=card["printing_id"],
+                        finish=finish,
+                        condition=condition,
+                        source="sealed_open",
+                        batch_id=batch_id,
+                    )
+                    new_id = collection_repo.add(entry)
+                    collection_ids.append(new_id)
+                    cards_added += 1
+                except Exception as e:
+                    errors.append(f"Error adding {card.get('name', '?')}: {e}")
+
+        # Update batch card count and complete
+        if collection_ids:
+            batch_repo.increment_card_count(batch_id, len(collection_ids))
+
+        # Assign to deck if requested
+        if deck_id and collection_ids:
+            from mtg_collector.db.models import DeckRepository
+            DeckRepository(conn).add_cards(int(deck_id), collection_ids, zone="mainboard")
+
+        batch_repo.complete(batch_id)
+
+        # Handle sealed sub-products
+        sealed_added = 0
+        if product.contents_json:
+            import json as _json
+            try:
+                contents = _json.loads(product.contents_json)
+            except (ValueError, TypeError):
+                contents = {}
+
+            sealed_repo = SealedCollectionRepository(conn)
+            for sealed_ref in contents.get("sealed", []):
+                sub_uuid = sealed_ref.get("uuid")
+                if not sub_uuid:
+                    continue
+                sub_product = product_repo.get(sub_uuid)
+                if not sub_product:
+                    continue
+                for _ in range(sealed_ref.get("count", 1)):
+                    sub_entry = SealedCollectionEntry(
+                        id=None,
+                        sealed_product_uuid=sub_uuid,
+                        quantity=1,
+                        source="sealed_open",
+                        notes=f"From opening: {product.name}",
+                    )
+                    sealed_repo.add(sub_entry)
+                    sealed_added += 1
+
+        # Optionally track the parent product in sealed collection
+        if track_in_sealed:
+            sealed_repo = SealedCollectionRepository(conn)
+            parent_entry = SealedCollectionEntry(
+                id=None,
+                sealed_product_uuid=sealed_product_uuid,
+                quantity=1,
+                condition=condition,
+                purchase_price=data.get("purchase_price"),
+                purchase_date=data.get("purchase_date"),
+                source="sealed_open",
+                status="opened",
+            )
+            sealed_repo.add(parent_entry)
+
+        conn.commit()
+        conn.close()
+
+        self._send_json({
+            "batch_id": batch_id,
+            "cards_added": cards_added,
+            "sealed_added": sealed_added,
+            "errors": errors,
         })
 
     def _api_sealed_price_history(self, tcgplayer_product_id: str):
