@@ -1,0 +1,11 @@
+# Scenario: View batch detail with cards and metadata
+#
+# Related:
+#   issues: [197]
+#   pull_requests: []
+
+description: >
+  I can click on a batch in the list to see its detail view. The detail
+  view shows the batch name, type, creation date, and card count. It
+  also displays the individual cards with their names and set information.
+  A "Back" button returns me to the batch list.

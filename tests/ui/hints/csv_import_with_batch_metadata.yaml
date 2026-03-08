@@ -1,0 +1,12 @@
+start_page: /import-csv
+involves:
+  - "text input with id='batch-name' and placeholder='e.g. Foundations Starter Collection'"
+  - "select with id='product-type' containing options: (empty), starter_collection, booster_box, bundle, precon, singles, other"
+  - "text input with id='batch-set-code' and placeholder='Set' with width ~70px"
+  - "batch fields appear between format dropdown and Parse button"
+fixture_data: {}
+notes: >
+  1. Navigate to /import-csv. 2. Verify the batch-name input is
+  visible with placeholder "e.g. Foundations Starter Collection".
+  3. Verify the product-type select is present. 4. Verify the
+  batch-set-code input is present with placeholder "Set".

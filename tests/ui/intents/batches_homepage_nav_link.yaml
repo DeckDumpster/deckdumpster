@@ -1,0 +1,10 @@
+# Scenario: Navigate to Batches from the homepage
+#
+# Related:
+#   issues: [197]
+#   pull_requests: []
+
+description: >
+  I can see a "Batches" link in the Collection section of the homepage
+  navigation. Clicking it takes me to the Batches page which shows a
+  list of import batches with their names, card counts, and type badges.

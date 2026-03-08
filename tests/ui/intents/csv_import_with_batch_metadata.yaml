@@ -1,0 +1,11 @@
+# Scenario: CSV import page shows optional batch fields
+#
+# Related:
+#   issues: [197]
+#   pull_requests: []
+
+description: >
+  When I visit the CSV Import page, I can see optional batch metadata
+  fields: a "Batch (optional)" text input, a product type dropdown,
+  and a set code input. These fields let me group imported cards into
+  a named batch for later reference on the Batches page.

@@ -1,0 +1,12 @@
+start_page: /
+involves:
+  - "homepage nav link: <a href='/batches'>Batches<span>View all import batches and orders</span></a>"
+  - "link is in the Collection section of the nav grid"
+  - "batches page title is 'Batches - MTG Collection'"
+  - "batch list shows batch-card divs with batch-name, batch-count, batch-date"
+fixture_data:
+  demo_batches: "2 corner-type batches: 'Wednesday evening scan' (3 cards), 'New cards from LGS' (4 cards)"
+notes: >
+  1. Navigate to /. 2. Verify "Batches" link is visible in the nav.
+  3. Click "Batches" text. 4. Wait for the batches page to load.
+  5. Verify batch list is visible with batch names and card counts.

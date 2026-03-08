@@ -1,0 +1,15 @@
+start_page: /batches
+involves:
+  - "batch-card divs in list-view with onclick='showBatch(id)'"
+  - "detail-view div with detail-header containing Back button and batch name"
+  - "detail-info div showing type, card count, creation date"
+  - "cards-grid div showing card-item divs with card-name and card-set"
+  - "Back button with class 'secondary' returns to list view"
+fixture_data:
+  demo_batch: "'New cards from LGS' with 4 cards including Judith, Orazca Puzzle-Door, Preacher of the Schism, The Pride of Hull Clade"
+notes: >
+  1. Navigate to /batches. 2. Wait for batch list to load. 3. Click
+  on the "New cards from LGS" batch card. 4. Verify detail view shows
+  batch name, type "Corner", and card count. 5. Verify card names are
+  visible (e.g. "Judith, Carnage Connoisseur"). 6. Click the "Back"
+  button. 7. Verify the list view is shown again.

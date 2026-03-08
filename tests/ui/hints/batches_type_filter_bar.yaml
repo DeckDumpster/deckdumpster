@@ -1,0 +1,15 @@
+start_page: /batches
+involves:
+  - "filter-bar div with id='type-filter' containing pill spans"
+  - "pill spans with data-type attributes: '', 'corner', 'ocr', 'csv_import', 'manual_id', 'order'"
+  - "active pill has class 'active'"
+  - "batch-grid div inside list-view showing batch cards"
+  - "each batch card shows name, type badge, card count, date"
+fixture_data:
+  demo_batches: "2 corner-type batches from demo data"
+notes: >
+  1. Navigate to /batches. 2. Verify the filter bar shows 6 pills
+  (All is active by default). 3. Verify batch cards are visible in
+  the list. 4. Click the "Corner" pill. 5. Verify the "Corner" pill
+  becomes active and batches are still visible (demo data is all
+  corner type). 6. Click "All" to reset. 7. Verify all batches show.
