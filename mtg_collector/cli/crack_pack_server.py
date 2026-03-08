@@ -944,6 +944,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("sealed.html")
         elif path == "/decks":
             self._serve_static("decks.html")
+        elif path.startswith("/decks/"):
+            self._serve_static("deck_detail.html")
         elif path == "/binders":
             self._serve_static("binders.html")
         elif path == "/set-value":

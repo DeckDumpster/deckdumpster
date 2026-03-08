@@ -436,7 +436,7 @@ function renderDeckList() {
   empty.style.display = 'none';
 
   grid.innerHTML = decks.map(d => `
-    <div class="deck-card" onclick="showDeck(${d.id})">
+    <a class="deck-card" href="/decks/${d.id}" style="text-decoration:none;color:inherit;display:block;">
       <h3>${esc(d.name)}</h3>
       <div class="meta">
         ${d.format ? `<span><span class="badge">${esc(d.format)}</span></span>` : ''}
@@ -448,7 +448,7 @@ function renderDeckList() {
         <span>${d.card_count} cards</span>
         ${d.total_value ? `<span>$${Number(d.total_value).toFixed(2)}</span>` : ''}
       </div>
-    </div>
+    </a>
   `).join('');
 }
 
@@ -602,7 +602,7 @@ async function saveDeck() {
     currentDeck = result;
     renderDeckDetail();
   } else {
-    showDeck(result.id);
+    window.location.href = '/decks/' + result.id;
   }
 }
 
