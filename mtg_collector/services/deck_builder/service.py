@@ -38,17 +38,71 @@ from mtg_collector.utils import parse_json_array
 # with these related tags.  Covers Scryfall tagging gaps where a card
 # fulfills a role but uses a more specific or adjacent tag name.
 TAG_ALIASES: dict[str, list[str]] = {
+    # ── Mass removal ──
     "boardwipe": ["multi-removal", "sweeper-one-sided"],
-    "sweeper-one-sided": ["boardwipe"],
+    "sweeper-one-sided": ["boardwipe", "multi-removal"],
     "multi-removal": ["boardwipe", "sweeper-one-sided"],
+    # ── Targeted removal ──
     "removal": ["creature-removal", "artifact-removal", "enchantment-removal",
                  "planeswalker-removal", "removal-exile", "edict", "bounce"],
     "creature-removal": ["removal-toughness", "edict", "burn-creature"],
+    "artifact-removal": ["disenchant"],
+    "enchantment-removal": ["disenchant"],
+    "disenchant": ["artifact-removal", "enchantment-removal"],
+    # ── Ramp ──
     "ramp": ["mana-dork", "mana-rock", "extra-land", "cost-reducer"],
+    "mana-dork": ["ramp"],
+    "mana-rock": ["ramp"],
+    "extra-land": ["ramp"],
+    # ── Card draw / advantage ──
     "draw": ["repeatable-draw", "burst-draw", "impulse", "card-advantage"],
     "card-advantage": ["draw", "impulse", "tutor"],
-    "recursion": ["reanimate"],
-    "reanimate": ["recursion"],
+    "repeatable-draw": ["draw", "curiosity-like"],
+    "burst-draw": ["draw", "wheel"],
+    "impulse": ["repeatable-impulsive-draw"],
+    "tutor": ["card-advantage"],
+    # ── Card filtering ──
+    "loot": ["rummage", "discard-outlet"],
+    "rummage": ["loot", "discard-outlet"],
+    "discard-outlet": ["loot", "rummage"],
+    # ── Recursion / reanimation ──
+    "recursion": ["reanimate", "recursion-artifact", "recursion-permanent", "cheat-death"],
+    "reanimate": ["recursion", "reanimate-cast"],
+    "reanimate-cast": ["reanimate"],
+    "recursion-artifact": ["recursion"],
+    "recursion-permanent": ["recursion"],
+    "recursion-land": ["recursion"],
+    "cheat-death": ["cheat-death-self", "recursion"],
+    "cheat-death-self": ["cheat-death"],
+    # ── Evasion ──
+    "evasion": ["gives-evasion", "gives-menace"],
+    "gives-evasion": ["evasion"],
+    # ── Token synergy ──
+    "synergy-token": ["synergy-token-creature", "repeatable-creature-tokens",
+                       "repeatable-token-generator", "multiple-bodies"],
+    "synergy-token-creature": ["synergy-token", "repeatable-creature-tokens"],
+    # ── Lifegain ──
+    "lifegain": ["repeatable-lifegain"],
+    "lifegain-matters": ["lifegain", "repeatable-lifegain"],
+    "repeatable-lifegain": ["lifegain"],
+    # ── Burn ──
+    "burn": ["burn-creature", "burn-player", "pinger"],
+    "burn-creature": ["burn", "pinger"],
+    "burn-player": ["burn"],
+    # ── Theft / control ──
+    "theft-creature": ["theft-cast", "control-changing-effects"],
+    "theft-cast": ["theft-creature", "control-changing-effects"],
+    "control-changing-effects": ["theft-creature", "theft-cast"],
+    # ── Sacrifice ──
+    "sacrifice-outlet": ["synergy-token"],
+    # ── Graveyard hate ──
+    "graveyard-hate": ["graveyard-to-library"],
+    # ── Mill ──
+    "mill": ["self-mill"],
+    "self-mill": ["mill"],
+    # ── Counters ──
+    "counters-matter": ["gives-pp-counters", "gives-mm-counters"],
+    "gives-pp-counters": ["counters-matter"],
 }
 
 AUTOFILL_WEIGHTS = {
