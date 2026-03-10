@@ -1,0 +1,70 @@
+{
+  "variants": [
+    {
+      "name": "Trample Beatdown",
+      "strategy": "Focus on creatures with natural trample and ways to give trample to others, maximizing Stonebrow's +2/+2 buff. Use combat tricks and anthems to create overwhelming attacks.",
+      "targets": {
+        "lands": 37,
+        "ramp": 8,
+        "mana-rock": 4,
+        "draw": 6,
+        "impulse": 4,
+        "removal": 6,
+        "creature-removal": 4,
+        "boardwipe": 3,
+        "evasion": 12,
+        "gives-evasion": 8,
+        "combat-trick": 10,
+        "giant-growth": 8,
+        "anthem": 6,
+        "power-boost-to-all": 4,
+        "gives-haste": 6
+      }
+    },
+    {
+      "name": "Token Trample",
+      "strategy": "Generate large numbers of creature tokens and give them trample, turning small tokens into massive threats with Stonebrow's ability. Focus on token generation and mass pump effects.",
+      "targets": {
+        "lands": 37,
+        "ramp": 10,
+        "mana-rock": 3,
+        "draw": 5,
+        "card-advantage": 5,
+        "removal": 5,
+        "creature-removal": 3,
+        "boardwipe": 2,
+        "sweeper-one-sided": 2,
+        "synergy-token": 12,
+        "synergy-token-creature": 8,
+        "repeatable-creature-tokens": 6,
+        "multiple-bodies": 4,
+        "gives-evasion": 8,
+        "anthem": 8,
+        "power-boost-to-all": 6
+      }
+    },
+    {
+      "name": "Equipment Voltron",
+      "strategy": "Use equipment and auras to create large trampling threats, with Stonebrow himself as a key threat. Focus on protection and recurring equipment to maintain board presence.",
+      "targets": {
+        "lands": 36,
+        "ramp": 8,
+        "mana-rock": 5,
+        "draw": 6,
+        "card-advantage": 4,
+        "removal": 6,
+        "creature-removal": 3,
+        "boardwipe": 2,
+        "synergy-equipment": 12,
+        "synergy-aura": 6,
+        "gives-evasion": 6,
+        "protects-creature": 8,
+        "gives-hexproof": 4,
+        "recursion": 6,
+        "recursion-artifact": 4,
+        "synergy-commander": 6,
+        "tutor": 4
+      }
+    }
+  ]
+}

@@ -647,17 +647,16 @@
     section.style.display = '';
     document.getElementById('btn-clear-plan').style.display = '';
 
-    // Count cards currently in deck by approximation (total nonland vs target)
-    // For now show targets; full progress tracking would need audit endpoint
-    const CATEGORY_LABELS = {
-      lands: 'Lands', ramp: 'Ramp', card_advantage: 'Card Advantage',
-      targeted_removal: 'Targeted Removal', board_wipes: 'Board Wipes',
-      standalone: 'Standalone', enhancers: 'Enhancers', enablers: 'Enablers'
-    };
+    // Sort: "lands" first, then alphabetical
+    const sorted = Object.entries(targets).sort(([a], [b]) => {
+      if (a === 'lands') return -1;
+      if (b === 'lands') return 1;
+      return a.localeCompare(b);
+    });
 
     let html = '<div class="plan-progress">';
-    for (const [key, target] of Object.entries(targets)) {
-      const label = CATEGORY_LABELS[key] || key;
+    for (const [tag, target] of sorted) {
+      const label = tag.replace(/-/g, ' ');
       const current = 0; // TODO: wire up audit endpoint for real counts
       const pct = target > 0 ? Math.min((current / target) * 100, 100) : 0;
       const cls = current >= target ? 'met' : current > target ? 'over' : 'under';
@@ -666,8 +665,6 @@
       html += `<span class="counts">${current}/${target}</span>`;
     }
     html += '</div>';
-    const total = Object.values(targets).reduce((s, n) => s + n, 0);
-    html += `<div style="margin-top:8px;font-size:0.85rem;color:var(--text-secondary)">Total: ${total} cards</div>`;
     body.innerHTML = html;
   }
 
@@ -765,13 +762,15 @@
       html += `<h4>${esc(v.name)}</h4>`;
       html += `<div class="strategy">${esc(v.strategy)}</div>`;
       html += '<div class="slots">';
-      const LABELS = {
-        lands: 'Lands', ramp: 'Ramp', card_advantage: 'Card Adv.',
-        targeted_removal: 'Removal', board_wipes: 'Wipes',
-        standalone: 'Standalone', enhancers: 'Enhancers', enablers: 'Enablers'
-      };
-      for (const [key, count] of Object.entries(v.targets || {})) {
-        html += `<span class="cat">${LABELS[key] || key}</span><span class="count">${count}</span>`;
+      // Sort: lands first, then by count descending
+      const sortedTargets = Object.entries(v.targets || {}).sort(([a, ac], [b, bc]) => {
+        if (a === 'lands') return -1;
+        if (b === 'lands') return 1;
+        return bc - ac;
+      });
+      for (const [tag, count] of sortedTargets) {
+        const label = tag.replace(/-/g, ' ');
+        html += `<span class="cat">${esc(label)}</span><span class="count">${count}</span>`;
       }
       html += '</div></div>';
     });

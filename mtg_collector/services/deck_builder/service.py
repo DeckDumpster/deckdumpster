@@ -621,22 +621,23 @@ class DeckBuilderService:
 
     def _get_plan_progress(self, deck_id: int, cards: List[dict],
                            plan: Optional[dict]) -> Optional[dict]:
-        """Get plan progress by counting cards with matching tags or keywords.
+        """Get plan progress by counting cards with matching tags.
 
-        Plan targets can be:
-        - Tag names (from card_tags) — counted via tag matching
-        - MTG keyword abilities (trample, deathtouch, etc.) — counted via oracle text
+        Plan targets are tag names from card_tags, plus the special
+        value "lands" which is counted by type line.
         """
         if not plan or "targets" not in plan:
             return None
 
-        from mtg_collector.services.deck_builder.tags import KEYWORD_TAG_MAP
-        keyword_names = set(KEYWORD_TAG_MAP.keys())
-
         targets = plan["targets"]
         progress = {}
 
-        # Count tags for tag-based targets
+        # Count lands separately (not a tag)
+        land_count = sum(
+            1 for c in cards if self._is_land_type(c.get("type_line", ""))
+        )
+
+        # Count tags for all cards in deck
         tag_counts: dict[str, int] = {}
         for card in cards:
             oracle_id = card.get("oracle_id")
@@ -647,12 +648,8 @@ class DeckBuilderService:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
         for target_name, target_count in targets.items():
-            if target_name in keyword_names:
-                # Count by oracle text keyword match
-                current = sum(
-                    1 for c in cards
-                    if target_name.lower() in (c.get("oracle_text") or "").lower()
-                )
+            if target_name == "lands":
+                current = land_count
             else:
                 current = tag_counts.get(target_name, 0)
             progress[target_name] = {"current": current, "target": target_count}

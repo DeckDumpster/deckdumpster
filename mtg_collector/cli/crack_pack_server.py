@@ -1337,6 +1337,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_plan_save(int(did), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/autofill"):
+            did = path[len("/api/decks/"):-len("/autofill")]
+            if did.isdigit():
+                self._api_deck_autofill(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/reassemble"):
             did = path[len("/api/decks/"):-len("/reassemble")]
             if did.isdigit():
@@ -4927,6 +4933,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.close()
         self._send_json(result)
 
+    def _api_deck_autofill(self, deck_id: int):
+        """POST /api/decks/:id/autofill — suggest cards to fill plan tags."""
+        # TODO: Phase 4 implementation (after plan uses real tags)
+        self._send_json({"error": "Not yet implemented"}, 501)
+
     def _api_deck_plan_generate_sse(self, deck_id: int):
         """POST /api/decks/:id/plan/generate — SSE stream Claude plan generation."""
         if not _has_api_key():
@@ -4965,11 +4976,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         commander = dict(commander)
 
-        # Build Claude prompt
+        # Build Claude prompt — fetch available tags for the prompt
         from mtg_collector.services.deck_builder.constants import INFRASTRUCTURE
-        infra_lines = []
-        for cat, info in INFRASTRUCTURE.items():
-            infra_lines.append(f"- {cat}: {info['min']} cards (tags: {', '.join(sorted(info['tags'])[:5])}...)")
 
         color_identity = commander.get("color_identity") or "[]"
         if isinstance(color_identity, str):
@@ -4979,6 +4987,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 color_identity = []
         colors_str = ", ".join(color_identity) if color_identity else "Colorless"
+
+        # Get all available tags with card counts
+        tag_rows = conn.execute(
+            "SELECT tag, COUNT(*) AS cnt FROM card_tags GROUP BY tag ORDER BY cnt DESC"
+        ).fetchall()
+        tag_list = ", ".join(f"{r['tag']} ({r['cnt']})" for r in tag_rows)
+
+        # Build infrastructure section showing tag groupings
+        infra_lines = []
+        for cat, info in INFRASTRUCTURE.items():
+            tags_str = ", ".join(sorted(info["tags"]))
+            infra_lines.append(f"- **{cat}** (min {info['min']}): {tags_str}")
 
         prompt = f"""You are an expert Magic: The Gathering Commander/EDH deck builder.
 
@@ -4990,32 +5010,44 @@ I need you to create 3 different deck plan variants for a Commander deck led by:
 **Color Identity:** {colors_str}
 **Oracle Text:** {commander.get('oracle_text', 'N/A')}
 
+## Available Tags
+These are the real tag names from our card database. You MUST use only these exact tag names in your plan targets.
+{tag_list}
+
+## Infrastructure (every Commander deck needs these)
+{chr(10).join(infra_lines)}
+
 ## Base Template (Command Zone Episode 658)
-A 99-card Commander deck typically has:
-- 38 Lands (including utility lands)
-- 10 Ramp (prioritize 2-mana rocks/spells)
-- 12 Card Advantage (draw, impulse, selection)
-- 12 Targeted Removal (destroy, exile, bounce, counter)
-- 6 Board Wipes (mass removal)
-- ~25 Standalone (threats, win conditions)
-- ~10 Enhancers (synergy multipliers)
-- ~7 Enablers (utility glue)
+A 99-card Commander deck has 99 cards plus the commander:
+- ~37 Lands (use the tag "lands" for this target)
+- ~10 Ramp cards (tags: ramp, mana-dork, mana-rock, etc.)
+- ~10 Card Advantage (tags: draw, card-advantage, tutor, etc.)
+- ~10 Targeted Removal (tags: removal, creature-removal, counter, etc.)
+- ~3 Board Wipes (tags: boardwipe, sweeper-one-sided)
+- ~29 remaining slots for the deck's strategy/theme
 
 ## Commander Adjustments
 - If commander provides card draw → fewer card advantage slots
 - If commander IS removal → fewer removal slots
 - If commander is cheap (1-3 MV) → can shave a land or two
-- If commander is expensive (6+ MV) → more ramp, possibly 39 lands
-- Run fewer cards at commander's mana value
-
-## Infrastructure Categories
-{chr(10).join(infra_lines)}
+- If commander is expensive (6+ MV) → more ramp, possibly 38 lands
 
 ## Your Task
-Create exactly 3 plan variants. Each should have a different strategic angle based on what this commander enables. For each variant, provide:
-1. A short name (2-3 words, e.g. "Aggressive Burn", "Value Engine", "Combo Control")
+Create exactly 3 plan variants. Each should have a different strategic angle.
+
+**CRITICAL: Every key in "targets" must be an exact tag name from the Available Tags list above, or the special value "lands".** Do not invent tag names. The autofill system will look up cards by these exact tags.
+
+For each variant, provide:
+1. A short name (2-3 words)
 2. A 1-2 sentence strategy description
-3. Adjusted slot counts for ALL categories: lands, ramp, card_advantage, targeted_removal, board_wipes, standalone, enhancers, enablers
+3. A targets dict mapping tag names to card counts
+
+Each variant should include:
+- "lands" target (~37)
+- Infrastructure tags (pick specific tags from the infrastructure groups above — e.g. use "ramp" and "mana-rock", not a generic "Ramp" category)
+- Strategy tags chosen for this commander (e.g. "creature-tokens", "sacrifice-outlet", "graveyard-recursion", "voltron", "lifegain", etc.)
+
+Cards can have multiple tags, so a single card can satisfy multiple targets. Because of this overlap, the sum of all targets will typically be HIGHER than 99 (e.g. 120-150). That's expected and correct — it means some cards serve double duty.
 
 Respond with ONLY valid JSON in this exact format:
 {{
@@ -5024,20 +5056,20 @@ Respond with ONLY valid JSON in this exact format:
       "name": "Variant Name",
       "strategy": "Brief strategy description.",
       "targets": {{
-        "lands": 38,
-        "ramp": 10,
-        "card_advantage": 12,
-        "targeted_removal": 12,
-        "board_wipes": 6,
-        "standalone": 25,
-        "enhancers": 10,
-        "enablers": 7
+        "lands": 37,
+        "ramp": 8,
+        "mana-rock": 4,
+        "draw": 6,
+        "card-advantage": 4,
+        "removal": 6,
+        "creature-removal": 4,
+        "boardwipe": 3,
+        "example-strategy-tag": 8,
+        "another-tag": 5
       }}
     }}
   ]
-}}
-
-The counts across all categories must sum to exactly 99 for each variant."""
+}}"""
 
         # Set up SSE
         self.send_response(200)

@@ -10,6 +10,7 @@ Usage:
     uv run python scripts/build_test_fixture.py
 """
 
+import json
 import sqlite3
 import uuid
 from pathlib import Path
@@ -123,6 +124,30 @@ def main():
     if fallback_count:
         print(f"  Inserted {fallback_count} fallback sealed products")
     conn.commit()
+
+    # Seed card_tags from tag_all_cards.json if available
+    tag_file = Path(__file__).resolve().parent.parent / "tag_all_cards.json"
+    if tag_file.exists():
+        print("  Seeding card_tags from tag_all_cards.json...")
+        with open(tag_file) as f:
+            tag_data = json.load(f)
+        # Get oracle_ids present in this fixture's cards table
+        fixture_oracle_ids = set(
+            r[0] for r in conn.execute("SELECT oracle_id FROM cards").fetchall()
+        )
+        tag_count = 0
+        for tag, oracle_ids in tag_data.items():
+            pairs = [(oid, tag) for oid in oracle_ids if oid in fixture_oracle_ids]
+            if pairs:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                    pairs,
+                )
+                tag_count += len(pairs)
+        conn.commit()
+        print(f"    Inserted {tag_count} card_tags for {len(fixture_oracle_ids)} cards")
+    else:
+        print("  WARNING: tag_all_cards.json not found, skipping card_tags seeding")
 
     # Compact
     print("  VACUUM...")
