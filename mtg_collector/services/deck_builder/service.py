@@ -34,6 +34,23 @@ from mtg_collector.utils import parse_json_array
 # ── Autofill ranking weights ─────────────────────────────────────
 # Fixed weights for autofill. Phase 5 (card replacement) will
 # expose these as user-tunable sliders.
+# Tag aliases — when autofill searches for a tag, also include cards
+# with these related tags.  Covers Scryfall tagging gaps where a card
+# fulfills a role but uses a more specific or adjacent tag name.
+TAG_ALIASES: dict[str, list[str]] = {
+    "boardwipe": ["multi-removal", "sweeper-one-sided"],
+    "sweeper-one-sided": ["boardwipe"],
+    "multi-removal": ["boardwipe", "sweeper-one-sided"],
+    "removal": ["creature-removal", "artifact-removal", "enchantment-removal",
+                 "planeswalker-removal", "removal-exile", "edict", "bounce"],
+    "creature-removal": ["removal-toughness", "edict", "burn-creature"],
+    "ramp": ["mana-dork", "mana-rock", "extra-land", "cost-reducer"],
+    "draw": ["repeatable-draw", "burst-draw", "impulse", "card-advantage"],
+    "card-advantage": ["draw", "impulse", "tutor"],
+    "recursion": ["reanimate"],
+    "reanimate": ["recursion"],
+}
+
 AUTOFILL_WEIGHTS = {
     "edhrec": 0.15,       # Global EDHREC rank (lower rank = better)
     "salt": 0.05,         # Salt / annoyance (lower = better)
@@ -585,6 +602,10 @@ class DeckBuilderService:
         exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
         limit_clause = f"LIMIT {int(limit)}" if limit else ""
 
+        # Expand tag to include aliases
+        tags = [tag] + TAG_ALIASES.get(tag, [])
+        tag_placeholders = ",".join("?" for _ in tags)
+
         query = f"""
             SELECT card.oracle_id, card.name, card.type_line,
                    card.mana_cost, card.cmc, card.oracle_text,
@@ -605,7 +626,7 @@ class DeckBuilderService:
             JOIN sets s ON p.set_code = s.set_code
             LEFT JOIN card_tags ct_all ON ct_all.oracle_id = card.oracle_id
             LEFT JOIN salt_scores salt ON salt.card_name = card.name
-            WHERE ct.tag = ?
+            WHERE ct.tag IN ({tag_placeholders})
               AND c.status = 'owned'
               AND card.oracle_id NOT IN ({exclude_list})
               AND card.type_line NOT LIKE '%Basic Land%'
@@ -614,7 +635,7 @@ class DeckBuilderService:
             ORDER BY json_extract(p.raw_json, '$.edhrec_rank') ASC NULLS LAST
             {limit_clause}
         """  # noqa: S608
-        rows = self.conn.execute(query, (tag,)).fetchall()
+        rows = self.conn.execute(query, tags).fetchall()
         return [dict(r) for r in rows]
 
     def _score_candidates(self, candidates: list[dict],
