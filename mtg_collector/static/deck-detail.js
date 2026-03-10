@@ -826,7 +826,15 @@
         body: JSON.stringify({ targets: chosen.targets }),
       });
       if (res.ok) {
+        // Fetch real progress from audit before rendering
+        const auditRes = await fetch(`/api/decks/${deck.id}/audit`);
+        if (auditRes.ok) {
+          const audit = await auditRes.json();
+          planProgress = audit.plan_progress;
+        }
         showPlanProgress(chosen.targets);
+        document.getElementById('btn-autofill').style.display = '';
+        document.getElementById('btn-clear-plan').style.display = '';
       } else {
         const err = await res.json();
         alert(err.error || 'Failed to save plan');
