@@ -840,11 +840,64 @@
     body.innerHTML = '<span class="spinner"></span> Finding cards for your plan...';
     document.getElementById('btn-autofill-add').disabled = true;
 
-    const res = await fetch(`/api/decks/${deck.id}/autofill`, { method: 'POST' });
-    const data = await res.json();
+    let res;
+    try {
+      res = await fetch(`/api/decks/${deck.id}/autofill`, { method: 'POST' });
+    } catch (_) {
+      body.innerHTML = '<div style="color:var(--error)">Connection to server failed.</div>';
+      return;
+    }
 
-    if (data.error) {
-      body.innerHTML = `<div style="color:var(--error)">${esc(data.error)}</div>`;
+    // Non-SSE error response (e.g. missing plan)
+    if (res.headers.get('content-type')?.includes('application/json')) {
+      const err = await res.json();
+      body.innerHTML = `<div style="color:var(--error)">${esc(err.error || 'Unknown error')}</div>`;
+      return;
+    }
+
+    // Parse SSE stream — render as soon as result arrives, don't wait for connection close
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let data = null;
+    let finished = false;
+
+    while (!finished) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      while (buffer.includes('\n\n')) {
+        const idx = buffer.indexOf('\n\n');
+        const message = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+
+        let eventType = 'message';
+        let eventData = '';
+        for (const line of message.split('\n')) {
+          if (line.startsWith('event: ')) eventType = line.slice(7);
+          else if (line.startsWith('data: ')) eventData = line.slice(6);
+        }
+        if (!eventData) continue;
+        const parsed = JSON.parse(eventData);
+
+        if (eventType === 'status') {
+          body.innerHTML = `<span class="spinner"></span> ${esc(parsed.message)}`;
+        } else if (eventType === 'result') {
+          data = parsed;
+        } else if (eventType === 'error') {
+          body.innerHTML = `<div style="color:var(--error)">${esc(parsed.message)}</div>`;
+          reader.cancel();
+          return;
+        } else if (eventType === 'done') {
+          finished = true;
+        }
+      }
+    }
+    reader.cancel();
+
+    if (!data) {
+      body.innerHTML = '<div style="color:var(--error)">No response from server.</div>';
       return;
     }
 
@@ -857,6 +910,9 @@
     }
 
     let html = '';
+    if (data.unvalidated) {
+      html += '<div class="autofill-warning">Suggestions are unvalidated (no API key). Some may not match their roles.</div>';
+    }
     for (const tag of tags) {
       const group = autofillSuggestions[tag];
       const label = tag.replace(/-/g, ' ');

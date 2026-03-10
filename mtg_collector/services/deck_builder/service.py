@@ -1,6 +1,7 @@
 """Deck builder service for Commander/EDH deck construction."""
 
 import json
+import random
 import sqlite3
 from typing import List, Optional, Set
 
@@ -34,20 +35,22 @@ from mtg_collector.utils import parse_json_array
 # expose these as user-tunable sliders.
 AUTOFILL_WEIGHTS = {
     "edhrec": 0.25,       # EDHREC popularity (lower rank = better)
-    "salt": 0.10,         # Salt / annoyance (lower = better)
-    "price": 0.10,        # Monetary value (higher = better, proxy for power)
-    "cross_func": 0.20,   # Tag count / CMC (multi-role efficiency)
+    "salt": 0.05,         # Salt / annoyance (lower = better)
+    "price": 0.05,        # Monetary value (higher = better, proxy for power)
+    "cross_func": 0.00,   # Disabled — tag count rewards Scryfall tag noise, not real multi-role
     "uniqueness": 0.10,   # Inverse EDHREC (higher rank = more unique/surprising)
     "recency": 0.15,      # Newer set release = fresher card
-    "bling": 0.10,        # Full-art, borderless, extended art, or showcase frame
+    "bling": 0.15,        # Full-art, borderless, extended art, or showcase frame
+    "random": 0.25,       # Uniform random — keeps suggestions fresh across runs
 }
 
 
 class DeckBuilderService:
     """Service for building Commander/EDH decks from owned cards."""
 
-    def __init__(self, conn: sqlite3.Connection):
+    def __init__(self, conn: sqlite3.Connection, api_key: str | None = None):
         self.conn = conn
+        self.api_key = api_key
         self.card_repo = CardRepository(conn)
         self.printing_repo = PrintingRepository(conn)
         self.collection_repo = CollectionRepository(conn)
@@ -431,7 +434,7 @@ class DeckBuilderService:
 
     # ── Autofill ──────────────────────────────────────────────────
 
-    def autofill(self, deck_id: int) -> dict:
+    def autofill(self, deck_id: int, progress_cb=None) -> dict:
         """Suggest cards to fill plan tag targets from the user's collection.
 
         For each unfilled tag target, queries SQL for owned unassigned cards
@@ -485,12 +488,34 @@ class DeckBuilderService:
                 tag_needs.append((tag, target, current, need))
         tag_needs.sort(key=lambda t: -t[3])
 
-        suggestions: dict[str, dict] = {}
+        # Create validator if API key is available
+        validator = None
+        if self.api_key:
+            from mtg_collector.services.deck_builder.tag_validator import TagValidator
+            validator = TagValidator(self.conn)
 
-        for tag, target, current, need in tag_needs:
+        suggestions: dict[str, dict] = {}
+        total_tags = len(tag_needs)
+
+        for i, (tag, target, current, need) in enumerate(tag_needs):
+            label = tag.replace("-", " ")
+            if progress_cb:
+                step = f"Searching for {label} ({i + 1}/{total_tags})"
+                progress_cb(step)
+
+            # Overfetch 3x when validator is available to account for filtering
+            fetch_limit = need * 3 if validator else None
             candidates = self._query_tag_candidates(
                 tag, deck_id, commander_ci, ci_clauses, exclude_oids,
+                limit=fetch_limit,
             )
+
+            # Validate tags via Haiku if available
+            if validator:
+                candidates = validator.validate_and_filter(
+                    candidates, tag, progress_cb=progress_cb,
+                )
+
             scored = self._score_candidates(candidates)
             scored.sort(key=lambda c: -c["score"])
 
@@ -519,7 +544,10 @@ class DeckBuilderService:
                 for p in picks:
                     exclude_oids.add(p["oracle_id"])
 
-        return {"deck_id": deck_id, "suggestions": suggestions}
+        result = {"deck_id": deck_id, "suggestions": suggestions}
+        if not self.api_key:
+            result["unvalidated"] = True
+        return result
 
     def _ci_exclusion_sql(self, commander_ci: Set[str]) -> str:
         """Build SQL WHERE clauses to exclude colors outside commander CI."""
@@ -535,17 +563,19 @@ class DeckBuilderService:
 
     def _query_tag_candidates(self, tag: str, deck_id: int,
                                commander_ci: Set[str], ci_clauses: str,
-                               exclude_oids: Set[str]) -> list[dict]:
+                               exclude_oids: Set[str],
+                               limit: int | None = None) -> list[dict]:
         """Query owned cards with a specific tag, in CI, not excluded.
 
         Cards in other decks/binders are still eligible — these are digital
         cards and speculative deck building is fine.
         """
         exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
+        limit_clause = f"LIMIT {int(limit)}" if limit else ""
 
         query = f"""
             SELECT card.oracle_id, card.name, card.type_line,
-                   card.mana_cost, card.cmc,
+                   card.mana_cost, card.cmc, card.oracle_text,
                    p.set_code, p.collector_number, p.raw_json,
                    MIN(c.id) AS collection_id,
                    s.released_at,
@@ -570,6 +600,7 @@ class DeckBuilderService:
               {ci_clauses}
             GROUP BY card.oracle_id
             ORDER BY json_extract(p.raw_json, '$.edhrec_rank') ASC NULLS LAST
+            {limit_clause}
         """  # noqa: S608
         rows = self.conn.execute(query, (tag,)).fetchall()
         return [dict(r) for r in rows]
@@ -646,6 +677,7 @@ class DeckBuilderService:
                 + c["_edhrec_n"] * w["uniqueness"]           # higher rank = more unique
                 + c["_recency_n"] * w["recency"]             # newer = better
                 + c.get("is_bling", 0) * w["bling"]          # full-art/borderless/extended/showcase
+                + random.random() * w["random"]              # uniform jitter for variety
             )
 
         return candidates

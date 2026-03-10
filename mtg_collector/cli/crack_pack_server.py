@@ -4955,19 +4955,57 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _api_deck_autofill(self, deck_id: int):
-        """POST /api/decks/:id/autofill — suggest cards to fill plan tags."""
+        """POST /api/decks/:id/autofill — SSE stream autofill progress."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        try:
-            from mtg_collector.services.deck_builder.service import DeckBuilderService
-            svc = DeckBuilderService(conn)
-            result = svc.autofill(deck_id)
-        except ValueError as e:
+
+        from mtg_collector.services.deck_builder.service import DeckBuilderService
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        svc = DeckBuilderService(conn, api_key=api_key)
+
+        # Validate deck/plan upfront so errors return as JSON
+        from mtg_collector.db.models import DeckRepository
+        deck = DeckRepository(conn).get(deck_id)
+        if not deck:
             conn.close()
-            self._send_json({"error": str(e)}, 400)
+            self._send_json({"error": f"Deck not found: {deck_id}"}, 404)
             return
+        plan = svc.get_plan(deck_id)
+        if not plan or "targets" not in plan:
+            conn.close()
+            self._send_json({"error": "No plan set — generate a plan first"}, 400)
+            return
+
+        # Set up SSE
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        def send_event(event_type, data_obj):
+            payload = f"event: {event_type}\ndata: {json.dumps(data_obj)}\n\n"
+            try:
+                self.wfile.write(payload.encode())
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def on_progress(message):
+            send_event("status", {"message": message})
+
+        try:
+            result = svc.autofill(deck_id, progress_cb=on_progress)
+            send_event("result", result)
+            send_event("done", {})
+        except ValueError as e:
+            send_event("error", {"message": str(e)})
+            send_event("done", {"error": True})
+        except Exception as e:
+            send_event("error", {"message": str(e)})
+            send_event("done", {"error": True})
         conn.close()
-        self._send_json(result)
 
     def _api_deck_plan_generate_sse(self, deck_id: int):
         """POST /api/decks/:id/plan/generate — SSE stream Claude plan generation."""

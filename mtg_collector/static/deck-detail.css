@@ -317,6 +317,14 @@ button.danger:hover { background: #a93226; }
 .autofill-card-name { font-weight: 500; }
 .autofill-card-type { color: var(--text-secondary); font-size: 0.8rem; }
 .autofill-card-set { color: var(--text-secondary); font-size: 0.8rem; }
+.autofill-warning {
+  background: rgba(255, 183, 0, 0.15);
+  color: #ffb700;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+}
 
 /* Responsive */
 @media (max-width: 768px) {

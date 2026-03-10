@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 34
+SCHEMA_VERSION = 35
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -282,6 +282,16 @@ CREATE TABLE IF NOT EXISTS card_tags (
     PRIMARY KEY (oracle_id, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_card_tags_tag ON card_tags(tag);
+
+-- Haiku-validated tag assignments (cache of LLM validation results)
+CREATE TABLE IF NOT EXISTS card_tag_validations (
+    oracle_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    valid INTEGER NOT NULL,
+    reason TEXT,
+    validated_at TEXT NOT NULL,
+    PRIMARY KEY (oracle_id, tag)
+);
 
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -652,6 +662,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v32_to_v33(conn)
         if current < 34:
             _migrate_v33_to_v34(conn)
+        if current < 35:
+            _migrate_v34_to_v35(conn)
 
     # Record schema version
     conn.execute(
@@ -1995,6 +2007,20 @@ def _migrate_v33_to_v34(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE collection ADD COLUMN deck_note TEXT")
 
 
+def _migrate_v34_to_v35(conn: sqlite3.Connection):
+    """Add card_tag_validations table for Haiku-based tag validation cache."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS card_tag_validations (
+            oracle_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            valid INTEGER NOT NULL,
+            reason TEXT,
+            validated_at TEXT NOT NULL,
+            PRIMARY KEY (oracle_id, tag)
+        )
+    """)
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -2002,6 +2028,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP VIEW IF EXISTS sealed_collection_view;
         DROP VIEW IF EXISTS collection_view;
         DROP TABLE IF EXISTS latest_prices;
+        DROP TABLE IF EXISTS card_tag_validations;
         DROP TABLE IF EXISTS card_tags;
         DROP TABLE IF EXISTS salt_scores;
         DROP TABLE IF EXISTS tcgplayer_groups;

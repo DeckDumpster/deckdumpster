@@ -705,6 +705,14 @@ class TestQuery:
 # Autofill
 # =============================================================================
 
+@pytest.fixture(autouse=True)
+def _deterministic_autofill(monkeypatch):
+    """Zero out random weight so autofill tests are deterministic."""
+    from mtg_collector.services.deck_builder import service as svc_mod
+    weights = {**svc_mod.AUTOFILL_WEIGHTS, "random": 0.0}
+    monkeypatch.setattr(svc_mod, "AUTOFILL_WEIGHTS", weights)
+
+
 class TestAutofill:
     def test_autofill_suggests_cards_for_plan(self, seeded_db):
         """Autofill should suggest cards matching plan tag targets."""
@@ -813,5 +821,140 @@ class TestAutofill:
             assert "score" in card
             assert isinstance(card["score"], float)
             assert card["score"] >= 0
+
+    def test_autofill_no_api_key_returns_unvalidated(self, seeded_db):
+        """Autofill without API key returns unvalidated flag."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)  # no api_key
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.set_plan(deck["deck_id"], {"ramp": 1})
+        result = svc.autofill(deck["deck_id"])
+        assert result["unvalidated"] is True
+
+    def test_autofill_with_api_key_no_unvalidated_flag(self, seeded_db):
+        """Autofill with API key does not return unvalidated flag."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db, api_key="test-key")
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.set_plan(deck["deck_id"], {"ramp": 1})
+        # Mock the validator to avoid real API calls
+        from unittest.mock import patch, MagicMock
+        mock_validator = MagicMock()
+        mock_validator.validate_and_filter.side_effect = lambda candidates, tag, **kw: candidates
+        with patch("mtg_collector.services.deck_builder.tag_validator.TagValidator", return_value=mock_validator):
+            result = svc.autofill(deck["deck_id"])
+        assert "unvalidated" not in result
+
+    def test_autofill_validator_filters_invalid(self, seeded_db):
+        """Validator should filter out invalid tag assignments."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db, api_key="test-key")
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.set_plan(deck["deck_id"], {"ramp": 2})
+        from unittest.mock import patch, MagicMock
+        mock_validator = MagicMock()
+        # Filter out all candidates (simulates all being invalid)
+        mock_validator.validate_and_filter.return_value = []
+        with patch("mtg_collector.services.deck_builder.tag_validator.TagValidator", return_value=mock_validator):
+            result = svc.autofill(deck["deck_id"])
+        # No valid candidates means no suggestions for ramp
+        assert "ramp" not in result["suggestions"]
+
+
+# =============================================================================
+# Tag Validation
+# =============================================================================
+
+class TestTagValidation:
+    def test_validate_uses_cached_results(self, seeded_db):
+        """Fully-validated cards should skip Haiku call."""
+        db, entries = seeded_db
+        from unittest.mock import MagicMock
+        from mtg_collector.services.deck_builder.tag_validator import TagValidator
+
+        # Pre-populate validation cache for ALL of Sol Ring's tags (ramp + mana-rock)
+        for tag in ("ramp", "mana-rock"):
+            db.execute(
+                "INSERT INTO card_tag_validations (oracle_id, tag, valid, reason, validated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("solring-id", tag, 1, "it ramps", "2026-01-01T00:00:00Z"),
+            )
+        db.commit()
+
+        validator = TagValidator(db)
+        validator.client = MagicMock()  # Should not be called
+
+        candidates = [{"oracle_id": "solring-id", "name": "Sol Ring",
+                       "type_line": "Artifact", "oracle_text": "Tap: Add {C}{C}."}]
+        result = validator.validate_and_filter(candidates, "ramp")
+
+        assert len(result) == 1
+        assert result[0]["oracle_id"] == "solring-id"
+        validator.client.messages.create.assert_not_called()
+
+    def test_validate_filters_cached_invalid(self, seeded_db):
+        """Cached invalid results should filter out cards."""
+        db, entries = seeded_db
+        from unittest.mock import MagicMock
+        from mtg_collector.services.deck_builder.tag_validator import TagValidator
+
+        # Pre-populate ALL tags as validated so backfill isn't triggered
+        # Sol Ring has ramp + mana-rock in card_tags; add creature-removal as extra
+        for tag, valid in [("ramp", 1), ("mana-rock", 1), ("creature-removal", 0)]:
+            db.execute(
+                "INSERT INTO card_tag_validations (oracle_id, tag, valid, reason, validated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("solring-id", tag, valid, "test", "2026-01-01T00:00:00Z"),
+            )
+        db.commit()
+
+        validator = TagValidator(db)
+        validator.client = MagicMock()
+
+        candidates = [{"oracle_id": "solring-id", "name": "Sol Ring",
+                       "type_line": "Artifact", "oracle_text": "Tap: Add {C}{C}."}]
+        result = validator.validate_and_filter(candidates, "creature-removal")
+
+        assert len(result) == 0
+        validator.client.messages.create.assert_not_called()
+
+    def test_validate_calls_haiku_for_unknowns(self, seeded_db):
+        """Unknown cards should be sent to Haiku for all-tag validation."""
+        db, entries = seeded_db
+        from unittest.mock import MagicMock
+        from mtg_collector.services.deck_builder.tag_validator import TagValidator
+
+        validator = TagValidator(db)
+        # Sol Ring has tags: ramp, mana-rock — Haiku should validate both
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(
+            text='['
+            '{"name": "Sol Ring", "tag": "ramp", "valid": true, "reason": "produces mana"},'
+            '{"name": "Sol Ring", "tag": "mana-rock", "valid": true, "reason": "artifact that taps for mana"}'
+            ']'
+        )]
+        validator.client.messages.create = MagicMock(return_value=mock_response)
+
+        candidates = [{"oracle_id": "solring-id", "name": "Sol Ring",
+                       "type_line": "Artifact", "oracle_text": "Tap: Add {C}{C}."}]
+        result = validator.validate_and_filter(candidates, "ramp")
+
+        assert len(result) == 1
+        validator.client.messages.create.assert_called_once()
+
+        # Check BOTH tags were cached (all-tags validation)
+        row = db.execute(
+            "SELECT valid, reason FROM card_tag_validations WHERE oracle_id = ? AND tag = ?",
+            ("solring-id", "ramp"),
+        ).fetchone()
+        assert row["valid"] == 1
+        assert "produces mana" in row["reason"]
+
+        row2 = db.execute(
+            "SELECT valid, reason FROM card_tag_validations WHERE oracle_id = ? AND tag = ?",
+            ("solring-id", "mana-rock"),
+        ).fetchone()
+        assert row2["valid"] == 1
+        assert "artifact" in row2["reason"].lower()
 
 
