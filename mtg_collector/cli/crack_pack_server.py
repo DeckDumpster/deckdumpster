@@ -1083,6 +1083,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_sealed_collection_stats()
         elif path == "/api/sealed/collection":
             self._api_sealed_collection_list(params)
+        # Card search routes
+        elif path == "/api/cards/commanders":
+            self._api_commander_search(params)
         # Deck API routes
         elif path == "/api/decks":
             self._api_decks_list()
@@ -4794,7 +4797,59 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         self._send_json(deck)
 
+    def _api_commander_search(self, params: dict):
+        """Search for legal commanders by name. Returns owned status."""
+        q = params.get("q", [""])[0].strip()
+        if len(q) < 2:
+            self._send_json([], 200)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """SELECT card.oracle_id, card.name, card.type_line,
+                      card.mana_cost, card.colors, card.color_identity,
+                      p.image_uri, p.set_code, p.collector_number,
+                      EXISTS(
+                          SELECT 1 FROM collection c2
+                          JOIN printings p2 ON c2.printing_id = p2.printing_id
+                          WHERE p2.oracle_id = card.oracle_id
+                            AND c2.status = 'owned'
+                            AND c2.deck_id IS NULL
+                      ) as owned
+               FROM cards card
+               JOIN printings p ON card.oracle_id = p.oracle_id
+               WHERE card.name LIKE ?
+                 AND (card.type_line LIKE '%Legendary%Creature%'
+                      OR card.oracle_text LIKE '%can be your commander%')
+               GROUP BY card.oracle_id
+               ORDER BY owned DESC, card.name ASC
+               LIMIT 20""",
+            (f"%{q}%",),
+        ).fetchall()
+        results = [dict(r) for r in rows]
+        conn.close()
+        self._send_json(results, 200)
+
     def _api_deck_create(self, data: dict):
+        commander_name = data.get("commander_name")
+        if commander_name:
+            # Commander deck flow — use DeckBuilderService
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            from mtg_collector.services.deck_builder.service import DeckBuilderService
+            svc = DeckBuilderService(conn)
+            try:
+                result = svc.create_deck(commander_name)
+            except ValueError as e:
+                conn.close()
+                self._send_json({"error": str(e)}, 400)
+                return
+            from mtg_collector.db.models import DeckRepository
+            deck = DeckRepository(conn).get(result["deck_id"])
+            conn.close()
+            self._send_json(deck, 201)
+            return
+
         name = data.get("name")
         if not name:
             self._send_json({"error": "name is required"}, 400)

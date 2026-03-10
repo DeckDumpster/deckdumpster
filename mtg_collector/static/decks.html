@@ -329,6 +329,25 @@ main { padding: 24px; }
 }
 .location-tag:hover { background: #e94560; }
 .location-tag.unassigned { background: #27ae60; }
+.commander-results {
+  list-style: none; margin: 0; padding: 0;
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 10;
+  background: #1a1a2e; border: 1px solid #333; border-radius: 4px;
+  max-height: 260px; overflow-y: auto; display: none;
+}
+.commander-results.open { display: block; }
+.commander-results li {
+  padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 10px;
+  border-bottom: 1px solid #222;
+}
+.commander-results li:hover { background: #0f3460; }
+.commander-results li.selected { background: #0f3460; }
+.commander-results .cmdr-img { width: 36px; height: 50px; object-fit: cover; border-radius: 3px; }
+.commander-results .cmdr-info { flex: 1; }
+.commander-results .cmdr-name { font-weight: bold; }
+.commander-results .cmdr-meta { font-size: 0.8rem; color: #aaa; }
+.commander-results .cmdr-owned { color: #27ae60; font-size: 0.75rem; margin-left: 4px; }
+.commander-results .cmdr-unowned { color: #e94560; font-size: 0.75rem; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -409,7 +428,7 @@ main { padding: 24px; }
     </div>
     <div class="form-group">
       <label>Format</label>
-      <select id="f-format">
+      <select id="f-format" onchange="toggleCommanderField()">
         <option value="">-- None --</option>
         <option value="commander">Commander / EDH</option>
         <option value="standard">Standard</option>
@@ -419,6 +438,14 @@ main { padding: 24px; }
         <option value="vintage">Vintage</option>
         <option value="pauper">Pauper</option>
       </select>
+    </div>
+    <div class="form-group" id="commander-field" style="display:none">
+      <label>Commander</label>
+      <div style="position:relative">
+        <input type="text" id="f-commander" placeholder="Search for a legendary creature..." autocomplete="off">
+        <input type="hidden" id="f-commander-name">
+        <ul class="commander-results" id="commander-results"></ul>
+      </div>
     </div>
     <div class="form-group">
       <label>Description</label>
@@ -667,7 +694,71 @@ function showCreateModal() {
   document.getElementById('f-sleeve').value = '';
   document.getElementById('f-deckbox').value = '';
   document.getElementById('f-location').value = '';
+  document.getElementById('f-commander').value = '';
+  document.getElementById('f-commander-name').value = '';
+  document.getElementById('commander-results').classList.remove('open');
+  toggleCommanderField();
   document.getElementById('deck-modal').classList.add('active');
+}
+
+function toggleCommanderField() {
+  const fmt = document.getElementById('f-format').value;
+  const show = fmt === 'commander' && !editingDeckId;
+  document.getElementById('commander-field').style.display = show ? '' : 'none';
+  if (!show) {
+    document.getElementById('f-commander').value = '';
+    document.getElementById('f-commander-name').value = '';
+  }
+}
+
+let _cmdrSearchTimer = null;
+document.getElementById('f-commander').addEventListener('input', function() {
+  clearTimeout(_cmdrSearchTimer);
+  const q = this.value.trim();
+  document.getElementById('f-commander-name').value = '';
+  if (q.length < 2) {
+    document.getElementById('commander-results').classList.remove('open');
+    return;
+  }
+  _cmdrSearchTimer = setTimeout(() => searchCommanders(q), 250);
+});
+
+document.getElementById('f-commander').addEventListener('blur', function() {
+  setTimeout(() => document.getElementById('commander-results').classList.remove('open'), 200);
+});
+
+async function searchCommanders(q) {
+  const res = await fetch(`/api/cards/commanders?q=${encodeURIComponent(q)}`);
+  const results = await res.json();
+  const ul = document.getElementById('commander-results');
+  ul.innerHTML = '';
+  if (!results.length) {
+    ul.classList.remove('open');
+    return;
+  }
+  for (const card of results) {
+    const li = document.createElement('li');
+    const imgSrc = card.image_uri ? card.image_uri.replace('/normal/', '/art_crop/') : '';
+    const ownedBadge = card.owned
+      ? '<span class="cmdr-owned">✓ owned</span>'
+      : '<span class="cmdr-unowned">not owned</span>';
+    li.innerHTML = `
+      ${imgSrc ? `<img class="cmdr-img" src="${imgSrc}" alt="">` : ''}
+      <div class="cmdr-info">
+        <div class="cmdr-name">${esc(card.name)}${ownedBadge}</div>
+        <div class="cmdr-meta">${esc(card.type_line || '')}</div>
+      </div>
+    `;
+    li.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      document.getElementById('f-commander').value = card.name;
+      document.getElementById('f-commander-name').value = card.name;
+      document.getElementById('f-name').value = card.name;
+      ul.classList.remove('open');
+    });
+    ul.appendChild(li);
+  }
+  ul.classList.add('open');
 }
 
 function showEditModal() {
@@ -685,13 +776,31 @@ function showEditModal() {
   document.getElementById('f-sleeve').value = currentDeck.sleeve_color || '';
   document.getElementById('f-deckbox').value = currentDeck.deck_box || '';
   document.getElementById('f-location').value = currentDeck.storage_location || '';
+  toggleCommanderField();
   document.getElementById('deck-modal').classList.add('active');
 }
 
 async function saveDeck() {
+  const commanderName = document.getElementById('f-commander-name').value.trim();
+  const format = document.getElementById('f-format').value || null;
+
+  // Commander deck creation via DeckBuilderService
+  if (!editingDeckId && format === 'commander' && commanderName) {
+    const res = await fetch('/api/decks', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ commander_name: commanderName }),
+    });
+    const result = await res.json();
+    if (result.error) { alert(result.error); return; }
+    closeModal('deck-modal');
+    window.location.href = '/decks/' + result.id;
+    return;
+  }
+
   const data = {
     name: document.getElementById('f-name').value.trim(),
-    format: document.getElementById('f-format').value || null,
+    format,
     description: document.getElementById('f-description').value.trim() || null,
     is_precon: document.getElementById('f-precon').checked,
     sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
@@ -710,6 +819,7 @@ async function saveDeck() {
     body: JSON.stringify(data),
   });
   const result = await res.json();
+  if (result.error) { alert(result.error); return; }
   closeModal('deck-modal');
 
   if (editingDeckId) {
