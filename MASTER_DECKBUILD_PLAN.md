@@ -34,16 +34,16 @@
   Set/Subtype). Tags populated from loaded data. Filters use AND logic
   (card must have ALL selected tags). Wired into clear/hasAnyFilter.
 
-### 1.4: Ship it
+### 1.4: Ship it — DONE
 
 Deploy via standard `deploy/deploy.sh`. Run `mtg cache tags` on the
 deployed instance to populate.
 
 ---
 
-## Phase 2: Deck Creation UI
+## Phase 2: Deck Creation UI — DONE
 
-### 2.1: Clean up decks.html
+### 2.1: Clean up decks.html — DONE
 
 Current state: `decks.html` has list view (deck grid) and detail view (card
 grid with category pills, mana curve). API endpoints exist in
@@ -70,13 +70,13 @@ grid with category pills, mana curve). API endpoints exist in
 - Commander search modal with text input → fetch results → select → create.
 - Wire existing detail view to show the new deck.
 
-### 2.2: Ship it
+### 2.2: Ship it — DONE
 
 ---
 
-## Phase 3: Deck Planning
+## Phase 3: Deck Planning — DONE
 
-### 3.1: "Make a Deck Plan"
+### 3.1: "Make a Deck Plan" — DONE
 
 From the deck detail view (with commander selected, deck mostly empty), user
 clicks "Generate Plan". This calls Claude to create deck plan options.
@@ -108,7 +108,7 @@ clicks "Generate Plan". This calls Claude to create deck plan options.
   advantage slots").
 - Ask for specific strategy/theme and how slot counts should be adjusted.
 
-### 3.2: Ship it
+### 3.2: Ship it — DONE
 
 ---
 
