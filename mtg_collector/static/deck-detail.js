@@ -67,6 +67,7 @@
         <tr>
           <th><input type="checkbox" id="select-all"></th>
           <th>Name</th>
+          <th>Role</th>
           <th>Set</th>
           <th>Mana</th>
           <th>Type</th>
@@ -307,15 +308,17 @@
   function renderCards() {
     const tbody = document.getElementById('card-tbody');
     if (deckCards.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-secondary); padding:24px;">No cards in this zone</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-secondary); padding:24px;">No cards in this zone</td></tr>';
       return;
     }
     tbody.innerHTML = deckCards.map(c => {
       const sc = c.set_code.toLowerCase();
       const cn = c.collector_number;
+      const role = c.deck_note ? c.deck_note.replace(/-/g, ' ') : '';
       return `<tr>
         <td><input type="checkbox" data-id="${c.id}" ${selectedCardIds.has(c.id) ? 'checked' : ''}></td>
         <td><a href="/card/${esc(sc)}/${esc(cn)}">${esc(c.name)}</a></td>
+        <td class="role-cell">${esc(role)}</td>
         <td>${esc(c.set_code.toUpperCase())} #${esc(cn)}</td>
         <td class="mana">${renderMana(c.mana_cost || '')}</td>
         <td>${esc(c.type_line || '')}</td>
@@ -951,7 +954,13 @@
 
   async function addAutofillCards() {
     const checked = document.querySelectorAll('#autofill-body input[type="checkbox"]:checked');
-    const ids = Array.from(checked).map(cb => parseInt(cb.dataset.cid));
+    const ids = [];
+    const notes = {};
+    for (const cb of checked) {
+      const cid = parseInt(cb.dataset.cid);
+      ids.push(cid);
+      if (cb.dataset.tag) notes[cid] = cb.dataset.tag;
+    }
     if (ids.length === 0) return;
 
     const btn = document.getElementById('btn-autofill-add');
@@ -961,7 +970,7 @@
     const res = await fetch(`/api/decks/${deck.id}/cards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection_ids: ids, zone: 'mainboard' }),
+      body: JSON.stringify({ collection_ids: ids, zone: 'mainboard', notes }),
     });
     const result = await res.json();
     if (result.error) { alert(result.error); btn.disabled = false; return; }

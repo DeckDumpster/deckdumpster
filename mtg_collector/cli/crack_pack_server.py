@@ -5240,6 +5240,7 @@ Respond with ONLY valid JSON in this exact format:
     def _api_deck_add_cards(self, deck_id: int, data: dict):
         collection_ids = data.get("collection_ids", [])
         zone = data.get("zone", "mainboard")
+        notes = data.get("notes", {})  # {collection_id_str: note_text}
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
@@ -5249,6 +5250,12 @@ Respond with ONLY valid JSON in this exact format:
         repo = DeckRepository(conn)
         try:
             count = repo.add_cards(deck_id, collection_ids, zone=zone)
+            # Set deck_note for cards that have notes
+            for cid_str, note in notes.items():
+                conn.execute(
+                    "UPDATE collection SET deck_note = ? WHERE id = ? AND deck_id = ?",
+                    (note, int(cid_str), deck_id),
+                )
             conn.commit()
         except ValueError as e:
             conn.close()
