@@ -2035,7 +2035,7 @@ def _migrate_v34_to_v35(conn: sqlite3.Connection):
 
 
 def _migrate_v35_to_v36(conn: sqlite3.Connection):
-    """Add edhrec_commander_cards table for per-commander inclusion data."""
+    """Add edhrec_commander_cards table and backfill type tags."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS edhrec_commander_cards (
             commander_name TEXT NOT NULL,
@@ -2047,6 +2047,9 @@ def _migrate_v35_to_v36(conn: sqlite3.Connection):
             PRIMARY KEY (commander_name, card_name)
         )
     """)
+    # Backfill type-derived tags into card_tags for existing databases
+    from mtg_collector.services.deck_builder.type_tags import insert_type_tags
+    insert_type_tags(conn)
 
 
 def drop_all_tables(conn: sqlite3.Connection):

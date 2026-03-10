@@ -69,8 +69,12 @@ def insert_type_tags(conn: sqlite3.Connection) -> int:
     """Insert type-derived tags into card_tags for all cards.
 
     Returns the number of type tag pairs inserted.
+    Safe to call during migration — returns 0 if tables/columns don't exist yet.
     """
-    rows = conn.execute("SELECT oracle_id, type_line FROM cards WHERE type_line IS NOT NULL").fetchall()
+    try:
+        rows = conn.execute("SELECT oracle_id, type_line FROM cards WHERE type_line IS NOT NULL").fetchall()
+    except Exception:
+        return 0
 
     count = 0
     for row in rows:
