@@ -192,7 +192,28 @@ cache hits.
   individual suggestions.
 - "Add Selected" button commits chosen cards to the deck.
 
-### 4.3: Ship it
+### 4.3: Tag coverage audit
+
+Audit the collection for cards that may fall through the cracks of the
+current autofill scoring:
+
+1. **Cards with zero tags** — query `cards` LEFT JOIN `card_tags` WHERE
+   `card_tags.oracle_id IS NULL` AND the card is in the collection. These
+   cards will never be suggested by autofill since it queries by tag.
+   Check if any are legitimately useful (e.g. new cards Scryfall hasn't
+   tagged yet) and need manual tag backfill.
+
+2. **Cards that autofill never suggests** — beyond zero-tag cards, some
+   tagged cards may be consistently out-scored. Run autofill across a
+   few representative commanders and collect the "always ignored" set.
+   Determine if the scoring weights or tag assignments need adjustment.
+
+3. **Tag coverage gaps** — compare tags that exist in `card_tags` against
+   tags that plans actually request. If plans routinely request tags that
+   have very few or zero matching owned cards, surface these as "acquire"
+   suggestions or flag the tag mapping as incomplete.
+
+### 4.4: Ship it
 
 ---
 

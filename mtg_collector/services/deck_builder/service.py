@@ -1,6 +1,7 @@
 """Deck builder service for Commander/EDH deck construction."""
 
 import json
+import math
 import random
 import sqlite3
 from typing import List, Optional, Set
@@ -34,14 +35,14 @@ from mtg_collector.utils import parse_json_array
 # Fixed weights for autofill. Phase 5 (card replacement) will
 # expose these as user-tunable sliders.
 AUTOFILL_WEIGHTS = {
-    "edhrec": 0.20,       # EDHREC popularity (lower rank = better)
+    "edhrec": 0.15,       # Global EDHREC rank (lower rank = better)
     "salt": 0.05,         # Salt / annoyance (lower = better)
-    "price": 0.05,        # Monetary value (higher = better, proxy for power)
+    "price": 0.05,        # Log-scaled monetary value
     "cross_func": 0.00,   # Disabled — tag count rewards Scryfall tag noise, not real multi-role
-    "uniqueness": 0.10,   # Inverse EDHREC (higher rank = more unique/surprising)
+    "novelty": 0.15,      # Self-information from per-commander inclusion (global rank fallback)
     "recency": 0.10,      # Newer set release = fresher card
-    "bling": 0.25,        # Full-art, borderless, extended art, or showcase frame
-    "random": 0.25,       # Uniform random — keeps suggestions fresh across runs
+    "bling": 0.25,        # Full-art/borderless/extended/showcase
+    "random": 0.25,       # Uniform jitter for variety
 }
 
 
@@ -467,6 +468,17 @@ class DeckBuilderService:
                 for tag in self._get_card_tags(oracle_id):
                     tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
+        # Fetch per-commander EDHREC data for novelty scoring
+        commanders = self.deck_repo.get_cards(deck_id, zone=ZONE_COMMANDER)
+        commander_name = commanders[0]["name"] if commanders else None
+        edhrec_data: dict[str, float] = {}
+        if commander_name:
+            from mtg_collector.services.deck_builder.edhrec import EdhrecCommander
+            edhrec_client = EdhrecCommander(self.conn)
+            edhrec_data = edhrec_client.get_inclusion_map(commander_name)
+            if progress_cb and edhrec_data:
+                progress_cb(f"Loaded EDHREC data for {commander_name}")
+
         # Build color identity exclusion SQL (reused per query)
         ci_clauses = self._ci_exclusion_sql(commander_ci)
 
@@ -516,7 +528,7 @@ class DeckBuilderService:
                     candidates, tag, progress_cb=progress_cb,
                 )
 
-            scored = self._score_candidates(candidates)
+            scored = self._score_candidates(candidates, edhrec_data=edhrec_data)
             scored.sort(key=lambda c: -c["score"])
 
             picks = scored[:need]
@@ -605,14 +617,21 @@ class DeckBuilderService:
         rows = self.conn.execute(query, (tag,)).fetchall()
         return [dict(r) for r in rows]
 
-    def _score_candidates(self, candidates: list[dict]) -> list[dict]:
+    def _score_candidates(self, candidates: list[dict],
+                          edhrec_data: dict[str, float] | None = None) -> list[dict]:
         """Score a small set of candidates using composite ranking.
 
         Normalizes signals across the candidate set and computes a
         weighted sum. Returns the same list with a 'score' field added.
+
+        If *edhrec_data* is provided (per-commander inclusion rates from
+        EDHREC), novelty uses ``-log2(inclusion_pct)`` for cards present
+        in the map, falling back to ``log2(edhrec_rank)`` otherwise.
         """
         if not candidates:
             return []
+
+        edhrec_data = edhrec_data or {}
 
         # Extract raw signal values
         for c in candidates:
@@ -635,8 +654,16 @@ class DeckBuilderService:
             c["edhrec_rank"] = edhrec_rank
             c["_edhrec"] = edhrec_rank if edhrec_rank is not None else 999999
             c["_salt"] = c.get("salt_score") or 1.0
-            c["_price"] = price_usd
+            c["_price"] = math.log1p(price_usd)
             c["_cross"] = tag_count / max(cmc, 1.0)
+
+            # Novelty: per-commander inclusion rate when available,
+            # else log2 of global EDHREC rank (higher = more novel)
+            inclusion_pct = edhrec_data.get(c["name"])
+            if inclusion_pct is not None:
+                c["_novelty"] = -math.log2(max(inclusion_pct, 0.001))
+            else:
+                c["_novelty"] = math.log2(max(c["_edhrec"], 1))
 
             # Recency: days since 1993-01-01
             recency = 0
@@ -665,6 +692,7 @@ class DeckBuilderService:
         _norm("_salt")
         _norm("_price")
         _norm("_cross")
+        _norm("_novelty")
         _norm("_recency")
 
         w = AUTOFILL_WEIGHTS
@@ -674,7 +702,7 @@ class DeckBuilderService:
                 + (1.0 - c["_salt_n"]) * w["salt"]          # lower salt = better
                 + c["_price_n"] * w["price"]                 # higher price = better
                 + c["_cross_n"] * w["cross_func"]            # more tags/cmc = better
-                + c["_edhrec_n"] * w["uniqueness"]           # higher rank = more unique
+                + c["_novelty_n"] * w["novelty"]             # higher novelty = better
                 + c["_recency_n"] * w["recency"]             # newer = better
                 + c.get("is_bling", 0) * w["bling"]          # full-art/borderless/extended/showcase
                 + random.random() * w["random"]              # uniform jitter for variety

@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -291,6 +291,17 @@ CREATE TABLE IF NOT EXISTS card_tag_validations (
     reason TEXT,
     validated_at TEXT NOT NULL,
     PRIMARY KEY (oracle_id, tag)
+);
+
+-- Per-commander card inclusion data from EDHREC
+CREATE TABLE IF NOT EXISTS edhrec_commander_cards (
+    commander_name TEXT NOT NULL,
+    card_name TEXT NOT NULL,
+    inclusion INTEGER NOT NULL,
+    num_decks INTEGER NOT NULL,
+    synergy REAL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (commander_name, card_name)
 );
 
 -- Schema version tracking
@@ -664,6 +675,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v33_to_v34(conn)
         if current < 35:
             _migrate_v34_to_v35(conn)
+        if current < 36:
+            _migrate_v35_to_v36(conn)
 
     # Record schema version
     conn.execute(
@@ -2021,6 +2034,21 @@ def _migrate_v34_to_v35(conn: sqlite3.Connection):
     """)
 
 
+def _migrate_v35_to_v36(conn: sqlite3.Connection):
+    """Add edhrec_commander_cards table for per-commander inclusion data."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS edhrec_commander_cards (
+            commander_name TEXT NOT NULL,
+            card_name TEXT NOT NULL,
+            inclusion INTEGER NOT NULL,
+            num_decks INTEGER NOT NULL,
+            synergy REAL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (commander_name, card_name)
+        )
+    """)
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -2028,6 +2056,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP VIEW IF EXISTS sealed_collection_view;
         DROP VIEW IF EXISTS collection_view;
         DROP TABLE IF EXISTS latest_prices;
+        DROP TABLE IF EXISTS edhrec_commander_cards;
         DROP TABLE IF EXISTS card_tag_validations;
         DROP TABLE IF EXISTS card_tags;
         DROP TABLE IF EXISTS salt_scores;

@@ -5057,9 +5057,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 color_identity = []
         colors_str = ", ".join(color_identity) if color_identity else "Colorless"
 
-        # Get all available tags with card counts
+        # Get all available tags with card counts (exclude type: tags — too many to list)
         tag_rows = conn.execute(
-            "SELECT tag, COUNT(*) AS cnt FROM card_tags GROUP BY tag ORDER BY cnt DESC"
+            "SELECT tag, COUNT(*) AS cnt FROM card_tags "
+            "WHERE tag NOT LIKE 'type:%' GROUP BY tag ORDER BY cnt DESC"
         ).fetchall()
         tag_list = ", ".join(f"{r['tag']} ({r['cnt']})" for r in tag_rows)
 
@@ -5083,6 +5084,11 @@ I need you to create 3 different deck plan variants for a Commander deck led by:
 These are the real tag names from our card database. You MUST use only these exact tag names in your plan targets.
 {tag_list}
 
+## Type Tags
+In addition to the functional tags above, every card has `type:X` tags derived from its card types and creature subtypes (e.g. `type:creature`, `type:pirate`, `type:artifact`, `type:dragon`). You do NOT need to list these — just use the format `type:X` with the lowercase type/subtype name when relevant.
+
+**Type synergy commanders:** Read the commander's oracle text carefully. If it references a creature type (e.g. "whenever a Pirate enters", "Goblins you control get +1/+1"), a card type (e.g. "whenever you cast an Artifact spell", "enchantments you control have..."), or shares a type that has tribal payoffs, include a `type:X` target for that type. Type targets should be LARGE — typically 25-40 cards — because the deck's entire strategy revolves around having enough cards of that type. This is intentionally much higher than functional tag targets like removal (10) or ramp (8). Not every variant needs a type target, but at least one variant for a type-caring commander should go deep on the tribal/type angle.
+
 ## Infrastructure (every Commander deck needs these)
 {chr(10).join(infra_lines)}
 
@@ -5104,7 +5110,7 @@ A 99-card Commander deck has 99 cards plus the commander:
 ## Your Task
 Create exactly 3 plan variants. Each should have a different strategic angle.
 
-**CRITICAL: Every key in "targets" must be an exact tag name from the Available Tags list above, or the special value "lands".** Do not invent tag names. The autofill system will look up cards by these exact tags.
+**CRITICAL: Every key in "targets" must be an exact tag name from the Available Tags list above, a `type:X` tag (lowercase type/subtype name), or the special value "lands".** Do not invent functional tag names — but `type:X` tags are always valid as long as X is a real Magic card type or creature subtype.
 
 For each variant, provide:
 1. A short name (2-3 words)

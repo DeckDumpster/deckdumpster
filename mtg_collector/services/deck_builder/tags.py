@@ -232,6 +232,11 @@ def sync_tags(
             )
         results[tag] = len(oids)
 
+    # Insert type-derived tags (type:creature, type:pirate, etc.)
+    from mtg_collector.services.deck_builder.type_tags import insert_type_tags
+    type_count = insert_type_tags(conn)
+    _log(f"  + {type_count} type-derived tags")
+
     conn.commit()
     total_entries = sum(results.values())
     _log(f"Done: {len(results)} tags, {total_entries} tag assignments")

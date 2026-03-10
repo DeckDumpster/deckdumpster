@@ -436,7 +436,12 @@ def cache_tags(db_path: str, file_path: str | None = None):
             )
             total_pairs += len(pairs)
 
+    # Insert type-derived tags (type:creature, type:pirate, etc.)
+    from mtg_collector.services.deck_builder.type_tags import insert_type_tags
+    type_count = insert_type_tags(conn)
+
     conn.commit()
     print(f"\nDone! {len(tag_data)} tags, {total_pairs} card-tag pairs inserted")
+    print(f"  + {type_count} type-derived tags")
     if skipped:
         print(f"  ({skipped} pairs skipped — oracle_id not in local DB)")

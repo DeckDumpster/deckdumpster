@@ -8,6 +8,7 @@ To run: uv run pytest tests/test_deck_builder.py -v
 """
 
 import json
+import math
 import os
 import sqlite3
 import tempfile
@@ -956,5 +957,205 @@ class TestTagValidation:
         ).fetchone()
         assert row2["valid"] == 1
         assert "artifact" in row2["reason"].lower()
+
+
+# =============================================================================
+# Scoring Improvements
+# =============================================================================
+
+class TestScoringImprovements:
+    def test_log_price_compresses_outliers(self, seeded_db):
+        """Log-scale price should compress the spread between cheap and expensive cards."""
+        db, _ = seeded_db
+        svc = DeckBuilderService(db)
+        # Build minimal candidates with different prices
+        candidates = [
+            {"name": "Cheap", "cmc": 1, "tag_count": 1, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "0.25"}})},
+            {"name": "Mid", "cmc": 1, "tag_count": 1, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "1.00"}})},
+            {"name": "Expensive", "cmc": 1, "tag_count": 1, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "50.00"}})},
+        ]
+        scored = svc._score_candidates(candidates)
+
+        # After log1p: cheap~0.22, mid~0.69, expensive~3.93
+        # Cheap-to-mid spread should be meaningful (not vanishing)
+        cheap = next(c for c in scored if c["name"] == "Cheap")
+        mid = next(c for c in scored if c["name"] == "Mid")
+        exp = next(c for c in scored if c["name"] == "Expensive")
+
+        # The cheap-to-mid gap should be > 10% of total range (log compresses outliers)
+        total_range = exp["_price"] - cheap["_price"]
+        cheap_mid_gap = mid["_price"] - cheap["_price"]
+        assert cheap_mid_gap / total_range > 0.10
+
+    def test_novelty_log_scale(self, seeded_db):
+        """Novelty should use log2(edhrec_rank) giving logarithmic separation."""
+        db, _ = seeded_db
+        svc = DeckBuilderService(db)
+        candidates = [
+            {"name": "Popular", "cmc": 2, "tag_count": 1, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "1.00"}})},
+            {"name": "Obscure", "cmc": 2, "tag_count": 1, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 10000, "prices": {"usd": "1.00"}})},
+        ]
+        scored = svc._score_candidates(candidates)
+
+        popular = next(c for c in scored if c["name"] == "Popular")
+        obscure = next(c for c in scored if c["name"] == "Obscure")
+
+        # log2(100) ≈ 6.64, log2(10000) ≈ 13.29 — ratio ~2x, not 100x
+        assert popular["_novelty"] == pytest.approx(math.log2(100), rel=0.01)
+        assert obscure["_novelty"] == pytest.approx(math.log2(10000), rel=0.01)
+
+    def test_score_with_per_commander_data(self, seeded_db):
+        """When edhrec_data is provided, novelty should use inclusion rate."""
+        db, _ = seeded_db
+        svc = DeckBuilderService(db)
+        edhrec_data = {
+            "Staple Card": 0.80,   # 80% inclusion — low novelty
+            "Hidden Gem": 0.02,    # 2% inclusion — high novelty
+        }
+        candidates = [
+            {"name": "Staple Card", "cmc": 2, "tag_count": 1, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 5, "prices": {"usd": "1.00"}})},
+            {"name": "Hidden Gem", "cmc": 2, "tag_count": 1, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 5000, "prices": {"usd": "1.00"}})},
+        ]
+        scored = svc._score_candidates(candidates, edhrec_data=edhrec_data)
+
+        staple = next(c for c in scored if c["name"] == "Staple Card")
+        gem = next(c for c in scored if c["name"] == "Hidden Gem")
+
+        # -log2(0.80) ≈ 0.32, -log2(0.02) ≈ 5.64 — gem much more novel
+        assert staple["_novelty"] == pytest.approx(-math.log2(0.80), rel=0.01)
+        assert gem["_novelty"] == pytest.approx(-math.log2(0.02), rel=0.01)
+        assert gem["_novelty"] > staple["_novelty"]
+
+
+# =============================================================================
+# EDHREC Commander Cache
+# =============================================================================
+
+class TestEdhrecCommanderCache:
+    def test_fetch_and_cache(self, db):
+        """Should fetch from EDHREC, store in DB, and return inclusion map."""
+        from unittest.mock import patch, MagicMock
+        from mtg_collector.services.deck_builder.edhrec import EdhrecCommander
+
+        client = EdhrecCommander(db)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "cardlists": [
+                {
+                    "cardviews": [
+                        {"name": "Sol Ring", "inclusion": 900, "num_decks": 1000, "synergy": 0.1},
+                        {"name": "Arcane Signet", "inclusion": 800, "num_decks": 1000, "synergy": 0.2},
+                    ]
+                }
+            ]
+        }
+
+        with patch("mtg_collector.services.deck_builder.edhrec.httpx.get", return_value=mock_response) as mock_get:
+            result = client.get_inclusion_map("Atraxa, Praetors' Voice")
+            mock_get.assert_called_once()
+
+        assert result["Sol Ring"] == pytest.approx(0.9)
+        assert result["Arcane Signet"] == pytest.approx(0.8)
+
+        # Second call should use cache (no HTTP)
+        with patch("mtg_collector.services.deck_builder.edhrec.httpx.get") as mock_get2:
+            result2 = client.get_inclusion_map("Atraxa, Praetors' Voice")
+            mock_get2.assert_not_called()
+
+        assert result2 == result
+
+    def test_slugify(self, db):
+        from mtg_collector.services.deck_builder.edhrec import EdhrecCommander
+        client = EdhrecCommander(db)
+        assert client._slugify("Atraxa, Praetors' Voice") == "atraxa-praetors-voice"
+        assert client._slugify("Korvold, Fae-Cursed King") == "korvold-fae-cursed-king"
+
+    def test_network_failure_returns_empty(self, db):
+        """Network failure with no cache should return empty dict."""
+        from unittest.mock import patch
+        import httpx as httpx_mod
+        from mtg_collector.services.deck_builder.edhrec import EdhrecCommander
+
+        client = EdhrecCommander(db)
+        with patch("mtg_collector.services.deck_builder.edhrec.httpx.get",
+                    side_effect=httpx_mod.ConnectError("fail")):
+            result = client.get_inclusion_map("Unknown Commander")
+
+        assert result == {}
+
+
+# =============================================================================
+# Type Tags
+# =============================================================================
+
+class TestTypeTags:
+    def test_parse_simple_creature(self):
+        from mtg_collector.services.deck_builder.type_tags import _parse_type_tags
+        tags = _parse_type_tags("Creature — Pirate")
+        assert "type:creature" in tags
+        assert "type:pirate" in tags
+
+    def test_parse_strips_supertypes(self):
+        from mtg_collector.services.deck_builder.type_tags import _parse_type_tags
+        tags = _parse_type_tags("Legendary Creature — Human Wizard")
+        assert "type:creature" in tags
+        assert "type:human" in tags
+        assert "type:wizard" in tags
+        assert "type:legendary" not in tags
+
+    def test_parse_artifact_creature(self):
+        from mtg_collector.services.deck_builder.type_tags import _parse_type_tags
+        tags = _parse_type_tags("Artifact Creature — Robot")
+        assert "type:artifact" in tags
+        assert "type:creature" in tags
+        assert "type:robot" in tags
+
+    def test_parse_no_subtypes(self):
+        from mtg_collector.services.deck_builder.type_tags import _parse_type_tags
+        tags = _parse_type_tags("Enchantment")
+        assert tags == ["type:enchantment"]
+
+    def test_parse_dfc(self):
+        from mtg_collector.services.deck_builder.type_tags import _parse_type_tags
+        tags = _parse_type_tags("Creature — Vampire // Creature — Vampire")
+        assert tags.count("type:creature") == 2
+        assert tags.count("type:vampire") == 2
+
+    def test_parse_basic_land(self):
+        from mtg_collector.services.deck_builder.type_tags import _parse_type_tags
+        tags = _parse_type_tags("Basic Land — Forest")
+        assert "type:forest" in tags
+        # "Land" is not a card type we tag (not in _CARD_TYPES)
+        assert "type:land" not in tags
+        assert "type:basic" not in tags
+
+    def test_insert_type_tags_into_db(self, seeded_db):
+        """insert_type_tags should add type tags for all cards in the DB."""
+        db, _ = seeded_db
+        from mtg_collector.services.deck_builder.type_tags import insert_type_tags
+        count = insert_type_tags(db)
+        assert count > 0
+        # Atraxa should have creature and subtypes
+        tags = [r[0] for r in db.execute(
+            "SELECT tag FROM card_tags WHERE oracle_id = 'atraxa-id' AND tag LIKE 'type:%'"
+        ).fetchall()]
+        assert "type:creature" in tags
+        assert "type:angel" in tags
 
 
