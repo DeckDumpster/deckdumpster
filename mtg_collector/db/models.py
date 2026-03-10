@@ -1909,13 +1909,15 @@ class DeckRepository:
     def get_cards(self, deck_id: int, zone: Optional[str] = None) -> List[Dict[str, Any]]:
         query = """
             SELECT c.id, c.printing_id, c.finish, c.condition, c.language,
-                   c.purchase_price, c.acquired_at, c.deck_zone, c.deck_note,
+                   c.purchase_price, c.acquired_at, c.deck_zone,
                    p.set_code, p.collector_number, p.rarity, p.artist,
                    p.image_uri, p.frame_effects, p.border_color, p.full_art,
                    p.promo, p.promo_types, p.finishes,
                    card.name, card.type_line, card.mana_cost, card.cmc,
                    card.colors, card.color_identity, p.oracle_id,
-                   s.set_name
+                   s.set_name,
+                   (SELECT GROUP_CONCAT(ct.tag, ',')
+                    FROM card_tags ct WHERE ct.oracle_id = p.oracle_id) AS tags
             FROM collection c
             JOIN printings p ON c.printing_id = p.printing_id
             JOIN cards card ON p.oracle_id = card.oracle_id

@@ -992,6 +992,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_wishlist_list(params)
         elif path == "/api/card/by-set-cn":
             self._api_card_by_set_cn(params)
+        elif path == "/api/card/tags":
+            self._api_card_tags(params)
         elif path.startswith("/api/card/"):
             printing_id = path[len("/api/card/"):]
             self._api_card(printing_id)
@@ -2206,6 +2208,22 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         result["tcg_price"] = _get_sqlite_price(self.db_path, set_code, cn, "tcgplayer", "normal")
         result["ck_url"] = self.generator.get_ck_url(printing_id, False) if self.generator else ""
 
+        conn.close()
+        self._send_json(result)
+
+    def _api_card_tags(self, params):
+        """Return validated tags for a card, validating on-demand if needed."""
+        oracle_id = params.get("oracle_id", [""])[0]
+        if not oracle_id:
+            self._send_json({"error": "Missing oracle_id parameter"}, 400)
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.services.deck_builder.service import DeckBuilderService
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        svc = DeckBuilderService(conn, api_key=api_key)
+        result = svc.get_validated_tags(oracle_id)
         conn.close()
         self._send_json(result)
 
@@ -5240,7 +5258,6 @@ Respond with ONLY valid JSON in this exact format:
     def _api_deck_add_cards(self, deck_id: int, data: dict):
         collection_ids = data.get("collection_ids", [])
         zone = data.get("zone", "mainboard")
-        notes = data.get("notes", {})  # {collection_id_str: note_text}
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
@@ -5250,12 +5267,6 @@ Respond with ONLY valid JSON in this exact format:
         repo = DeckRepository(conn)
         try:
             count = repo.add_cards(deck_id, collection_ids, zone=zone)
-            # Set deck_note for cards that have notes
-            for cid_str, note in notes.items():
-                conn.execute(
-                    "UPDATE collection SET deck_note = ? WHERE id = ? AND deck_id = ?",
-                    (note, int(cid_str), deck_id),
-                )
             conn.commit()
         except ValueError as e:
             conn.close()

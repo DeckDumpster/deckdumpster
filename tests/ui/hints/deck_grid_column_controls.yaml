@@ -1,0 +1,19 @@
+start_page: /decks/2
+involves:
+  - "Grid size controls (#grid-size-wrap) with minus/plus buttons"
+  - "Column count display (#col-count)"
+  - "Grid view toggle (#view-grid-btn)"
+fixture_data:
+  deck_id: "2"
+notes: >
+  1. Navigate to /decks/2. Wait for cards to load.
+  2. Verify grid size controls are hidden in table view.
+  3. Switch to grid view by clicking #view-grid-btn.
+  4. Verify grid size controls are now visible.
+  5. Read the current column count from #col-count.
+  6. Click the minus button (#col-minus) to decrease columns.
+  7. Verify #col-count decreased by 1.
+  8. Click the plus button (#col-plus) to increase columns.
+  9. Verify #col-count increased by 1.
+  Controls: #col-minus (minus button), #col-count (display), #col-plus (plus button).
+  Controls container: #grid-size-wrap (hidden when not in grid view).

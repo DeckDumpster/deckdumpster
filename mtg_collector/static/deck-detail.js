@@ -28,6 +28,11 @@
   let selectedCardIds = new Set();
   let pickerSelected = new Set();
   let editingDeckId = null;
+  let activeRoleFilter = null;
+  let currentView = 'table';
+  const COL_MIN = 1, COL_MAX = 12;
+  let gridCols = parseInt(localStorage.getItem('deckGridCols'))
+    || (window.innerWidth < 600 ? 2 : 6);
 
   // Build the page
   const layout = document.getElementById('deck-detail-layout');
@@ -56,12 +61,41 @@
       <div class="plan-body" id="plan-body"></div>
     </div>
 
-    <div class="zone-tabs" id="zone-tabs">
-      <div class="tab active" data-zone="mainboard">Mainboard <span id="count-mainboard"></span></div>
-      <div class="tab" data-zone="sideboard">Sideboard <span id="count-sideboard"></span></div>
-      <div class="tab" data-zone="commander">Commander <span id="count-commander"></span></div>
+    <div class="deck-view-bar">
+      <div class="zone-tabs" id="zone-tabs">
+        <div class="tab active" data-zone="mainboard">Mainboard <span id="count-mainboard"></span></div>
+        <div class="tab" data-zone="sideboard">Sideboard <span id="count-sideboard"></span></div>
+        <div class="tab" data-zone="commander">Commander <span id="count-commander"></span></div>
+      </div>
+      <div class="deck-view-controls">
+        <div class="view-toggle-group">
+          <button class="secondary active" id="view-table-btn" title="Table view">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="1" y="1" width="14" height="3" rx="1"/>
+              <rect x="1" y="6" width="14" height="3" rx="1"/>
+              <rect x="1" y="11" width="14" height="3" rx="1"/>
+            </svg>
+          </button>
+          <button class="secondary" id="view-grid-btn" title="Grid view">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <rect x="1" y="1" width="6" height="6" rx="1"/>
+              <rect x="9" y="1" width="6" height="6" rx="1"/>
+              <rect x="1" y="9" width="6" height="6" rx="1"/>
+              <rect x="9" y="9" width="6" height="6" rx="1"/>
+            </svg>
+          </button>
+        </div>
+        <div class="col-controls" id="grid-size-wrap" style="display:none">
+          <button class="col-btn" id="col-minus">&minus;</button>
+          <div class="col-count" id="col-count"></div>
+          <button class="col-btn" id="col-plus">+</button>
+        </div>
+      </div>
     </div>
 
+    <div id="active-filter-banner" class="active-filter-banner" style="display:none"></div>
+
+    <div id="card-display">
     <table class="card-table" id="card-table">
       <thead>
         <tr>
@@ -77,6 +111,8 @@
       </thead>
       <tbody id="card-tbody"></tbody>
     </table>
+    <div class="card-grid" id="card-grid" style="display:none"></div>
+    </div>
 
     <div class="completeness-section" id="completeness-section" style="display:none">
       <div class="completeness-header" id="completeness-header">
@@ -252,6 +288,47 @@
   // Picker search
   document.getElementById('picker-search').addEventListener('input', searchPickerCards);
 
+  // View toggle
+  document.getElementById('view-table-btn').addEventListener('click', () => {
+    currentView = 'table';
+    updateViewButtons();
+    renderCards();
+  });
+  document.getElementById('view-grid-btn').addEventListener('click', () => {
+    currentView = 'grid';
+    updateViewButtons();
+    renderCards();
+  });
+
+  function updateViewButtons() {
+    document.getElementById('view-table-btn').classList.toggle('active', currentView === 'table');
+    document.getElementById('view-grid-btn').classList.toggle('active', currentView === 'grid');
+    document.getElementById('grid-size-wrap').style.display = currentView === 'grid' ? '' : 'none';
+    document.getElementById('card-table').style.display = currentView === 'table' ? '' : 'none';
+    document.getElementById('card-grid').style.display = currentView === 'grid' ? '' : 'none';
+  }
+
+  // Grid column controls
+  function applyGridCols() {
+    document.getElementById('col-count').textContent = gridCols;
+    document.getElementById('col-minus').disabled = gridCols <= COL_MIN;
+    document.getElementById('col-plus').disabled = gridCols >= COL_MAX;
+    localStorage.setItem('deckGridCols', gridCols);
+  }
+  document.getElementById('col-minus').addEventListener('click', () => {
+    if (gridCols > COL_MIN) { gridCols--; applyGridCols(); if (currentView === 'grid') renderCards(); }
+  });
+  document.getElementById('col-plus').addEventListener('click', () => {
+    if (gridCols < COL_MAX) { gridCols++; applyGridCols(); if (currentView === 'grid') renderCards(); }
+  });
+  applyGridCols();
+
+  // Grid card click — navigate to card detail
+  document.getElementById('card-grid').addEventListener('click', e => {
+    const card = e.target.closest('.sheet-card');
+    if (card) window.location.href = `/card/${card.dataset.sc}/${card.dataset.cn}`;
+  });
+
   // Close modals on backdrop click
   document.querySelectorAll('.modal-backdrop').forEach(el => {
     el.addEventListener('click', e => {
@@ -305,16 +382,50 @@
     renderCards();
   }
 
+  function getFilteredCards() {
+    if (!activeRoleFilter) return deckCards;
+    return deckCards.filter(c => {
+      const tags = c.tags ? c.tags.split(',') : [];
+      return tags.includes(activeRoleFilter);
+    });
+  }
+
   function renderCards() {
+    const cards = getFilteredCards();
+
+    // Filter banner
+    const banner = document.getElementById('active-filter-banner');
+    if (activeRoleFilter) {
+      const label = activeRoleFilter.replace(/-/g, ' ');
+      banner.innerHTML = `Filtered: <strong>${esc(label)}</strong> <button class="secondary" id="btn-clear-filter" style="font-size:0.75rem;padding:2px 8px;margin-left:8px">Clear</button>`;
+      banner.style.display = '';
+      document.getElementById('btn-clear-filter').addEventListener('click', () => {
+        activeRoleFilter = null;
+        renderCards();
+        highlightPlanTag(null);
+      });
+    } else {
+      banner.style.display = 'none';
+    }
+
+    if (currentView === 'grid') {
+      renderGrid(cards);
+    } else {
+      renderTable(cards);
+    }
+  }
+
+  function renderTable(cards) {
     const tbody = document.getElementById('card-tbody');
-    if (deckCards.length === 0) {
+    if (cards.length === 0) {
       tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-secondary); padding:24px;">No cards in this zone</td></tr>';
       return;
     }
-    tbody.innerHTML = deckCards.map(c => {
+    tbody.innerHTML = cards.map(c => {
       const sc = c.set_code.toLowerCase();
       const cn = c.collector_number;
-      const role = c.deck_note ? c.deck_note.replace(/-/g, ' ') : '';
+      const tags = c.tags ? c.tags.split(',') : [];
+      const role = tags.filter(t => planTargetTags.has(t)).map(t => t.replace(/-/g, ' ')).join(', ');
       return `<tr>
         <td><input type="checkbox" data-id="${c.id}" ${selectedCardIds.has(c.id) ? 'checked' : ''}></td>
         <td><a href="/card/${esc(sc)}/${esc(cn)}">${esc(c.name)}</a></td>
@@ -335,6 +446,29 @@
         else selectedCardIds.delete(id);
       });
     });
+  }
+
+  function renderGrid(cards) {
+    const grid = document.getElementById('card-grid');
+    if (cards.length === 0) {
+      grid.innerHTML = '<div style="padding:24px;color:var(--text-secondary);text-align:center">No cards in this zone</div>';
+      return;
+    }
+    const gap = 10;
+    const containerWidth = grid.clientWidth || document.getElementById('card-display').clientWidth || 800;
+    const cardWidth = Math.floor((containerWidth - (gridCols - 1) * gap) / gridCols);
+
+    grid.innerHTML = cards.map(c => {
+      const sc = c.set_code.toLowerCase();
+      const cn = c.collector_number;
+      const rarityColor = getRarityColor(c.rarity);
+      const foilClass = (c.finish === 'foil' || c.finish === 'etched') ? ' foil' : '';
+      return `<div class="sheet-card" data-sc="${esc(sc)}" data-cn="${esc(cn)}" style="width:${cardWidth}px">
+        <div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111">
+          <img src="${c.image_uri || ''}" alt="${esc(c.name)}" loading="lazy">
+        </div>
+      </div>`;
+    }).join('');
   }
 
   // --- Edit modal ---
@@ -648,6 +782,7 @@
 
   // --- Plan ---
   let planProgress = null;  // {tag: {current, target}} from audit
+  let planTargetTags = new Set();  // tags from current plan targets
 
   async function loadPlan() {
     // Show Generate Plan button for Commander decks
@@ -658,6 +793,7 @@
     const res = await fetch(`/api/decks/${deck.id}/plan`);
     const plan = await res.json();
     if (plan && plan.targets) {
+      planTargetTags = new Set(Object.keys(plan.targets));
       // Fetch audit for real progress counts
       const auditRes = await fetch(`/api/decks/${deck.id}/audit`);
       if (auditRes.ok) {
@@ -688,12 +824,34 @@
       const current = (planProgress && planProgress[tag]) ? planProgress[tag].current : 0;
       const pct = target > 0 ? Math.min((current / target) * 100, 100) : 0;
       const cls = current >= target ? 'met' : 'under';
-      html += `<span class="cat">${esc(label)}</span>`;
+      const activeClass = activeRoleFilter === tag ? ' active' : '';
+      html += `<span class="cat clickable${activeClass}" data-tag="${esc(tag)}">${esc(label)}</span>`;
       html += `<span class="bar-cell"><div class="bar"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div></span>`;
       html += `<span class="counts">${current}/${target}</span>`;
     }
     html += '</div>';
     body.innerHTML = html;
+
+    // Wire up plan tag click to filter cards
+    body.querySelectorAll('.cat.clickable').forEach(el => {
+      el.addEventListener('click', () => {
+        const tag = el.dataset.tag;
+        if (activeRoleFilter === tag) {
+          activeRoleFilter = null;
+          highlightPlanTag(null);
+        } else {
+          activeRoleFilter = tag;
+          highlightPlanTag(tag);
+        }
+        renderCards();
+      });
+    });
+  }
+
+  function highlightPlanTag(tag) {
+    document.querySelectorAll('.plan-progress .cat.clickable').forEach(el => {
+      el.classList.toggle('active', el.dataset.tag === tag);
+    });
   }
 
   async function generatePlan() {
@@ -963,11 +1121,8 @@
   async function addAutofillCards() {
     const checked = document.querySelectorAll('#autofill-body input[type="checkbox"]:checked');
     const ids = [];
-    const notes = {};
     for (const cb of checked) {
-      const cid = parseInt(cb.dataset.cid);
-      ids.push(cid);
-      if (cb.dataset.tag) notes[cid] = cb.dataset.tag;
+      ids.push(parseInt(cb.dataset.cid));
     }
     if (ids.length === 0) return;
 
@@ -978,7 +1133,7 @@
     const res = await fetch(`/api/decks/${deck.id}/cards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection_ids: ids, zone: 'mainboard', notes }),
+      body: JSON.stringify({ collection_ids: ids, zone: 'mainboard' }),
     });
     const result = await res.json();
     if (result.error) { alert(result.error); btn.disabled = false; return; }

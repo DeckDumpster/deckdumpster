@@ -154,14 +154,14 @@ select cards to fill each tag target.
 
 | Signal              | Weight | Source                                | Direction       | Notes |
 |---------------------|--------|---------------------------------------|-----------------|-------|
-| EDHREC popularity   | 0.20   | `raw_json $.edhrec_rank`              | lower = better  | Primary signal for card quality |
-| Bling               | 0.25   | frame_effects, full_art, promo        | higher = better | Full-art, borderless, extended art, showcase |
-| Random              | 0.25   | uniform random [0,1)                  | —               | Keeps suggestions fresh across runs |
-| Uniqueness          | 0.10   | inverse EDHREC rank                   | higher = better | Less popular cards make games more interesting |
+| EDHREC popularity   | 0.15   | `raw_json $.edhrec_rank`              | lower = better  | Primary signal for card quality |
+| Bling               | 0.20   | frame_effects, full_art, promo        | higher = better | Full-art, borderless, extended art, showcase |
+| Random              | 0.15   | uniform random [0,1)                  | —               | Keeps suggestions fresh across runs |
+| Plan tag overlap    | 0.15   | card tags ∩ plan target categories    | more = better   | Multi-role cards that fill several plan needs |
+| Novelty             | 0.15   | `log2(edhrec_rank)` or per-commander  | higher = better | Less popular cards make games more interesting |
 | Recency             | 0.10   | `sets.released_at`                    | newer = better  | Fresher cards feel more fun |
 | Salt / annoyance    | 0.05   | `salt_scores.salt_score`              | lower = better  | Avoid grief cards |
-| Monetary value      | 0.05   | `raw_json $.prices.usd`              | higher = better | Proxy for power level |
-| Cross-functionality | 0.00   | disabled                              | —               | Tag count rewards Scryfall tag noise, not real multi-role |
+| Monetary value      | 0.05   | `raw_json $.prices.usd` (log-scaled)  | higher = better | Proxy for power level |
 
 Phase 5 (card replacement) will expose weight tuning to the user.
 
@@ -192,7 +192,37 @@ cache hits.
   individual suggestions.
 - "Add Selected" button commits chosen cards to the deck.
 
-### 4.3: Tag coverage audit
+### 4.3: Deck detail UI improvements — DONE
+
+#### Grid view with column controls
+- Table/Grid toggle in deck detail view bar.
+- Grid view shows card images with rarity/set gradient borders and foil overlay.
+- Column controls (+/-) adjust grid from 3-8 columns per row.
+
+#### Plan category click-to-filter
+- Plan progress categories are clickable — clicking filters the card list/grid
+  to only cards with that tag.
+- Filter banner shows active filter with Clear button.
+- Works in both table and grid views.
+
+#### Card detail tags
+- Card detail page shows validated Scryfall tags with color-coded badges
+  (green=valid, red=invalid with strikethrough, grey=unvalidated).
+- Tags loaded on-demand via `GET /api/card/tags?oracle_id=...`.
+- Validation delegated to `DeckBuilderService.get_validated_tags()` (SOLID —
+  tag validation logic lives in the service, not the HTTP handler).
+
+#### Remove deck_note, derive roles from tags
+- Removed `deck_note` field from all reads/writes. Column stays in schema
+  (no migration needed) but is no longer used anywhere.
+- Removed `annotate_card()` method, `--note` CLI args, notes dict from
+  `_api_deck_add_cards`.
+- Card roles in deck detail are now derived from `(card tags) ∩ (plan targets)`.
+  Multi-valued, always accurate, never stale. Damnation correctly shows under
+  both "Creature Removal" and "Board Wipes".
+- `DeckRepository.get_cards()` returns `tags` via GROUP_CONCAT subquery.
+
+### 4.4: Tag coverage audit
 
 Audit the collection for cards that may fall through the cracks of the
 current autofill scoring:
@@ -281,8 +311,9 @@ fetch lands, utility lands, and color-fixing needs.
 ## Reference
 
 ### Key files
-- `mtg_collector/db/schema.py` — schema v35, `card_tags` at v33,
-  `salt_scores`/`plan`/`deck_note` at v34, `card_tag_validations` at v35
+- `mtg_collector/db/schema.py` — schema v36, `card_tags` at v33,
+  `salt_scores`/`plan`/`deck_note` at v34, `card_tag_validations` at v35,
+  `type_line` backfill + `edhrec_commander_cards` at v36
 - `mtg_collector/cli/cache_cmd.py` — `cache_all()`, add `cache_tags()`
 - `mtg_collector/services/deck_builder/service.py` — `DeckBuilderService`,
   autofill with composite scoring, Haiku validation integration

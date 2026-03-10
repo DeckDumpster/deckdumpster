@@ -106,14 +106,14 @@ TAG_ALIASES: dict[str, list[str]] = {
 }
 
 AUTOFILL_WEIGHTS = {
-    "edhrec": 0.15,       # Global EDHREC rank (lower rank = better)
-    "salt": 0.05,         # Salt / annoyance (lower = better)
-    "price": 0.05,        # Log-scaled monetary value
-    "cross_func": 0.00,   # Disabled — tag count rewards Scryfall tag noise, not real multi-role
-    "novelty": 0.15,      # Self-information from per-commander inclusion (global rank fallback)
-    "recency": 0.10,      # Newer set release = fresher card
-    "bling": 0.25,        # Full-art/borderless/extended/showcase
-    "random": 0.25,       # Uniform jitter for variety
+    "edhrec": 0.15,         # Global EDHREC rank (lower rank = better)
+    "salt": 0.05,           # Salt / annoyance (lower = better)
+    "price": 0.05,          # Log-scaled monetary value
+    "plan_overlap": 0.15,   # Cards matching multiple plan categories score higher
+    "novelty": 0.15,        # Self-information from per-commander inclusion (global rank fallback)
+    "recency": 0.10,        # Newer set release = fresher card
+    "bling": 0.20,          # Full-art/borderless/extended/showcase
+    "random": 0.15,         # Uniform jitter for variety
 }
 
 
@@ -171,7 +171,7 @@ class DeckBuilderService:
     # ── Card management ─────────────────────────────────────────────
 
     def add_card(self, deck_id: int, card_name: str, zone: str = ZONE_MAINBOARD,
-                 note: Optional[str] = None, count: int = 1) -> dict:
+                 count: int = 1) -> dict:
         """Add a card to the deck."""
         deck = self.deck_repo.get(deck_id)
         if not deck:
@@ -200,11 +200,6 @@ class DeckBuilderService:
             if not copy_id:
                 raise ValueError(self._explain_no_copy(card.name, card.oracle_id))
             self.deck_repo.add_cards(deck_id, [copy_id], zone=zone)
-            if note:
-                self.conn.execute(
-                    "UPDATE collection SET deck_note = ? WHERE id = ?",
-                    (note, copy_id),
-                )
             added.append(copy_id)
 
         self.conn.commit()
@@ -228,27 +223,11 @@ class DeckBuilderService:
         tally = self._get_deck_tally(deck_id)
         return {"card": card_name, "removed": len(to_remove), "tally": tally}
 
-    def swap_card(self, deck_id: int, out_name: str, in_name: str,
-                  note: Optional[str] = None) -> dict:
+    def swap_card(self, deck_id: int, out_name: str, in_name: str) -> dict:
         """Swap one card for another in the deck."""
         out_result = self.remove_card(deck_id, out_name, count=1)
-        in_result = self.add_card(deck_id, in_name, note=note)
+        in_result = self.add_card(deck_id, in_name)
         return {"removed": out_result["card"], "added": in_result["card"]}
-
-    def annotate_card(self, deck_id: int, card_name: str,
-                      note: Optional[str] = None) -> dict:
-        """Update the note on a card in the deck."""
-        matches = self._cards_in_deck_by_name(deck_id, card_name)
-        if not matches:
-            raise ValueError(f"'{card_name}' not found in deck {deck_id}")
-
-        cid = matches[0]["id"]
-        if note is not None:
-            self.conn.execute(
-                "UPDATE collection SET deck_note = ? WHERE id = ?", (note, cid)
-            )
-            self.conn.commit()
-        return {"card": card_name, "collection_id": cid}
 
     def fill_lands(self, deck_id: int) -> dict:
         """Auto-fill basic lands proportionally based on pip distribution."""
@@ -571,6 +550,15 @@ class DeckBuilderService:
                 tag_needs.append((tag, target, current, need))
         tag_needs.sort(key=lambda t: -t[3])
 
+        # Build expanded plan tag set: each plan category + its aliases
+        expanded_plan_tags: set[str] = set()
+        for tag in targets:
+            if tag == "lands":
+                continue
+            expanded_plan_tags.add(tag)
+            for alias in TAG_ALIASES.get(tag, []):
+                expanded_plan_tags.add(alias)
+
         # Create validator if API key is available
         validator = None
         if self.api_key:
@@ -599,7 +587,8 @@ class DeckBuilderService:
                     candidates, tag, progress_cb=progress_cb,
                 )
 
-            scored = self._score_candidates(candidates, edhrec_data=edhrec_data)
+            scored = self._score_candidates(candidates, edhrec_data=edhrec_data,
+                                              plan_tags=expanded_plan_tags)
             scored.sort(key=lambda c: -c["score"])
 
             picks = scored[:need]
@@ -693,7 +682,8 @@ class DeckBuilderService:
         return [dict(r) for r in rows]
 
     def _score_candidates(self, candidates: list[dict],
-                          edhrec_data: dict[str, float] | None = None) -> list[dict]:
+                          edhrec_data: dict[str, float] | None = None,
+                          plan_tags: set[str] | None = None) -> list[dict]:
         """Score a small set of candidates using composite ranking.
 
         Normalizes signals across the candidate set and computes a
@@ -702,17 +692,32 @@ class DeckBuilderService:
         If *edhrec_data* is provided (per-commander inclusion rates from
         EDHREC), novelty uses ``-log2(inclusion_pct)`` for cards present
         in the map, falling back to ``log2(edhrec_rank)`` otherwise.
+
+        If *plan_tags* is provided (expanded set of all plan categories +
+        aliases), each candidate gets a plan_overlap score based on how
+        many plan tags it matches.
         """
         if not candidates:
             return []
 
         edhrec_data = edhrec_data or {}
+        plan_tags = plan_tags or set()
+
+        # Batch-fetch card tags for plan overlap computation
+        tags_by_oid: dict[str, set[str]] = {}
+        if plan_tags:
+            oids = [c["oracle_id"] for c in candidates]
+            placeholders = ",".join("?" for _ in oids)
+            rows = self.conn.execute(
+                f"SELECT oracle_id, tag FROM card_tags "  # noqa: S608
+                f"WHERE oracle_id IN ({placeholders})",
+                oids,
+            ).fetchall()
+            for row in rows:
+                tags_by_oid.setdefault(row["oracle_id"], set()).add(row["tag"])
 
         # Extract raw signal values
         for c in candidates:
-            cmc = float(c.get("cmc") or 0)
-            tag_count = c.get("tag_count") or 0
-
             # EDHREC rank from raw_json
             edhrec_rank = None
             price_usd = 0.0
@@ -730,7 +735,10 @@ class DeckBuilderService:
             c["_edhrec"] = edhrec_rank if edhrec_rank is not None else 999999
             c["_salt"] = c.get("salt_score") or 1.0
             c["_price"] = math.log1p(price_usd)
-            c["_cross"] = tag_count / max(cmc, 1.0)
+
+            # Plan overlap: count of plan tags this card matches
+            card_tags = tags_by_oid.get(c["oracle_id"], set())
+            c["_plan_overlap"] = len(card_tags & plan_tags)
 
             # Novelty: per-commander inclusion rate when available,
             # else log2 of global EDHREC rank (higher = more novel)
@@ -766,7 +774,7 @@ class DeckBuilderService:
         _norm("_edhrec")
         _norm("_salt")
         _norm("_price")
-        _norm("_cross")
+        _norm("_plan_overlap")
         _norm("_novelty")
         _norm("_recency")
 
@@ -776,7 +784,7 @@ class DeckBuilderService:
                 (1.0 - c["_edhrec_n"]) * w["edhrec"]       # lower rank = better
                 + (1.0 - c["_salt_n"]) * w["salt"]          # lower salt = better
                 + c["_price_n"] * w["price"]                 # higher price = better
-                + c["_cross_n"] * w["cross_func"]            # more tags/cmc = better
+                + c["_plan_overlap_n"] * w["plan_overlap"]   # more plan tags = better
                 + c["_novelty_n"] * w["novelty"]             # higher novelty = better
                 + c["_recency_n"] * w["recency"]             # newer = better
                 + c.get("is_bling", 0) * w["bling"]          # full-art/borderless/extended/showcase
@@ -784,6 +792,69 @@ class DeckBuilderService:
             )
 
         return candidates
+
+    # ── Tag inspection ─────────────────────────────────────────────
+
+    def get_validated_tags(self, oracle_id: str) -> dict:
+        """Return tags for a card, validating on-demand if API key is available.
+
+        Checks the card_tag_validations cache first.  For any unvalidated
+        tags, triggers a Haiku validation call (if ``self.api_key`` is set)
+        and caches the results.
+
+        Returns ``{"tags": [...], "validated": bool}`` where each tag entry
+        has ``tag``, ``valid`` (bool|None), ``reason`` (str|None),
+        ``validated`` (bool).
+        """
+        tag_rows = self.conn.execute(
+            "SELECT tag FROM card_tags WHERE oracle_id = ?", (oracle_id,)
+        ).fetchall()
+        all_tags = [r["tag"] for r in tag_rows]
+
+        if not all_tags:
+            return {"tags": [], "validated": False}
+
+        # Check cached validations
+        val_rows = self.conn.execute(
+            "SELECT tag, valid, reason FROM card_tag_validations WHERE oracle_id = ?",
+            (oracle_id,),
+        ).fetchall()
+        validated = {r["tag"]: {"valid": bool(r["valid"]), "reason": r["reason"]}
+                     for r in val_rows}
+
+        unvalidated = [t for t in all_tags if t not in validated]
+
+        # On-demand validation via Haiku
+        if unvalidated and self.api_key:
+            card_row = self.conn.execute(
+                "SELECT oracle_id, name, type_line, oracle_text "
+                "FROM cards WHERE oracle_id = ?",
+                (oracle_id,),
+            ).fetchone()
+            if card_row:
+                from mtg_collector.services.deck_builder.tag_validator import TagValidator
+                validator = TagValidator(self.conn)
+                validator._validate_all_tags_for_cards([dict(card_row)])
+                # Re-fetch after validation
+                val_rows = self.conn.execute(
+                    "SELECT tag, valid, reason FROM card_tag_validations "
+                    "WHERE oracle_id = ?",
+                    (oracle_id,),
+                ).fetchall()
+                validated = {r["tag"]: {"valid": bool(r["valid"]), "reason": r["reason"]}
+                             for r in val_rows}
+                unvalidated = [t for t in all_tags if t not in validated]
+
+        tags = []
+        for t in sorted(all_tags):
+            if t in validated:
+                tags.append({"tag": t, "valid": validated[t]["valid"],
+                             "reason": validated[t]["reason"], "validated": True})
+            else:
+                tags.append({"tag": t, "valid": None, "reason": None,
+                             "validated": False})
+
+        return {"tags": tags, "validated": len(unvalidated) == 0}
 
     # ── Utilities ───────────────────────────────────────────────────
 

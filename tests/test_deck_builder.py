@@ -10,6 +10,7 @@ To run: uv run pytest tests/test_deck_builder.py -v
 import json
 import math
 import os
+import random
 import sqlite3
 import tempfile
 
@@ -378,25 +379,6 @@ class TestCardManagement:
         result = svc.swap_card(deck["deck_id"], "Sol Ring", "Swords to Plowshares")
         assert result["removed"] == "Sol Ring"
         assert result["added"] == "Swords to Plowshares"
-
-    def test_annotate_card(self, seeded_db):
-        db, entries = seeded_db
-        svc = DeckBuilderService(db)
-        deck = svc.create_deck("Atraxa, Praetors' Voice")
-        svc.add_card(deck["deck_id"], "Sol Ring")
-        svc.annotate_card(deck["deck_id"], "Sol Ring", note="fast mana")
-        cards = DeckRepository(db).get_cards(deck["deck_id"])
-        sol = [c for c in cards if c["name"] == "Sol Ring"][0]
-        assert sol["deck_note"] == "fast mana"
-
-    def test_add_card_with_note(self, seeded_db):
-        db, entries = seeded_db
-        svc = DeckBuilderService(db)
-        deck = svc.create_deck("Atraxa, Praetors' Voice")
-        svc.add_card(deck["deck_id"], "Sol Ring", note="staple")
-        cards = DeckRepository(db).get_cards(deck["deck_id"])
-        sol = [c for c in cards if c["name"] == "Sol Ring"][0]
-        assert sol["deck_note"] == "staple"
 
     def test_add_card_returns_tally(self, seeded_db):
         db, entries = seeded_db
@@ -1019,14 +1001,14 @@ class TestScoringImprovements:
         svc = DeckBuilderService(db)
         # Build minimal candidates with different prices
         candidates = [
-            {"name": "Cheap", "cmc": 1, "tag_count": 1, "salt_score": 1.0,
-             "released_at": "2024-01-01", "is_bling": 0,
+            {"oracle_id": "solring-id", "name": "Cheap", "cmc": 1, "tag_count": 1,
+             "salt_score": 1.0, "released_at": "2024-01-01", "is_bling": 0,
              "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "0.25"}})},
-            {"name": "Mid", "cmc": 1, "tag_count": 1, "salt_score": 1.0,
-             "released_at": "2024-01-01", "is_bling": 0,
+            {"oracle_id": "stp-id", "name": "Mid", "cmc": 1, "tag_count": 1,
+             "salt_score": 1.0, "released_at": "2024-01-01", "is_bling": 0,
              "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "1.00"}})},
-            {"name": "Expensive", "cmc": 1, "tag_count": 1, "salt_score": 1.0,
-             "released_at": "2024-01-01", "is_bling": 0,
+            {"oracle_id": "rhystic-id", "name": "Expensive", "cmc": 1, "tag_count": 1,
+             "salt_score": 1.0, "released_at": "2024-01-01", "is_bling": 0,
              "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "50.00"}})},
         ]
         scored = svc._score_candidates(candidates)
@@ -1047,11 +1029,11 @@ class TestScoringImprovements:
         db, _ = seeded_db
         svc = DeckBuilderService(db)
         candidates = [
-            {"name": "Popular", "cmc": 2, "tag_count": 1, "salt_score": 1.0,
-             "released_at": "2024-01-01", "is_bling": 0,
+            {"oracle_id": "solring-id", "name": "Popular", "cmc": 2, "tag_count": 1,
+             "salt_score": 1.0, "released_at": "2024-01-01", "is_bling": 0,
              "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "1.00"}})},
-            {"name": "Obscure", "cmc": 2, "tag_count": 1, "salt_score": 1.0,
-             "released_at": "2024-01-01", "is_bling": 0,
+            {"oracle_id": "stp-id", "name": "Obscure", "cmc": 2, "tag_count": 1,
+             "salt_score": 1.0, "released_at": "2024-01-01", "is_bling": 0,
              "raw_json": json.dumps({"edhrec_rank": 10000, "prices": {"usd": "1.00"}})},
         ]
         scored = svc._score_candidates(candidates)
@@ -1072,11 +1054,11 @@ class TestScoringImprovements:
             "Hidden Gem": 0.02,    # 2% inclusion — high novelty
         }
         candidates = [
-            {"name": "Staple Card", "cmc": 2, "tag_count": 1, "salt_score": 1.0,
-             "released_at": "2024-01-01", "is_bling": 0,
+            {"oracle_id": "solring-id", "name": "Staple Card", "cmc": 2, "tag_count": 1,
+             "salt_score": 1.0, "released_at": "2024-01-01", "is_bling": 0,
              "raw_json": json.dumps({"edhrec_rank": 5, "prices": {"usd": "1.00"}})},
-            {"name": "Hidden Gem", "cmc": 2, "tag_count": 1, "salt_score": 1.0,
-             "released_at": "2024-01-01", "is_bling": 0,
+            {"oracle_id": "stp-id", "name": "Hidden Gem", "cmc": 2, "tag_count": 1,
+             "salt_score": 1.0, "released_at": "2024-01-01", "is_bling": 0,
              "raw_json": json.dumps({"edhrec_rank": 5000, "prices": {"usd": "1.00"}})},
         ]
         scored = svc._score_candidates(candidates, edhrec_data=edhrec_data)
@@ -1088,6 +1070,133 @@ class TestScoringImprovements:
         assert staple["_novelty"] == pytest.approx(-math.log2(0.80), rel=0.01)
         assert gem["_novelty"] == pytest.approx(-math.log2(0.02), rel=0.01)
         assert gem["_novelty"] > staple["_novelty"]
+
+    def test_plan_overlap_boosts_multi_tag_cards(self, seeded_db):
+        """Cards matching multiple plan categories should score higher."""
+        db, _ = seeded_db
+        svc = DeckBuilderService(db)
+
+        # Insert tags for two cards: one matches 3 plan tags, one matches 1
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   ("stp-id", "removal"))
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   ("stp-id", "creature-removal"))
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   ("rhystic-id", "draw"))
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   ("rhystic-id", "card-advantage"))
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   ("rhystic-id", "removal"))
+        db.commit()
+
+        plan_tags = {"removal", "draw", "card-advantage", "creature-removal"}
+
+        candidates = [
+            {"oracle_id": "stp-id", "name": "Swords to Plowshares",
+             "cmc": 1, "tag_count": 2, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "1.00"}})},
+            {"oracle_id": "rhystic-id", "name": "Rhystic Study",
+             "cmc": 3, "tag_count": 3, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 100, "prices": {"usd": "1.00"}})},
+        ]
+
+        # Seed random for determinism
+        random.seed(42)
+        scored = svc._score_candidates(candidates, plan_tags=plan_tags)
+
+        stp = next(c for c in scored if c["name"] == "Swords to Plowshares")
+        rhystic = next(c for c in scored if c["name"] == "Rhystic Study")
+
+        # Rhystic matches 3 plan tags (draw, card-advantage, removal)
+        # StP matches 2 (removal, creature-removal)
+        assert rhystic["_plan_overlap"] > stp["_plan_overlap"]
+
+    def test_plan_overlap_respects_aliases(self, seeded_db):
+        """Alias expansion should let cards match plan categories via related tags."""
+        db, _ = seeded_db
+        svc = DeckBuilderService(db)
+        from mtg_collector.services.deck_builder.service import TAG_ALIASES
+
+        # Card has "mana-rock" tag (alias of "ramp")
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   ("solring-id", "mana-rock"))
+        db.commit()
+
+        # Plan has "ramp" — expanded plan_tags should include "mana-rock" via aliases
+        plan_targets = {"ramp": 8, "draw": 6}
+        expanded = set()
+        for tag in plan_targets:
+            expanded.add(tag)
+            for alias in TAG_ALIASES.get(tag, []):
+                expanded.add(alias)
+
+        candidates = [
+            {"oracle_id": "solring-id", "name": "Sol Ring",
+             "cmc": 1, "tag_count": 1, "salt_score": 1.0,
+             "released_at": "2024-01-01", "is_bling": 0,
+             "raw_json": json.dumps({"edhrec_rank": 1, "prices": {"usd": "1.00"}})},
+        ]
+
+        scored = svc._score_candidates(candidates, plan_tags=expanded)
+        sol = scored[0]
+
+        # "mana-rock" is in expanded plan tags (alias of "ramp"), so overlap > 0
+        assert sol["_plan_overlap"] >= 1
+        assert "mana-rock" in expanded
+
+
+# =============================================================================
+# get_validated_tags
+# =============================================================================
+
+class TestGetValidatedTags:
+    def test_no_tags_returns_empty(self, seeded_db):
+        """Card with no tags returns empty list."""
+        db, _ = seeded_db
+        svc = DeckBuilderService(db)
+        result = svc.get_validated_tags("bolt-id")
+        assert result["tags"] == []
+        assert result["validated"] is False
+
+    def test_returns_cached_validations(self, seeded_db):
+        """Already-validated tags are returned from cache."""
+        db, _ = seeded_db
+        svc = DeckBuilderService(db)
+        # Use atraxa (unlikely to have leftover tags from other tests)
+        db.execute("DELETE FROM card_tags WHERE oracle_id = 'atraxa-id'")
+        db.execute("DELETE FROM card_tag_validations WHERE oracle_id = 'atraxa-id'")
+        db.execute("INSERT INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   ("atraxa-id", "removal"))
+        db.execute("INSERT INTO card_tag_validations "
+                   "(oracle_id, tag, valid, reason, validated_at) VALUES (?, ?, ?, ?, ?)",
+                   ("atraxa-id", "removal", 1, "Exiles a creature", "2024-01-01T00:00:00Z"))
+        db.commit()
+
+        result = svc.get_validated_tags("atraxa-id")
+        assert len(result["tags"]) == 1
+        removal = result["tags"][0]
+        assert removal["tag"] == "removal"
+        assert removal["valid"] is True
+        assert removal["validated"] is True
+        assert result["validated"] is True
+
+    def test_unvalidated_without_api_key(self, seeded_db):
+        """Without API key, unvalidated tags are returned as-is."""
+        db, _ = seeded_db
+        svc = DeckBuilderService(db)  # no api_key
+        db.execute("DELETE FROM card_tags WHERE oracle_id = 'atraxa-id'")
+        db.execute("DELETE FROM card_tag_validations WHERE oracle_id = 'atraxa-id'")
+        db.execute("INSERT INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   ("atraxa-id", "removal"))
+        db.commit()
+
+        result = svc.get_validated_tags("atraxa-id")
+        assert len(result["tags"]) == 1
+        assert result["tags"][0]["valid"] is None
+        assert result["tags"][0]["validated"] is False
+        assert result["validated"] is False
 
 
 # =============================================================================
