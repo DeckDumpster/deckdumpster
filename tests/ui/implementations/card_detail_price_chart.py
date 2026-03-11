@@ -16,7 +16,7 @@ def _find_container():
             capture_output=True, text=True,
         )
         for name in result.stdout.strip().split("\n"):
-            if "card-detail" in name or "integration-test" in name:
+            if name.startswith(("systemd-mtgc-", "mtgc-")):
                 return name
     except Exception:
         pass
