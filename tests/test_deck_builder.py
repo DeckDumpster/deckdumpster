@@ -32,13 +32,15 @@ from mtg_collector.db.schema import init_db
 from mtg_collector.services.deck_builder.service import DeckBuilderService
 
 
-def _make_raw_json(legalities=None, edhrec_rank=None):
+def _make_raw_json(legalities=None, edhrec_rank=None, produced_mana=None):
     """Build a minimal raw_json string."""
     data = {}
     if legalities:
         data["legalities"] = legalities
     if edhrec_rank is not None:
         data["edhrec_rank"] = edhrec_rank
+    if produced_mana is not None:
+        data["produced_mana"] = produced_mana
     return json.dumps(data)
 
 
@@ -192,6 +194,58 @@ def seeded_db(db):
         raw_json=_make_raw_json({"commander": "legal"}, edhrec_rank=1),
     ))
 
+    # Shock land: Breeding Pool (U/G, enters tapped unless you pay 2 life)
+    card_repo.upsert(Card(
+        oracle_id="breedingpool-id", name="Breeding Pool",
+        type_line="Land — Forest Island", mana_cost=None, cmc=0.0,
+        oracle_text="({T}: Add {G} or {U}.)\nAs Breeding Pool enters the battlefield, you may pay 2 life. If you don't, it enters the battlefield tapped.",
+        colors=[], color_identity=["G", "U"],
+    ))
+    printing_repo.upsert(Printing(
+        printing_id="breedingpool-p1", oracle_id="breedingpool-id", set_code="cmd",
+        collector_number="9", rarity="R",
+        raw_json=_make_raw_json({"commander": "legal"}, edhrec_rank=100, produced_mana=["G", "U"]),
+    ))
+
+    # Tapland: Simic Guildgate (U/G, always enters tapped)
+    card_repo.upsert(Card(
+        oracle_id="simicgate-id", name="Simic Guildgate",
+        type_line="Land — Gate", mana_cost=None, cmc=0.0,
+        oracle_text="Simic Guildgate enters the battlefield tapped.\n{T}: Add {G} or {U}.",
+        colors=[], color_identity=["G", "U"],
+    ))
+    printing_repo.upsert(Printing(
+        printing_id="simicgate-p1", oracle_id="simicgate-id", set_code="cmd",
+        collector_number="10a", rarity="C",
+        raw_json=_make_raw_json({"commander": "legal"}, edhrec_rank=5000, produced_mana=["G", "U"]),
+    ))
+
+    # Fetch land: Evolving Wilds (any color via search, null produced_mana)
+    card_repo.upsert(Card(
+        oracle_id="evolvingwilds-id", name="Evolving Wilds",
+        type_line="Land", mana_cost=None, cmc=0.0,
+        oracle_text="{T}, Sacrifice Evolving Wilds: Search your library for a basic land card, put it onto the battlefield tapped, then shuffle.",
+        colors=[], color_identity=[],
+    ))
+    printing_repo.upsert(Printing(
+        printing_id="evolvingwilds-p1", oracle_id="evolvingwilds-id", set_code="cmd",
+        collector_number="11", rarity="C",
+        raw_json=_make_raw_json({"commander": "legal"}, edhrec_rank=200),
+    ))
+
+    # Off-CI land: Boros Garrison (R/W — should be excluded for Atraxa since R not in CI)
+    card_repo.upsert(Card(
+        oracle_id="borosgarrison-id", name="Boros Garrison",
+        type_line="Land", mana_cost=None, cmc=0.0,
+        oracle_text="Boros Garrison enters the battlefield tapped.\nWhen Boros Garrison enters the battlefield, return a land you control to its owner's hand.\n{T}: Add {R}{W}.",
+        colors=[], color_identity=["R", "W"],
+    ))
+    printing_repo.upsert(Printing(
+        printing_id="borosgarrison-p1", oracle_id="borosgarrison-id", set_code="cmd",
+        collector_number="12", rarity="C",
+        raw_json=_make_raw_json({"commander": "legal"}, edhrec_rank=3000, produced_mana=["R", "W"]),
+    ))
+
     # Basic lands (multiple copies)
     land_cn_base = {"Plains": 200, "Island": 300, "Swamp": 400, "Forest": 500}
     for land_name, color in [("Plains", "W"), ("Island", "U"), ("Swamp", "B"), ("Forest", "G")]:
@@ -239,7 +293,8 @@ def seeded_db(db):
     # Collection entries — owned, unassigned
     entries = {}
     for pid in ["atraxa-p1", "solring-p1", "stp-p1", "bolt-p1", "rhystic-p1",
-                "wrath-p1", "bear-p1", "avenger-p1", "reanimate-p1", "cmdtower-p1"]:
+                "wrath-p1", "bear-p1", "avenger-p1", "reanimate-p1", "cmdtower-p1",
+                "breedingpool-p1", "simicgate-p1", "evolvingwilds-p1", "borosgarrison-p1"]:
         eid = collection_repo.add(CollectionEntry(id=None, printing_id=pid, finish="nonfoil"))
         entries[pid] = eid
 
@@ -257,7 +312,23 @@ def seeded_db(db):
             pid = f"{land_name}-p{i}"
             collection_repo.add(CollectionEntry(id=None, printing_id=pid, finish="nonfoil"))
 
+    # Spider Token (should be excluded by autofill)
+    card_repo.upsert(Card(
+        oracle_id="spider-token-id", name="Spider",
+        type_line="Token Creature — Spider", mana_cost=None, cmc=0.0,
+        oracle_text="Reach", colors=["G"], color_identity=["G"],
+    ))
+    printing_repo.upsert(Printing(
+        printing_id="spider-token-p1", oracle_id="spider-token-id", set_code="cmd",
+        collector_number="T1", rarity="T",
+        raw_json=_make_raw_json({"commander": "legal"}),
+    ))
+    entries["spider-token-p1"] = collection_repo.add(
+        CollectionEntry(id=None, printing_id="spider-token-p1", finish="nonfoil")
+    )
+
     # Card tags
+    db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)", ("spider-token-id", "type:spider"))
     db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)", ("solring-id", "ramp"))
     db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)", ("solring-id", "mana-rock"))
     db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)", ("stp-id", "removal"))
@@ -592,6 +663,76 @@ class TestPlan:
         deck = svc.create_deck("Atraxa, Praetors' Voice")
         assert svc.get_plan(deck["deck_id"]) is None
 
+    def test_edit_plan_replaces_targets(self, seeded_db):
+        """Editing a plan replaces targets entirely — rename, add, remove."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.set_plan(deck["deck_id"], {"ramp": 10, "draw": 8, "boardwipe": 5})
+        # Edit: rename draw→card-advantage, remove boardwipe, add evasion
+        svc.set_plan(deck["deck_id"], {"ramp": 12, "card-advantage": 8, "evasion": 4})
+        plan = svc.get_plan(deck["deck_id"])
+        assert plan["targets"] == {"ramp": 12, "card-advantage": 8, "evasion": 4}
+        assert "draw" not in plan["targets"]
+        assert "boardwipe" not in plan["targets"]
+
+    def test_invalidated_tags_excluded_from_deck_cards(self, seeded_db):
+        """Tags validated as invalid must not appear in deck card tags."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.add_card(deck["deck_id"], "Sol Ring")
+
+        sol_oid = db.execute(
+            "SELECT oracle_id FROM cards WHERE name = 'Sol Ring'"
+        ).fetchone()["oracle_id"]
+
+        # Give Sol Ring two tags
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   (sol_oid, "ramp"))
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   (sol_oid, "boardwipe"))
+        # Invalidate boardwipe
+        db.execute(
+            "INSERT OR REPLACE INTO card_tag_validations "
+            "(oracle_id, tag, valid, reason, validated_at) VALUES (?, ?, ?, ?, ?)",
+            (sol_oid, "boardwipe", 0, "Not a boardwipe", "2024-01-01T00:00:00Z"),
+        )
+        db.commit()
+
+        cards = svc.deck_repo.get_cards(deck["deck_id"])
+        sol = [c for c in cards if c["name"] == "Sol Ring"][0]
+        tags = sol["tags"].split(",") if sol["tags"] else []
+        assert "ramp" in tags
+        assert "boardwipe" not in tags
+
+    def test_keyword_tags_prevalidated(self, seeded_db):
+        """Keyword-derived tags get pre-validated so Haiku can't override them."""
+        from mtg_collector.services.deck_builder.tags import _apply_keyword_tags
+
+        db, entries = seeded_db
+        # Pick a card with a keyword — Sol Ring has no keywords, use one that does
+        # Insert a fake card with flying
+        db.execute(
+            "INSERT OR IGNORE INTO cards (oracle_id, name, oracle_text, colors, cmc) "
+            "VALUES ('fake-flyer', 'Test Bird', 'Flying', '[]', 1)"
+        )
+        db.commit()
+
+        tag_cards: dict[str, set] = {}
+        _apply_keyword_tags(db, tag_cards, {"fake-flyer"})
+
+        assert "fake-flyer" in tag_cards.get("evasion", set())
+
+        # Check that a validation record was written
+        row = db.execute(
+            "SELECT valid, reason FROM card_tag_validations "
+            "WHERE oracle_id = 'fake-flyer' AND tag = 'evasion'"
+        ).fetchone()
+        assert row is not None
+        assert row["valid"] == 1
+        assert row["reason"] == "keyword_match"
+
 
 # =============================================================================
 # Fill Lands
@@ -620,14 +761,108 @@ class TestFillLands:
             svc.fill_lands(deck_id)
 
     def test_fill_lands_returns_utility_suggestions(self, seeded_db):
+        """fill_lands backward compat — auto-adds nonbasic + basic lands."""
         db, entries = seeded_db
         svc = DeckBuilderService(db)
         deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.add_card(deck["deck_id"], "Swords to Plowshares")
         result = svc.fill_lands(deck["deck_id"])
-        assert "utility_suggestions" in result
-        # Command Tower should be in suggestions
-        names = [s["name"] for s in result["utility_suggestions"]]
-        assert "Command Tower" in names
+        assert result["added"] > 0
+        assert "lands" in result
+
+
+# =============================================================================
+# Land Suggestions
+# =============================================================================
+
+class TestSuggestLands:
+    def test_suggest_lands_returns_nonbasics_and_basics(self, seeded_db):
+        """suggest_lands should return both nonbasic and basic land suggestions."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.add_card(deck["deck_id"], "Swords to Plowshares")
+        result = svc.suggest_lands(deck["deck_id"])
+        assert result["deck_id"] == deck["deck_id"]
+        assert result["land_target"] > 0
+        assert "nonbasic" in result["suggestions"]
+        assert "basic" in result["suggestions"]
+        # Should have some nonbasic suggestions
+        nonbasic_names = [s["name"] for s in result["suggestions"]["nonbasic"]]
+        assert len(nonbasic_names) > 0
+        # Should have basic land suggestions
+        assert len(result["suggestions"]["basic"]) > 0
+        # Each nonbasic should have required fields
+        for land in result["suggestions"]["nonbasic"]:
+            assert "collection_id" in land
+            assert "score" in land
+            assert "produced_mana" in land
+            assert "enters_tapped" in land
+
+    def test_suggest_lands_untapped_preferred(self, seeded_db):
+        """Shock land (conditionally untapped) should score higher than tapland."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.add_card(deck["deck_id"], "Swords to Plowshares")
+        # Seed the random for deterministic test
+        random.seed(42)
+        result = svc.suggest_lands(deck["deck_id"])
+        nonbasic = result["suggestions"]["nonbasic"]
+        names = [s["name"] for s in nonbasic]
+        # Both should be present
+        assert "Breeding Pool" in names
+        assert "Simic Guildgate" in names
+        # Breeding Pool should score higher (better EDHREC + untapped bonus)
+        bp_score = next(s["score"] for s in nonbasic if s["name"] == "Breeding Pool")
+        sg_score = next(s["score"] for s in nonbasic if s["name"] == "Simic Guildgate")
+        assert bp_score > sg_score
+
+    def test_suggest_lands_fetch_lands_score_well(self, seeded_db):
+        """Fetch land with null produced_mana + search text should get color coverage."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.add_card(deck["deck_id"], "Swords to Plowshares")
+        result = svc.suggest_lands(deck["deck_id"])
+        nonbasic = result["suggestions"]["nonbasic"]
+        ew = next((s for s in nonbasic if s["name"] == "Evolving Wilds"), None)
+        assert ew is not None
+        # Should detect all CI colors via search text
+        assert set(ew["produced_mana"]) == {"W", "U", "B", "G"}
+
+    def test_suggest_lands_respects_color_identity(self, seeded_db):
+        """Off-CI land (Boros Garrison with R) should be excluded for Atraxa (WUBG)."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        result = svc.suggest_lands(deck["deck_id"])
+        nonbasic_names = [s["name"] for s in result["suggestions"]["nonbasic"]]
+        assert "Boros Garrison" not in nonbasic_names
+
+    def test_suggest_lands_no_commander_errors(self, db):
+        """suggest_lands should raise when no commander assigned."""
+        deck_repo = DeckRepository(db)
+        deck_id = deck_repo.add(Deck(id=None, name="No Commander"))
+        db.commit()
+        svc = DeckBuilderService(db)
+        with pytest.raises(ValueError, match="No commander"):
+            svc.suggest_lands(deck_id)
+
+    def test_fill_lands_backward_compat(self, seeded_db):
+        """fill_lands should auto-add all suggested lands (CLI backward compat)."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.add_card(deck["deck_id"], "Swords to Plowshares")
+
+        result = svc.fill_lands(deck["deck_id"])
+        assert result["added"] > 0
+        assert "lands" in result
+        # Should have added both nonbasic and basic lands
+        total_in_deck = len(svc.deck_repo.get_cards(deck["deck_id"]))
+        # Commander + STP + lands added
+        assert total_in_deck == 1 + 1 + result["added"]
 
 
 # =============================================================================
@@ -843,6 +1078,87 @@ class TestAutofill:
         # No valid candidates means no suggestions for ramp
         assert "ramp" not in result["suggestions"]
 
+    def test_autofill_reset_clears_non_commander_cards(self, seeded_db):
+        """reset=True should remove non-commander cards before suggesting."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.set_plan(deck["deck_id"], {"ramp": 1, "removal": 1})
+
+        # Add cards to deck
+        svc.add_card(deck["deck_id"], "Sol Ring")
+        svc.add_card(deck["deck_id"], "Swords to Plowshares")
+        cards_before = svc.deck_repo.get_cards(deck["deck_id"])
+        # Commander + Sol Ring + STP = 3
+        assert len(cards_before) == 3
+
+        # Autofill with reset — should remove Sol Ring and STP, then re-suggest them
+        result = svc.autofill(deck["deck_id"], reset=True)
+        # After reset, cards should have been removed (only commander remains)
+        cards_after_reset = svc.deck_repo.get_cards(deck["deck_id"])
+        assert len(cards_after_reset) == 1  # Only commander
+        assert cards_after_reset[0]["deck_zone"] == "commander"
+
+        # Suggestions should include ramp and removal (since deck is now empty)
+        assert "ramp" in result["suggestions"]
+        assert "removal" in result["suggestions"]
+
+    def test_autofill_excludes_tokens(self, seeded_db):
+        """Token cards should not appear in autofill suggestions."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        svc.set_plan(deck["deck_id"], {"type:spider": 1})
+        result = svc.autofill(deck["deck_id"])
+
+        # Spider token has the type:spider tag but should be filtered out
+        suggestions = result["suggestions"]
+        if "type:spider" in suggestions:
+            names = [c["name"] for c in suggestions["type:spider"]["cards"]]
+            assert "Spider" not in names, "Token cards should not be suggested"
+
+    def test_autofill_respects_budget(self, seeded_db):
+        """Total suggested cards should not exceed 99 - lands - commander."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        # Set targets that sum to more than available slots (budget = 99 - 1 - 37 = 61)
+        svc.set_plan(deck["deck_id"], {
+            "ramp": 30, "draw": 30, "removal": 30, "lands": 37,
+        })
+        result = svc.autofill(deck["deck_id"])
+
+        total_suggested = sum(
+            len(group["cards"]) for group in result["suggestions"].values()
+        )
+        land_target = 37
+        max_nonland = 99 - 1 - land_target  # 61
+        assert total_suggested <= max_nonland, (
+            f"Suggested {total_suggested} cards but budget is {max_nonland}"
+        )
+
+    def test_autofill_cross_tag_counting(self, seeded_db):
+        """A card picked for one tag should reduce need for other tags it satisfies."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        # Sol Ring has both "ramp" and "mana-rock" tags
+        # If we need 1 ramp and 1 mana-rock, picking Sol Ring for ramp
+        # should also satisfy mana-rock (cross-tag counting)
+        svc.set_plan(deck["deck_id"], {"ramp": 1, "mana-rock": 1})
+        result = svc.autofill(deck["deck_id"])
+
+        suggestions = result["suggestions"]
+        total_suggested = sum(
+            len(group["cards"]) for group in suggestions.values()
+        )
+        # With cross-tag counting, Sol Ring picked for ramp satisfies mana-rock too
+        # So total should be 1 (not 2)
+        assert total_suggested == 1, (
+            f"Expected 1 card (cross-tag), got {total_suggested}: "
+            f"{[(t, [c['name'] for c in g['cards']]) for t, g in suggestions.items()]}"
+        )
+
 
 # =============================================================================
 # Tag Validation
@@ -902,43 +1218,40 @@ class TestTagValidation:
         validator.client.messages.create.assert_not_called()
 
     def test_validate_calls_haiku_for_unknowns(self, seeded_db):
-        """Unknown cards should be sent to Haiku for all-tag validation."""
+        """Unknown cards should be sent to Haiku for per-card validation."""
         db, entries = seeded_db
         from unittest.mock import MagicMock
-        from mtg_collector.services.deck_builder.tag_validator import TagValidator
+        from mtg_collector.services.deck_builder.tag_validator import (
+            TagValidator, TagValidation, TagResult,
+        )
 
         validator = TagValidator(db)
-        # Sol Ring has tags: ramp, mana-rock — Haiku should validate both
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(
-            text='['
-            '{"name": "Sol Ring", "tag": "ramp", "valid": true, "reason": "produces mana"},'
-            '{"name": "Sol Ring", "tag": "mana-rock", "valid": true, "reason": "artifact that taps for mana"}'
-            ']'
-        )]
-        validator.client.messages.create = MagicMock(return_value=mock_response)
+        mock_response.parsed_output = TagValidation(results=[
+            TagResult(tag="ramp", valid=True),
+            TagResult(tag="mana-rock", valid=True),
+        ])
+        validator.client.messages.parse = MagicMock(return_value=mock_response)
 
         candidates = [{"oracle_id": "solring-id", "name": "Sol Ring",
                        "type_line": "Artifact", "oracle_text": "Tap: Add {C}{C}."}]
         result = validator.validate_and_filter(candidates, "ramp")
 
         assert len(result) == 1
-        validator.client.messages.create.assert_called_once()
+        validator.client.messages.parse.assert_called_once()
 
-        # Check BOTH tags were cached (all-tags validation)
+        # Check BOTH tags were cached
         row = db.execute(
-            "SELECT valid, reason FROM card_tag_validations WHERE oracle_id = ? AND tag = ?",
+            "SELECT valid FROM card_tag_validations WHERE oracle_id = ? AND tag = ?",
             ("solring-id", "ramp"),
         ).fetchone()
         assert row["valid"] == 1
-        assert "produces mana" in row["reason"]
 
         row2 = db.execute(
-            "SELECT valid, reason FROM card_tag_validations WHERE oracle_id = ? AND tag = ?",
+            "SELECT valid FROM card_tag_validations WHERE oracle_id = ? AND tag = ?",
             ("solring-id", "mana-rock"),
         ).fetchone()
         assert row2["valid"] == 1
-        assert "artifact" in row2["reason"].lower()
 
     def test_type_tags_skip_haiku(self, seeded_db):
         """type: tags should be validated deterministically, not via Haiku."""
@@ -1275,7 +1588,10 @@ class TestTypeTags:
         assert "type:creature" in tags
         assert "type:human" in tags
         assert "type:wizard" in tags
-        assert "type:legendary" not in tags
+        assert "type:legendary" in tags  # legendary is a taggable supertype
+        # Other supertypes like "basic" and "snow" are stripped
+        tags2 = _parse_type_tags("Snow Creature — Bear")
+        assert "type:snow" not in tags2
 
     def test_parse_artifact_creature(self):
         from mtg_collector.services.deck_builder.type_tags import _parse_type_tags
@@ -1309,11 +1625,12 @@ class TestTypeTags:
         from mtg_collector.services.deck_builder.type_tags import insert_type_tags
         count = insert_type_tags(db)
         assert count > 0
-        # Atraxa should have creature and subtypes
+        # Atraxa should have creature, legendary, and subtypes
         tags = [r[0] for r in db.execute(
             "SELECT tag FROM card_tags WHERE oracle_id = 'atraxa-id' AND tag LIKE 'type:%'"
         ).fetchall()]
         assert "type:creature" in tags
+        assert "type:legendary" in tags
         assert "type:angel" in tags
 
 

@@ -12,6 +12,7 @@ from mtg_collector.db.models import (
     Deck,
     DeckRepository,
     PrintingRepository,
+    tag_validation_filter,
 )
 from mtg_collector.services.deck_builder.constants import (
     ANY_NUMBER_CARDS,
@@ -24,6 +25,7 @@ from mtg_collector.services.deck_builder.constants import (
     INFRASTRUCTURE,
     LAND_COUNTS,
     LAND_TARGET_DEFAULT,
+    LAND_WEIGHTS,
     NONCREATURE_CURVE_TARGETS,
     SNOW_BASICS,
     ZONE_COMMANDER,
@@ -229,8 +231,8 @@ class DeckBuilderService:
         in_result = self.add_card(deck_id, in_name)
         return {"removed": out_result["card"], "added": in_result["card"]}
 
-    def fill_lands(self, deck_id: int) -> dict:
-        """Auto-fill basic lands proportionally based on pip distribution."""
+    def suggest_lands(self, deck_id: int) -> dict:
+        """Suggest nonbasic + basic lands for a deck, scored and ready for review."""
         deck = self.deck_repo.get(deck_id)
         if not deck:
             raise ValueError(f"Deck not found: {deck_id}")
@@ -242,61 +244,170 @@ class DeckBuilderService:
         if commander_ci is None:
             raise ValueError("No commander assigned — cannot determine color identity")
 
-        # Count existing lands
         existing_lands = sum(1 for c in cards if self._is_land_type(c.get("type_line", "")))
-
-        # Determine land target
         color_count = len(commander_ci)
         land_target = LAND_COUNTS.get(color_count, 38)
+        lands_needed = max(0, min(land_target - existing_lands, DECK_SIZE - current_count))
 
-        # How many more lands needed
-        lands_to_add = max(0, min(land_target - existing_lands, DECK_SIZE - current_count))
-
-        # Suggest utility lands before filling basics
-        utility_suggestions = self._suggest_utility_lands(deck_id, commander_ci)
-
-        if lands_to_add == 0:
-            return {"added": 0, "message": "No lands needed",
-                    "utility_suggestions": utility_suggestions}
-
-        # Count pips for proportional distribution
-        pip_counts = self._count_pips(cards)
         ci_colors = [c for c in commander_ci if c in "WUBRG"]
-
-        if not ci_colors:
-            return {"added": 0, "message": "Colorless commander — add lands manually",
-                    "utility_suggestions": utility_suggestions}
-
-        # Filter to colors in CI
+        pip_counts = self._count_pips(cards)
         relevant_pips = {c: pip_counts.get(c, 0) for c in ci_colors}
         total_pips = sum(relevant_pips.values())
+        pip_fractions = {}
+        for c in ci_colors:
+            pip_fractions[c] = relevant_pips[c] / total_pips if total_pips > 0 else 1.0 / max(len(ci_colors), 1)
+
+        result = {
+            "deck_id": deck_id,
+            "land_target": land_target,
+            "existing_lands": existing_lands,
+            "suggestions": {"nonbasic": [], "basic": []},
+        }
+
+        if lands_needed == 0 or not ci_colors:
+            return result
+
+        # --- Nonbasic candidates ---
+        ci_clauses = self._ci_exclusion_sql(commander_ci)
+        rows = self.conn.execute(
+            f"""SELECT card.oracle_id, card.name, card.type_line, card.oracle_text,
+                       p.set_code, p.collector_number, p.printing_id,
+                       json_extract(p.raw_json, '$.produced_mana') AS produced_mana,
+                       json_extract(p.raw_json, '$.edhrec_rank') AS edhrec_rank,
+                       c.id AS collection_id, c.finish, p.frame_effects, p.full_art, p.promo
+                FROM collection c
+                JOIN printings p ON c.printing_id = p.printing_id
+                JOIN cards card ON p.oracle_id = card.oracle_id
+                WHERE card.type_line LIKE '%Land%'
+                  AND card.type_line NOT LIKE '%Basic%'
+                  AND c.status = 'owned'
+                  AND c.deck_id IS NULL AND c.binder_id IS NULL
+                  AND card.oracle_id NOT IN (
+                      SELECT p2.oracle_id FROM collection c2
+                      JOIN printings p2 ON c2.printing_id = p2.printing_id
+                      WHERE c2.deck_id = ?
+                  )
+                  {ci_clauses}
+                GROUP BY card.oracle_id
+                ORDER BY edhrec_rank ASC NULLS LAST""",
+            (deck_id,),
+        ).fetchall()
+        candidates = [dict(r) for r in rows]
+
+        if candidates:
+            scored = self._score_land_candidates(candidates, ci_colors, pip_fractions)
+            max_nonbasic = lands_needed // 2
+            nonbasic_picks = scored[:max_nonbasic]
+            result["suggestions"]["nonbasic"] = nonbasic_picks
+            lands_needed -= len(nonbasic_picks)
+
+        # --- Basic land distribution ---
+        if lands_needed > 0 and ci_colors:
+            remaining = lands_needed
+            for i, color in enumerate(ci_colors):
+                if i == len(ci_colors) - 1:
+                    n = remaining
+                else:
+                    n = round(lands_needed * pip_fractions[color])
+                    remaining -= n
+                if n <= 0:
+                    continue
+                land_name = [name for name, c in BASIC_LANDS.items() if c == color][0]
+                cids = self._find_basic_land_copies(color, deck_id, n)
+                if cids:
+                    result["suggestions"]["basic"].append({
+                        "name": land_name, "count": len(cids), "collection_ids": cids,
+                    })
+
+        return result
+
+    def _score_land_candidates(self, candidates: list[dict], ci_colors: list[str],
+                                pip_fractions: dict[str, float]) -> list[dict]:
+        """Score and rank nonbasic land candidates."""
+        # Collect edhrec ranks and bling scores for min-max normalization
+        edhrec_ranks = [c["edhrec_rank"] for c in candidates if c["edhrec_rank"] is not None]
+        edhrec_min = min(edhrec_ranks) if edhrec_ranks else 0
+        edhrec_max = max(edhrec_ranks) if edhrec_ranks else 1
+        edhrec_range = max(edhrec_max - edhrec_min, 1)
+
+        bling_scores = [self._bling_score(c) for c in candidates]
+        bling_max = max(bling_scores) if bling_scores else 1
+
+        scored = []
+        for i, c in enumerate(candidates):
+            # Color coverage
+            produced = json.loads(c["produced_mana"]) if c["produced_mana"] else []
+            oracle = (c["oracle_text"] or "").lower()
+            # Fetch lands: null produced_mana but search for basic land
+            if not produced and "search your library for a basic land" in oracle:
+                produced = list(ci_colors)
+            coverage = sum(pip_fractions.get(color, 0) for color in ci_colors if color in produced)
+
+            # Untapped
+            enters_tapped = "enters the battlefield tapped" in oracle or "enters tapped" in oracle
+            has_unless = "unless" in oracle
+            if not enters_tapped:
+                untapped_score = 1.0
+            elif has_unless:
+                untapped_score = 0.7
+            else:
+                untapped_score = 0.0
+
+            # EDHREC (inverted, normalized)
+            if c["edhrec_rank"] is not None:
+                edhrec_score = 1.0 - (c["edhrec_rank"] - edhrec_min) / edhrec_range
+            else:
+                edhrec_score = 0.0
+
+            # Bling (normalized)
+            bling_norm = bling_scores[i] / bling_max if bling_max > 0 else 0.0
+
+            # Random jitter
+            jitter = random.random()
+
+            total = (
+                LAND_WEIGHTS["color_coverage"] * coverage
+                + LAND_WEIGHTS["untapped"] * untapped_score
+                + LAND_WEIGHTS["edhrec"] * edhrec_score
+                + LAND_WEIGHTS["bling"] * bling_norm
+                + LAND_WEIGHTS["random"] * jitter
+            )
+
+            scored.append({
+                "name": c["name"],
+                "collection_id": c["collection_id"],
+                "score": round(total, 3),
+                "produced_mana": produced,
+                "enters_tapped": enters_tapped,
+                "set_code": c["set_code"],
+                "collector_number": c["collector_number"],
+            })
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored
+
+    def fill_lands(self, deck_id: int) -> dict:
+        """Auto-fill lands using suggest_lands(), then add all suggestions."""
+        suggestions = self.suggest_lands(deck_id)
+        nonbasic = suggestions["suggestions"]["nonbasic"]
+        basic = suggestions["suggestions"]["basic"]
 
         added = {}
-        remaining = lands_to_add
-        for i, color in enumerate(ci_colors):
-            if total_pips > 0:
-                share = relevant_pips[color] / total_pips
-            else:
-                share = 1 / len(ci_colors)
+        # Add nonbasic lands
+        for land in nonbasic:
+            self.deck_repo.add_cards(deck_id, [land["collection_id"]], zone=ZONE_MAINBOARD)
+            added[land["name"]] = added.get(land["name"], 0) + 1
 
-            if i == len(ci_colors) - 1:
-                n = remaining  # Last color gets remainder
-            else:
-                n = round(lands_to_add * share)
-                remaining -= n
-
-            land_name = [name for name, c in BASIC_LANDS.items() if c == color][0]
-            for _ in range(n):
-                copy_id = self._find_basic_land_copy(color, deck_id)
-                if copy_id:
-                    self.deck_repo.add_cards(deck_id, [copy_id], zone=ZONE_MAINBOARD)
-                    added[land_name] = added.get(land_name, 0) + 1
-                else:
-                    break
+        # Add basic lands
+        for group in basic:
+            self.deck_repo.add_cards(deck_id, group["collection_ids"], zone=ZONE_MAINBOARD)
+            added[group["name"]] = added.get(group["name"], 0) + group["count"]
 
         self.conn.commit()
-        return {"added": sum(added.values()), "lands": added,
-                "utility_suggestions": utility_suggestions}
+        total_added = sum(added.values())
+        if total_added == 0:
+            return {"added": 0, "message": "No lands needed"}
+        return {"added": total_added, "lands": added}
 
     # ── Inspection ──────────────────────────────────────────────────
 
@@ -485,13 +596,17 @@ class DeckBuilderService:
 
     # ── Autofill ──────────────────────────────────────────────────
 
-    def autofill(self, deck_id: int, progress_cb=None) -> dict:
+    def autofill(self, deck_id: int, progress_cb=None, reset: bool = False) -> dict:
         """Suggest cards to fill plan tag targets from the user's collection.
 
         For each unfilled tag target, queries SQL for owned unassigned cards
         with that tag in the commander's color identity, scores the small
         result set, and picks the best cards. A card picked for one tag is
         excluded from subsequent tags.
+
+        If reset=True, removes all non-commander cards from the deck first.
+        This is useful when the plan has been modified and the user wants
+        a fresh autofill.
 
         Returns suggestions grouped by tag. Does NOT add cards — caller
         decides which to accept.
@@ -504,11 +619,35 @@ class DeckBuilderService:
         if not plan or "targets" not in plan:
             raise ValueError("No plan set — generate a plan first")
 
+        # Reset: remove all non-commander cards before suggesting
+        if reset:
+            all_cards = self.deck_repo.get_cards(deck_id)
+            non_commander_ids = [
+                c["id"] for c in all_cards
+                if c.get("deck_zone") != ZONE_COMMANDER
+            ]
+            if non_commander_ids:
+                self.deck_repo.remove_cards(deck_id, non_commander_ids)
+                self.conn.commit()
+                if progress_cb:
+                    progress_cb(f"Cleared {len(non_commander_ids)} cards from deck")
+
         targets = plan["targets"]
         cards_in_deck = self.deck_repo.get_cards(deck_id)
         commander_ci = self._get_commander_identity(deck_id)
         if commander_ci is None:
             raise ValueError("No commander assigned")
+
+        # Compute budget: total nonland slots available
+        commander_count = sum(1 for c in cards_in_deck if c.get("deck_zone") == ZONE_COMMANDER)
+        land_target = targets.get("lands", LAND_TARGET_DEFAULT)
+        nonland_budget = DECK_SIZE - commander_count - land_target
+        existing_nonland = sum(
+            1 for c in cards_in_deck
+            if c.get("deck_zone") != ZONE_COMMANDER
+            and not self._is_land_type(c.get("type_line", ""))
+        )
+        remaining_budget = nonland_budget - existing_nonland
 
         # Count current progress per tag
         tag_counts: dict[str, int] = {}
@@ -539,17 +678,6 @@ class DeckBuilderService:
             if oid:
                 exclude_oids.add(oid)
 
-        # Process tags sorted by deficit (most needed first)
-        tag_needs = []
-        for tag, target in targets.items():
-            if tag == "lands":
-                continue  # Lands handled by fill_lands
-            current = tag_counts.get(tag, 0)
-            need = max(0, target - current)
-            if need > 0:
-                tag_needs.append((tag, target, current, need))
-        tag_needs.sort(key=lambda t: -t[3])
-
         # Build expanded plan tag set: each plan category + its aliases
         expanded_plan_tags: set[str] = set()
         for tag in targets:
@@ -566,16 +694,36 @@ class DeckBuilderService:
             validator = TagValidator(self.conn)
 
         suggestions: dict[str, dict] = {}
-        total_tags = len(tag_needs)
+        # Tags that have been exhausted (no candidates available)
+        exhausted_tags: set[str] = set()
 
-        for i, (tag, target, current, need) in enumerate(tag_needs):
+        while remaining_budget > 0:
+            # Recalculate needs from current tag_counts each iteration
+            tag_needs = []
+            for tag, target in targets.items():
+                if tag == "lands" or tag in exhausted_tags:
+                    continue
+                current = tag_counts.get(tag, 0)
+                need = max(0, target - current)
+                if need > 0:
+                    tag_needs.append((tag, target, current, need))
+
+            if not tag_needs:
+                break
+
+            # Sort by deficit descending — fill most-needed tag first
+            tag_needs.sort(key=lambda t: -t[3])
+            tag, target, current, need = tag_needs[0]
+
             label = tag.replace("-", " ")
             if progress_cb:
-                step = f"Searching for {label} ({i + 1}/{total_tags})"
-                progress_cb(step)
+                progress_cb(f"Searching for {label}")
+
+            # Cap picks at remaining budget
+            pick_count = min(need, remaining_budget)
 
             # Overfetch 3x when validator is available to account for filtering
-            fetch_limit = need * 3 if validator else None
+            fetch_limit = pick_count * 3 if validator else None
             candidates = self._query_tag_candidates(
                 tag, deck_id, commander_ci, ci_clauses, exclude_oids,
                 limit=fetch_limit,
@@ -591,30 +739,46 @@ class DeckBuilderService:
                                               plan_tags=expanded_plan_tags)
             scored.sort(key=lambda c: -c["score"])
 
-            picks = scored[:need]
-            if picks:
+            picks = scored[:pick_count]
+
+            if not picks:
+                # No candidates available for this tag — mark exhausted
+                exhausted_tags.add(tag)
+                continue
+
+            # Record suggestions (append to existing tag group if revisited)
+            if tag not in suggestions:
                 suggestions[tag] = {
                     "target": target,
                     "current": current,
-                    "cards": [
-                        {
-                            "oracle_id": p["oracle_id"],
-                            "name": p["name"],
-                            "mana_cost": p["mana_cost"],
-                            "cmc": p["cmc"],
-                            "type_line": p["type_line"],
-                            "set_code": p["set_code"],
-                            "collector_number": p["collector_number"],
-                            "collection_id": p["collection_id"],
-                            "score": round(p["score"], 3),
-                            "edhrec_rank": p["edhrec_rank"],
-                            "tag_count": p["tag_count"],
-                        }
-                        for p in picks
-                    ],
+                    "cards": [],
                 }
-                for p in picks:
-                    exclude_oids.add(p["oracle_id"])
+            suggestions[tag]["cards"].extend([
+                {
+                    "oracle_id": p["oracle_id"],
+                    "name": p["name"],
+                    "mana_cost": p["mana_cost"],
+                    "cmc": p["cmc"],
+                    "type_line": p["type_line"],
+                    "set_code": p["set_code"],
+                    "collector_number": p["collector_number"],
+                    "collection_id": p["collection_id"],
+                    "score": round(p["score"], 3),
+                    "edhrec_rank": p["edhrec_rank"],
+                    "tag_count": p["tag_count"],
+                }
+                for p in picks
+            ])
+
+            # Update tag_counts for ALL plan tags each picked card satisfies
+            for p in picks:
+                exclude_oids.add(p["oracle_id"])
+                card_tags = self._get_card_tags(p["oracle_id"])
+                for t in card_tags:
+                    if t in targets:
+                        tag_counts[t] = tag_counts.get(t, 0) + 1
+
+            remaining_budget -= len(picks)
 
         result = {"deck_id": deck_id, "suggestions": suggestions}
         if not self.api_key:
@@ -668,11 +832,14 @@ class DeckBuilderService:
             JOIN collection c ON c.printing_id = p.printing_id
             JOIN sets s ON p.set_code = s.set_code
             LEFT JOIN card_tags ct_all ON ct_all.oracle_id = card.oracle_id
+              AND {tag_validation_filter("ct_all")}
             LEFT JOIN salt_scores salt ON salt.card_name = card.name
             WHERE ct.tag IN ({tag_placeholders})
+              AND {tag_validation_filter()}
               AND c.status = 'owned'
               AND card.oracle_id NOT IN ({exclude_list})
               AND card.type_line NOT LIKE '%Basic Land%'
+              AND card.type_line NOT LIKE 'Token%'
               {ci_clauses}
             GROUP BY card.oracle_id
             ORDER BY json_extract(p.raw_json, '$.edhrec_rank') ASC NULLS LAST
@@ -709,8 +876,9 @@ class DeckBuilderService:
             oids = [c["oracle_id"] for c in candidates]
             placeholders = ",".join("?" for _ in oids)
             rows = self.conn.execute(
-                f"SELECT oracle_id, tag FROM card_tags "  # noqa: S608
-                f"WHERE oracle_id IN ({placeholders})",
+                f"SELECT ct.oracle_id, ct.tag FROM card_tags ct "  # noqa: S608
+                f"WHERE ct.oracle_id IN ({placeholders})"
+                f" AND {tag_validation_filter()}",
                 oids,
             ).fetchall()
             for row in rows:
@@ -834,7 +1002,7 @@ class DeckBuilderService:
             if card_row:
                 from mtg_collector.services.deck_builder.tag_validator import TagValidator
                 validator = TagValidator(self.conn)
-                validator._validate_all_tags_for_cards([dict(card_row)])
+                validator._validate_card(dict(card_row))
                 # Re-fetch after validation
                 val_rows = self.conn.execute(
                     "SELECT tag, valid, reason FROM card_tag_validations "
@@ -921,7 +1089,8 @@ class DeckBuilderService:
         if not oracle_id:
             return categories
         rows = self.conn.execute(
-            "SELECT tag FROM card_tags WHERE oracle_id = ?", (oracle_id,)
+            f"SELECT ct.tag FROM card_tags ct WHERE ct.oracle_id = ?"
+            f" AND {tag_validation_filter()}", (oracle_id,)
         ).fetchall()
         card_tags = {row["tag"] for row in rows}
         for cat_name, cat_info in INFRASTRUCTURE.items():
@@ -930,9 +1099,10 @@ class DeckBuilderService:
         return categories
 
     def _get_card_tags(self, oracle_id: str) -> set:
-        """Get all tags for a card."""
+        """Get all validated tags for a card."""
         rows = self.conn.execute(
-            "SELECT tag FROM card_tags WHERE oracle_id = ?", (oracle_id,)
+            f"SELECT ct.tag FROM card_tags ct WHERE ct.oracle_id = ?"
+            f" AND {tag_validation_filter()}", (oracle_id,)
         ).fetchall()
         return {row["tag"] for row in rows}
 
@@ -993,11 +1163,16 @@ class DeckBuilderService:
 
     def _find_basic_land_copy(self, color: str, deck_id: int) -> Optional[int]:
         """Find an unassigned basic land copy for the given color."""
+        copies = self._find_basic_land_copies(color, deck_id, 1)
+        return copies[0] if copies else None
+
+    def _find_basic_land_copies(self, color: str, deck_id: int, count: int) -> List[int]:
+        """Find up to `count` unassigned basic land copies for the given color."""
         land_names = [name for name, c in {**BASIC_LANDS, **SNOW_BASICS}.items() if c == color]
         if not land_names:
-            return None
+            return []
         placeholders = ",".join("?" * len(land_names))
-        row = self.conn.execute(
+        rows = self.conn.execute(
             f"""SELECT c.id
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
@@ -1006,10 +1181,10 @@ class DeckBuilderService:
                   AND c.status = 'owned'
                   AND c.deck_id IS NULL
                   AND c.binder_id IS NULL
-                LIMIT 1""",
-            land_names,
-        ).fetchone()
-        return row["id"] if row else None
+                LIMIT ?""",
+            [*land_names, count],
+        ).fetchall()
+        return [r["id"] for r in rows]
 
     def _bling_score(self, row) -> int:
         """Calculate a bling score for a card copy."""
@@ -1068,7 +1243,8 @@ class DeckBuilderService:
                     FROM collection c
                     JOIN printings p ON c.printing_id = p.printing_id
                     JOIN card_tags ct ON ct.oracle_id = p.oracle_id
-                    WHERE c.deck_id = ? AND ct.tag IN ({placeholders})""",
+                    WHERE c.deck_id = ? AND ct.tag IN ({placeholders})
+                      AND {tag_validation_filter()}""",
                 [deck_id, *cat_info["tags"]],
             ).fetchone()
             categories[cat_name] = cat_row["cnt"]
@@ -1088,11 +1264,11 @@ class DeckBuilderService:
 
         # Count all tag occurrences + land count in two queries
         tag_rows = self.conn.execute(
-            """SELECT ct.tag, COUNT(DISTINCT p.oracle_id) AS cnt
+            f"""SELECT ct.tag, COUNT(DISTINCT p.oracle_id) AS cnt
                FROM collection c
                JOIN printings p ON c.printing_id = p.printing_id
                JOIN card_tags ct ON ct.oracle_id = p.oracle_id
-               WHERE c.deck_id = ?
+               WHERE c.deck_id = ? AND {tag_validation_filter()}
                GROUP BY ct.tag""",
             (deck_id,),
         ).fetchall()
@@ -1121,11 +1297,12 @@ class DeckBuilderService:
         Returns (coverage_pct, avg_roles, zero_role_card_names).
         """
         rows = self.conn.execute(
-            """SELECT card.name, COUNT(ct.tag) AS role_count
+            f"""SELECT card.name, COUNT(ct.tag) AS role_count
                FROM collection c
                JOIN printings p ON c.printing_id = p.printing_id
                JOIN cards card ON p.oracle_id = card.oracle_id
                LEFT JOIN card_tags ct ON ct.oracle_id = card.oracle_id
+                 AND {tag_validation_filter()}
                WHERE c.deck_id = ? AND card.type_line NOT LIKE '%Land%'
                GROUP BY card.oracle_id""",
             (deck_id,),
