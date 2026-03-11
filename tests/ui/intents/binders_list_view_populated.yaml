@@ -1,0 +1,12 @@
+# Scenario: Binders list view shows populated binder cards
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I navigate to /binders, I see the two existing binders ("Trade
+  Binder" and "Foil Collection") rendered as a card grid. Each binder
+  card displays the name, card count (6 each), and any metadata that
+  was set (color, binder type badge). Clicking a binder card takes me
+  to its detail view.

@@ -1,0 +1,12 @@
+# Scenario: Toggle multi-select mode and use select All/None
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can open the More menu and click "Toggle Multi-Select" to enter
+  multi-select mode. A selection bar appears showing "0 selected" and
+  checkboxes appear on card rows. Selecting cards updates the count.
+  Clicking "All" selects all visible cards. Clicking "None" deselects
+  all. Toggling multi-select off hides the bar and clears selections.

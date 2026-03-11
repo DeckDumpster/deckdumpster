@@ -1,0 +1,29 @@
+start_page: /sealed
+involves:
+  - '"Open Product" button (#open-btn)'
+  - 'modal overlay (#open-modal-overlay)'
+  - 'search input (#open-search-input) with placeholder "Search sealed products by name..."'
+  - 'product results list (#open-product-results)'
+  - 'confirm button (#open-confirm-btn)'
+  - closing modal after first open and reopening for a second product
+fixture_data:
+  first_search: "Foundations Beginner"
+  first_product_name: "Foundations Beginner Box"
+  second_search: "Foundations Starter"
+  second_product_name: "Foundations Starter Collection"
+notes: >
+  This tests for a bug where showOpenPreview() sets
+  openSearchInput.style.display = 'none' and closeOpenModal() never resets
+  it. On the second modal open the search input is invisible. The fix adds
+  openSearchInput.style.display = '' in openOpenModal().
+
+  1. Navigate to /sealed. 2. Click #open-btn to open modal. 3. Type
+  "Foundations Beginner" into #open-search-input. 4. Wait for results to
+  appear in #open-product-results. 5. Click the "Foundations Beginner Box"
+  result. 6. Wait for preview with #open-confirm-btn. 7. Click
+  #open-confirm-btn to open the product. 8. Wait for modal to close and
+  "Added" status message. 9. Click #open-btn again to reopen the modal.
+  10. Assert that #open-search-input is visible — this is the regression
+  check. 11. Type "Foundations Starter" and wait for results. 12. Click
+  "Foundations Starter Collection" to verify the full flow still works.
+  13. Screenshot the preview state as final evidence.

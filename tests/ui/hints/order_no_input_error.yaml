@@ -1,0 +1,8 @@
+start_page: /ingestor-order
+involves:
+  - "parse button #parse-btn"
+  - "results panel #results with error message"
+fixture_data: {}
+notes: >
+  Navigate to /ingestor-order. Do not enter any text. Click #parse-btn. Verify
+  #results shows "No input provided." error message.

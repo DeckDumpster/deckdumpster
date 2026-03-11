@@ -1,0 +1,15 @@
+start_page: /binders
+involves:
+  - "binder-card for 'Trade Binder' in list view"
+  - "card-table with per-row checkboxes (input[type='checkbox'][data-id])"
+  - "Remove Selected button in detail-controls"
+  - "removeSelectedCards() sends DELETE to /api/binders/{id}/cards"
+  - "after remove, binder detail refreshes with updated card count"
+fixture_data:
+  binder: "Trade Binder (id 1) with 6 cards"
+  card_to_remove: "first card in table (Acrobatic Cheerleader, id 9)"
+notes: >
+  1. Click "Trade Binder" in list. 2. Wait for card table to load.
+  3. Click the checkbox on the first card row. 4. Click "Remove
+  Selected". 5. Verify the card count decreases and the card is
+  removed from the table.

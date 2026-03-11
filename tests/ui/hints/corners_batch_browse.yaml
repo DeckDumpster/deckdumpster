@@ -1,0 +1,12 @@
+start_page: /batches
+involves:
+  - corner type filter pill
+  - batch card list with batch name, card count, deck label
+  - batch detail view showing cards with names
+fixture_data:
+  batch_name: "New cards from LGS"
+  batch_type: "corner"
+notes: >
+  Navigate to /batches. The demo fixture has two corner batches. Click
+  the "Corner" filter pill to filter to corner batches only. Click the
+  "New cards from LGS" batch to see its card list in the detail view.

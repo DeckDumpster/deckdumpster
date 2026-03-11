@@ -5,9 +5,9 @@ involves:
   - '"New Deck..." option at the end of the dropdown triggers a prompt dialog'
   - prompt dialog auto-accepts with default "Test View"
 fixture_data:
-  card_name: "Condemn"
+  card_name: "Cathar Commando"
 notes: >
-  Search for Condemn (SPG, index 26, unassigned). Open its card modal. The
+  Search for Cathar Commando (FDN 139, unassigned). Open its card modal. The
   Copies section will show an "Add to Deck" dropdown even if no decks existed.
   Select "New Deck..." — the browser prompt is auto-accepted with "Test View".
   The copy should then show the newly created deck name.

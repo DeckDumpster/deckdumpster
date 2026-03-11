@@ -1,0 +1,10 @@
+# Scenario: Collapse and expand sheet sections to view card grids with badges
+#
+# Related:
+#   pages: [sheets]
+
+description: >
+  After loading sheets for a set and product, I can see the Variants section
+  expanded and all sheet sections collapsed. Clicking a sheet header expands
+  it to reveal card images in a grid with pull-rate badges. Clicking the
+  header again collapses the section and hides the cards.

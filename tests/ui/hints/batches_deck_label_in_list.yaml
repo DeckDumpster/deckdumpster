@@ -1,0 +1,13 @@
+start_page: /batches
+involves:
+  - "batch-card divs in batch-grid"
+  - "batch-deck div with class 'batch-deck' (green text) showing 'Deck: {deck_name}'"
+  - "only rendered when b.deck_name is truthy"
+fixture_data:
+  assigned_batch: "Batch 1 'Wednesday evening scan' assigned to 'Bolt Tribal'"
+  unassigned_batch: "Batch 2 'New cards from LGS' with no deck"
+notes: >
+  1. Navigate to /batches. 2. Verify "Deck: Bolt Tribal" text is present
+  (from the assigned batch). 3. Verify "Deck: New cards" is NOT present
+  (the unassigned batch should not show a deck label). The test verifies
+  both states are rendered correctly in the list view simultaneously.

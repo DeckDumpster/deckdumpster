@@ -1,0 +1,11 @@
+# Scenario: Select and remove cards from a deck
+#
+# Prerequisites:
+#   Deck 1 "Bolt Tribal" has 8 mainboard + 3 sideboard cards
+
+description: >
+  When I navigate to deck 1 (Bolt Tribal), switch to the Sideboard zone (3
+  cards), use the "Select All" checkbox to select all sideboard cards, and
+  click "Remove Selected", the cards are removed from the sideboard. The
+  sideboard count updates to 0 and shows "No cards in this zone". The
+  overall card count in the metadata also decreases.

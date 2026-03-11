@@ -8,9 +8,9 @@ involves:
   - prompt dialog auto-accepts with "Test View"
   - after assignment the overlay closes
 fixture_data:
-  search_term: "Graceful Takedown"
+  search_term: "Ruby Medallion"
 notes: >
-  Search for "Graceful Takedown" (WOE, index 28, unassigned). Open the ⋮ more
+  Search for "Ruby Medallion" (MH3 295, unassigned). Open the more
   menu and click "Toggle Multi-Select". Check the card's checkbox. Click
   "Add to Deck" in the selection bar. In the assign-deck overlay, select
   "New Deck..." from the dropdown — the prompt auto-accepts with "Test View".

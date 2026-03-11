@@ -1,0 +1,11 @@
+# Scenario: Delete cards via multi-select
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can enter multi-select mode, select one or more cards, click the
+  Delete button, confirm the browser dialog, and the selected cards
+  are removed from the collection. The selection bar count updates
+  and the cards disappear from the table.

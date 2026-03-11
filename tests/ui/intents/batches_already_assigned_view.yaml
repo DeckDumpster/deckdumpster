@@ -1,0 +1,11 @@
+# Scenario: View an already-assigned batch shows status instead of controls
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I click into batch "Wednesday evening scan" (already assigned to
+  "Bolt Tribal"), I see a green "Assigned to: Bolt Tribal (sideboard)"
+  status message instead of deck/zone dropdowns and an Assign button.
+  No assignment controls are available.

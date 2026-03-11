@@ -1,0 +1,11 @@
+# Scenario: Open wishlist panel and remove an entry
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can open the More menu and click "Wishlist (3)" to open the wishlist
+  panel. The panel slides in from the right showing wanted cards (Bonny
+  Pall, Disruptor Flute, Niko). I can remove an entry by clicking its
+  X button. I can close the panel by clicking the backdrop.

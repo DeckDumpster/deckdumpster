@@ -1,0 +1,13 @@
+start_page: /batches
+involves:
+  - "batch card 'Wednesday evening scan' in list view (onclick showBatch(1))"
+  - "assign-section div in detail view"
+  - "assign-status div with green text 'Assigned to: Bolt Tribal (sideboard)'"
+  - "no #assign-deck-select or #assign-zone-select elements present"
+fixture_data:
+  assigned_batch: "Batch 1 'Wednesday evening scan' assigned to deck 1 'Bolt Tribal' zone 'sideboard'"
+notes: >
+  1. Navigate to /batches. 2. Click "Wednesday evening scan". 3. Wait
+  for detail view to load. 4. Verify "Assigned to: Bolt Tribal (sideboard)"
+  is visible. 5. Verify no deck dropdown is present (assert_hidden on
+  #assign-deck-select).

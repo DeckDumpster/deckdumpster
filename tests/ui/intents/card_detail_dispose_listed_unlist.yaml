@@ -1,0 +1,12 @@
+# Scenario: Dispose a copy as Listed then Unlist it on the card detail page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the card detail page, I select "Listed" from the disposition dropdown
+  on an owned copy. After confirming, the copy shows a purple "Listed"
+  badge. The disposition dropdown now includes an "Unlist" option. Selecting
+  "Unlist" returns the copy to "owned" status, and the full disposition
+  controls reappear.

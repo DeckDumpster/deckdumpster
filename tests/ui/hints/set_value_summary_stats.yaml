@@ -1,0 +1,20 @@
+start_page: /set-value
+involves:
+  - "summary section #summary with .stat elements"
+  - "stat-total #stat-total (Total Cards)"
+  - "stat-priced #stat-priced (With Prices)"
+  - "stat-median #stat-median (Median)"
+  - "stat-chaff #stat-chaff (Chaff tier)"
+  - "stat-modest #stat-modest ($0.40-$2 tier)"
+  - "stat-high #stat-high ($2-$10 tier)"
+  - "stat-premium #stat-premium ($10+ tier)"
+fixture_data:
+  set: "blb"
+  total_cards: 398
+  priced_cards: 0
+notes: >
+  Navigate to /set-value. Select BLB and click Analyze. Wait for #summary
+  to be visible. Verify #stat-total shows a nonzero value. Verify
+  "Total Cards" label is present. Verify "With Prices" label is present.
+  Verify "Median" label is present. Fixture has 0 priced cards so
+  #stat-priced shows 0.

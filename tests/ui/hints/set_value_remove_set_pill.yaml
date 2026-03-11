@@ -1,0 +1,17 @@
+start_page: /set-value
+involves:
+  - "set search input #set-search"
+  - "set dropdown #set-dropdown with li items"
+  - "selected pills #selected-pills with .selected-pill elements"
+  - "remove pill button .remove-pill (x button inside pill)"
+  - "analyze button #analyze-btn (disabled when no sets selected)"
+fixture_data:
+  set1: "blb"
+  set1_name: "Bloomburrow"
+  set2: "fdn"
+  set2_name: "Foundations"
+notes: >
+  Navigate to /set-value. Select BLB via search. Select FDN via search.
+  Verify two .selected-pill elements. Click .remove-pill on first pill.
+  Verify one pill remains. Click .remove-pill on remaining pill. Verify
+  no pills remain and #analyze-btn is disabled.

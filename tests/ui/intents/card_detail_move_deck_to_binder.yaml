@@ -1,0 +1,12 @@
+# Scenario: Move a copy from a deck to a binder on the card detail page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the card detail page, when a copy is assigned to a deck, a "Move to
+  Binder" dropdown appears alongside the deck name and "Remove" link.
+  Selecting a binder from the dropdown atomically moves the copy from
+  the deck to the binder. After the move, the copy shows the binder name
+  with a "Remove" link and a "Move to Deck" dropdown.

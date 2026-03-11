@@ -1,0 +1,16 @@
+start_page: /
+involves:
+  - "nav-group 'Analysis' with links: Crack-a-Pack (/crack), Explore Sheets (/sheets), Set Value (/set-value)"
+  - "nav-group 'Add Cards' with links: Upload (/upload), Recent (/recent), Corners (/ingest-corners), Manual ID (/ingestor-ids), Orders (/ingestor-order), CSV Import (/import-csv)"
+  - "OCR subgroup .nav-subgroup with .sub-label 'OCR' containing Upload and Recent"
+notes: >
+  1. Navigate to /. 2. Assert OCR sub-label is visible in Add Cards group.
+  3. Click "Crack-a-Pack" link, wait for page, navigate back.
+  4. Click "Explore Sheets", wait for page, navigate back.
+  5. Click "Set Value", wait for page, navigate back.
+  6. Click "Upload", wait for page, navigate back.
+  7. Click "Recent", wait for page, navigate back.
+  8. Click "Corners", wait for page, navigate back.
+  9. Click "Manual ID", wait for page, navigate back.
+  10. Click "Orders", wait for page, navigate back.
+  11. Click "CSV Import", wait for page, navigate back. 12. Screenshot.

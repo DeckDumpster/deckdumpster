@@ -1,0 +1,10 @@
+# Scenario: Empty state message when no decks exist
+#
+# Prerequisites:
+#   Both fixture decks are deleted via the API before loading the page
+
+description: >
+  When I visit /decks on an instance with no decks, I see the message
+  "No decks yet. Click 'New Deck' to create one." instead of a deck grid.
+  The "New Deck" button is still available. To reach this state, I first
+  delete both existing fixture decks via the API, then reload the page.

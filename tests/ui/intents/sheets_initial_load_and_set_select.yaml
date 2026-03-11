@@ -1,0 +1,10 @@
+# Scenario: Load sheets page and select a set via search
+#
+# Related:
+#   pages: [sheets]
+
+description: >
+  I can visit the Explore Sheets page, wait for sets to load (the input
+  transitions from disabled "Loading sets..." to enabled "Search sets..."),
+  type a partial name to filter the dropdown, click a result, and see
+  product radio pills appear with the first one auto-selected.

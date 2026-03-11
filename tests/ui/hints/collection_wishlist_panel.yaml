@@ -1,0 +1,17 @@
+start_page: /collection
+involves:
+  - "more menu button #more-menu-btn"
+  - "wishlist toggle button #wishlist-toggle-btn showing count"
+  - "wishlist panel #wishlist-panel sliding in from right"
+  - "wishlist entries .wl-entry with .wl-name and .wl-remove"
+  - "wishlist backdrop #wishlist-backdrop"
+fixture_data:
+  wishlist_entries:
+    - "Bonny Pall, Clearcutter"
+    - "Disruptor Flute"
+    - "Niko, Light of Hope"
+notes: >
+  Navigate to /collection. Wait for .collection-table. Open #more-menu-btn.
+  Click #wishlist-toggle-btn. Wait for #wishlist-panel to be visible.
+  Verify 3 entries present. Click the first .wl-remove button to remove
+  an entry. Close panel via #wishlist-backdrop.

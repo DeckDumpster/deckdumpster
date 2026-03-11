@@ -1,0 +1,14 @@
+start_page: /ingestor-order
+involves:
+  - "textarea #order-text"
+  - "parse button #parse-btn"
+  - "results panel #results with .order-group"
+  - "summary bar with Resolved count"
+  - "commit button #commit-btn"
+  - "success message in results"
+fixture_data:
+  order_text: "1x Mountain [Foundations] - Near Mint\n1x Forest [Foundations] - Near Mint"
+notes: >
+  Navigate to /ingestor-order. Paste valid order text into #order-text. Click
+  #parse-btn. Wait for "Resolved" in summary bar. Verify .order-group is
+  visible. Click #commit-btn. Wait for success message with "Added" text.

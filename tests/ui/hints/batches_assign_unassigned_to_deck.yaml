@@ -1,0 +1,18 @@
+start_page: /batches
+involves:
+  - "batch card 'New cards from LGS' in list view (onclick showBatch(2))"
+  - "assign-section div in detail view with deck/zone dropdowns"
+  - "deck select #assign-deck-select with options from /api/decks"
+  - "zone select #assign-zone-select defaulting to 'mainboard'"
+  - "Assign button triggers assignDeck()"
+  - "success-msg div with green text showing assigned count"
+  - "assign-status div showing 'Assigned to: Eldrazi Ramp (mainboard)'"
+fixture_data:
+  unassigned_batch: "Batch 2 'New cards from LGS' with 4 cards, no deck assigned"
+  target_deck: "Eldrazi Ramp (id=2, format=commander)"
+notes: >
+  1. Navigate to /batches. 2. Click "New cards from LGS". 3. Wait for
+  detail view with assign dropdowns. 4. Select "Eldrazi Ramp" from the
+  deck dropdown (#assign-deck-select). 5. Leave zone as Mainboard.
+  6. Click "Assign". 7. Wait for success message. 8. Verify assign-status
+  shows "Assigned to: Eldrazi Ramp (mainboard)".

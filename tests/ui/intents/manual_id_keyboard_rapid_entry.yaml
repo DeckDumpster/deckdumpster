@@ -1,0 +1,11 @@
+# Scenario: Rapid keyboard entry flow on Manual ID page
+#
+# Related:
+#   issues: []
+
+description: >
+  I can rapidly add card entries using the keyboard: type a collector number in
+  the CN input, press Enter to move focus to the Set input, type a set code,
+  press Enter to add the entry. The CN input clears and re-focuses for the next
+  entry. Rarity and foil settings persist between entries. I add 3 entries in
+  quick succession this way.

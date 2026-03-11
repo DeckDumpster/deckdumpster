@@ -1,0 +1,9 @@
+# Scenario: Clicking modal backdrop closes the New Deck modal
+#
+# Prerequisites:
+#   The /decks page loads with the "New Deck" button visible
+
+description: >
+  When I open the "New Deck" modal and click on the dark backdrop area outside
+  the modal content, the modal closes without creating a deck. The deck list
+  remains unchanged.

@@ -1,0 +1,15 @@
+start_page: /import-csv
+involves:
+  - "textarea #csv-text"
+  - "parse button #parse-btn"
+  - "assign target dropdown #assign-target with optgroups"
+  - "commit button #commit-btn"
+  - "success message in results"
+fixture_data:
+  decklist: "1 Beast-Kin Ranger (FDN) 100"
+  decks: ["Bolt Tribal", "Eldrazi Ramp"]
+  binders: ["Trade Binder", "Foil Collection"]
+notes: >
+  Navigate to /import-csv. Paste valid deck list. Click #parse-btn. Wait for
+  resolved results. Wait for #assign-target optgroup to load. Select
+  "Bolt Tribal". Click #commit-btn. Verify success message.

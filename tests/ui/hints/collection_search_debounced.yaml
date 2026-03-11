@@ -1,0 +1,13 @@
+start_page: /collection
+involves:
+  - "search input #search-input with placeholder 'Search cards...'"
+  - "status text #status showing card count"
+  - "collection table .collection-table with card rows"
+fixture_data:
+  search_term: "Scrawling Crawler"
+  total_cards: 43
+notes: >
+  Navigate to /collection. Wait for .collection-table (up to 15s).
+  Type "Scrawling" into #search-input. Wait 500ms for debounce + fetch.
+  Table should show only matching cards. Status text updates.
+  Clear the search input. Wait for table to re-render with all cards.

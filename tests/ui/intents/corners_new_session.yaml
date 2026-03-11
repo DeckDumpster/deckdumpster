@@ -1,0 +1,10 @@
+# Scenario: New Session button clears state and shows success message
+#
+# Related:
+#   issues: []
+
+description: >
+  On the Ingest Corners page, I click the "New Session" button in the header.
+  A green success message "New session started" appears. The results section
+  remains hidden and messages are cleared (only the new success message is
+  shown).

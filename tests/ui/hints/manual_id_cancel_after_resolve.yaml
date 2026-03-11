@@ -1,0 +1,16 @@
+start_page: /ingestor-ids
+involves:
+  - "collector number input #cn-input"
+  - "set code input #set-input"
+  - "add button #add-btn"
+  - "resolve button #resolve-btn"
+  - "cancel button #cancel-btn"
+  - "results panel #results with cancellation message"
+fixture_data:
+  set_code: "fdn"
+  collector_number: "100"
+  card_name: "Beast-Kin Ranger"
+notes: >
+  Navigate to /ingestor-ids. Add a valid entry (CN 100, set fdn). Click
+  #resolve-btn. Wait for resolved results. Click #cancel-btn. Verify results
+  show "Cancelled. Add more cards to start over."

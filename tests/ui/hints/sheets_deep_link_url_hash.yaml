@@ -1,0 +1,15 @@
+start_page: "/sheets#set=blb&product=play"
+involves:
+  - "set input #set-input (auto-filled with set name)"
+  - "product radios #product-radios (play auto-selected)"
+  - "sheet sections .section with content"
+  - "status #status showing sheet/card counts"
+fixture_data:
+  set: "blb"
+  product: "play"
+  set_name: "Bloomburrow"
+notes: >
+  Navigate to /sheets#set=blb&product=play. Wait for .section-header to
+  appear (sheets loaded). Verify #set-input value contains "Bloomburrow".
+  Verify "play" product label is highlighted. Verify sheet content sections
+  exist. Verify status shows "8 sheets".

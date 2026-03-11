@@ -1,0 +1,13 @@
+# Scenario: New Deck modal opens with all expected fields
+#
+# Prerequisites:
+#   The /decks page loads with the "New Deck" button visible
+
+description: >
+  When I visit /decks and click the "New Deck" button, a modal opens with the
+  title "New Deck". The modal contains form fields: Name (placeholder "My
+  Commander Deck"), Format (dropdown with commander, standard, modern, pioneer,
+  legacy, vintage, pauper), Description (textarea), a "Preconstructed deck"
+  checkbox, Sleeve Color, Deck Box, and Storage Location. Save and Cancel
+  buttons are visible at the bottom. The precon-specific fields (Origin Set,
+  Theme, Variation) are hidden until the checkbox is checked.

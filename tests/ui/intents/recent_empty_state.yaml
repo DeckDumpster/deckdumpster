@@ -1,0 +1,10 @@
+# Scenario: Recent page shows empty state when no ingest images exist
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When I navigate to the Recent Images page with no ingest images in the
+  pipeline, I see a "No recent images" heading and a link to "Upload some
+  photos" pointing to /upload. The Batch Ingest button is hidden and the
+  summary text is empty.

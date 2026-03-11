@@ -1,0 +1,10 @@
+# Scenario: Verify initial state of the Set Value Analysis page
+#
+# Related:
+#   pages: [set-value]
+
+description: >
+  I can load the Set Value Analysis page and see the title, a "Search
+  sets..." input, TCGplayer and Normal toggles active, Analyze button
+  disabled, and an empty state message. The filter bar, chart, summary,
+  and top cards table are all hidden.

@@ -1,0 +1,14 @@
+start_page: /disambiguate
+involves:
+  - "header h1 with 'Disambiguate' title linking to /"
+  - "nav link 'Home' linking to /"
+  - "nav link 'Upload' linking to /upload"
+  - "nav link 'Recent' linking to /recent"
+  - "empty state #empty-state with 'No cards to disambiguate'"
+  - "upload link inside empty state pointing to /upload"
+fixture_data: {}
+notes: >
+  Navigate to /disambiguate. Wait for #empty-state. Verify header contains
+  "Disambiguate" text. Verify "Home", "Upload", "Recent" link text is present.
+  Verify "No cards to disambiguate" text. Verify "Upload some photos" link
+  text is present.

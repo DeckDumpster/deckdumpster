@@ -1,0 +1,13 @@
+start_page: /
+involves:
+  - "Recent link <a href='/recent'> in Add Cards nav-group"
+  - "badge span .badge inside #recent-badge-wrap (should not exist)"
+  - "ingest counts API /api/ingest2/counts returning zero READY_FOR_OCR and PROCESSING"
+fixture_data:
+  ingest_status: "DONE: 2, ERROR: 2, no READY_FOR_OCR or PROCESSING entries"
+notes: >
+  1. Navigate to /. 2. Wait for page to fully load (settings pills activate).
+  3. Assert "Recent" link text is visible. 4. Assert no .badge element exists
+  inside #recent-badge-wrap. 5. Assert text "processing" is absent from the
+  page. 6. Click "Recent" to confirm the link is navigable. 7. Wait for
+  Recent page to load. 8. Screenshot.

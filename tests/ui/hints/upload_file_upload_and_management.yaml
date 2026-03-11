@@ -1,0 +1,17 @@
+start_page: /upload
+involves:
+  - "hidden file input #file-input for programmatic upload"
+  - "image grid #image-list with .image-card elements"
+  - "image card .image-card with thumbnail, .info filename, .delete-btn"
+  - "actions bar #actions (visible after upload)"
+  - "count text #count-text showing '{N} image(s) uploaded'"
+  - "View Recent Images button linking to /recent"
+fixture_data: {}
+notes: >
+  Navigate to /upload. Use harness to set files on #file-input (Playwright
+  setInputFiles). Wait for .image-card to appear in #image-list. Verify
+  #actions becomes visible with count text. Verify .delete-btn is visible on
+  the image card. Click "View Recent Images" to verify navigation to /recent.
+  Note: actual file upload uses Playwright's setInputFiles API to bypass the
+  native file dialog. The harness fill_by_selector cannot do this; use
+  click_by_text on "View Recent Images" as the navigation assertion.

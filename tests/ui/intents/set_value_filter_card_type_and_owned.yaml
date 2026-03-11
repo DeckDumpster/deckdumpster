@@ -1,0 +1,10 @@
+# Scenario: Filter by card type (Special) and owned status
+#
+# Related:
+#   pages: [set-value]
+
+description: >
+  After running an analysis, I can switch the Cards toggle to "Special" and
+  see Total Cards decrease. Switching the Owned toggle to "Owned" further
+  reduces the count. Switching both back to "All" restores the original
+  count. This proves card type, owned filters, and filter composition work.

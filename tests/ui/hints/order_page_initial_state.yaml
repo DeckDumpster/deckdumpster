@@ -1,0 +1,16 @@
+start_page: /ingestor-order
+involves:
+  - "textarea #order-text with placeholder"
+  - "file drop zone #file-drop"
+  - "status pills #status-pills with Ordered active and Owned inactive"
+  - "format dropdown #format-select with 5 options"
+  - "parse button #parse-btn"
+  - "results panel #results with info message"
+  - "home link in header"
+fixture_data: {}
+notes: >
+  Navigate to /ingestor-order. Wait for #order-text. Assert textarea has
+  placeholder "Paste TCGPlayer/CK order text here...". Assert #file-drop
+  contains "Click or drop .html / .txt files". Assert Ordered pill has .active
+  class. Assert #format-select is visible. Assert #results contains info
+  message. Assert header contains link to "/".

@@ -1,0 +1,17 @@
+start_page: /ingestor-ids
+involves:
+  - "collector number input #cn-input"
+  - "set code input #set-input"
+  - "add button #add-btn"
+  - "resolve button #resolve-btn"
+  - "results panel #results with .failed-section"
+  - "failed table .failed-table with error messages"
+  - "edit and retry button .retry-btn"
+  - "entry table #entry-tbody"
+fixture_data:
+  invalid_set: "zzz"
+  invalid_cn: "9999"
+notes: >
+  Navigate to /ingestor-ids. Add an entry with CN "9999" and set "zzz". Click
+  #resolve-btn. Wait for "Failed" text. Verify .failed-section is visible with
+  error message. Click .retry-btn. Verify entry moves back to #entry-tbody.

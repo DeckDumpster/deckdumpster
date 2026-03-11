@@ -1,0 +1,14 @@
+# Scenario: Load and view the edit order page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I open the edit page for an existing order, I see the left panel
+  pre-filled with the order's seller name, order number, date, source,
+  financial totals, and a "Save Order Details" button. In the right panel
+  I see a summary bar with the card count and total value, a "+ Add Card"
+  button, and a list of card rows -- each showing a thumbnail, card name,
+  set and collector number, a condition dropdown, a finish dropdown, a
+  price input, and replace/remove action buttons.

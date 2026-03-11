@@ -1,0 +1,12 @@
+# Scenario: Upload page displays all expected elements at rest
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When I navigate to the Upload page, I see the header with navigation links
+  (Home, Recent, Disambiguate) and the title "Upload" linking to the homepage.
+  Below the header, I see the camera placeholder with an "Open Camera" button,
+  an empty set hint input with placeholder "Set hint (e.g. FDN, Foundations)",
+  the drop zone with "Or drop / select files" text, an empty image grid, and
+  the actions bar is hidden. This is the page at rest with no images.

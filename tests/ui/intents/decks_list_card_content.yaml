@@ -1,0 +1,12 @@
+# Scenario: Deck list cards display content (name, format badge, count, description)
+#
+# Prerequisites:
+#   Two decks exist: "Bolt Tribal" (modern, 11 cards) and "Eldrazi Ramp" (commander, 6 cards)
+
+description: >
+  When I visit /decks with existing decks, each deck card in the grid displays
+  the deck name as a heading, a format badge (e.g. "modern", "commander") if a
+  format is set, the card count, and the description text. The fixture has
+  "Bolt Tribal" (modern, 11 cards, "Burn deck") and "Eldrazi Ramp" (commander,
+  6 cards, "Big mana Eldrazi"). All of these data points are visible on each
+  card without clicking into it.

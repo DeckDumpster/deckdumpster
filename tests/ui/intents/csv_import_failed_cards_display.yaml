@@ -1,0 +1,10 @@
+# Scenario: CSV Import shows failed and resolved cards together
+#
+# Related:
+#   issues: []
+
+description: >
+  When I paste content with a mix of valid and fake card names into the CSV
+  Import page and click "Parse & Resolve", a "Failed Cards" group appears with
+  red header and error messages for unresolvable cards. Resolved cards still
+  appear in their own group. The summary bar shows the failed count in red.

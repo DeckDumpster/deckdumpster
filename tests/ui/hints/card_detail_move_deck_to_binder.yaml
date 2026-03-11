@@ -1,0 +1,17 @@
+start_page: /card/fdn/100
+involves:
+  - 'copy assigned to a deck showing deck name "Bolt Tribal"'
+  - '"Remove" link (.copy-remove-deck) next to the deck name'
+  - '"Move to Binder ▾" dropdown (.copy-move-to-binder) with available binders'
+  - 'selecting a binder triggers atomic move from deck to binder'
+  - 'after move, copy shows binder name, "Remove" link (.copy-remove-binder), and "Move to Deck ▾" dropdown (.copy-move-to-deck)'
+fixture_data:
+  card_name: "Beast-Kin Ranger"
+  source_deck: "Bolt Tribal"
+  target_binder: "Foil Collection"
+notes: >
+  FDN 100 (Beast-Kin Ranger) has an owned copy (entry #3) in deck
+  "Bolt Tribal". Navigate to /card/fdn/100 and wait for copies to load.
+  Verify "Bolt Tribal" is shown. Select "Foil Collection" from the
+  "Move to Binder" dropdown. The copies section reloads showing
+  "Binder: Foil Collection" with a "Remove" link and "Move to Deck" dropdown.

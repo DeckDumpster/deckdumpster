@@ -1,0 +1,24 @@
+start_page: /binders
+involves:
+  - "New Binder button in list-controls"
+  - "binder-modal backdrop with modal form"
+  - "modal-title h3 showing 'New Binder'"
+  - "form fields: #f-name, #f-description (textarea), #f-color, #f-type (select), #f-location"
+  - "Save button calls saveBinder()"
+  - "after create, showBinder(result.id) is called to show detail view"
+  - "detail view shows binder-name h2 and meta-grid with all metadata"
+fixture_data:
+  new_binder:
+    name: "Rare Binder"
+    description: "High-value rares"
+    color: "red"
+    binder_type: "4-pocket"
+    storage_location: "top shelf"
+notes: >
+  1. Click "New Binder". 2. Fill #f-name with "Rare Binder". 3. Fill
+  #f-description with "High-value rares". 4. Fill #f-color with "red".
+  5. Select "4-Pocket" in #f-type. 6. Fill #f-location with "top shelf".
+  7. Click "Save". 8. Verify detail view shows all five fields. The
+  #f-name placeholder is "My Trade Binder", #f-color placeholder is
+  "e.g. blue, black ultra pro", #f-location placeholder is
+  "e.g. bookshelf, top row".

@@ -1,0 +1,11 @@
+# Scenario: Manual ID Entry page initial state verification
+#
+# Related:
+#   issues: []
+
+description: >
+  When I navigate to the Manual ID Entry page, I see the correct initial state:
+  an empty entry table with headers (Rarity, CN, Set, Foil), card count showing
+  "Cards: 0", the Resolve button disabled, the results panel showing the info
+  message "Add cards using rarity, collector number, and set code, then click
+  Resolve.", and a Home link in the header.

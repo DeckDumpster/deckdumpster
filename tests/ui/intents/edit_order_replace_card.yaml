@@ -1,0 +1,12 @@
+# Scenario: Replace a card in an order using the search overlay
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the edit order page, I note a card's name, then click its replace
+  button. The search overlay opens with the input focused. I search for
+  a different card, select one from the results, and the overlay closes.
+  The card list refreshes and the original card name is gone, replaced
+  by the one I selected.

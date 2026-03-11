@@ -1,0 +1,13 @@
+start_page: /collection
+involves:
+  - "collection table .collection-table"
+  - "table headers th[data-col] with sortable columns"
+  - "sort arrow indicator .sort-arrow showing direction"
+fixture_data:
+  total_cards: 43
+notes: >
+  Navigate to /collection. Wait for .collection-table (up to 15s).
+  Default sort is by name ascending. Click the "Name" column header
+  th[data-col='name'] to reverse sort (descending). Screenshot showing
+  arrow change. Click a different column header like th[data-col='set']
+  to sort by set ascending. Screenshot final state.

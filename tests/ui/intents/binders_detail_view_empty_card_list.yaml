@@ -1,0 +1,11 @@
+# Scenario: Newly created binder detail view shows empty card table
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  After creating a new binder (via the "New Binder" modal), I land on
+  its detail view. Since it has no cards, the card table displays a
+  single row with the message "No cards in this binder". The header
+  shows "Add Cards" and "Remove Selected" buttons.

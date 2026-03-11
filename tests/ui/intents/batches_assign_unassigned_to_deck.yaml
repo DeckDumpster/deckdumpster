@@ -1,0 +1,13 @@
+# Scenario: Assign an unassigned batch to a deck
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I view an unassigned batch ("New cards from LGS"), I see a deck
+  dropdown populated with existing decks, a zone dropdown defaulting to
+  Mainboard, and an Assign button. I select "Eldrazi Ramp", leave zone
+  as Mainboard, and click Assign. A green success message appears
+  showing the number of cards assigned, and the dropdowns are replaced
+  by a green "Assigned to: Eldrazi Ramp (mainboard)" status.

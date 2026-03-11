@@ -1,0 +1,9 @@
+# Scenario: Cancel after resolving on CSV Import page
+#
+# Related:
+#   issues: []
+
+description: >
+  After resolving cards on the CSV Import page, I click "Cancel". The results
+  panel shows "Cancelled. Paste new data to start over." and all resolved/parsed
+  data is cleared.

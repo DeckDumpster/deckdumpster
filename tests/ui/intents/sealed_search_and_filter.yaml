@@ -1,0 +1,12 @@
+# Scenario: Search and filter the sealed collection
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can type "Bloomburrow" into the search input and the collection
+  filters to show only Bloomburrow products. After clearing the search,
+  I can open the filter sidebar, select the "Booster Pack" category pill,
+  and verify only booster packs appear. Clicking "Clear Filters" restores
+  all products.

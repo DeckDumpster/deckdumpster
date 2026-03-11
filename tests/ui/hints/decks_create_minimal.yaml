@@ -1,0 +1,16 @@
+start_page: /decks
+involves:
+  - '"New Deck" button opens #deck-modal'
+  - "#f-name filled with name only, all other fields left at defaults"
+  - "Save button creates deck and redirects to /decks/:id"
+  - "h2#deck-name on detail page showing the new deck name"
+  - "No format, description, or precon metadata displayed"
+  - "Empty card table with 'No cards in this zone' message"
+fixture_data:
+  new_deck_name: "Minimal Deck"
+notes: >
+  Navigate to /decks. Click "New Deck". Wait for modal. Fill in only the name
+  "Minimal Deck". Leave format as "-- None --", description empty, precon
+  unchecked, all other fields empty. Click Save. Wait for redirect to the
+  detail page. Verify the deck name shows "Minimal Deck". Verify "No cards
+  in this zone" is shown. Take a screenshot.

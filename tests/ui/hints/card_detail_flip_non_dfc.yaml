@@ -1,0 +1,16 @@
+start_page: /card/fdn/191
+involves:
+  - 'flip button (#flip-btn) with rotation arrow icon'
+  - 'card flip container (#card-flip) toggles "flipped" class'
+  - 'back face shows generic card back image (/static/card_back.jpeg)'
+  - 'details panel (#details-panel) does NOT change for non-DFC cards'
+  - 'clicking flip again removes "flipped" class, returning to front'
+fixture_data:
+  card_name: "Brazen Scourge"
+  layout: "normal"
+notes: >
+  FDN 191 (Brazen Scourge) is a normal-layout card. Navigate to
+  /card/fdn/191. Wait for the card to load. Click the flip button.
+  Verify #card-flip has the "flipped" class. The card name in the
+  details panel should still be "Brazen Scourge". Click flip again.
+  Verify the "flipped" class is removed.

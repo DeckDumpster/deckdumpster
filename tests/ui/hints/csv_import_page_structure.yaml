@@ -1,0 +1,19 @@
+start_page: /import-csv
+involves:
+  - "page title 'CSV Import' in header h1"
+  - "home link in header"
+  - "textarea #csv-text with placeholder"
+  - "file drop zone #file-drop"
+  - "format dropdown #format-select with 5 options"
+  - "batch name input #batch-name"
+  - "product type dropdown #product-type"
+  - "batch set code input #batch-set-code"
+  - "parse button #parse-btn"
+  - "results panel #results with info message"
+fixture_data: {}
+notes: >
+  Navigate to /import-csv. Wait for #csv-text. Assert header contains "CSV
+  Import" and link to "/". Assert #csv-text is visible. Assert #file-drop
+  contains "Or drop/click to upload a .csv file". Assert #format-select is
+  visible with "Auto-detect". Assert #batch-name, #product-type, #batch-set-code
+  are visible. Assert #parse-btn is visible. Assert #results contains info message.

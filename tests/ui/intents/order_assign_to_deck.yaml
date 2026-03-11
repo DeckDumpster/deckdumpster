@@ -1,0 +1,9 @@
+# Scenario: Assign order cards to a deck via dropdown
+#
+# Related:
+#   issues: []
+
+description: >
+  After resolving an order, the assign target dropdown has optgroups for Decks
+  (Bolt Tribal, Eldrazi Ramp) and Binders (Trade Binder, Foil Collection) with
+  deck:ID / binder:ID values. I select a deck, commit, and verify success.

@@ -1,0 +1,13 @@
+# Scenario: Cards display status-colored borders and error indicators
+#
+# Related:
+#   issues: [200]
+#
+# Prerequisites:
+#   Demo ingest samples must be loaded (2 DONE, 2 ERROR images)
+
+description: >
+  On the Recent Images page, DONE cards have a green border (CSS class .done)
+  and ERROR cards have a red border (CSS class .error). Error cards display
+  a red "x" icon overlay. Hovering over an error card reveals a tooltip with
+  the error message.

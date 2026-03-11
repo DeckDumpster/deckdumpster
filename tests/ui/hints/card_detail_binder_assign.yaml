@@ -1,0 +1,14 @@
+start_page: /card/mkm/210
+involves:
+  - 'unassigned copy with "Add to Binder ▾" dropdown (.copy-add-to-binder)'
+  - selecting a binder from the dropdown triggers assignment
+  - 'copies section reloads showing binder name and "Remove" link (.copy-remove-binder)'
+  - '"Move to Deck ▾" dropdown (.copy-move-to-deck) appears after assignment'
+fixture_data:
+  card_name: "Judith, Carnage Connoisseur"
+  target_binder: "Trade Binder"
+notes: >
+  MKM 210 (Judith, Carnage Connoisseur) has an unassigned owned copy in
+  demo data (entry #33). Navigate to /card/mkm/210 and wait for copies to
+  load. Select "Trade Binder" from the "Add to Binder" dropdown. The copies
+  section reloads showing "Binder: Trade Binder" with a "Remove" link.

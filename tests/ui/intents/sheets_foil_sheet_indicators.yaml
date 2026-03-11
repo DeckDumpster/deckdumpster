@@ -1,0 +1,10 @@
+# Scenario: Foil sheet indicators in headers, card wrappers, and variant pills
+#
+# Related:
+#   pages: [sheets]
+
+description: >
+  After loading sheets, foil sheets show a foil tag in their section headers.
+  Expanding a foil sheet reveals card wrappers with the foil class for the
+  rainbow wash effect. Variant pills for foil sheets use the foil-pill
+  styling in the variants table.

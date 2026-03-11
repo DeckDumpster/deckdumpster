@@ -1,0 +1,11 @@
+# Scenario: Parse a valid order and commit to collection
+#
+# Related:
+#   issues: []
+
+description: >
+  I paste valid TCGPlayer-format order text referencing cards in the fixture DB
+  into the Order Ingestion page and click Parse. The two-step pipeline runs
+  (parsing then resolving). Resolved results show order groups with seller info
+  and card tables with thumbnails, set, condition, qty, and price. I click "Add
+  All to Collection" and see a success message with card and order counts.

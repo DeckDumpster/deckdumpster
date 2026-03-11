@@ -1,0 +1,13 @@
+# Scenario: Save order metadata changes on the edit order page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the edit order page, I change the seller name, pick a different source
+  from the dropdown (verifying TCGPlayer, Card Kingdom, and Other are
+  available), update the shipping cost, then click "Save Order Details".
+  The button briefly shows "Saving..." and disables, then a green "Saved"
+  confirmation appears below it. After the confirmation disappears, I
+  reload the page and confirm the changes persisted.

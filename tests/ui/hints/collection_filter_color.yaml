@@ -1,0 +1,14 @@
+start_page: /collection
+involves:
+  - "sidebar toggle #sidebar-toggle-btn"
+  - "filter sidebar #sidebar"
+  - "color filter pills #cf-W, #cf-U, #cf-B, #cf-R, #cf-G, #cf-C (checkboxes are display:none, click labels)"
+  - "clear filters button #clear-filters-btn"
+  - "sidebar close button #sidebar-close-btn"
+fixture_data:
+  color_distribution: "W:6, U:10, B:9, R:8, G:12, C:7"
+notes: >
+  Navigate to /collection. Wait for .collection-table (up to 15s).
+  Click #sidebar-toggle-btn to open filters. Wait for #sidebar.
+  Click label[for='cf-G'] to filter by green. Screenshot.
+  Click #clear-filters-btn to reset. Click #sidebar-close-btn.

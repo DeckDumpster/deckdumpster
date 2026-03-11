@@ -1,0 +1,19 @@
+start_page: /binders
+involves:
+  - "binder-card for 'Trade Binder' in list view"
+  - "Edit button in detail-view actions div"
+  - "binder-modal with modal-title 'Edit Binder'"
+  - "form fields pre-populated: #f-name='Trade Binder', #f-color='blue', #f-type='9-pocket'"
+  - "Save button calls saveBinder() with PUT to /api/binders/{id}"
+  - "after edit, currentBinder is updated and renderBinderDetail() is called"
+fixture_data:
+  existing_binder: "Trade Binder - id 1, color blue, type 9-pocket"
+  edits:
+    name: "Updated Trade Binder"
+    color: "green"
+notes: >
+  1. Click "Trade Binder" in list to open detail. 2. Click "Edit".
+  3. Verify modal title is "Edit Binder". 4. Clear and fill #f-name
+  with "Updated Trade Binder". 5. Clear and fill #f-color with "green".
+  6. Click "Save". 7. Verify detail view shows "Updated Trade Binder"
+  and "green" in the metadata grid.

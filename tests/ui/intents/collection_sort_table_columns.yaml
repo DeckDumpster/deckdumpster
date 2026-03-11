@@ -1,0 +1,11 @@
+# Scenario: Sort collection table by clicking column headers
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  In table view, I can click a column header to sort the collection by
+  that column. An arrow indicator shows the current sort direction.
+  Clicking the same header again reverses the sort order. Clicking a
+  different header sorts by that column ascending.

@@ -1,0 +1,9 @@
+# Scenario: Open a pack in normal (non-surprise) mode
+#
+# Related:
+#   issues: [200]
+
+description: >
+  I can open a pack in normal mode by unchecking the Surprise toggle before
+  clicking Open Pack. All cards appear face-up immediately in the grid with
+  rarity-colored borders and treatment badges.

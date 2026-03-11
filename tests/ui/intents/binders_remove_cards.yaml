@@ -1,0 +1,10 @@
+# Scenario: Remove a card from a binder via checkbox selection
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  From a binder's detail view with cards present, I check one card
+  using its per-row checkbox, then click "Remove Selected". The card
+  disappears from the table and the binder's card count decreases by 1.

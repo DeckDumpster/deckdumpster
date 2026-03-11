@@ -1,0 +1,14 @@
+start_page: /recent
+involves:
+  - "batch ingest button #batch-btn"
+  - "batch message #batch-msg with Collection link"
+  - "DONE cards .img-card.done (removed after ingest)"
+  - "summary text #summary (updated after ingest)"
+fixture_data:
+  expected_done_before: 2
+  expected_done_after: 0
+notes: >
+  Navigate to /recent. Wait for #grid and .img-card.done. Verify #batch-btn
+  is visible. Click #batch-btn. Wait for .img-card.done to disappear. Verify
+  #batch-msg contains success text with "Collection" link. WARNING: destructive
+  test -- run after other recent tests.

@@ -1,0 +1,17 @@
+start_page: /upload
+involves:
+  - "header with nav links Home (/), Recent (/recent), Disambiguate (/disambiguate)"
+  - "title 'Upload' linking to /"
+  - "camera placeholder #camera-placeholder with Open Camera button #camera-btn"
+  - "set hint input #set-hint with placeholder text"
+  - "drop zone #drop-zone with 'Or drop / select files' text"
+  - "file input #file-input (hidden)"
+  - "empty image grid #image-list"
+  - "actions bar #actions (hidden when no images)"
+fixture_data: {}
+notes: >
+  Navigate to /upload. Verify header links (Home, Recent, Disambiguate).
+  Verify #camera-btn is visible inside #camera-placeholder. Verify #set-hint
+  is visible with placeholder. Verify #drop-zone has "Or drop / select files"
+  text. Verify #image-list is empty. Verify #actions is hidden. Fill
+  #set-hint with "FDN" to confirm input is interactive.

@@ -1,13 +1,13 @@
-start_page: /card/woe/56
+start_page: /card/fdn/139
 involves:
   - 'unassigned copy with "Add to Deck ▾" dropdown (.copy-add-to-deck)'
   - selecting a deck from the dropdown triggers assignment
   - 'copies section reloads showing deck name and "Remove" link'
 fixture_data:
-  card_name: "Ingenious Prodigy"
+  card_name: "Cathar Commando"
   target_deck: "Bolt Tribal"
 notes: >
-  WOE 56 (Ingenious Prodigy) has an unassigned owned copy in demo data
-  (entry #27). Navigate to /card/woe/56 and wait for copies to load.
+  FDN 139 (Cathar Commando) has an unassigned owned copy in demo data.
+  Navigate to /card/fdn/139 and wait for copies to load.
   Select "Bolt Tribal" from the "Add to Deck" dropdown. The copies
   section reloads showing "Deck: Bolt Tribal" with a "Remove" link.

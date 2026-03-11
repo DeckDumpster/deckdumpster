@@ -14,11 +14,12 @@ def steps(harness):
     # Select the "Unassigned Cards" saved view from the dropdown.
     harness.select_by_label("#view-select", "Unassigned Cards")
     # Wait for the collection to re-render with the container filter applied.
-    harness.wait_for_text("Condemn", timeout=10_000)
+    # Cathar Commando is unassigned in the current fixture.
+    harness.wait_for_text("Cathar Commando", timeout=10_000)
     # Verify the container filter dropdown was set correctly.
     harness.assert_visible("#container-filter")
     # Verify an assigned card (Acrobatic Cheerleader, in Trade Binder) is absent.
     harness.assert_text_absent("Acrobatic Cheerleader")
     # Verify an unassigned card is present.
-    harness.assert_text_present("Condemn")
+    harness.assert_text_present("Cathar Commando")
     harness.screenshot("final_state")

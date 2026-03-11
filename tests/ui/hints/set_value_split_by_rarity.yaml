@@ -1,0 +1,12 @@
+start_page: /set-value
+involves:
+  - "split toggle #split-toggle with pills: None, Rarity, Color, Owned"
+  - "chart canvas #chart"
+  - "chart wrapper #chart-wrap"
+fixture_data:
+  set: "blb"
+notes: >
+  Navigate to /set-value. Select BLB and Analyze. Wait for #chart-wrap.
+  Click "Rarity" pill in #split-toggle. Verify #chart-wrap is still
+  visible (chart re-renders). Screenshot captures the rarity-split chart
+  with legend labels.

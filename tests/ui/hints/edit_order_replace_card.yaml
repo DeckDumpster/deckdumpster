@@ -1,0 +1,16 @@
+start_page: /edit-order?id=1
+involves:
+  - 'replace button (.btn-icon with swap icon &#x21C4;) on each card row'
+  - 'search overlay (#search-overlay) opens with class "active"'
+  - 'search input (#search-input) is focused'
+  - 'search results grid (.search-grid) with candidate cards (.search-candidate)'
+  - 'clicking a candidate replaces the card and closes the overlay'
+fixture_data:
+  original_card: "Witness Protection"
+  search_query: "Lightning Bolt"
+notes: >
+  Navigate to /edit-order?id=1. Wait for cards to load. Note the last
+  card name. Click the replace button on the last card row. Wait for the
+  search overlay to become active. Type a card name in the search input.
+  Wait for results. Click the first result. Verify the overlay closes
+  and the card list refreshes with the new card name visible.

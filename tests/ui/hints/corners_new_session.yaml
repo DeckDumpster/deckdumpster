@@ -1,0 +1,10 @@
+start_page: /ingest-corners
+involves:
+  - "New Session button in header (onclick='newSession()')"
+  - "messages div #messages receives .success-msg child"
+  - "results section #results-section (stays hidden)"
+fixture_data: {}
+notes: >
+  Navigate to /ingest-corners. Click the "New Session" button. Wait for
+  .success-msg to appear in #messages. Verify the message text contains
+  "New session started". Verify #results-section is still hidden.

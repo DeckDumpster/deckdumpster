@@ -1,0 +1,11 @@
+# Scenario: Add cards from collection to a deck
+#
+# Prerequisites:
+#   Deck 2 "Eldrazi Ramp" exists. "Cathar Commando" is unassigned in collection.
+
+description: >
+  When I navigate to deck 2 (Eldrazi Ramp) at /decks/2, click "Add Cards",
+  the add-cards modal opens with a zone selector and a search field. I type
+  "Cathar" in the search field, see "Cathar Commando" in the results, click
+  it to select it, and click "Add Selected". The modal closes and the card
+  appears in the deck's mainboard card table. The card count increases.

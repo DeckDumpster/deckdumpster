@@ -1,0 +1,15 @@
+start_page: /collection
+involves:
+  - "more menu button #more-menu-btn"
+  - "toggle multi-select button #toggle-multiselect-btn"
+  - "selection bar #selection-bar with count #sel-count"
+  - "row checkboxes input.row-sel-cb"
+  - "delete button #sel-delete-btn"
+  - "browser confirm dialog (auto-accepted by harness)"
+fixture_data:
+  search_term: "Graceful Takedown"
+notes: >
+  Search for "Graceful Takedown" (unassigned card). Open the more menu
+  via #more-menu-btn and click #toggle-multiselect-btn. Check the card's
+  checkbox. Click #sel-delete-btn. Confirm dialog is auto-accepted.
+  Card is removed from the collection.

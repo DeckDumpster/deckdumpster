@@ -1,0 +1,15 @@
+start_page: /binders
+involves:
+  - "binder-card for 'Foil Collection' in list view"
+  - "Delete Binder button (class 'danger') in detail-view actions"
+  - "confirm() dialog auto-accepted by harness"
+  - "after delete, showList() is called which reloads binder list"
+  - "list-view becomes active, deleted binder is gone"
+fixture_data:
+  target_binder: "Foil Collection (id 2)"
+  remaining_binder: "Trade Binder (id 1)"
+notes: >
+  1. Click "Foil Collection" in list to open detail. 2. Click "Delete
+  Binder". 3. Confirm dialog is auto-accepted. 4. Verify list view
+  reappears. 5. Verify "Foil Collection" is absent. 6. Verify "Trade
+  Binder" is still present.

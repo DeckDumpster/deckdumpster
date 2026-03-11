@@ -1,0 +1,12 @@
+start_page: /batches
+involves:
+  - "filter-bar pill spans with data-type attributes"
+  - "OCR pill (data-type='ocr') triggers API call /api/batches?type=ocr"
+  - "empty-state div with message 'No batches yet. Import cards via CSV, corners, or orders to create batches.'"
+  - "All pill (data-type='') resets filter to show all batches"
+fixture_data:
+  demo_batches: "2 corner-type batches, no OCR batches"
+notes: >
+  1. Navigate to /batches. 2. Verify batch list is populated. 3. Click
+  "OCR" pill. 4. Verify the empty state message appears. 5. Click "All"
+  pill. 6. Verify batches reappear.

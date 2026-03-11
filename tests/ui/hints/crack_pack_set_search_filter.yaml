@@ -1,0 +1,15 @@
+start_page: /crack
+involves:
+  - "set search input #set-input"
+  - "set dropdown #set-dropdown with li items"
+  - "keyboard navigation (ArrowDown + Enter)"
+  - "dropdown close on selection"
+  - "input clear and dropdown reopen on re-focus"
+fixture_data:
+  set: "fdn"
+  set_name: "Foundations"
+notes: >
+  Navigate to /crack. Wait for #set-input. Wait for "Search sets..." text.
+  Type "Found" into #set-input. Wait for #set-dropdown li. Press ArrowDown
+  then Enter to select. Verify input shows "Foundations (fdn)" and dropdown
+  is closed. Click #set-input again. Verify input clears and dropdown reopens.

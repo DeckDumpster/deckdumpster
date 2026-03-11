@@ -1,0 +1,12 @@
+start_page: /
+involves:
+  - "nav-group 'Collection' with links: Cards (/collection), Decks (/decks), Binders (/binders), Sealed (/sealed)"
+  - "each link navigates to a distinct page with its own title"
+fixture_data:
+  collection: "demo data with ~50 cards across multiple sets"
+notes: >
+  1. Navigate to /. 2. Click "Cards" link. 3. Wait for Collection Browser
+  page to load (assert title text or unique element). 4. Navigate back to /.
+  5. Click "Decks" link. 6. Wait for Decks page. 7. Navigate back to /.
+  8. Click "Binders" link. 9. Wait for Binders page. 10. Navigate back to /.
+  11. Click "Sealed" link. 12. Wait for Sealed page. 13. Screenshot.

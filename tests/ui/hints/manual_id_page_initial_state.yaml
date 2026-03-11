@@ -1,0 +1,14 @@
+start_page: /ingestor-ids
+involves:
+  - "entry table #entry-table with headers Rarity, CN, Set, Foil"
+  - "empty tbody #entry-tbody"
+  - "card count #card-count showing 'Cards: 0'"
+  - "resolve button #resolve-btn disabled"
+  - "results panel #results with info message"
+  - "home link in header"
+fixture_data: {}
+notes: >
+  Navigate to /ingestor-ids. Wait for #cn-input. Assert #entry-table is visible
+  with empty #entry-tbody. Assert #card-count contains "0". Assert #resolve-btn
+  is visible (it is disabled by default). Assert #results contains the info
+  message text. Assert header contains a link to "/".

@@ -1,0 +1,9 @@
+# Scenario: Click a card to open zoom overlay and dismiss it
+#
+# Related:
+#   pages: [sheets]
+
+description: >
+  After expanding a sheet section, I can click a card image to open a zoom
+  overlay showing a large card image. Clicking the overlay dismisses it
+  and returns to the normal sheet view.

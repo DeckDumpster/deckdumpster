@@ -1,0 +1,9 @@
+# Scenario: Disambiguate page shows empty state
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When I navigate to the Disambiguate page with no cards pending disambiguation,
+  I see an empty state message indicating there are no cards to disambiguate,
+  with a link to the Upload page.

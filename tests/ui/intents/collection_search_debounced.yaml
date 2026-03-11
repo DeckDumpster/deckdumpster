@@ -1,0 +1,10 @@
+# Scenario: Search collection by card name with debounced server fetch
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can type a card name into the search input and the collection re-fetches
+  from the server showing only matching cards. The status text updates to
+  reflect the filtered count. Clearing the search restores the full view.

@@ -1,0 +1,16 @@
+start_page: /set-value
+involves:
+  - "card type toggle #card-type-toggle with pills: All, Normal, Special"
+  - "owned toggle #owned-toggle with pills: All, Owned, Not Owned"
+  - "stat-total #stat-total (Total Cards value)"
+  - "filter bar #filter-bar"
+fixture_data:
+  set: "blb"
+  total_cards: 398
+  owned_cards: 5
+notes: >
+  Navigate to /set-value. Select BLB and Analyze. Wait for #filter-bar.
+  Click "Special" in #card-type-toggle. Verify #stat-total decreases.
+  Click "Owned" in #owned-toggle. Verify #stat-total decreases further.
+  Click "All" in #card-type-toggle. Click "All" in #owned-toggle. Verify
+  #stat-total returns to original.

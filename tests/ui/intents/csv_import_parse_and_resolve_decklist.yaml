@@ -1,0 +1,12 @@
+# Scenario: Parse and resolve a plain text deck list
+#
+# Related:
+#   issues: []
+
+description: >
+  I paste a plain text deck list with set codes and collector numbers into the
+  CSV Import textarea and click "Parse & Resolve". The two-step pipeline
+  completes: the summary bar shows total cards, resolved count, and detected
+  format. Resolved cards appear in a table with card name, set/CN, condition,
+  and quantity columns. An action bar with "Add to Collection", "Cancel", and
+  assign target dropdown appears.

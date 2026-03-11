@@ -1,0 +1,22 @@
+start_page: /decks/2
+involves:
+  - "#btn-add-cards opens #add-cards-modal.active"
+  - "#add-zone selector defaults to Mainboard"
+  - "#picker-search input with placeholder 'Search by name...'"
+  - ".picker-cards shows search results"
+  - ".picker-card click toggles .selected class"
+  - "#btn-add-picker sends POST /api/decks/2/cards"
+  - "#card-tbody updates with the new card"
+  - "#count-mainboard updates with new count"
+fixture_data:
+  deck_id: 2
+  deck_name: "Eldrazi Ramp"
+  search_term: "Cathar"
+  card_name: "Cathar Commando"
+  original_count: 6
+notes: >
+  Navigate to /decks/2. Wait for deck to load. Click "Add Cards". Wait for
+  the add-cards modal to appear. Type "Cathar" in the search field. Wait for
+  results to appear. Click "Cathar Commando" in the picker results. Click
+  "Add Selected". Wait for modal to close. Verify "Cathar Commando" appears
+  in the card table. Verify the mainboard count increased. Take a screenshot.

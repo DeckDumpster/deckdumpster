@@ -1,0 +1,6 @@
+# Scenario: Homepage displays all navigation groups and settings
+
+description: >
+  When I visit the homepage, I can see three navigation groups labeled
+  "Collection", "Analysis", and "Add Cards", each containing their expected
+  links with subtitle descriptions, and a Settings section below.

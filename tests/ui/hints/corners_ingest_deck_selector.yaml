@@ -1,0 +1,12 @@
+start_page: /ingest-corners
+involves:
+  - deck selector dropdown (#deck-select) with existing decks
+  - '"+ Create new deck..." option in the dropdown'
+  - zone selector (#zone-select) with Mainboard, Sideboard, Commander
+  - new deck creation form (#new-deck-form)
+fixture_data:
+  existing_deck: "Bolt Tribal"
+notes: >
+  The ingest corners page has a deck selector dropdown that lists existing
+  decks. Verify Bolt Tribal appears as an option. Verify the zone selector
+  has Mainboard, Sideboard, and Commander options.

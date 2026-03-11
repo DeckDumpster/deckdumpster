@@ -1,0 +1,14 @@
+start_page: /
+involves:
+  - "Price Sources check-row #price-source-checks"
+  - "TCG pill div.pill[data-value='tcg']"
+  - "CK pill div.pill[data-value='ck']"
+  - "save-status indicator #save-status with class .visible when saved"
+fixture_data:
+  default_price_sources: "tcg,ck"
+notes: >
+  1. Navigate to /. 2. Wait for settings to load (both TCG and CK pills active).
+  3. Click TCG pill to deactivate it. 4. Wait for save-status visible.
+  5. Assert only CK pill is active. 6. Reload page. 7. Assert CK is active,
+  TCG is not (persisted). 8. Click TCG pill to reactivate.
+  9. Wait for save-status. 10. Screenshot.

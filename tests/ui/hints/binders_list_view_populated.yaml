@@ -1,0 +1,15 @@
+start_page: /binders
+involves:
+  - "binder-grid div with binder-card divs"
+  - "each binder-card has h3 (name), meta div (type badge, color, description), stats div (card count)"
+  - "clicking a binder-card calls showBinder(id)"
+  - "detail-view div becomes active with binder-name h2 and meta-grid"
+fixture_data:
+  binder_1: "Trade Binder - color blue, type 9-pocket, 6 cards"
+  binder_2: "Foil Collection - color black, description 'Premium cards', 6 cards"
+notes: >
+  1. Navigate to /binders. 2. Verify "Trade Binder" and "Foil Collection"
+  are visible. 3. Verify card counts (6 cards each). 4. Verify metadata
+  (type badge "9-pocket" on Trade Binder, color info). 5. Click "Trade
+  Binder" to enter detail view. 6. Verify detail view shows binder name
+  and metadata.

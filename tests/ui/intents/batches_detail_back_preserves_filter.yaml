@@ -1,0 +1,10 @@
+# Scenario: Back button from detail preserves filter state
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I click the "Corner" filter pill, see the filtered list, then click
+  into a batch detail. When I click "Back", the list view reappears
+  still showing the Corner filter as active and the same filtered results.

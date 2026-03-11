@@ -1,0 +1,11 @@
+# Scenario: Filter collection by color identity
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can open the filter sidebar and select color pills (W/U/B/R/G/C) to
+  filter the collection to show only cards matching the selected colors.
+  The filter is applied client-side in real time. Deselecting restores
+  the full view.

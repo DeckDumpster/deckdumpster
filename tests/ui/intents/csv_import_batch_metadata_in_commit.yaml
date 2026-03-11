@@ -1,0 +1,10 @@
+# Scenario: CSV Import with batch metadata in commit
+#
+# Related:
+#   issues: []
+
+description: >
+  On the CSV Import page, I fill in batch metadata (batch name "Test Batch",
+  product type "Booster Box", set code "FDN"), then parse and resolve valid
+  cards, and commit. The commit succeeds, confirming that batch metadata is
+  included in the request.

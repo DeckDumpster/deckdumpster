@@ -1,0 +1,10 @@
+# Scenario: Resolve valid cards and commit to collection
+#
+# Related:
+#   issues: []
+
+description: >
+  I add valid card entries using known fixture cards, click Resolve to see
+  resolved cards with thumbnails and names, select a deck from the assign target
+  dropdown (which has optgroups for Decks and Binders), and click "Add to
+  Collection" to commit. A success message appears and the state resets.

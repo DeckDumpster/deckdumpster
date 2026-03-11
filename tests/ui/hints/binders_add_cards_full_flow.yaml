@@ -1,0 +1,20 @@
+start_page: /binders
+involves:
+  - "binder-card for 'Trade Binder' in list view"
+  - "Add Cards button in detail-controls"
+  - "add-cards-modal with picker-search input (placeholder 'Search by name...')"
+  - "initial text 'Type to search your collection...'"
+  - "picker-cards div populated by searchPickerCards() via /api/collection?q=pr&status=owned"
+  - "picker-card divs are clickable, toggle 'selected' class"
+  - "Add Selected button calls addSelectedPickerCards()"
+  - "after add, binder detail refreshes with updated card count and card table"
+fixture_data:
+  binder: "Trade Binder (id 1) with 6 cards"
+  search_term: "pr"
+  available_card: "Preacher of the Schism (unassigned, set lci, collector_number 113)"
+notes: >
+  1. Click "Trade Binder" in list. 2. Click "Add Cards". 3. Wait for
+  modal with picker-search input. 4. Type "pr" in the search field.
+  5. Wait for picker results to load. 6. Click on "Preacher of the
+  Schism" picker-card. 7. Click "Add Selected". 8. Verify modal closes
+  and card appears in the binder table.

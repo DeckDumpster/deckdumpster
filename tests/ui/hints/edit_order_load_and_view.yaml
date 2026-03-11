@@ -1,0 +1,19 @@
+start_page: /edit-order?id=1
+involves:
+  - 'left panel with seller name input (#meta-seller), order number (#meta-order-num), date (#meta-date), source dropdown (#meta-source)'
+  - 'financial fields: subtotal (#meta-subtotal), shipping (#meta-shipping), tax (#meta-tax), total (#meta-total)'
+  - '"Save Order Details" button (#save-meta-btn)'
+  - 'summary bar (.summary-bar) with card count and total value'
+  - '"+ Add Card" button (#add-card-btn)'
+  - 'card rows (.card-row) with thumbnail, name, set/CN, condition select, finish select, price input, replace and remove buttons'
+fixture_data:
+  order_id: 1
+  seller_name: "CardHaus Gaming"
+  order_number: "DEMO-TCG-001"
+  source: "tcgplayer"
+  card_count: 5
+notes: >
+  Navigate to /edit-order?id=1. Wait for the order to load. Verify the
+  seller name is "CardHaus Gaming", order number is "DEMO-TCG-001", source
+  is "tcgplayer". Verify the summary bar shows "5 cards". Verify at least
+  one card row is visible with all expected controls.

@@ -1,0 +1,11 @@
+# Scenario: Zone tab switching shows different card lists and counts
+#
+# Prerequisites:
+#   Deck 1 "Bolt Tribal" has 8 mainboard, 3 sideboard, 0 commander cards
+
+description: >
+  When I navigate to deck 1 (Bolt Tribal) at /decks/1, I see zone tabs for
+  Mainboard (8), Sideboard (3), and Commander (0). The Mainboard tab is
+  active by default showing 8 cards. Clicking the Sideboard tab shows 3
+  cards. Clicking the Commander tab shows "No cards in this zone" since
+  there are 0 commander cards.

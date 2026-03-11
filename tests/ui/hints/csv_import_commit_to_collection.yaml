@@ -1,0 +1,12 @@
+start_page: /import-csv
+involves:
+  - "textarea #csv-text"
+  - "parse button #parse-btn"
+  - "commit button #commit-btn"
+  - "results panel #results with success message"
+fixture_data:
+  decklist: "1 Beast-Kin Ranger (FDN) 100\n1 Cathar Commando (FDN) 139"
+notes: >
+  Navigate to /import-csv. Paste valid deck list. Click #parse-btn. Wait
+  for "Resolved". Click #commit-btn. Wait for "Successfully added" success
+  message.

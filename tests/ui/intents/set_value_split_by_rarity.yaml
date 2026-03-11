@@ -1,0 +1,10 @@
+# Scenario: Split chart by rarity
+#
+# Related:
+#   pages: [set-value]
+
+description: >
+  After running an analysis, I can click "Rarity" in the split toggle
+  to re-render the chart. The chart canvas remains visible and the legend
+  labels change from set names to rarity categories (Common, Uncommon,
+  Rare, Mythic).

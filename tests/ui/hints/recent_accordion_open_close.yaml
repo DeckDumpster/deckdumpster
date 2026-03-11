@@ -1,0 +1,17 @@
+start_page: /recent
+involves:
+  - "DONE image cards .img-card.done with data-id attribute"
+  - "accordion panel #accordion-panel.accordion-content"
+  - "selected card indicator .img-card.selected"
+  - "action buttons in accordion (Reprocess, Delete)"
+fixture_data:
+  done_images:
+    - id: 1
+      filename: sample_aetherflame_wall.jpg
+    - id: 4
+      filename: sample_canyon_wildcat.jpg
+notes: >
+  Navigate to /recent. Wait for .img-card.done elements. Click the first
+  DONE card (data-id="1"). Verify .img-card.selected appears and
+  #accordion-panel.open is visible. Verify accordion has action buttons. Click
+  the same card again. Verify accordion closes (no .open class).

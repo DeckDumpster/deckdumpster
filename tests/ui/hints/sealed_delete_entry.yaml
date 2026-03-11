@@ -1,0 +1,16 @@
+start_page: /sealed
+involves:
+  - "product card or table row [data-uuid] to open detail modal"
+  - "detail modal overlay #detail-modal-overlay"
+  - "edit toggle button .entry-edit-toggle"
+  - "delete button .entry-delete-btn"
+  - "browser confirm dialog (auto-accepted by harness)"
+fixture_data:
+  product_name: "Duskmourn House of Horror Bundle"
+  entry_id: 6
+  quantity: 1
+notes: >
+  Navigate to /sealed. Click the Duskmourn Bundle (single-entry product,
+  qty=1) to open detail modal. Click "Edit" to expand the edit pane.
+  Click "Delete". The confirm dialog is auto-accepted. Modal closes
+  and the product disappears from the collection.

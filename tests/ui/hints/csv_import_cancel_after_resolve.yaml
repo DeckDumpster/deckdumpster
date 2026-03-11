@@ -1,0 +1,12 @@
+start_page: /import-csv
+involves:
+  - "textarea #csv-text"
+  - "parse button #parse-btn"
+  - "cancel button #cancel-btn"
+  - "results panel #results with cancellation message"
+fixture_data:
+  decklist: "1 Beast-Kin Ranger (FDN) 100"
+notes: >
+  Navigate to /import-csv. Paste valid deck list. Click #parse-btn. Wait for
+  resolved results. Click #cancel-btn. Verify "Cancelled. Paste new data to
+  start over." appears.

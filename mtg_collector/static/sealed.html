@@ -2165,6 +2165,7 @@ const openBody = document.getElementById('open-modal-body');
 
 function openOpenModal() {
   openSearchInput.value = '';
+  openSearchInput.style.display = '';
   openBody.innerHTML = '<ul class="product-results" id="open-product-results"></ul>';
   document.getElementById('open-modal-title').textContent = 'Open Sealed Product';
   openOverlay.classList.add('active');

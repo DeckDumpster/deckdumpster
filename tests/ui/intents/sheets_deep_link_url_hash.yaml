@@ -1,0 +1,10 @@
+# Scenario: Navigate directly via URL hash deep link
+#
+# Related:
+#   pages: [sheets]
+
+description: >
+  I can navigate directly to /sheets#set=blb&product=play and have the
+  page auto-populate: the set input shows "Bloomburrow (blb)", the play
+  product radio is selected, and sheet content renders without any manual
+  interaction. This supports shareability and bookmarking.

@@ -1,0 +1,17 @@
+start_page: /batches
+involves:
+  - "filter-bar pill spans with data-type attributes"
+  - "Corner pill (data-type='corner') becomes active on click"
+  - "batch-card divs in list view"
+  - "detail-view div with Back button"
+  - "Back button calls backToList() which toggles display"
+  - "currentFilter JS variable preserved across detail/list transitions"
+fixture_data:
+  demo_batches: "2 corner-type batches visible with Corner filter"
+notes: >
+  1. Navigate to /batches. 2. Click "Corner" pill. 3. Verify Corner
+  pill is active and batches are still visible. 4. Click a batch to
+  enter detail view. 5. Click "Back". 6. Verify Corner pill is still
+  active and the same batches are visible. Note: Both demo batches are
+  corner type so filtered and unfiltered lists look the same -- the
+  key assertion is that the pill remains active.

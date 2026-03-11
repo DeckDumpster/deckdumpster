@@ -1,0 +1,11 @@
+start_page: /recent
+involves:
+  - "header h1 'Recent Images' linking to /"
+  - "header link 'Home' href='/'"
+  - "header link 'Upload' href='/upload'"
+  - "header link 'Disambiguate' href='/disambiguate'"
+fixture_data: {}
+notes: >
+  Navigate to /recent. Verify header contains h1 with "Recent Images" text.
+  Verify "Home", "Upload", "Disambiguate" link text present. Click "Upload"
+  link to verify navigation works, then confirm we are on /upload.

@@ -1,0 +1,10 @@
+start_page: /ingestor-order
+involves:
+  - "status pills #status-pills"
+  - "ordered pill .pill[data-value='ordered']"
+  - "owned pill .pill[data-value='owned']"
+fixture_data: {}
+notes: >
+  Navigate to /ingestor-order. Verify Ordered pill has .active class. Click
+  Owned pill. Verify Owned pill gains .active class and Ordered loses it.
+  Click Ordered pill. Verify Ordered regains .active class.

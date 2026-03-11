@@ -1,0 +1,11 @@
+# Scenario: Remove a card from an order on the edit order page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the edit order page, I note the current card count in the summary
+  bar, then click the remove button on one of the cards and accept the
+  confirmation dialog. The card disappears from the list and the summary
+  bar updates to show one fewer card.

@@ -1,0 +1,15 @@
+start_page: "/sheets#set=blb&product=play"
+involves:
+  - "variants section .section.open (expanded by default, first section)"
+  - "variants table .variants-table with th and td elements"
+  - "variant pills .variant-pill (sheet name labels)"
+  - "status text #status"
+fixture_data:
+  set: "blb"
+  product: "play"
+  variant_count: 4
+notes: >
+  Load BLB play via deep link. Variants section is .section.open by
+  default. Verify .variants-table is visible inside it. Verify
+  .variant-pill elements exist. Verify status shows "8 sheets".
+  The table has columns: #, Probability, Contents.

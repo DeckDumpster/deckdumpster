@@ -1,0 +1,19 @@
+start_page: /import-csv
+involves:
+  - "textarea #csv-text"
+  - "batch name input #batch-name"
+  - "product type dropdown #product-type"
+  - "batch set code input #batch-set-code"
+  - "parse button #parse-btn"
+  - "commit button #commit-btn"
+  - "success message in results"
+fixture_data:
+  decklist: "1 Beast-Kin Ranger (FDN) 100"
+  batch_name: "Test Batch"
+  product_type: "booster_box"
+  set_code: "FDN"
+notes: >
+  Navigate to /import-csv. Fill #batch-name with "Test Batch". Select
+  "Booster Box" from #product-type. Fill #batch-set-code with "FDN". Paste
+  valid deck list into #csv-text. Click #parse-btn. Wait for resolved
+  results. Click #commit-btn. Verify success message.

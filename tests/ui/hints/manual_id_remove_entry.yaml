@@ -1,0 +1,17 @@
+start_page: /ingestor-ids
+involves:
+  - "collector number input #cn-input"
+  - "set code input #set-input"
+  - "add button #add-btn"
+  - "entry table #entry-tbody with remove buttons .remove-btn"
+  - "card count #card-count"
+  - "resolve button #resolve-btn"
+fixture_data:
+  entries:
+    - { cn: "100", set: "fdn" }
+    - { cn: "139", set: "fdn" }
+notes: >
+  Navigate to /ingestor-ids. Add 2 entries via #cn-input, #set-input, #add-btn.
+  Assert "Cards: 2". Click .remove-btn on first entry. Assert "Cards: 1". Click
+  .remove-btn on remaining entry. Assert "Cards: 0". Verify #resolve-btn is
+  disabled.

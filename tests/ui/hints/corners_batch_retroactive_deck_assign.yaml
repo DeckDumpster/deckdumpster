@@ -1,0 +1,11 @@
+start_page: /batches
+involves:
+  - batch detail view for an unassigned corner batch
+  - deck assignment dropdown in the detail view
+  - batch list showing deck name after assignment
+fixture_data:
+  batch_name: "New cards from LGS"
+  target_deck: "Bolt Tribal"
+notes: >
+  Click the "New cards from LGS" batch (unassigned). In the detail view,
+  assign it to "Bolt Tribal" deck. Verify the batch shows the deck name.

@@ -1,0 +1,10 @@
+# Scenario: Verify summary stats row after analysis
+#
+# Related:
+#   pages: [set-value]
+
+description: >
+  After running an analysis, the summary row shows Total Cards (nonzero),
+  With Prices (0 in test fixture), Median, and four tier percentages
+  (Chaff, Modest, High, Premium). Even with zero-price data, the stats
+  row renders with correct labels and values.

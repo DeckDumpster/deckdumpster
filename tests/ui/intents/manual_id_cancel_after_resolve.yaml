@@ -1,0 +1,9 @@
+# Scenario: Cancel after resolving cards on Manual ID page
+#
+# Related:
+#   issues: []
+
+description: >
+  After resolving card entries on the Manual ID page, I click Cancel. The
+  results panel shows "Cancelled. Add more cards to start over." and the
+  resolved data is cleared.

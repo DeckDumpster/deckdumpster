@@ -1,0 +1,16 @@
+start_page: "/sheets#set=blb&product=play"
+involves:
+  - "foil tag .foil-tag in section headers"
+  - "foil card wrappers .sheet-card-img-wrap.foil"
+  - "foil variant pills .variant-pill.foil-pill"
+  - "section headers .section-header with h2 and .meta span"
+fixture_data:
+  set: "blb"
+  product: "play"
+  foil_sheets: ["foilLand", "foil"]
+notes: >
+  Load BLB play via deep link. Verify .foil-tag elements exist in
+  section headers (foil sheets have Foil tag in meta). Verify
+  .variant-pill.foil-pill exists in the variants table. Click the
+  "Foil" section header to expand it. Verify .sheet-card-img-wrap.foil
+  elements exist inside the expanded section.

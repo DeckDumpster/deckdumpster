@@ -1,0 +1,11 @@
+# Scenario: Flip a non-double-faced card on the card detail page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I view a non-double-faced card (e.g., fdn/100 Beast-Kin Ranger,
+  layout "normal") and click the flip button, the card image flips to
+  show the generic card back. The details panel does not change. Clicking
+  the flip button again returns to the front face.

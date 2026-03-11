@@ -1,0 +1,11 @@
+# Scenario: Ingest corners page loads with correct initial state
+#
+# Related:
+#   issues: []
+
+description: >
+  When I navigate to the Ingest Corners page, I see the camera placeholder
+  with an "Open Camera" button, the drop zone with "Drop or select a photo
+  of card corners" text, the results section is hidden, no messages are
+  displayed, and navigation links are present (Home, Upload OCR, Collection,
+  Batches, and a "New Session" button).

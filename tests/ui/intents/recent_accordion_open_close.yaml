@@ -1,0 +1,14 @@
+# Scenario: Open and close accordion panel on a DONE image card
+#
+# Related:
+#   issues: [200]
+#
+# Prerequisites:
+#   Demo ingest samples must be loaded (fixture has 2 DONE images)
+
+description: >
+  On the Recent Images page, I click a DONE image card to open the accordion
+  panel. The card gets a white border and selected indicator. The accordion
+  panel opens below the row showing the card name and action buttons
+  (Reprocess, Delete, Trace toggle). Clicking the same card again closes
+  the accordion.

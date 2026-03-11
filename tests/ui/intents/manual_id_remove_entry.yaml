@@ -1,0 +1,9 @@
+# Scenario: Remove entries from the Manual ID staging list
+#
+# Related:
+#   issues: []
+
+description: >
+  After adding several card entries to the staging list, I can click the remove
+  button on an entry to delete it. The card count updates accordingly. After
+  removing all entries, the Resolve button becomes disabled.

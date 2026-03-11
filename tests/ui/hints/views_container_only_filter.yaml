@@ -8,10 +8,10 @@ involves:
 fixture_data:
   view_name: "Unassigned Cards"
   absent_card: "Acrobatic Cheerleader"
-  present_card: "Condemn"
+  present_card: "Cathar Commando"
 notes: >
   Open filters sidebar. Select "Unassigned Cards" from the saved views dropdown.
   The collection should refetch and filter to only unassigned cards. Verify that
-  an unassigned card (Condemn) is visible and an assigned card (Acrobatic
+  an unassigned card (Cathar Commando) is visible and an assigned card (Acrobatic
   Cheerleader, in Trade Binder) is not. This tests the fix where container-only
   views (no search query) were previously not applied.

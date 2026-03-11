@@ -1,0 +1,18 @@
+start_page: /decks/1
+involves:
+  - ".zone-tabs .tab[data-zone=sideboard] to switch zones"
+  - "#select-all checkbox to select all cards in the zone"
+  - "#btn-remove-selected button to remove selected cards"
+  - "DELETE /api/decks/1/cards with collection_ids"
+  - "#count-sideboard updating to (0)"
+  - "'No cards in this zone' message after removal"
+fixture_data:
+  deck_id: 1
+  deck_name: "Bolt Tribal"
+  sideboard_cards: ["Condemn", "Graceful Takedown", "Ingenious Prodigy"]
+notes: >
+  Navigate to /decks/1. Wait for deck to load. Click the "Sideboard" tab.
+  Wait for sideboard cards to appear (e.g. "Condemn"). Click the select-all
+  checkbox. Click "Remove Selected". The confirm/alert is auto-accepted.
+  Wait for the table to refresh. Verify sideboard count is now (0). Verify
+  "No cards in this zone" appears. Take a screenshot.

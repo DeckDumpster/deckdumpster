@@ -1,0 +1,10 @@
+# Scenario: Adjust grid column count with plus/minus buttons
+#
+# Related:
+#   issues: [200]
+
+description: >
+  On the Recent Images page, I click the minus and plus buttons to change
+  the grid column count. The column count display updates accordingly. The
+  minus button is disabled at 1 column and the plus button is disabled at
+  12 columns.

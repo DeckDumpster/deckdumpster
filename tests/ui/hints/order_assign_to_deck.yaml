@@ -1,0 +1,15 @@
+start_page: /ingestor-order
+involves:
+  - "textarea #order-text"
+  - "parse button #parse-btn"
+  - "assign target dropdown #assign-target with optgroups"
+  - "commit button #commit-btn"
+  - "success message in results"
+fixture_data:
+  order_text: "1x Mountain [Foundations] - Near Mint"
+  decks: ["Bolt Tribal", "Eldrazi Ramp"]
+  binders: ["Trade Binder", "Foil Collection"]
+notes: >
+  Navigate to /ingestor-order. Paste valid order text. Click #parse-btn. Wait
+  for resolved results. Wait for #assign-target optgroup to load. Select
+  "Bolt Tribal" from #assign-target. Click #commit-btn. Verify success.

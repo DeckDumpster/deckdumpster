@@ -1,0 +1,15 @@
+start_page: /decks
+involves:
+  - "DELETE /api/decks/1 and /api/decks/2 to clear fixture decks"
+  - "#empty-state div showing 'No decks yet' message"
+  - '"New Deck" button still visible in header controls'
+fixture_data:
+  deck_1_id: 1
+  deck_2_id: 2
+notes: >
+  Navigate to /decks. Wait for page to load. Delete both fixture decks via
+  API calls (navigate to a URL that triggers deletion is not possible, so
+  use the UI: click into deck 1, delete it, go back, click into deck 2,
+  delete it). Then navigate back to /decks. Wait for the empty state message
+  to appear. Verify the text "No decks yet" is present. Verify the "New Deck"
+  button is still visible. Take a screenshot.

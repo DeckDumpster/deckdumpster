@@ -1,0 +1,10 @@
+# Scenario: Select a set and run analysis to see results
+#
+# Related:
+#   pages: [set-value]
+
+description: >
+  I can focus the search input, type a partial name to filter the dropdown,
+  click a set to add it as a pill. The Analyze button enables. Clicking
+  Analyze shows a loading message, then the filter bar, chart, summary
+  stats, and top 20 table all become visible.

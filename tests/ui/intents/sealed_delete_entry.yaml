@@ -1,0 +1,11 @@
+# Scenario: Delete a sealed collection entry
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can open the detail modal for a sealed product, expand the edit
+  pane, click "Delete", confirm the browser dialog, and the entry is
+  removed. The modal closes and the product disappears from the
+  collection if it was the only entry.

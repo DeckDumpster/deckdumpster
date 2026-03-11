@@ -1,0 +1,14 @@
+start_page: /sheets
+involves:
+  - "set search input #set-input (disabled with 'Loading sets...' initially)"
+  - "set dropdown #set-dropdown with li items"
+  - "product radio pills #product-radios with label elements"
+fixture_data:
+  set: "blb"
+  set_name: "Bloomburrow"
+notes: >
+  Navigate to /sheets. Wait for #set-input to become enabled (placeholder
+  changes to "Search sets..."). Type "Bloom" to filter. Wait for
+  #set-dropdown li. Click first li. Wait for #product-radios label to appear.
+  Verify input value contains "Bloomburrow (blb)". Verify a product label
+  has the checked+highlighted state (first product auto-selected).

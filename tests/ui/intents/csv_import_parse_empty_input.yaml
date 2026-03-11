@@ -1,0 +1,9 @@
+# Scenario: CSV Import shows error on empty input
+#
+# Related:
+#   issues: []
+
+description: >
+  When I click "Parse & Resolve" on the CSV Import page without entering any
+  text or uploading a file, a red error message "No CSV text provided." appears
+  in the results panel.

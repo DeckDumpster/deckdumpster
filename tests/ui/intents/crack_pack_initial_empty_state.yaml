@@ -1,0 +1,10 @@
+# Scenario: Crack-a-Pack page loads with correct disabled-state defaults
+#
+# Related:
+#   approved-intents: crack.approved-intents.md
+
+description: >
+  When I load the Crack-a-Pack page, the set input shows "Search sets..." after
+  sets finish loading, Open Pack / Reveal All / Explore Sheets buttons are all
+  disabled, the pack header reads "Select a set and open a pack", and the picks
+  panel shows "(0)" with placeholder text "Click cards to pick them".

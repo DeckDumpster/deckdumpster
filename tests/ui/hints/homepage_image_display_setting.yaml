@@ -1,0 +1,15 @@
+start_page: /
+involves:
+  - "Image Display pill-row #image-display-pills"
+  - "Crop pill div.pill[data-value='crop']"
+  - "Contain pill div.pill[data-value='contain']"
+  - "save-status indicator #save-status with class .visible when saved"
+fixture_data:
+  default_image_display: "crop"
+notes: >
+  1. Navigate to /. 2. Wait for settings to load (Crop pill becomes active).
+  3. Assert Crop pill has class 'active'. 4. Click Contain pill.
+  5. Assert Contain pill has class 'active' and Crop pill lost 'active'.
+  6. Wait for save-status to become visible. 7. Reload page.
+  8. Assert Contain pill is still active after reload (persisted).
+  9. Click Crop pill to restore default. 10. Screenshot.

@@ -1,0 +1,10 @@
+# Scenario: New Deck modal validates name is required
+#
+# Prerequisites:
+#   The /decks page loads with the "New Deck" button visible
+
+description: >
+  When I open the "New Deck" modal and click "Save" without entering a name,
+  a browser alert appears with the message "Name is required". The modal
+  remains open and no deck is created. I can then enter a name and
+  successfully save.

@@ -1,0 +1,12 @@
+start_page: /ingestor-order
+involves:
+  - "textarea #order-text"
+  - "parse button #parse-btn"
+  - "cancel button #cancel-btn"
+  - "results panel #results with cancellation message"
+fixture_data:
+  order_text: "1x Mountain [Foundations] - Near Mint"
+notes: >
+  Navigate to /ingestor-order. Paste valid order text. Click #parse-btn. Wait
+  for resolved results. Click #cancel-btn. Verify "Cancelled. Paste new data
+  to start over." appears.

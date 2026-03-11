@@ -1,0 +1,17 @@
+start_page: /edit-order?id=1
+involves:
+  - 'seller name input (#meta-seller)'
+  - 'source dropdown (#meta-source) with options: TCGPlayer, Card Kingdom, Other'
+  - 'shipping input (#meta-shipping)'
+  - '"Save Order Details" button (#save-meta-btn) shows "Saving..." then re-enables'
+  - 'green "Saved" confirmation (.status-msg.success) appears in #meta-save-status'
+fixture_data:
+  new_seller: "Test Seller"
+  new_source: "cardkingdom"
+  new_shipping: "5.99"
+notes: >
+  Navigate to /edit-order?id=1. Clear and type "Test Seller" in the seller
+  name input. Select "Card Kingdom" from the source dropdown. Clear and type
+  "5.99" in shipping. Click "Save Order Details". Wait for the green "Saved"
+  message. Reload the page and verify the seller name is "Test Seller",
+  source is "cardkingdom", and shipping is "5.99".

@@ -1,0 +1,15 @@
+# Scenario: Batch ingest removes DONE cards and shows success message
+#
+# Related:
+#   issues: [200]
+#
+# Prerequisites:
+#   Demo ingest samples must be loaded (at least 2 DONE images)
+#
+# WARNING: This test is DESTRUCTIVE -- it removes DONE cards from the grid.
+# It must run AFTER all other recent page tests.
+
+description: >
+  On the Recent Images page with DONE cards present, the green "Batch Ingest"
+  button is visible. Clicking it removes the DONE cards from the grid and
+  displays a success message with a link to the Collection page.

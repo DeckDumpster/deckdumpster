@@ -1,0 +1,12 @@
+start_page: /decks
+involves:
+  - '"New Deck" button opens #deck-modal.active'
+  - "Clicking #deck-modal backdrop (not .modal content) removes .active class"
+  - "Modal closes, deck list unchanged"
+fixture_data: {}
+notes: >
+  Navigate to /decks. Wait for page to load. Click "New Deck". Wait for modal
+  to appear. Click on the #deck-modal backdrop element itself (not the inner
+  .modal div). The click handler checks if e.target === el (the backdrop).
+  Verify the modal is no longer visible. Verify the deck list is unchanged
+  (both deck names still present). Take a screenshot.

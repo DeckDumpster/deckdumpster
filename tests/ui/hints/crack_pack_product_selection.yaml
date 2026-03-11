@@ -1,0 +1,17 @@
+start_page: /crack
+involves:
+  - "set search input #set-input"
+  - "product radio pills #product-radios label (first auto-selected)"
+  - "open pack button #open-btn (enabled after set selected)"
+  - "explore sheets button #sheets-btn (enabled after set selected)"
+  - "switching product selection to a different pill"
+fixture_data:
+  set: "fdn"
+  set_name: "Foundations"
+  products: ["beginner", "collector", "play", "prerelease"]
+notes: >
+  Navigate to /crack. Wait for #set-input. Wait for "Search sets...". Type
+  "Foundations". Click first #set-dropdown li. Wait for #product-radios label.
+  Verify #open-btn is not disabled. Verify #sheets-btn is not disabled. Verify
+  first product radio is checked. Click a different product label to switch
+  selection. Verify the new radio is checked.

@@ -1,0 +1,15 @@
+start_page: /ingestor-order
+involves:
+  - "textarea #order-text"
+  - "parse button #parse-btn"
+  - "ordered pill .pill[data-value='ordered'].active"
+  - "commit button #commit-btn"
+  - "success message .status-msg.success"
+  - "guidance message with amber styling and link to /collection"
+fixture_data:
+  order_text: "1x Mountain [Foundations] - Near Mint"
+notes: >
+  Navigate to /ingestor-order. Verify Ordered pill is active. Paste valid
+  order text. Click #parse-btn. Wait for resolved results. Click #commit-btn.
+  Wait for success message. Verify amber guidance message appears with text
+  about "Ordered" and a link to /collection.

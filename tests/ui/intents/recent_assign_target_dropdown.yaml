@@ -1,0 +1,12 @@
+# Scenario: Assign target dropdown lists decks and binders
+#
+# Related:
+#   issues: [200]
+#
+# Prerequisites:
+#   Demo decks and binders must be loaded
+
+description: >
+  On the Recent Images page, the assign target dropdown has "No assignment"
+  as the default option, a "Decks" optgroup with Bolt Tribal and Eldrazi Ramp,
+  and a "Binders" optgroup with Trade Binder and Foil Collection.

@@ -1,0 +1,7 @@
+# Scenario: Image Display setting toggles and persists
+
+description: >
+  When I visit the homepage, the Image Display pills reflect the saved setting
+  (one pill active). When I click the inactive pill, it becomes active, the
+  other deactivates, and the green "Saved" indicator briefly appears. Refreshing
+  the page confirms the new setting persisted.

@@ -1,0 +1,15 @@
+start_page: /import-csv
+involves:
+  - "textarea #csv-text"
+  - "parse button #parse-btn"
+  - "summary bar .summary-bar with failed count in red"
+  - "failed cards group .card-group with red-styled header"
+  - "resolved cards group .card-group"
+  - "error tags .error-tag on failed rows"
+fixture_data:
+  decklist: "1 Nonexistent Card XYZ (ZZZ) 999\n1 Beast-Kin Ranger (FDN) 100"
+notes: >
+  Navigate to /import-csv. Paste mixed valid/invalid deck list. Click
+  #parse-btn. Wait for results. Verify "Failed" count in summary bar. Verify
+  failed cards group with red header. Verify resolved card "Beast-Kin Ranger"
+  also appears.

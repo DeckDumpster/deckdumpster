@@ -1,0 +1,10 @@
+# Scenario: Failed card resolution with Edit & Retry
+#
+# Related:
+#   issues: []
+
+description: >
+  When I add entries with invalid set codes or collector numbers and click
+  Resolve, a "Failed (N)" section appears with error messages and "Edit & Retry"
+  buttons. Clicking "Edit & Retry" moves the failed entry back to the input
+  staging list for correction.

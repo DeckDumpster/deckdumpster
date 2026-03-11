@@ -1,0 +1,9 @@
+# Scenario: Order import shows unresolved card warnings
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When I parse an order containing cards that cannot be found in the database,
+  the results show unresolved cards with red error styling and a "Failed" count
+  in the summary bar.

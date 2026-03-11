@@ -1,0 +1,10 @@
+# Scenario: Product radio pills appear and are selectable after choosing a set
+#
+# Related:
+#   approved-intents: crack.approved-intents.md
+
+description: >
+  After selecting a set, product radio pills appear with the first option
+  auto-selected (highlighted). The Open Pack and Explore Sheets buttons become
+  enabled. I can switch to a different product pill and verify the highlight
+  moves to the newly selected option.

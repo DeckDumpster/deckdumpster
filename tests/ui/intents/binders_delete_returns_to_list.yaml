@@ -1,0 +1,10 @@
+# Scenario: Delete a binder and return to list
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  From a binder's detail view, I click "Delete Binder". After accepting
+  the confirmation dialog, I am returned to the list view. The deleted
+  binder no longer appears in the binder grid.

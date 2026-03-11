@@ -1,0 +1,13 @@
+# Scenario: Create a new binder with all fields populated
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  From the binders list view, I click "New Binder" and the modal opens
+  with title "New Binder" and all fields empty. I fill in the name
+  ("Rare Binder"), description ("High-value rares"), color ("red"),
+  binder type ("4-Pocket"), and storage location ("top shelf"). I click
+  Save. The modal closes and I land on the detail view for the newly
+  created binder. The detail view shows all five metadata fields I entered.

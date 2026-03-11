@@ -2,14 +2,14 @@
 Hand-written implementation for collection_multiselect_new_deck.
 
 Multi-selects a card and creates a new deck inline via the assign modal's
-"New Deck..." option. Uses Graceful Takedown (WOE, index 28) which is
+"New Deck..." option. Uses Ruby Medallion (MH3 295) which is
 unassigned. The prompt dialog is auto-accepted with "Test View".
 """
 
 
 def steps(harness):
     # Search for an unassigned card.
-    harness.fill_by_placeholder("Search cards...", "Graceful Takedown")
+    harness.fill_by_placeholder("Search cards...", "Ruby Medallion")
     harness.wait_for_visible("tr[data-idx]")
     # Open the more menu and enable multi-select.
     harness.click_by_selector("#more-menu-btn")

@@ -1,0 +1,18 @@
+start_page: /recent
+involves:
+  - "assign target select #assign-target"
+  - "default option 'No assignment' (value='')"
+  - "Decks optgroup with Bolt Tribal and Eldrazi Ramp"
+  - "Binders optgroup with Trade Binder and Foil Collection"
+fixture_data:
+  decks:
+    - Bolt Tribal
+    - Eldrazi Ramp
+  binders:
+    - Trade Binder
+    - Foil Collection
+notes: >
+  Navigate to /recent. Wait for #assign-target to be populated (optgroups
+  are loaded asynchronously via loadAssignTargets). Verify default option is
+  "No assignment". Verify "Decks" optgroup has Bolt Tribal and Eldrazi Ramp.
+  Verify "Binders" optgroup has Trade Binder and Foil Collection.

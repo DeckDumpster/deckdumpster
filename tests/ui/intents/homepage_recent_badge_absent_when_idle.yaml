@@ -1,0 +1,6 @@
+# Scenario: No processing badge on Recent link when idle
+
+description: >
+  When no cards are in READY_FOR_OCR or PROCESSING state, the homepage does
+  not show a processing badge next to the "Recent" link. The link is still
+  visible and navigable.

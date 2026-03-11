@@ -1,0 +1,20 @@
+start_page: /sealed
+involves:
+  - "product card or table row [data-uuid] to open detail modal"
+  - "detail modal overlay #detail-modal-overlay"
+  - "edit toggle button .entry-edit-toggle"
+  - "edit pane with dispose controls"
+  - "dispose status dropdown .ee-dispose-status"
+  - "dispose sale price input .ee-dispose-price"
+  - "dispose button .entry-dispose-btn"
+fixture_data:
+  product_name: "Outlaws of Thunder Junction Bundle"
+  entry_id: 5
+  status_before: "owned"
+  dispose_to: "sold"
+  sale_price: 55.0
+notes: >
+  Navigate to /sealed. Click the Outlaws of Thunder Junction Bundle
+  to open detail modal. Click "Edit" to expand the edit pane.
+  Select "sold" from the dispose dropdown. Enter sale price 55.
+  Click "Dispose". Entry status changes from "owned" to "sold".

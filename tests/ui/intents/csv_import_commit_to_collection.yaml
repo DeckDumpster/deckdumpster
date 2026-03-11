@@ -1,0 +1,9 @@
+# Scenario: Commit resolved CSV cards to collection
+#
+# Related:
+#   issues: []
+
+description: >
+  After resolving cards on the CSV Import page, I click "Add to Collection".
+  The button shows "Adding..." while disabled. On success, a green message
+  "Successfully added N card(s) to collection." appears.

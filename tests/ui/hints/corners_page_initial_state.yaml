@@ -1,0 +1,14 @@
+start_page: /ingest-corners
+involves:
+  - "camera placeholder #camera-placeholder with Open Camera button #camera-btn"
+  - "drop zone #drop-zone with 'Drop or select a photo of card corners' text"
+  - "results section #results-section (hidden initially)"
+  - "messages div #messages (empty initially)"
+  - "header links: Home (/), Upload OCR (/upload), Collection (/collection), Batches (/batches)"
+  - "New Session button in header"
+fixture_data: {}
+notes: >
+  Navigate to /ingest-corners. Verify #camera-btn is visible inside
+  #camera-placeholder. Verify #drop-zone has correct text. Verify
+  #results-section is hidden. Verify #messages is empty/has no child
+  elements. Verify header nav links and New Session button.

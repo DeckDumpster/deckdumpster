@@ -1,0 +1,11 @@
+# Scenario: Search and select a set using the type-ahead dropdown
+#
+# Related:
+#   approved-intents: crack.approved-intents.md
+
+description: >
+  I can type a partial set name into the search input to filter the dropdown
+  in real time, then use keyboard arrows and Enter to select a set. The input
+  updates to show "Name (code)" and the dropdown closes. When I click back
+  into the input, it clears the selection and reopens the dropdown for
+  reselection.

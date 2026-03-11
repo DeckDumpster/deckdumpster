@@ -1,0 +1,10 @@
+# Scenario: Toggle foil status on resolved cards
+#
+# Related:
+#   issues: []
+
+description: >
+  After resolving cards on the Manual ID page, I can click the foil toggle on
+  a non-foil card to change it to gold "Foil" text. Clicking again toggles it
+  back to gray "--". The state change is visual and persistent within the
+  results view.

@@ -1,0 +1,13 @@
+# Scenario: CSV Import page structure verification
+#
+# Related:
+#   issues: []
+
+description: >
+  When I navigate to the CSV Import page, I see the correct initial state: page
+  title "CSV Import", Home link in header, textarea with monospace font and
+  placeholder "Paste CSV here (e.g. Moxfield deck export)...", file upload drop
+  zone with "Or drop/click to upload a .csv file" text, format dropdown
+  defaulting to "Auto-detect" with 5 options (Auto-detect, Deck List (text),
+  Moxfield (CSV), Archidekt (CSV), Deckbox (CSV)), batch metadata fields, and
+  "Parse & Resolve" button. Results panel shows info message.

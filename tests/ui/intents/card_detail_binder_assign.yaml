@@ -1,0 +1,11 @@
+# Scenario: Assign an unassigned copy to a binder from the card detail page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the card detail page, an unassigned copy shows an "Add to Binder"
+  dropdown listing all existing binders. Selecting a binder assigns the
+  copy. After assignment, the copy shows the binder name with a "Remove"
+  link and a "Move to Deck" dropdown instead of the assignment dropdowns.

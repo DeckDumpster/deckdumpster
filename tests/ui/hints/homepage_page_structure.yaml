@@ -1,0 +1,17 @@
+start_page: /
+involves:
+  - "page header h1.page-header with text 'MTG Collection Tools'"
+  - "nav-group with .group-label 'Collection' containing links: Cards, Decks, Binders, Sealed, Batches"
+  - "nav-group with .group-label 'Analysis' containing links: Crack-a-Pack, Explore Sheets, Set Value"
+  - "nav-group with .group-label 'Add Cards' containing links: Upload, Recent, Corners, Manual ID, Orders, CSV Import"
+  - "settings section .settings-col with h2 'Settings'"
+  - "Image Display pill-row #image-display-pills with Crop and Contain pills"
+  - "Price Sources check-row #price-source-checks with TCG and CK pills"
+notes: >
+  1. Navigate to /. 2. Assert page header text "MTG Collection Tools".
+  3. Assert group labels "Collection", "Analysis", "Add Cards" are present.
+  4. Assert each link text (Cards, Decks, Binders, Sealed, Batches,
+  Crack-a-Pack, Explore Sheets, Set Value, Upload, Recent, Corners,
+  Manual ID, Orders, CSV Import) is present. 5. Assert "Settings" heading
+  is visible. 6. Assert "Image Display" and "Price Sources" labels visible.
+  7. Assert pill texts "Crop", "Contain", "TCG", "CK" are present.

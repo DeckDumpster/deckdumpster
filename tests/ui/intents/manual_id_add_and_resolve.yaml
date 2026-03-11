@@ -1,0 +1,9 @@
+# Scenario: Add cards by collector number and resolve
+#
+# Related:
+#   issues: [200]
+
+description: >
+  I can manually enter cards by set code and collector number on the Manual ID
+  Entry page. After adding entries to the staging list, I click Resolve to match
+  them against the database. Successfully resolved cards show thumbnails and names.

@@ -1,0 +1,9 @@
+# Scenario: Add and remove set pills to control Analyze button state
+#
+# Related:
+#   pages: [set-value]
+
+description: >
+  I can select two sets and see two pills appear. Clicking the "x" on one
+  pill removes it. Removing the second pill disables the Analyze button.
+  This tests multi-select deselection and the enable/disable logic.

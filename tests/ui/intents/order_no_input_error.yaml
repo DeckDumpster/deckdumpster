@@ -1,0 +1,9 @@
+# Scenario: Order parse with no input shows error
+#
+# Related:
+#   issues: []
+
+description: >
+  When I click Parse on the Order Ingestion page with an empty textarea and no
+  uploaded files, an error message "No input provided." appears in the results
+  panel.

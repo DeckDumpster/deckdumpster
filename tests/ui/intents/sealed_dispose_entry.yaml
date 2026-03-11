@@ -1,0 +1,10 @@
+# Scenario: Dispose of a sealed collection entry
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can open the detail modal for an owned sealed product, expand the
+  edit pane, select "sold" from the dispose dropdown, enter a sale price,
+  click "Dispose", and verify the entry status changes to "sold".

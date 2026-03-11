@@ -1,0 +1,10 @@
+# Scenario: Disambiguate page navigation links and empty state structure
+#
+# Related:
+#   approved-intents: disambiguate.approved-intents.md
+
+description: >
+  When I load the Disambiguate page, the header contains the "Disambiguate"
+  title linking to Home, plus navigation links for Home (/), Upload (/upload),
+  and Recent (/recent). The empty state shows "No cards to disambiguate" with
+  a link to the Upload page.

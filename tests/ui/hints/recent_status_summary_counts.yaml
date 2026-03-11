@@ -1,0 +1,11 @@
+start_page: /recent
+involves:
+  - "summary text #summary showing image counts"
+fixture_data:
+  expected_images: 4
+  expected_done: 2
+  expected_error: 2
+notes: >
+  Navigate to /recent. Wait for #grid and #summary to have text content.
+  Verify #summary contains "4 image(s)" text. Verify it contains "2 done"
+  and "2 error" counts matching the fixture data.

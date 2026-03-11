@@ -1,0 +1,10 @@
+# Scenario: Assign CSV-imported cards to a deck
+#
+# Related:
+#   issues: []
+
+description: >
+  After resolving cards on the CSV Import page, the assign target dropdown has
+  optgroups for Decks (Bolt Tribal, Eldrazi Ramp) and Binders (Trade Binder,
+  Foil Collection). I select a deck, click "Add to Collection", and verify the
+  commit succeeds.

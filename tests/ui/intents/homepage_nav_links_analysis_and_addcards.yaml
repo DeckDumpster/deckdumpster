@@ -1,0 +1,7 @@
+# Scenario: Analysis and Add Cards nav links navigate correctly
+
+description: >
+  When I click each link in the Analysis group (Crack-a-Pack, Explore Sheets,
+  Set Value) and the Add Cards group (Upload, Recent, Corners, Manual ID,
+  Orders, CSV Import), each navigates to the correct destination page. The
+  OCR subgroup with its "OCR" sub-label is visible containing Upload and Recent.

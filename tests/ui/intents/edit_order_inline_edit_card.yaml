@@ -1,0 +1,11 @@
+# Scenario: Inline edit a card's condition and finish on the edit order page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the edit order page, I change a card's condition dropdown to
+  "Lightly Played" and its finish dropdown to "foil". I then reload
+  the page and verify both values persisted, confirming the auto-save
+  on change worked without any explicit save button.

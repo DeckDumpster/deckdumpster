@@ -1,0 +1,14 @@
+start_page: /recent
+involves:
+  - "DONE cards .img-card.done (green border)"
+  - "ERROR cards .img-card.error (red border)"
+  - "error icon .error-icon inside error cards"
+  - "error tooltip .error-tooltip inside error cards"
+fixture_data:
+  expected_done: 2
+  expected_error: 2
+notes: >
+  Navigate to /recent. Wait for #grid. Verify .img-card.done elements exist
+  (2 expected). Verify .img-card.error elements exist (2 expected). Verify
+  .error-icon elements are present inside error cards. Error tooltip is
+  hidden by default, shown on hover.

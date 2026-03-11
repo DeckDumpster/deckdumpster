@@ -1,0 +1,15 @@
+start_page: /crack
+involves:
+  - "set search input #set-input (placeholder 'Search sets...' after load)"
+  - "open pack button #open-btn (disabled)"
+  - "reveal all button #reveal-all-btn (disabled)"
+  - "explore sheets button #sheets-btn (disabled)"
+  - "pack header #pack-header showing 'Select a set and open a pack'"
+  - "pick count #pick-count showing '(0)'"
+  - "pick list #pick-list with empty-state placeholder 'Click cards to pick them'"
+fixture_data: {}
+notes: >
+  Navigate to /crack. Wait for #set-input. Wait for placeholder to change to
+  "Search sets..." (indicates sets loaded). Verify #open-btn, #reveal-all-btn,
+  #sheets-btn are all disabled. Verify #pack-header text. Verify #pick-count
+  shows "(0)". Verify "Click cards to pick them" placeholder text.

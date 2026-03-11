@@ -8,15 +8,23 @@ verifies range pills, and switches to a different range.
 import subprocess
 
 
-def _find_container():
-    """Find the card-detail container name."""
+def _find_container(base_url):
+    """Find the container serving the given base_url by matching its port."""
     try:
+        # Extract port from base_url (e.g. https://localhost:35353 -> 35353)
+        port = base_url.rstrip("/").rsplit(":", 1)[-1]
         result = subprocess.run(
             ["podman", "ps", "--format", "{{.Names}}"],
             capture_output=True, text=True,
         )
         for name in result.stdout.strip().split("\n"):
-            if name.startswith(("systemd-mtgc-", "mtgc-")):
+            if not name:
+                continue
+            port_result = subprocess.run(
+                ["podman", "port", name, "8081/tcp"],
+                capture_output=True, text=True,
+            )
+            if port in port_result.stdout:
                 return name
     except Exception:
         pass
@@ -28,7 +36,7 @@ def steps(harness):
     harness.wait_for_text("Artist's Talent")
 
     # Seed price data into the database via podman exec.
-    container = _find_container()
+    container = _find_container(harness.base_url)
     if container:
         sql = (
             "INSERT OR IGNORE INTO prices "

@@ -1,0 +1,23 @@
+start_page: /decks
+involves:
+  - "#deck-grid with .deck-card elements"
+  - ".deck-card h3 showing deck name"
+  - ".deck-card .meta .badge showing format (modern, commander)"
+  - ".deck-card .stats showing card count (11 cards, 6 cards)"
+  - ".deck-card .meta showing description text"
+fixture_data:
+  deck_1_name: "Bolt Tribal"
+  deck_1_format: "modern"
+  deck_1_count: 11
+  deck_1_description: "Burn deck"
+  deck_2_name: "Eldrazi Ramp"
+  deck_2_format: "commander"
+  deck_2_count: 6
+  deck_2_description: "Big mana Eldrazi"
+notes: >
+  Navigate to /decks. Wait for the deck grid to load (wait for "Bolt Tribal"
+  text). Verify "Bolt Tribal" text is present. Verify "modern" badge text is
+  present. Verify "11 cards" text is present. Verify "Burn deck" description
+  is present. Verify "Eldrazi Ramp" text is present. Verify "commander" badge
+  text is present. Verify "6 cards" text is present. Verify "Big mana Eldrazi"
+  description is present. Take a screenshot.

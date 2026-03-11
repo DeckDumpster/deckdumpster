@@ -1,0 +1,11 @@
+# Scenario: Toggle the add-to-collection form open and closed on the card detail page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the card detail page, clicking the "Add" button opens the
+  add-to-collection form with a date field pre-filled with today's date,
+  a price field, and a source field. Clicking "Add" again while the form
+  is open closes it without submitting. No copy is added.

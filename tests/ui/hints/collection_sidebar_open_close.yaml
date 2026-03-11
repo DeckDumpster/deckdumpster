@@ -1,0 +1,17 @@
+start_page: /collection
+involves:
+  - "sidebar toggle button #sidebar-toggle-btn"
+  - "filter sidebar #sidebar with filter dimensions"
+  - "sidebar close button #sidebar-close-btn"
+  - "sidebar backdrop #sidebar-backdrop"
+  - "color filters #color-filters"
+  - "rarity filters #rarity-filters"
+  - "type filters #type-filters"
+  - "set filter #set-filter-wrap"
+fixture_data: {}
+notes: >
+  Navigate to /collection. Wait for .collection-table (up to 15s).
+  Click #sidebar-toggle-btn. Wait for #sidebar to be visible. Verify
+  filter sections are present (color, rarity, type, set). Screenshot.
+  Click #sidebar-close-btn to close. Verify sidebar closes. Open again
+  via #sidebar-toggle-btn, then close via #sidebar-backdrop.

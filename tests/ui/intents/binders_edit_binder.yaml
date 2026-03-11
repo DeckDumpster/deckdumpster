@@ -1,0 +1,14 @@
+# Scenario: Edit a binder's name and color
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  From a binder's detail view (e.g., "Trade Binder"), I click "Edit"
+  and the modal opens with title "Edit Binder" and fields pre-populated
+  with the current data (name "Trade Binder", color "blue", type
+  "9-Pocket"). I change the name to "Updated Trade Binder" and the
+  color to "green", then click Save. The modal closes and the detail
+  view updates in-place to show the new name and color without
+  navigating away.

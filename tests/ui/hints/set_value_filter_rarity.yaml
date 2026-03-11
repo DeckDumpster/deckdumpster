@@ -1,0 +1,13 @@
+start_page: /set-value
+involves:
+  - "rarity filter pills #rarity-filters .pill (C, U, R, M -- all active by default)"
+  - "stat-total #stat-total (Total Cards value)"
+  - "filter bar #filter-bar"
+fixture_data:
+  set: "blb"
+notes: >
+  Navigate to /set-value. Select BLB and click Analyze. Wait for
+  #filter-bar. Note the initial #stat-total text. Click the "C" pill
+  in #rarity-filters to deactivate it (toggles .active off). Verify
+  #stat-total text changes (decreases). Click "C" again to reactivate.
+  Verify #stat-total returns to original value.

@@ -1,0 +1,17 @@
+start_page: /sheets
+involves:
+  - "set search input #set-input"
+  - "set dropdown #set-dropdown with li items"
+  - "product radio pills #product-radios with label elements (radio inputs display:none)"
+  - "sheet sections .section with .section-header h2 text"
+  - "status text #status showing sheet/card counts"
+fixture_data:
+  set: "blb"
+  set_name: "Bloomburrow"
+  collector_sheets: ["foilRareMythic", "showcaseRareMythic", "foilShowcaseRareMythic", "foilLand", "foilCommon", "foilUncommon"]
+  play_sheets: ["land", "uncommon", "common", "theList", "foilLand", "wildcard", "rareMythicWithShowcase", "foil"]
+notes: >
+  Navigate to /sheets. Select BLB. First product (collector) is auto-selected
+  and sections render. Click the "play" product label. Verify "Common"
+  appears in the section headers (play has a "common" sheet; collector does
+  not). Verify URL hash contains "product=play".

@@ -1,0 +1,11 @@
+# Scenario: Filtering to a type with no batches shows empty state
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I click the "OCR" filter pill (which matches no batches in the
+  fixture), the batch grid is replaced by the empty-state message
+  "No batches yet. Import cards via CSV, corners, or orders to create
+  batches." Switching back to "All" restores the full batch list.

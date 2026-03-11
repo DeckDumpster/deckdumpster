@@ -1,0 +1,10 @@
+# Scenario: Switching product type reloads sheets and updates URL hash
+#
+# Related:
+#   pages: [sheets]
+
+description: >
+  With a set selected, I can see the first product auto-selected and sheets
+  rendered. Clicking a different product pill highlights it red, updates
+  the URL hash to include the new product, and reloads the sheet content
+  with different sheet names.

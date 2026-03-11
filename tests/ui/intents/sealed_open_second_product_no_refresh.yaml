@@ -1,0 +1,12 @@
+# Scenario: Open a second sealed product without refreshing the page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  After opening one sealed product via the "Open Product" modal on the
+  sealed collection page, I can click "Open Product" again and the modal
+  still shows the search box so I can search for and open a second product
+  — without needing a page refresh. The search input must remain visible
+  across consecutive modal opens.

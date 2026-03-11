@@ -2,7 +2,7 @@
 Hand-written implementation for collection_inline_deck_creation.
 
 Creates a new deck inline from the card modal's per-copy "Add to Deck"
-dropdown using the "New Deck..." option. Uses Condemn (SPG, index 26)
+dropdown using the "New Deck..." option. Uses Cathar Commando (FDN 139)
 which is unassigned. The prompt dialog is auto-accepted with "Test View"
 by the test harness.
 """
@@ -10,7 +10,7 @@ by the test harness.
 
 def steps(harness):
     # Search for an unassigned card.
-    harness.fill_by_placeholder("Search cards...", "Condemn")
+    harness.fill_by_placeholder("Search cards...", "Cathar Commando")
     # Wait for results and switch to grid view.
     harness.wait_for_visible("tr[data-idx]")
     harness.click_by_selector("#view-grid-btn")

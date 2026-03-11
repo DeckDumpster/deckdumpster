@@ -1,0 +1,21 @@
+start_page: /decks/1
+involves:
+  - ".zone-tabs with .tab elements for mainboard, sideboard, commander"
+  - "#count-mainboard showing (8), #count-sideboard showing (3), #count-commander showing (0)"
+  - ".tab.active toggles on click"
+  - "#card-tbody shows cards for the selected zone"
+  - "'No cards in this zone' message when zone has 0 cards"
+fixture_data:
+  deck_id: 1
+  deck_name: "Bolt Tribal"
+  mainboard_count: 8
+  sideboard_count: 3
+  commander_count: 0
+  sideboard_card: "Condemn"
+notes: >
+  Navigate to /decks/1. Wait for deck to load. Verify Mainboard tab is active
+  and shows (8). Verify card table has cards (e.g. "Beast-Kin Ranger"). Click
+  the Sideboard tab. Verify the Sideboard tab becomes active. Verify sideboard
+  cards are shown (e.g. "Condemn"). Click the Commander tab. Verify the
+  Commander tab becomes active. Verify "No cards in this zone" message
+  appears. Take a screenshot.

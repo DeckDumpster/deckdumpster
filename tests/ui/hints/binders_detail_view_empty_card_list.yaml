@@ -1,0 +1,15 @@
+start_page: /binders
+involves:
+  - "New Binder button in list-controls"
+  - "binder-modal with #f-name input"
+  - "Save button creates binder via POST /api/binders"
+  - "after create, showBinder(result.id) shows detail view"
+  - "card-tbody renders 'No cards in this binder' when binderCards is empty"
+  - "detail-controls div with 'Add Cards' and 'Remove Selected' buttons"
+fixture_data:
+  new_binder_name: "Empty Test Binder"
+notes: >
+  1. Click "New Binder". 2. Fill name with "Empty Test Binder".
+  3. Click "Save". 4. Verify detail view loads. 5. Verify "No cards
+  in this binder" message is present. 6. Verify "Add Cards" and
+  "Remove Selected" buttons are visible in the header.

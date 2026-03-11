@@ -1,0 +1,11 @@
+# Scenario: Edit deck name and format via the edit modal
+#
+# Prerequisites:
+#   Deck 1 "Bolt Tribal" exists with format "modern"
+
+description: >
+  When I navigate to deck 1 (Bolt Tribal), click the "Edit" button, the edit
+  modal opens pre-populated with the current deck name and format. I change
+  the name to "Bolt Tribal v2" and the format to "Legacy", then click Save.
+  The modal closes and the deck header updates immediately to show the new
+  name "Bolt Tribal v2" and the new format "legacy".

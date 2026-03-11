@@ -1,0 +1,16 @@
+start_page: /collection
+involves:
+  - "more menu button #more-menu-btn"
+  - "toggle multi-select button #toggle-multiselect-btn"
+  - "selection bar #selection-bar with count #sel-count"
+  - "select all link #sel-all"
+  - "select none link #sel-none"
+  - "row checkboxes input.row-sel-cb"
+fixture_data:
+  total_cards: 43
+notes: >
+  Navigate to /collection. Wait for .collection-table (up to 15s).
+  Open #more-menu-btn, click #toggle-multiselect-btn. Selection bar
+  appears with "0 selected". Click #sel-all to select all cards.
+  Count updates. Click #sel-none. Count goes to 0. Open menu again,
+  click #toggle-multiselect-btn to turn off. Bar hides.

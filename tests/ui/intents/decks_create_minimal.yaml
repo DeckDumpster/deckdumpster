@@ -1,0 +1,11 @@
+# Scenario: Create a deck with only a name (minimal input)
+#
+# Prerequisites:
+#   The /decks page loads with the "New Deck" button visible
+
+description: >
+  When I open the "New Deck" modal, enter only a deck name (the sole required
+  field), leave all other fields at their defaults, and click "Save", the deck
+  is created and the browser navigates to the new deck's detail page at
+  /decks/:id. The detail page shows the name I entered and no format,
+  description, or precon metadata.

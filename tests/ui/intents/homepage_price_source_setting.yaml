@@ -1,0 +1,7 @@
+# Scenario: Price Sources setting toggles and persists
+
+description: >
+  When I visit the homepage, the Price Sources pills reflect the saved setting.
+  I can toggle each pill independently (both active, one, or neither). After
+  each toggle, the "Saved" indicator appears and the change persists across
+  page reload.

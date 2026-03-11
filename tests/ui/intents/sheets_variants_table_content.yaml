@@ -1,0 +1,10 @@
+# Scenario: Verify variants table with probability and sheet pills
+#
+# Related:
+#   pages: [sheets]
+
+description: >
+  After loading sheets, the Variants section shows a table with variant
+  rows containing probability percentages and pill-shaped sheet labels.
+  The status text shows the total sheet and card counts for the loaded
+  product.

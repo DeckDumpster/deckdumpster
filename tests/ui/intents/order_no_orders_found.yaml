@@ -1,0 +1,9 @@
+# Scenario: Order parse with garbage text shows no orders found
+#
+# Related:
+#   issues: []
+
+description: >
+  When I paste random garbage text that is not a recognized order format and
+  click Parse, an error message "No orders found in input." appears in the
+  results panel.

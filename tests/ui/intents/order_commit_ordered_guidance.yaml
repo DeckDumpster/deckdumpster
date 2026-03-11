@@ -1,0 +1,10 @@
+# Scenario: Ordered status commit shows guidance message
+#
+# Related:
+#   issues: []
+
+description: >
+  When I parse an order with "Ordered" status selected (the default) and commit,
+  in addition to the green success message, an amber/gold guidance message
+  appears directing me to the Collection page to mark cards as received. The
+  guidance message includes a link to /collection.

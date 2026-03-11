@@ -1,0 +1,21 @@
+start_page: /decks/1
+involves:
+  - "#btn-edit button opens #deck-modal.active"
+  - "#f-name pre-populated with current deck name"
+  - "#f-format pre-populated with current format"
+  - "Change #f-name to new value, #f-format to new value"
+  - "#btn-save-deck saves via PUT /api/decks/1"
+  - "h2#deck-name updates to new name after save"
+  - ".deck-meta-grid updates to show new format"
+fixture_data:
+  deck_id: 1
+  original_name: "Bolt Tribal"
+  original_format: "modern"
+  new_name: "Bolt Tribal v2"
+  new_format: "legacy"
+notes: >
+  Navigate to /decks/1. Wait for deck to load. Click "Edit". Wait for
+  the edit modal to appear. Clear the name field and type "Bolt Tribal v2".
+  Change format to "Legacy". Click "Save". Wait for modal to close. Verify
+  the deck header shows "Bolt Tribal v2". Verify "legacy" appears in the
+  metadata. Take a screenshot.

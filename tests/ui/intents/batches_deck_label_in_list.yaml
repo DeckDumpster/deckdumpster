@@ -1,0 +1,10 @@
+# Scenario: Deck label appears on assigned batch cards in list view
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  In the batch list view, the batch "Wednesday evening scan" (assigned
+  to "Bolt Tribal") shows a green "Deck: Bolt Tribal" label on its card.
+  The batch "New cards from LGS" (unassigned) does not show a deck label.

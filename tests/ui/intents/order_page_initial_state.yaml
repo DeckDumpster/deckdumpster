@@ -1,0 +1,12 @@
+# Scenario: Order Import page initial state verification
+#
+# Related:
+#   issues: []
+
+description: >
+  When I navigate to the Order Ingestion page, I see the correct initial state:
+  an empty textarea with placeholder "Paste TCGPlayer/CK order text here...",
+  a file drop zone with "Click or drop .html / .txt files" text, "Ordered" pill
+  active by default, "Owned" pill inactive, format dropdown set to "Auto-detect"
+  with all 5 options, results panel showing info message "Paste order data or
+  upload files, then click Parse.", and a Home link in the header.

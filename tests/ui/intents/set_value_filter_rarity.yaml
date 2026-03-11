@@ -1,0 +1,10 @@
+# Scenario: Filter by rarity and observe Total Cards change
+#
+# Related:
+#   pages: [set-value]
+
+description: >
+  After running an analysis, I can deactivate the "C" (Common) rarity pill
+  in the filter bar. The Total Cards stat decreases, proving the filter
+  took effect. Reactivating it restores the original count. Rarity
+  filtering works even without price data.

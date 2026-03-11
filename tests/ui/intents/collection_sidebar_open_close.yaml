@@ -1,0 +1,11 @@
+# Scenario: Open and close the filter sidebar
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can click the "Filters" button to open the filter sidebar. The sidebar
+  slides in from the left showing filter dimensions including Color, Rarity,
+  Type, Set, Finish, and range filters. I can close the sidebar by clicking
+  "Close Filters" or clicking the backdrop.

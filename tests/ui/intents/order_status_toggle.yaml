@@ -1,0 +1,10 @@
+# Scenario: Toggle between Ordered and Owned status pills
+#
+# Related:
+#   issues: []
+
+description: >
+  On the Order Ingestion page, I can click the "Owned" pill to activate it,
+  which deactivates the "Ordered" pill. Clicking "Ordered" switches it back.
+  The active pill has a red background and the inactive pill has a dark
+  background.

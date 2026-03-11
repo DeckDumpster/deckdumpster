@@ -1,0 +1,15 @@
+start_page: /edit-order?id=1
+involves:
+  - 'condition dropdown (select[data-field="condition"]) on a card row'
+  - 'finish dropdown (select[data-field="finish"]) on a card row'
+  - 'auto-save triggers on change event without explicit save button'
+fixture_data:
+  card_name: "Cathar Commando"
+  card_id: 39
+  new_condition: "Lightly Played"
+  new_finish: "foil"
+notes: >
+  Navigate to /edit-order?id=1. Wait for card rows to load. Find the
+  condition dropdown for card ID 39 (Cathar Commando) and select
+  "Lightly Played". Find the finish dropdown for the same card and
+  select "foil". Reload the page and verify both values persisted.

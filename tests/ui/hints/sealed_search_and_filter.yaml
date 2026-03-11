@@ -1,0 +1,19 @@
+start_page: /sealed
+involves:
+  - "search input #search-input with placeholder 'Search collection...'"
+  - "filter button #filter-btn to toggle sidebar"
+  - "sidebar #sidebar with category pills #category-pills"
+  - "category pill labels (checkboxes are display:none, click label)"
+  - "clear filters button #clear-filters-btn"
+  - "status text #status"
+fixture_data:
+  search_term: "Bloomburrow"
+  bloomburrow_products: 2
+  booster_pack_count: 3
+  total_products: 8
+notes: >
+  Navigate to /sealed. Wait for cards to load. Type "Bloomburrow" into
+  #search-input. Verify only Bloomburrow products appear. Clear search.
+  Click #filter-btn to open sidebar. Click the "Booster Pack" category
+  pill label. Verify only booster packs appear. Click #clear-filters-btn.
+  Verify all products return.

@@ -1,0 +1,15 @@
+start_page: /import-csv
+involves:
+  - "textarea #csv-text"
+  - "parse button #parse-btn"
+  - "summary bar .summary-bar with total, resolved, format"
+  - "resolved cards table .item-table"
+  - "action bar .action-bar with commit, cancel, assign dropdown"
+fixture_data:
+  decklist: "1 Beast-Kin Ranger (FDN) 100\n1 Cathar Commando (FDN) 139"
+  expected_cards: ["Beast-Kin Ranger", "Cathar Commando"]
+notes: >
+  Navigate to /import-csv. Paste deck list text into #csv-text. Click
+  #parse-btn. Wait for "Resolved" text in summary bar. Verify .item-table
+  is visible with resolved card rows. Verify #commit-btn and #cancel-btn
+  are visible.

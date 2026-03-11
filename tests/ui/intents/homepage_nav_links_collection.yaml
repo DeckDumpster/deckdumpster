@@ -1,0 +1,6 @@
+# Scenario: Collection group nav links navigate to correct pages
+
+description: >
+  When I click each link in the Collection group (Cards, Decks, Binders,
+  Sealed), the browser navigates to the correct destination page. Batches
+  is excluded -- already covered by batches_homepage_nav_link.

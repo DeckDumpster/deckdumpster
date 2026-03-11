@@ -1,0 +1,23 @@
+start_page: /ingestor-ids
+involves:
+  - "rarity select #rarity-select"
+  - "collector number input #cn-input"
+  - "set code input #set-input"
+  - "add button #add-btn"
+  - "resolve button #resolve-btn"
+  - "resolved table .resolved-table with card details"
+  - "assign target dropdown #assign-target with optgroups"
+  - "commit button #commit-btn"
+  - "results panel #results with success message"
+fixture_data:
+  set_code: "fdn"
+  collector_number: "100"
+  rarity: "C"
+  card_name: "Beast-Kin Ranger"
+  decks: ["Bolt Tribal", "Eldrazi Ramp"]
+  binders: ["Trade Binder", "Foil Collection"]
+notes: >
+  Navigate to /ingestor-ids. Select "C" from #rarity-select. Enter "100" in
+  #cn-input, "fdn" in #set-input. Click #add-btn. Click #resolve-btn. Wait
+  for "Beast-Kin Ranger". Select "Bolt Tribal" from #assign-target. Click
+  #commit-btn. Verify success message "Added" appears.

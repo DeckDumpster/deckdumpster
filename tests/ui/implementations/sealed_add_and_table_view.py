@@ -9,8 +9,8 @@ The demo fixture already has some sealed products loaded.
 def steps(harness):
     # Click the "+ Add" button to open the add modal.
     harness.click_by_selector("#add-btn")
-    # Search for a product.
-    harness.fill_by_placeholder("Search sealed products by name...", "Lorwyn")
+    # Search for a product using the specific add-modal search input.
+    harness.fill_by_selector("#add-search-input", "Lorwyn")
     # Wait for results and click the first matching product.
     harness.wait_for_visible(".product-results li")
     harness.click_by_selector(".product-results li")

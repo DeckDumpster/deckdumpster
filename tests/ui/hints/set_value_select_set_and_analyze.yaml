@@ -1,0 +1,20 @@
+start_page: /set-value
+involves:
+  - "set search input #set-search"
+  - "set dropdown #set-dropdown with li items"
+  - "selected pills #selected-pills with .selected-pill"
+  - "analyze button #analyze-btn (enables after set selected)"
+  - "loading indicator #loading"
+  - "filter bar #filter-bar"
+  - "chart wrap #chart-wrap with canvas#chart"
+  - "summary #summary with .stat elements"
+  - "top cards section #top-cards"
+fixture_data:
+  set: "blb"
+  set_name: "Bloomburrow"
+notes: >
+  Navigate to /set-value. Click #set-search to focus. Type "Bloom" to
+  filter. Wait for #set-dropdown li. Click first li (Bloomburrow). Verify
+  .selected-pill appears. Verify #analyze-btn is no longer disabled. Click
+  #analyze-btn. Wait for #loading to become hidden. Verify #filter-bar,
+  #summary, #chart-wrap, #top-cards are visible.

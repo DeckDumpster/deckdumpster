@@ -1,0 +1,14 @@
+# Scenario: Add cards to a binder via search picker
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  From the "Trade Binder" detail view, I click "Add Cards". The modal
+  opens showing "Type to search your collection..." I type "pr" into
+  the search field and see matching cards from my collection appear
+  (e.g., "Preacher of the Schism"). I click a card to select it (it
+  highlights). I click "Add Selected". The modal closes, the binder's
+  card count increases from 6 to 7, and the newly added card appears
+  in the card table.

@@ -1,0 +1,17 @@
+start_page: /card/lci/113
+involves:
+  - 'dispose dropdown (.dispose-select) with "Listed" option on owned copies'
+  - '"Dispose" button (.dispose-btn) triggers the status change'
+  - 'purple "Listed" disposition badge (.disposition-badge.listed) appears'
+  - 'after listing, dispose dropdown shows "Unlist" option instead of "Listed"'
+  - 'selecting "Unlist" and clicking Dispose returns copy to owned status'
+  - 'full disposition controls reappear after unlisting'
+fixture_data:
+  card_name: "Preacher of the Schism"
+  copy_id: 31
+notes: >
+  LCI 113 (Preacher of the Schism) has an unassigned owned copy (entry #31).
+  Navigate to /card/lci/113 and wait for copies to load. Select "Listed"
+  from the dispose dropdown and click "Dispose". The copy shows a "listed"
+  badge. Then select "Unlist" from the updated dropdown and click "Dispose"
+  again. The copy returns to owned status with full disposition controls.

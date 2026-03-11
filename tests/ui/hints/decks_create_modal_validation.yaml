@@ -1,0 +1,15 @@
+start_page: /decks
+involves:
+  - '"New Deck" button opens #deck-modal'
+  - "#f-name input left empty"
+  - "Save button triggers alert('Name is required')"
+  - "Modal stays open after alert"
+  - "#f-name filled then Save succeeds"
+fixture_data:
+  validation_deck_name: "Validated Deck"
+notes: >
+  Navigate to /decks. Click "New Deck". Wait for modal. Click "Save" without
+  filling in the name. The browser alert is auto-accepted by the harness.
+  Verify the modal is still open. Fill in the name "Validated Deck". Click
+  Save. Wait for redirect to the new deck's detail page. Verify the deck
+  name is shown. Take a screenshot.

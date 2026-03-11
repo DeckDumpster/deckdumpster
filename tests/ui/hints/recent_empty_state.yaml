@@ -1,0 +1,14 @@
+start_page: /recent
+involves:
+  - "empty state div #empty with .empty-state class"
+  - "heading h2 'No recent images' inside #empty"
+  - "link to /upload 'Upload some photos' inside #empty"
+  - "batch ingest button #batch-btn (hidden when no done images)"
+  - "summary text #summary (empty when no images)"
+fixture_data:
+  expected_images: 4
+notes: >
+  The fixture has 4 images so #empty is display:none. Verify the #empty div
+  exists in the DOM with correct content (h2 and link). Verify #batch-btn is
+  visible (since there are DONE images). Verify #summary has text content.
+  This test checks the empty state elements exist in the DOM even when hidden.

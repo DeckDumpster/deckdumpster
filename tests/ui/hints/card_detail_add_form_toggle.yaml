@@ -1,0 +1,13 @@
+start_page: /card/lci/68
+involves:
+  - '"Add" button (#add-btn) in the detail links row'
+  - 'add-collection-form (.add-collection-form) with date (#add-date), price (#add-price), source (#add-source) inputs'
+  - 'clicking "Add" again while form is open closes the form'
+  - 'no copy is added (copies section unchanged)'
+fixture_data:
+  card_name: "Orazca Puzzle-Door"
+notes: >
+  LCI 68 (Orazca Puzzle-Door) has an owned copy. Navigate to /card/lci/68.
+  Wait for the card to load. Click the "Add" button. Verify the add form
+  appears with a date input pre-filled. Click "Add" again. Verify the
+  form disappears. The copies section should remain unchanged.

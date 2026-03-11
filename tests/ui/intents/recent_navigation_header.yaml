@@ -1,0 +1,10 @@
+# Scenario: Recent page header has correct navigation links
+#
+# Related:
+#   issues: [200]
+
+description: >
+  When I navigate to the Recent Images page, the header contains links for
+  "Home" (/), "Upload" (/upload), and "Disambiguate" (/disambiguate). The
+  title "Recent Images" links to /. Clicking a navigation link navigates
+  to the correct page.

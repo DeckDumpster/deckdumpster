@@ -1,0 +1,11 @@
+# Scenario: Upload files and manage image cards in the grid
+#
+# Related:
+#   issues: [200]
+
+description: >
+  I programmatically set files on the hidden #file-input to upload images.
+  After upload, each image appears as a thumbnail card in the image grid
+  showing the filename and a red delete button. The actions bar becomes
+  visible with an image count and a "View Recent Images" button. Clicking
+  "View Recent Images" navigates to /recent.

@@ -1,0 +1,11 @@
+start_page: /ingestor-order
+involves:
+  - "textarea #order-text"
+  - "parse button #parse-btn"
+  - "results panel #results with error message"
+fixture_data:
+  garbage_text: "this is random garbage text that is not an order format"
+notes: >
+  Navigate to /ingestor-order. Fill #order-text with garbage text. Click
+  #parse-btn. Wait for results. Verify "No orders found in input." error
+  message appears.

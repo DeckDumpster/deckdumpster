@@ -1,0 +1,12 @@
+start_page: /recent
+involves:
+  - "minus button #col-minus"
+  - "plus button #col-plus"
+  - "column count display #col-count"
+  - "grid #grid with CSS var --grid-cols"
+fixture_data: {}
+notes: >
+  Navigate to /recent. Wait for #grid. Read initial #col-count text. Click
+  #col-minus to decrease columns. Verify #col-count decreases. Click
+  #col-plus to increase columns. Verify #col-count increases. Column
+  range is 1-12; buttons disable at boundaries.

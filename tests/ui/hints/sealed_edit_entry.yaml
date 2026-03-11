@@ -1,0 +1,19 @@
+start_page: /sealed
+involves:
+  - "product card or table row [data-uuid] to open detail modal"
+  - "detail modal overlay #detail-modal-overlay"
+  - "edit toggle button .entry-edit-toggle expanding edit pane"
+  - "edit pane #entry-edit-0 with qty (.ee-qty) and price (.ee-price) inputs"
+  - "save button .entry-save-btn"
+  - "detail close button #detail-close"
+fixture_data:
+  product_name: "Duskmourn House of Horror Collector Booster Box"
+  entry_id: 1
+  original_price: 105.0
+  new_qty: 2
+  new_price: 99.0
+notes: >
+  Navigate to /sealed. Click the Duskmourn Collector Booster Box card
+  to open the detail modal. Click "Edit" on the first entry to expand
+  the edit pane. Change qty to 2 and price to 99. Click "Save".
+  Modal refreshes with updated values. Close the modal.

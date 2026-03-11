@@ -1,0 +1,17 @@
+start_page: /ingestor-ids
+involves:
+  - "collector number input #cn-input"
+  - "set code input #set-input"
+  - "rarity select #rarity-select"
+  - "entry table #entry-tbody"
+  - "card count #card-count"
+fixture_data:
+  entries:
+    - { cn: "100", set: "fdn" }
+    - { cn: "139", set: "fdn" }
+    - { cn: "191", set: "fdn" }
+notes: >
+  Navigate to /ingestor-ids. Wait for #cn-input. For each entry: fill CN in
+  #cn-input, press Enter (focus moves to #set-input), fill set code in
+  #set-input, press Enter (entry added, CN clears). Repeat 3 times. Assert
+  card count shows "3" and 3 rows in #entry-tbody.

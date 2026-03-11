@@ -1,0 +1,8 @@
+start_page: /import-csv
+involves:
+  - "parse button #parse-btn"
+  - "results panel #results with error message"
+fixture_data: {}
+notes: >
+  Navigate to /import-csv. Do not enter any text. Click #parse-btn. Verify
+  "No CSV text provided." error message appears in #results.

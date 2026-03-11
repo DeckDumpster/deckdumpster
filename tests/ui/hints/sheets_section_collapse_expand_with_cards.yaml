@@ -1,0 +1,17 @@
+start_page: /sheets
+involves:
+  - "collapsible sections .section with .section-header and .section-body"
+  - "section open state .section.open (body visible when open)"
+  - "card grid .card-grid with .sheet-card elements"
+  - "card images .sheet-card-img-wrap img"
+  - "pull-rate badges .badge.pull-rate"
+  - "Variants section (first section, expanded by default)"
+fixture_data:
+  set: "blb"
+  product: "play"
+notes: >
+  Load BLB play sheets via deep link. Variants section is .section.open by
+  default. Sheet sections (Common, etc.) are collapsed (no .open class).
+  Click the "Common" section-header to expand it. Verify .sheet-card
+  elements and .badge.pull-rate are visible. Click the header again to
+  collapse. Verify .sheet-card elements are hidden.
