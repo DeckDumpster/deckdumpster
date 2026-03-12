@@ -10,6 +10,8 @@ argument-hint: "[issue-number] [instance-name]"
 
 Run this after completing a feature implementation to produce UI scenario tests. This is a multi-phase workflow that produces intent YAML, hint YAML, and hand-written implementation Python files under `tests/ui/`.
 
+**CRITICAL: You MUST run the tests (Phase 6) before teardown. Every test must pass. Do NOT skip this phase or proceed to teardown with failing/unrun tests.**
+
 ## Phase 1: Analyze & Propose Intents
 
 Use a subagent to analyze the changes made in this session (or for issue `$0` if provided). The subagent should:
@@ -142,22 +144,25 @@ def steps(harness):
 - If a modal/overlay appears asynchronously, add `wait_for_visible` before interacting
 - Keep implementations minimal -- test one thing per scenario
 
-## Phase 6: Run the Tests
+## Phase 6: Run the Tests (MANDATORY)
 
-After writing all implementation files, **always run the tests** against the still-running container to verify they pass:
+**This phase is NOT optional. You MUST run the tests before teardown.**
+
+After writing all implementation files, run the new tests against the still-running container:
 
 ```bash
-uv run pytest tests/ui/ -v --instance ${1:-qa-finish} -k "<test_name_pattern>"
+uv run pytest tests/ui/ -v --instance ${1:-qa-finish} -k "<test_name_1> or <test_name_2> or ..."
 ```
 
-Use `-k` to select only the newly written scenarios (e.g. `-k "sealed_open"`).
+Build the `-k` pattern from the filenames of the newly written scenarios (e.g. `-k "sealed_open_product or sealed_open_no_contents"`).
 
 If any test fails:
 1. Read the error output to understand the failure
 2. Fix the implementation file (wrong selector, missing wait, incorrect text match, etc.)
 3. Re-run until all new tests pass
+4. Repeat until you get 0 failures
 
-**Do NOT proceed to teardown until all new tests pass.** This is a hard requirement — untested test code is worse than no tests at all.
+**Do NOT proceed to teardown until every new test passes.** Untested test code is worse than no tests at all. If you skip this phase the tests will almost certainly have bugs (wrong button text, missing waits, bad selectors) that could have been caught.
 
 ## Phase 7: Teardown
 
