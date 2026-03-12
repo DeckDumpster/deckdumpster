@@ -1,0 +1,13 @@
+start_page: /ingest-corners
+involves:
+  - 'jumpstart-banner div (id=jumpstart-banner) hidden by default'
+  - 'camera placeholder (id=camera-placeholder) visible'
+  - 'drop zone (id=drop-zone) visible'
+  - 'results section (id=results-section) hidden'
+  - 'deck selector (id=deck-selector) hidden initially'
+fixture_data: {}
+notes: >
+  1. Navigate to /ingest-corners. 2. Assert jumpstart-banner exists
+  but is hidden (display:none). 3. Assert camera-placeholder is visible.
+  4. Assert drop-zone is visible. 5. Assert results-section is hidden.
+  6. Assert "New Session" button text is present. Done.

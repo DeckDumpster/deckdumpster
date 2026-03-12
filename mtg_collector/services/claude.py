@@ -436,7 +436,7 @@ Each corner has TWO LINES of tiny printed text:
 CRITICAL: The set code is on LINE 2, directly before the separator (· or ★). It is always 3 characters. Any text on line 1 after the collector number is NOT the set code — ignore it.
 
 Where:
-- RARITY: a single letter — C, U, R, M, P, L (land), or T (token)
+- RARITY: a single letter — C, U, R, M, P, L (land), T (token), or F (Jumpstart face card)
 - COLLECTOR_NUMBER: 3-4 digits with leading zeros (e.g. 0075, 0200)
 - SET: exactly 3 letters on line 2, before · or ★ (e.g. FIN, EOE, MKM)
 - Dot (·) = nonfoil, star (★) = foil

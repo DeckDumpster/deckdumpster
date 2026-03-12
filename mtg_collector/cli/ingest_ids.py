@@ -12,7 +12,7 @@ from mtg_collector.db import (
 from mtg_collector.db.models import CollectionEntry
 from mtg_collector.utils import normalize_condition, normalize_finish, store_source_image
 
-RARITY_MAP = {"C": "common", "U": "uncommon", "R": "rare", "M": "mythic", "P": "promo", "L": "common", "T": "token"}
+RARITY_MAP = {"C": "common", "U": "uncommon", "R": "rare", "M": "mythic", "P": "promo", "L": "common", "T": "token", "F": "rare"}
 
 
 def lookup_card(set_code, cn_raw, cn_stripped, rarity_expected, printing_repo):

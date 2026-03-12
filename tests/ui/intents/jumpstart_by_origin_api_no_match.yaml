@@ -1,0 +1,13 @@
+# Scenario: By-origin endpoint returns null for non-existent deck
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I navigate to the Ingest Corners page and the jumpstart-banner
+  element exists but is hidden by default, I know the Jumpstart
+  auto-detection UI is wired up. The page loads with the banner
+  hidden, the deck selector present, and the results section hidden —
+  confirming the new Jumpstart detection elements are in place
+  alongside the existing corner ingest UI.

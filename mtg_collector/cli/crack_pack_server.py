@@ -1084,6 +1084,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path == "/api/sealed/collection":
             self._api_sealed_collection_list(params)
         # Deck API routes
+        elif path == "/api/decks/by-origin":
+            self._api_deck_by_origin(params)
         elif path == "/api/decks":
             self._api_decks_list()
         elif path.startswith("/api/decks/") and path.endswith("/expected"):
@@ -4080,16 +4082,48 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "condition": "Near Mint",
             })
 
+        # Check for Jumpstart face card (rarity "F") and look up deck theme
+        jumpstart_info = None
+        for d in detections:
+            if d.get("rarity") == "F":
+                raw_set = d["set"]
+                if raw_set.lower() in unique_sets:
+                    js_set = unique_sets[raw_set.lower()]
+                    js_cn_raw = d["collector_number"]
+                    js_cn_stripped = js_cn_raw.lstrip("0") or "0"
+                    row = conn.execute(
+                        """SELECT spc.source_name, sp.set_code, sp.name
+                           FROM printings p
+                           JOIN mtgjson_uuid_map um ON p.set_code = um.set_code AND p.collector_number = um.collector_number
+                           JOIN sealed_product_cards spc ON um.uuid = spc.mtgjson_uuid
+                           JOIN sealed_products sp ON spc.sealed_product_uuid = sp.uuid
+                           WHERE p.set_code = ? AND p.collector_number IN (?, ?)
+                             AND spc.source_type = 'deck' AND spc.source_name IS NOT NULL
+                           LIMIT 1""",
+                        (js_set, js_cn_raw, js_cn_stripped),
+                    ).fetchone()
+                    if row:
+                        jumpstart_info = {
+                            "set_code": row[1],
+                            "theme": row[0],
+                            "product_name": row[2],
+                        }
+                break  # first F card wins
+
         conn.close()
 
         _log_ingest(f"Corner detect: {len(resolved_cards)} resolved, {len(skipped)} skipped, {len(errors)} errors")
 
-        self._send_json({
+        result = {
             "cards": resolved_cards,
             "skipped": skipped,
             "errors": errors,
             "image_key": image_key,
-        })
+        }
+        if jumpstart_info:
+            result["jumpstart"] = jumpstart_info
+
+        self._send_json(result)
 
     def _api_corners_commit(self):
         """Commit reviewed corner-detected cards to collection."""
@@ -4774,6 +4808,23 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         repo = DeckRepository(conn)
         self._send_json(repo.list_all())
         conn.close()
+
+    def _api_deck_by_origin(self, params: dict):
+        set_code = params.get("set_code", [None])[0]
+        theme = params.get("theme", [None])[0]
+        if not set_code or not theme:
+            self._send_json({"error": "set_code and theme are required"}, 400)
+            return
+        variation = params.get("variation", [None])[0]
+        if variation is not None:
+            variation = int(variation)
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        deck = repo.find_by_origin(set_code, theme, variation)
+        conn.close()
+        self._send_json(deck)
 
     def _api_deck_get(self, deck_id: int):
         conn = sqlite3.connect(self.db_path)

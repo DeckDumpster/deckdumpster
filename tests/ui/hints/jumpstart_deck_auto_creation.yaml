@@ -1,0 +1,22 @@
+start_page: /decks
+involves:
+  - '"New Deck" button opens the deck-modal'
+  - 'name input placeholder "My Commander Deck"'
+  - '"Preconstructed deck" checkbox (id=f-precon) toggles precon-fields'
+  - 'Origin Set dropdown (id=f-origin-set) with Jumpstart (JMP) option'
+  - 'Theme text input (id=f-origin-theme)'
+  - 'deck detail page metadata grid shows origin info'
+  - 'deck list page shows the new deck'
+fixture_data:
+  deck_name: "Goblins JMP Test"
+  origin_set: "jmp"
+  origin_set_label: "Jumpstart (JMP)"
+  origin_theme: "Goblins"
+notes: >
+  1. Navigate to /decks. 2. Click "New Deck". 3. Fill name "Goblins
+  JMP Test". 4. Check "Preconstructed deck" checkbox — origin fields
+  appear. 5. Select "Jumpstart (JMP)" from Origin Set. 6. Type
+  "Goblins" in Theme. 7. Click "Save" — auto-navigates to deck detail.
+  8. Verify "Preconstructed" and "JMP" and "Goblins" text appear.
+  9. Navigate to /decks. 10. Verify "Goblins JMP Test" appears in list.
+  Done.

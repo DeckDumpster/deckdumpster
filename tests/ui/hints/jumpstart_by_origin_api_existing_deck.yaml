@@ -1,0 +1,20 @@
+start_page: /decks
+involves:
+  - '"New Deck" button opens the deck-modal'
+  - 'name input placeholder "My Commander Deck"'
+  - '"Preconstructed deck" checkbox (id=f-precon) toggles precon-fields'
+  - 'Origin Set dropdown (id=f-origin-set) with Jumpstart (JMP) option'
+  - 'Theme text input (id=f-origin-theme)'
+  - 'deck detail page shows origin metadata (Preconstructed, JMP, Elves)'
+  - 'deck list page shows the new deck'
+fixture_data:
+  deck_name: "Elves JMP"
+  origin_set: "jmp"
+  origin_set_label: "Jumpstart (JMP)"
+  origin_theme: "Elves"
+notes: >
+  1. On /decks, click "New Deck". 2. Fill name "Elves JMP". 3. Check
+  "Preconstructed deck" checkbox. 4. Select "Jumpstart (JMP)" from
+  Origin Set. 5. Type "Elves" in Theme. 6. Click "Save" — navigates
+  to deck detail. 7. Verify origin metadata text. 8. Navigate to /decks.
+  9. Verify "Elves JMP" appears in list. Done.

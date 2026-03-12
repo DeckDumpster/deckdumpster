@@ -267,6 +267,18 @@ button.danger:hover { background: #b71c1c; }
   color: #e94560;
 }
 
+#jumpstart-banner {
+  display: none;
+  margin: 8px;
+  padding: 10px 16px;
+  background: #1b2e4a;
+  border: 1px solid #42a5f5;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #42a5f5;
+  font-weight: 600;
+}
+
 @media (max-width: 768px) {
   .results-table { font-size: 0.75rem; }
   .results-table th, .results-table td { padding: 6px 8px; }
@@ -314,6 +326,7 @@ button.danger:hover { background: #b71c1c; }
 </div>
 
 <div id="messages"></div>
+<div id="jumpstart-banner"></div>
 
 <div id="results-section">
   <h2>Detected Cards</h2>
@@ -436,6 +449,7 @@ function newSession() {
   currentImageKey = null;
   photoCounter = 0;
   resultsSection.style.display = 'none';
+  document.getElementById('jumpstart-banner').style.display = 'none';
   clearMessages();
   showSuccess('New session started');
 }
@@ -519,6 +533,47 @@ function stopCamera() {
   document.getElementById('photo-count').style.display = 'none';
 }
 
+// ── Jumpstart auto-detection ──
+async function handleJumpstartDetection(jumpstart) {
+  const banner = document.getElementById('jumpstart-banner');
+  const deckSelect = document.getElementById('deck-select');
+  try {
+    // Check if a deck with this origin already exists
+    const params = new URLSearchParams({ set_code: jumpstart.set_code, theme: jumpstart.theme });
+    const resp = await fetch('/api/decks/by-origin?' + params);
+    const existing = await resp.json();
+    if (existing && existing.id) {
+      // Select the existing deck
+      await loadDecks();
+      deckSelect.value = existing.id;
+      onDeckSelectChange();
+      banner.textContent = `Jumpstart Deck Detected: ${jumpstart.theme} (${jumpstart.set_code.toUpperCase()}) — existing deck selected`;
+    } else {
+      // Create a new deck
+      const name = `${jumpstart.theme} (${jumpstart.product_name || jumpstart.set_code.toUpperCase()})`;
+      const createResp = await fetch('/api/decks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          origin_set_code: jumpstart.set_code,
+          origin_theme: jumpstart.theme,
+          is_precon: true,
+        }),
+      });
+      if (createResp.ok) {
+        const created = await createResp.json();
+        await loadDecks();
+        deckSelect.value = created.id;
+        onDeckSelectChange();
+        banner.textContent = `Jumpstart Deck Detected: ${jumpstart.theme} (${jumpstart.set_code.toUpperCase()}) — new deck created`;
+      }
+    }
+    banner.style.display = 'block';
+    showSuccess(`Jumpstart face card detected — deck auto-selected for "${jumpstart.theme}"`);
+  } catch (e) { /* non-critical — user can still pick a deck manually */ }
+}
+
 // ── Detection ──
 async function detectFromFile(file) {
   processing.style.display = 'block';
@@ -557,6 +612,10 @@ async function detectFromFile(file) {
     currentCards = data.cards;
     currentImageKey = data.image_key;
     renderResults();
+
+    if (data.jumpstart) {
+      handleJumpstartDetection(data.jumpstart);
+    }
   } catch (e) {
     processing.style.display = 'none';
     showError('Network error: ' + e.message);
@@ -629,6 +688,7 @@ function discardResults() {
   currentImageKey = null;
   resultsSection.style.display = 'none';
   document.getElementById('deck-selector').style.display = 'none';
+  document.getElementById('jumpstart-banner').style.display = 'none';
 }
 
 // ── Commit ──

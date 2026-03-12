@@ -1905,6 +1905,29 @@ class DeckRepository:
         )
         return [dict(row) for row in cursor]
 
+    def find_by_origin(self, origin_set_code: str, origin_theme: str,
+                       origin_variation: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Find a deck by its origin metadata (set code + theme + optional variation)."""
+        if origin_variation is not None:
+            row = self.conn.execute(
+                """SELECT d.*, COUNT(c.id) as card_count,
+                          COALESCE(SUM(c.purchase_price), 0) as total_value
+                   FROM decks d LEFT JOIN collection c ON c.deck_id = d.id
+                   WHERE d.origin_set_code = ? AND d.origin_theme = ? AND d.origin_variation = ?
+                   GROUP BY d.id LIMIT 1""",
+                (origin_set_code, origin_theme, origin_variation),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                """SELECT d.*, COUNT(c.id) as card_count,
+                          COALESCE(SUM(c.purchase_price), 0) as total_value
+                   FROM decks d LEFT JOIN collection c ON c.deck_id = d.id
+                   WHERE d.origin_set_code = ? AND d.origin_theme = ?
+                   GROUP BY d.id LIMIT 1""",
+                (origin_set_code, origin_theme),
+            ).fetchone()
+        return dict(row) if row else None
+
     def get_cards(self, deck_id: int, zone: Optional[str] = None) -> List[Dict[str, Any]]:
         query = """
             SELECT c.id, c.printing_id, c.finish, c.condition, c.language,

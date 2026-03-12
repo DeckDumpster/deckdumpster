@@ -1,0 +1,14 @@
+# Scenario: Create Jumpstart precon deck and verify origin metadata round-trip
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can create a new precon deck with Jumpstart origin metadata
+  (set code "jmp", theme "Goblins") from the Decks page. After
+  saving, the deck detail page shows the origin metadata. When I
+  then navigate to the Decks list, the new deck appears. This
+  confirms that decks created with origin metadata (as the
+  Jumpstart auto-detection flow would create) persist correctly
+  and display their origin information.

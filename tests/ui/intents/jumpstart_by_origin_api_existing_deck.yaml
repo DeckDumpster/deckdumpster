@@ -1,0 +1,13 @@
+# Scenario: Look up existing deck by Jumpstart origin metadata
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I create a precon deck with origin_set_code "jmp" and
+  origin_theme "Elves" via the Decks page, then navigate to the
+  Ingest Corners page, the deck appears in the deck selector
+  dropdown. The /api/decks/by-origin endpoint returns this deck
+  when queried with matching set_code and theme parameters, and
+  returns null when no deck matches.
