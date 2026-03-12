@@ -295,7 +295,7 @@
 
     let orderHtml = '';
     if (copy.order_id) {
-      orderHtml = `<div class="detail-row"><span class="label">Order</span><span class="value">${esc(copy.seller_name || '')} #${esc(copy.order_number || '')}${copy.order_date ? ' (' + copy.order_date + ')' : ''}</span></div>`;
+      orderHtml = `<div class="detail-row"><span class="label">Order</span><span class="value"><a href="/edit-order?id=${copy.order_id}" style="color:#e94560">${esc(copy.seller_name || '')} #${esc(copy.order_number || '')}${copy.order_date ? ' (' + copy.order_date + ')' : ''}</a></span></div>`;
     }
 
     let lineageHtml = '';
