@@ -1744,7 +1744,7 @@ document.getElementById('toggle-multiselect-btn').addEventListener('click', () =
   selectedCards.clear();
   lastSelectedIdx = null;
   updateSelectionBar();
-  render();
+  fetchCollection();
 });
 
 
@@ -1857,18 +1857,22 @@ document.getElementById('sel-delete-btn').addEventListener('click', async () => 
   const delBtn = document.getElementById('sel-delete-btn');
   delBtn.disabled = true;
   delBtn.textContent = 'Deleting...';
-  // Fetch copies for each selected card to get individual IDs
+  // Collect individual IDs — use collection_id directly when available (expand=copies mode)
   const allIds = [];
   for (const c of selectedCardData) {
-    try {
-      const res = await fetch(`/api/collection/copies?printing_id=${encodeURIComponent(c.printing_id)}`);
-      const copies = await res.json();
-      for (const copy of copies) {
-        if (copy.status === 'owned' || copy.status === 'ordered') {
-          allIds.push(copy.id);
+    if (c.collection_id) {
+      allIds.push(c.collection_id);
+    } else {
+      try {
+        const res = await fetch(`/api/collection/copies?printing_id=${encodeURIComponent(c.printing_id)}`);
+        const copies = await res.json();
+        for (const copy of copies) {
+          if (copy.status === 'owned' || copy.status === 'ordered') {
+            allIds.push(copy.id);
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
   }
   if (allIds.length === 0) {
     selShareResult.textContent = 'No deleteable copies found';
@@ -3094,6 +3098,9 @@ function getFetchParams() {
   if (hasDisposition) {
     params.set('status', 'all');
   }
+  if (multiSelectMode) {
+    params.set('expand', 'copies');
+  }
   return params.toString();
 }
 
@@ -4119,15 +4126,18 @@ async function showAssignBinderModal() {
 }
 
 async function getSelectedCollectionIds() {
-  // Selected cards are indices into allCards - we need collection IDs from copies
   const ids = [];
   for (const idx of selectedCards) {
     const card = allCards[idx];
     if (!card) continue;
-    const res = await fetch(`/api/collection/copies?printing_id=${card.printing_id}&finish=${card.finish}`);
-    const copies = await res.json();
-    for (const copy of copies) {
-      if (!copy.deck_id && !copy.binder_id) ids.push(copy.id);
+    if (card.collection_id) {
+      ids.push(card.collection_id);
+    } else {
+      const res = await fetch(`/api/collection/copies?printing_id=${card.printing_id}&finish=${card.finish}`);
+      const copies = await res.json();
+      for (const copy of copies) {
+        if (!copy.deck_id && !copy.binder_id) ids.push(copy.id);
+      }
     }
   }
   return ids;

@@ -390,21 +390,24 @@
         '<div style="padding:12px;color:var(--text-secondary);">Type at least 2 characters...</div>';
       return;
     }
-    const res = await fetch(`/api/collection?q=${encodeURIComponent(q)}&status=owned`);
+    const res = await fetch(`/api/collection?q=${encodeURIComponent(q)}&status=owned&expand=copies`);
     const data = await res.json();
-    const cards = Array.isArray(data) ? data : data.cards || [];
+    const allCopies = Array.isArray(data) ? data : data.cards || [];
+    // Filter to unassigned copies only
+    const cards = allCopies.filter(c => !c.deck_id && !c.binder_id);
 
     const container = document.getElementById('picker-cards');
     if (cards.length === 0) {
-      container.innerHTML = '<div style="padding:12px;color:var(--text-secondary);">No matching cards found</div>';
+      container.innerHTML = '<div style="padding:12px;color:var(--text-secondary);">No unassigned copies found</div>';
       return;
     }
     container.innerHTML = cards.map(c => {
-      const key = c.printing_id + '|' + c.finish;
+      const key = String(c.collection_id);
+      const cond = c.condition ? ` [${esc(c.condition)}]` : '';
+      const price = c.purchase_price ? ` $${parseFloat(c.purchase_price).toFixed(2)}` : '';
       return `<div class="picker-card ${pickerSelected.has(key) ? 'selected' : ''}" data-key="${esc(key)}">
         <span>${esc(c.name)}</span>
-        <span style="color:var(--text-secondary);font-size:0.85rem">${esc(c.set_code.toUpperCase())} #${esc(c.collector_number)} - ${esc(c.finish)}</span>
-        <span style="color:var(--text-secondary);font-size:0.85rem">x${c.qty}</span>
+        <span style="color:var(--text-secondary);font-size:0.85rem">${esc(c.set_code.toUpperCase())} #${esc(c.collector_number)} · ${esc(c.finish)}${cond}${price}</span>
       </div>`;
     }).join('');
 
@@ -427,22 +430,7 @@
     if (pickerSelected.size === 0) { alert('No cards selected'); return; }
     const zone = document.getElementById('add-zone').value;
 
-    const allIds = [];
-    for (const key of pickerSelected) {
-      const [printingId, finish] = key.split('|');
-      const res = await fetch(`/api/collection/copies?printing_id=${printingId}&finish=${finish}`);
-      const copies = await res.json();
-      for (const copy of copies) {
-        if (!copy.deck_id && !copy.binder_id) {
-          allIds.push(copy.id);
-        }
-      }
-    }
-
-    if (allIds.length === 0) {
-      alert('No unassigned copies found for the selected cards');
-      return;
-    }
+    const allIds = Array.from(pickerSelected).map(Number);
 
     const res = await fetch(`/api/decks/${deck.id}/cards`, {
       method: 'POST',

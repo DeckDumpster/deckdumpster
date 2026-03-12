@@ -1626,6 +1626,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         filter_deck_id = params.get("deck_id", [""])[0]
         filter_binder_id = params.get("binder_id", [""])[0]
         filter_unassigned = params.get("unassigned", [""])[0] == "1"
+        expand_copies = params.get("expand", [""])[0] == "copies"
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -1855,6 +1856,44 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     ORDER BY {sort_col} {order_dir}, card.name ASC
                 """
             sql_params = join_params + sql_params
+        elif expand_copies:
+            query = f"""
+                SELECT
+                    card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
+                    card.colors, card.color_identity,
+                    p.set_code, s.set_name, p.collector_number, p.rarity,
+                    p.printing_id, p.image_uri, p.artist,
+                    p.frame_effects, p.border_color, p.full_art, p.promo,
+                    p.promo_types, p.finishes,
+                    COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
+                    json_extract(p.raw_json, '$.layout') as layout,
+                    json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
+                    json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana,
+                    c.finish, c.condition, c.status,
+                    c.id as collection_id,
+                    1 as qty,
+                    c.acquired_at,
+                    c.order_id,
+                    o.seller_name as order_seller,
+                    o.order_number as order_number,
+                    o.order_date as order_date,
+                    c.purchase_price,
+                    c.deck_id, c.deck_zone, c.binder_id,
+                    d.name as deck_name,
+                    b.name as binder_name,
+                    ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at as ingest_lineage_raw
+                FROM collection c
+                JOIN printings p ON c.printing_id = p.printing_id
+                JOIN cards card ON p.oracle_id = card.oracle_id
+                JOIN sets s ON p.set_code = s.set_code
+                LEFT JOIN orders o ON c.order_id = o.id
+                LEFT JOIN decks d ON c.deck_id = d.id
+                LEFT JOIN binders b ON c.binder_id = b.id
+                LEFT JOIN ingest_lineage il ON il.collection_id = c.id
+                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
+                WHERE {where_sql}
+                ORDER BY {sort_col} {order_dir}, card.name ASC
+            """
         else:
             query = f"""
                 SELECT
@@ -1935,6 +1974,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "acquired_at": row["acquired_at"],
                 "owned": bool(row["owned"]) if include_unowned else True,
             }
+            if "collection_id" in row.keys():
+                card["collection_id"] = row["collection_id"]
             # Deck/binder info
             if "deck_id" in row.keys() and row["deck_id"]:
                 card["deck_id"] = row["deck_id"]
