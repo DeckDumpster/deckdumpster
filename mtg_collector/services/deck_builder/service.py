@@ -2248,11 +2248,14 @@ class DeckBuilderService:
         tag_count_expr = ctx.tag_count_expr()
 
         # Count all tag occurrences + land count in two queries
+        # Exclude lands from tag counts — lands fill the "Lands" target,
+        # not functional tags like ramp/draw/removal.
         tag_rows = self.conn.execute(
             f"""SELECT ct.tag, {tag_count_expr} AS cnt
                {card_from}
                JOIN card_tags ct ON ct.oracle_id = card.oracle_id
                WHERE {card_where} AND {tag_validation_filter()}
+                 AND card.type_line NOT LIKE '%Land%'
                GROUP BY ct.tag""",
             (deck_id,),
         ).fetchall()
@@ -2289,7 +2292,8 @@ class DeckBuilderService:
                        JOIN card_tags ct ON ct.oracle_id = card.oracle_id
                        WHERE {card_where}
                          AND ct.tag IN ({placeholders})
-                         AND {tag_validation_filter()}""",
+                         AND {tag_validation_filter()}
+                         AND card.type_line NOT LIKE '%Land%'""",
                     (deck_id, *sorted(sub_tags)),
                 ).fetchone()
                 current = cnt_row["cnt"]
