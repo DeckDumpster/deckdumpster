@@ -2135,6 +2135,22 @@ class DeckRepository:
             count += 1
         return count
 
+    def update_expected_quantity(self, deck_id: int, oracle_id: str,
+                                 quantity: int, zone: str = "mainboard") -> None:
+        """Set the quantity for an expected card. Deletes the row if quantity <= 0."""
+        if quantity <= 0:
+            self.conn.execute(
+                "DELETE FROM deck_expected_cards "
+                "WHERE deck_id = ? AND oracle_id = ? AND zone = ?",
+                (deck_id, oracle_id, zone),
+            )
+        else:
+            self.conn.execute(
+                "UPDATE deck_expected_cards SET quantity = ? "
+                "WHERE deck_id = ? AND oracle_id = ? AND zone = ?",
+                (quantity, deck_id, oracle_id, zone),
+            )
+
     def remove_expected_cards(self, deck_id: int, oracle_ids: List[str]) -> int:
         """Remove oracle_ids from deck_expected_cards."""
         if not oracle_ids:

@@ -26,7 +26,8 @@ TAG_ROLE_HINTS = {
     "multi-removal": "removes 2+ permanents in one action, not single-target",
     "card-advantage": "must generate net card advantage, not just filter/loot",
     "mana-rock": "an artifact that generates mana",
-    "mana-dork": "a creature that generates mana"
+    "mana-dork": "a creature that generates mana",
+    "reanimate": "moves a creature from graveyard to battlefield"
 }
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"

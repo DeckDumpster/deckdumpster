@@ -417,7 +417,7 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   width: calc(100% - 4px);
   height: calc(100% - 4px);
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: 10px;
   image-rendering: high-quality;
 }
 
@@ -1595,7 +1595,7 @@ const gridSizeWrap = document.getElementById('grid-size-wrap');
 const includeUnownedBtn = document.getElementById('include-unowned-btn');
 let includeUnowned = '';  // '' | 'base' | 'full'
 
-let currentView = 'table';
+let currentView = 'grid';
 let sortOrder = 'asc';
 let sortColumn = 'name';
 let allCards = [];
@@ -3047,8 +3047,8 @@ function applyFilter(type, value) {
 }
 
 // --- View toggle ---
-viewTableBtn.addEventListener('click', () => { currentView = 'table'; groupByOrder = false; updateViewButtons(); render(); });
-viewGridBtn.addEventListener('click', () => { currentView = 'grid'; groupByOrder = false; updateViewButtons(); render(); });
+viewTableBtn.addEventListener('click', () => { currentView = 'table'; groupByOrder = false; updateViewButtons(); render(); fetch('/api/settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_card_view: 'table' }) }); });
+viewGridBtn.addEventListener('click', () => { currentView = 'grid'; groupByOrder = false; updateViewButtons(); render(); fetch('/api/settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_card_view: 'grid' }) }); });
 viewOrdersBtn.addEventListener('click', () => { groupByOrder = !groupByOrder; if (groupByOrder) currentView = 'orders'; else currentView = 'table'; updateViewButtons(); render(); });
 
 function updateViewButtons() {
@@ -4247,6 +4247,8 @@ async function assignSelectedToBinder() {
   ]);
   _settings = await settingsRes.json();
   cachedSets = await cachedSetsRes.json();
+  currentView = _settings.default_card_view || 'grid';
+  updateViewButtons();
   applySettings();
   fetchCollection();
   loadContainerData();

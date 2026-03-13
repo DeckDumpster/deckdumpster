@@ -24,6 +24,8 @@ MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gath
 - **Normalize polymorphic values at the boundary.** If a data structure has values that can be different shapes (int vs dict, string vs object), normalize to a single canonical shape at read/write time. Downstream code should never need `isinstance`/`typeof` checks to handle variant shapes. If the same type-dispatch branch appears in 3+ places, extract a helper or normalize the data.
 - **Tests that demonstrate bugs must fail.** If a test exists to reproduce a known bug, it should assert the correct/fixed behavior — not the broken behavior. A passing test means the bug is fixed; a failing test means the bug still exists. Never write a test that passes when the bug is present.
 - **After implementing any feature with UI changes, run `/qa-finish`** to generate UI scenario tests (intents, hints, implementations). This is a skill defined in `.claude/skills/qa-finish/SKILL.md`. It deploys a test container, walks the feature, and writes test artifacts under `tests/ui/`.
+- **Prefer flat guard-clause style over nested if/else.** Use early returns / `continue` to keep code flat. Don't nest hypothetical vs physical paths inside if/else — put the shorter path first with an early exit, then let the main path fall through at the original indentation.
+- **Planned: default view mode setting.** A global setting (in the `settings` table) for default grid vs table view across all card list views (deck detail, replacement modal, collection page). One user prefers grid, another prefers table — both share the same instance.
 
 ## Commands
 
@@ -178,6 +180,7 @@ Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in
 - **Card not in local DB → tell user to run `mtg cache all`.** Do not fall back to Scryfall API. The card simply isn't cached yet.
 - **Test fixture goes stale after schema migrations.** Regenerate with `uv run python scripts/build_test_fixture.py`, then recreate seed volume with `bash deploy/seed.sh --force`. Full fixture (with sealed product contents) requires `~/.mtgc/AllPrintings.json` — run `mtg data fetch` first.
 - **HTML pages share no JS imports (legacy).** Helpers like `getRarityColor()` are copy-pasted between existing pages. New pages should use `shared.css` + `shared.js` instead. The card detail page (`card_detail.html`) is the first to do so.
+- **Hypothetical decks still require owned cards.** Hypothetical means "ignore card assignment (deck/binder) restrictions" — NOT "search all cards in the database." Queries for hypothetical decks must still `JOIN collection c` and filter `c.status = 'owned'`. The only difference is skipping `c.deck_id IS NULL AND c.binder_id IS NULL`. Physical decks = card is reserved in one place. Hypothetical decks = same owned card can appear in multiple decks. Commander decks created via the web UI are hypothetical by default; sealed product decks are physical. **Use `DeckContext` (in `service.py`) for all hypothetical-vs-physical branching** — it derives the flag from `deck_id` so callers never pass `hypothetical` manually. Methods like `availability_sql()`, `exclude_deck_sql()`, and `card_source_sql()` centralize the SQL differences.
 
 ## Deployment
 

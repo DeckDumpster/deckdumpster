@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 
 import httpx
 
-
 _CACHE_DAYS = 90
 _EDHREC_URL = "https://json.edhrec.com/pages/commanders/{slug}.json"
 

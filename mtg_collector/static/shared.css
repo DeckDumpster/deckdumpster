@@ -154,7 +154,7 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
   width: calc(100% - 4px);
   height: calc(100% - 4px);
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: 10px;
   image-rendering: high-quality;
 }
 

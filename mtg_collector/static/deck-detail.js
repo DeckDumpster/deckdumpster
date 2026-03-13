@@ -25,14 +25,11 @@
   // State
   let deckCards = [];
   let selectedCardIds = new Set();
-  let pickerSelected = new Set();
   let editingDeckId = null;
   let activeRoleFilter = null;
   let activeTypeFilter = null;
-  let currentView = 'grid';
-  const COL_MIN = 1, COL_MAX = 12;
-  let gridCols = parseInt(localStorage.getItem('deckGridCols'))
-    || (window.innerWidth < 600 ? 2 : 5);
+  let currentView = 'list';
+  let groupBy = 'type';
 
   // Build the page
   const layout = document.getElementById('deck-detail-layout');
@@ -54,14 +51,7 @@
           <div class="zone-tabs" id="type-filters"></div>
           <div class="deck-view-controls">
             <div class="view-toggle-group">
-              <button class="secondary" id="view-table-btn" title="Table view">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                  <rect x="1" y="1" width="14" height="3" rx="1"/>
-                  <rect x="1" y="6" width="14" height="3" rx="1"/>
-                  <rect x="1" y="11" width="14" height="3" rx="1"/>
-                </svg>
-              </button>
-              <button class="secondary active" id="view-grid-btn" title="Grid view">
+              <button class="secondary active" id="view-list-btn" title="List view">
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                   <rect x="1" y="1" width="6" height="6" rx="1"/>
                   <rect x="9" y="1" width="6" height="6" rx="1"/>
@@ -69,18 +59,25 @@
                   <rect x="9" y="9" width="6" height="6" rx="1"/>
                 </svg>
               </button>
+              <button class="secondary" id="view-table-btn" title="Table view">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <rect x="1" y="1" width="14" height="3" rx="1"/>
+                  <rect x="1" y="6" width="14" height="3" rx="1"/>
+                  <rect x="1" y="11" width="14" height="3" rx="1"/>
+                </svg>
+              </button>
             </div>
-            <div class="col-controls" id="grid-size-wrap">
-              <button class="col-btn" id="col-minus">&minus;</button>
-              <div class="col-count" id="col-count"></div>
-              <button class="col-btn" id="col-plus">+</button>
-            </div>
+            <select id="group-by-select" class="group-by-select">
+              <option value="type">Group by Type</option>
+              <option value="role">Group by Role</option>
+            </select>
           </div>
         </div>
 
         <div id="active-filter-banner" class="active-filter-banner" style="display:none"></div>
 
         <div id="card-display">
+        <div id="card-list"></div>
         <table class="card-table" id="card-table" style="display:none">
           <thead>
             <tr>
@@ -96,7 +93,6 @@
           </thead>
           <tbody id="card-tbody"></tbody>
         </table>
-        <div class="card-grid" id="card-grid"></div>
         </div>
 
         <div class="completeness-section" id="completeness-section" style="display:none">
@@ -119,9 +115,11 @@
             <button class="secondary" id="btn-curve">Curve</button>
           </div>
           <button id="btn-generate-plan" style="display:none">Generate Plan</button>
-          <button class="secondary" id="btn-weights" style="display:none">Edit Weights</button>
-          <button id="btn-autofill" style="display:none">Autofill</button>
-          <button id="btn-fill-lands" style="display:none">Fill Lands</button>
+          <div class="sidebar-actions-row" id="plan-actions-row">
+            <button class="secondary" id="btn-add-card">Add Card</button>
+          </div>
+          <button id="btn-autofill" style="display:none">Autofill Nonland</button>
+          <button id="btn-fill-lands" style="display:none">Autofill Lands</button>
         </div>
 
         <div class="plan-section" id="plan-section" style="display:none">
@@ -205,30 +203,6 @@
       </div>
     </div>
 
-    <!-- Add Cards Modal -->
-    <div class="modal-backdrop" id="add-cards-modal">
-      <div class="modal">
-        <h3>Add Cards to Deck</h3>
-        <div class="form-group">
-          <label>Zone</label>
-          <select id="add-zone">
-            <option value="mainboard">Mainboard</option>
-            <option value="sideboard">Sideboard</option>
-            <option value="commander">Commander</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Search your collection</label>
-          <input type="text" id="picker-search" placeholder="Search by name...">
-        </div>
-        <div class="picker-cards" id="picker-cards"></div>
-        <div class="form-actions">
-          <button id="btn-add-picker">Add Selected</button>
-          <button class="secondary" id="btn-cancel-add">Cancel</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Expected List Import Modal -->
     <div class="modal-backdrop" id="expected-modal">
       <div class="modal">
@@ -245,29 +219,6 @@
       </div>
     </div>
 
-    <!-- Autofill Suggestions Modal -->
-    <div class="modal-backdrop" id="autofill-modal">
-      <div class="modal" style="max-width:700px;max-height:80vh;overflow-y:auto">
-        <h3>Autofill Suggestions</h3>
-        <div id="autofill-body"><span class="spinner"></span> Finding cards...</div>
-        <div class="form-actions">
-          <button id="btn-autofill-add" disabled>Add Selected</button>
-          <button class="secondary" id="btn-autofill-cancel">Cancel</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Fill Lands Modal -->
-    <div class="modal-backdrop" id="fill-lands-modal">
-      <div class="modal fill-lands-modal">
-        <h3>Land Suggestions</h3>
-        <div id="fill-lands-body"><span class="spinner"></span> Finding lands...</div>
-        <div class="form-actions">
-          <button id="btn-fill-lands-add" disabled>Add All</button>
-          <button class="secondary" id="btn-fill-lands-cancel">Cancel</button>
-        </div>
-      </div>
-    </div>
 
     <!-- Plan Variants Modal -->
     <div class="modal-backdrop" id="plan-variants-modal">
@@ -291,37 +242,39 @@
       </div>
     </div>
 
-    <!-- Weights Modal -->
-    <div class="modal-backdrop" id="weights-modal">
-      <div class="modal" style="max-width:500px">
-        <h3>Autofill Weights</h3>
-        <p class="weights-desc">Adjust how cards are scored during autofill and replacement suggestions.</p>
-        <div id="weights-body"></div>
-        <div class="form-actions">
-          <button id="btn-weights-save">Save</button>
-          <button class="secondary" id="btn-weights-reset">Reset to Defaults</button>
-          <button class="secondary" id="btn-weights-cancel">Cancel</button>
-        </div>
-      </div>
-    </div>
 
-    <div class="modal-backdrop" id="replace-modal">
+    <div class="modal-backdrop" id="search-modal">
       <div class="modal replace-modal">
         <div class="replace-header">
-          <h3>Replace: <span id="replace-card-name"></span> <span id="replace-card-roles" class="replace-roles"></span></h3>
-          <button class="btn btn-ghost" id="replace-cancel">✕</button>
+          <h3 id="search-modal-title">Search</h3>
+          <button class="btn btn-ghost" id="search-cancel">✕</button>
         </div>
-        <div class="replace-tabs">
-          <button class="replace-tab active" data-tab="role">Role</button>
-          <button class="replace-tab" data-tab="type">Type</button>
-          <button class="replace-tab" data-tab="search">Search</button>
-        </div>
-        <div class="replace-search-inputs" id="replace-search-form" style="display:none">
-          <input placeholder="Name" id="rs-name">
-          <input placeholder="Mana value" id="rs-cmc" type="number">
-          <input placeholder="Set code" id="rs-set">
-          <input placeholder="Type" id="rs-type">
-          <input placeholder="Tag (e.g. removal)" id="rs-tag">
+        <div class="search-filters">
+          <div class="search-filter-row">
+            <input placeholder="Card name..." id="sf-name" class="search-input-wide">
+            <input placeholder="Mana value" id="sf-cmc" type="number" min="0" max="20" class="search-input-sm">
+            <input placeholder="Tag (e.g. removal)" id="sf-tag" class="search-input-med">
+          </div>
+          <div class="search-filter-row">
+            <div class="search-pills" id="sf-colors">
+              <label class="search-pill"><input type="checkbox" value="W"><span class="ms ms-w ms-cost"></span></label>
+              <label class="search-pill"><input type="checkbox" value="U"><span class="ms ms-u ms-cost"></span></label>
+              <label class="search-pill"><input type="checkbox" value="B"><span class="ms ms-b ms-cost"></span></label>
+              <label class="search-pill"><input type="checkbox" value="R"><span class="ms ms-r ms-cost"></span></label>
+              <label class="search-pill"><input type="checkbox" value="G"><span class="ms ms-g ms-cost"></span></label>
+            </div>
+            <div class="search-pills" id="sf-types">
+              <label class="search-pill"><input type="checkbox" value="Creature">Creature</label>
+              <label class="search-pill"><input type="checkbox" value="Instant">Instant</label>
+              <label class="search-pill"><input type="checkbox" value="Sorcery">Sorcery</label>
+              <label class="search-pill"><input type="checkbox" value="Enchantment">Enchant</label>
+              <label class="search-pill"><input type="checkbox" value="Artifact">Artifact</label>
+              <label class="search-pill"><input type="checkbox" value="Land">Land</label>
+            </div>
+            <select id="sf-role" style="display:none">
+              <option value="">— Role —</option>
+            </select>
+          </div>
         </div>
         <div class="replace-grid-wrap">
           <div class="card-grid replace-card-grid" id="replace-grid"></div>
@@ -341,8 +294,8 @@
   // Select all checkbox
   document.getElementById('select-all').addEventListener('change', function() {
     deckCards.forEach(c => {
-      if (this.checked) selectedCardIds.add(c.id);
-      else selectedCardIds.delete(c.id);
+      if (this.checked) selectedCardIds.add(cardKey(c));
+      else selectedCardIds.delete(cardKey(c));
     });
     renderCards();
   });
@@ -352,9 +305,10 @@
   document.getElementById('btn-curve').addEventListener('click', openCurveModal);
   document.getElementById('btn-generate-plan').addEventListener('click', generatePlan);
   document.getElementById('btn-autofill').addEventListener('click', runAutofill);
-  document.getElementById('btn-weights').addEventListener('click', openWeightsModal);
+
   document.getElementById('btn-delete').addEventListener('click', deleteDeck);
   document.getElementById('btn-edit-plan').addEventListener('click', enterPlanEditMode);
+  document.getElementById('btn-add-card').addEventListener('click', openAddCardModal);
 
   // Completeness header toggle
   document.getElementById('completeness-header').addEventListener('click', toggleCompleteness);
@@ -362,46 +316,28 @@
   // Modal save/cancel buttons
   document.getElementById('btn-save-deck').addEventListener('click', saveDeck);
   document.getElementById('btn-cancel-edit').addEventListener('click', () => closeModal('deck-modal'));
-  document.getElementById('btn-add-picker').addEventListener('click', addSelectedPickerCards);
-  document.getElementById('btn-cancel-add').addEventListener('click', () => closeModal('add-cards-modal'));
   document.getElementById('btn-import-expected-confirm').addEventListener('click', importExpectedList);
   document.getElementById('btn-cancel-expected').addEventListener('click', () => closeModal('expected-modal'));
-  document.getElementById('btn-autofill-add').addEventListener('click', addAutofillCards);
-  document.getElementById('btn-autofill-cancel').addEventListener('click', () => closeModal('autofill-modal'));
   document.getElementById('btn-fill-lands').addEventListener('click', runFillLands);
-  document.getElementById('btn-fill-lands-add').addEventListener('click', addFillLandsCards);
-  document.getElementById('btn-fill-lands-cancel').addEventListener('click', () => closeModal('fill-lands-modal'));
-  document.getElementById('btn-weights-save').addEventListener('click', saveWeights);
-  document.getElementById('btn-weights-reset').addEventListener('click', resetWeights);
-  document.getElementById('btn-weights-cancel').addEventListener('click', () => closeModal('weights-modal'));
   document.getElementById('btn-curve-close').addEventListener('click', () => closeModal('curve-modal'));
   document.getElementById('btn-save-plan').addEventListener('click', savePlanVariant);
-  document.getElementById('replace-cancel').addEventListener('click', () => closeModal('replace-modal'));
+  document.getElementById('search-cancel').addEventListener('click', () => closeModal('search-modal'));
   document.getElementById('replace-confirm').addEventListener('click', confirmReplacement);
 
-  // Replace tab switching
-  let replaceActiveTab = 'role';
-  let replaceCandidateData = { role: [], type: [], search: [] };
-  document.querySelectorAll('.replace-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      replaceActiveTab = tab.dataset.tab;
-      document.querySelectorAll('.replace-tab').forEach(t => t.classList.toggle('active', t === tab));
-      document.getElementById('replace-search-form').style.display = replaceActiveTab === 'search' ? '' : 'none';
-      if (replaceActiveTab === 'search' && replaceCandidateData.search.length === 0) {
-        searchReplacements();
-      } else {
-        renderReplaceGrid(replaceCandidateData[replaceActiveTab]);
-      }
+  // Search modal filter debounce
+  let searchTimer = null;
+  ['sf-name', 'sf-cmc', 'sf-tag'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(searchCards, 300);
     });
   });
-
-  // Replace search debounce
-  let replaceSearchTimer = null;
-  ['rs-name', 'rs-cmc', 'rs-set', 'rs-type', 'rs-tag'].forEach(id => {
-    document.getElementById(id).addEventListener('input', () => {
-      clearTimeout(replaceSearchTimer);
-      replaceSearchTimer = setTimeout(searchReplacements, 300);
-    });
+  document.querySelectorAll('#sf-colors input, #sf-types input').forEach(cb => {
+    cb.addEventListener('change', searchCards);
+  });
+  document.getElementById('sf-role').addEventListener('change', () => {
+    document.getElementById('sf-tag').value = document.getElementById('sf-role').value;
+    searchCards();
   });
 
   // Precon checkbox toggle
@@ -409,61 +345,81 @@
     document.getElementById('precon-fields').style.display = this.checked ? '' : 'none';
   });
 
-  // Picker search
-  document.getElementById('picker-search').addEventListener('input', searchPickerCards);
-
   // View toggle
+  document.getElementById('view-list-btn').addEventListener('click', () => {
+    currentView = 'list';
+    updateViewButtons();
+    renderCards();
+    fetch('/api/settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_card_view: 'list' }) });
+  });
   document.getElementById('view-table-btn').addEventListener('click', () => {
     currentView = 'table';
     updateViewButtons();
     renderCards();
     fetch('/api/settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_card_view: 'table' }) });
   });
-  document.getElementById('view-grid-btn').addEventListener('click', () => {
-    currentView = 'grid';
-    updateViewButtons();
+
+  // Group-by selector
+  document.getElementById('group-by-select').addEventListener('change', function() {
+    groupBy = this.value;
     renderCards();
-    fetch('/api/settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_card_view: 'grid' }) });
   });
 
   function updateViewButtons() {
+    document.getElementById('view-list-btn').classList.toggle('active', currentView === 'list');
     document.getElementById('view-table-btn').classList.toggle('active', currentView === 'table');
-    document.getElementById('view-grid-btn').classList.toggle('active', currentView === 'grid');
-    document.getElementById('grid-size-wrap').style.display = currentView === 'grid' ? '' : 'none';
+    document.getElementById('group-by-select').style.display = currentView === 'list' ? '' : 'none';
+    document.getElementById('card-list').style.display = currentView === 'list' ? '' : 'none';
     document.getElementById('card-table').style.display = currentView === 'table' ? '' : 'none';
-    document.getElementById('card-grid').style.display = currentView === 'grid' ? '' : 'none';
   }
 
-  // Grid column controls
-  function applyGridCols() {
-    document.getElementById('col-count').textContent = gridCols;
-    document.getElementById('col-minus').disabled = gridCols <= COL_MIN;
-    document.getElementById('col-plus').disabled = gridCols >= COL_MAX;
-    document.getElementById('card-grid').style.setProperty('--grid-cols', gridCols);
-    localStorage.setItem('deckGridCols', gridCols);
-  }
-  document.getElementById('col-minus').addEventListener('click', () => {
-    if (gridCols > COL_MIN) { gridCols--; applyGridCols(); if (currentView === 'grid') renderCards(); }
-  });
-  document.getElementById('col-plus').addEventListener('click', () => {
-    if (gridCols < COL_MAX) { gridCols++; applyGridCols(); if (currentView === 'grid') renderCards(); }
-  });
-  applyGridCols();
+  // List card hover — show card image in sidebar commander-display area
+  let hoverPreviewActive = false;
+  let commanderHtml = '';  // stash original commander display
 
-  // Grid card click — navigate to card detail (or open replace modal)
-  document.getElementById('card-grid').addEventListener('click', e => {
-    const replBtn = e.target.closest('.replace-btn');
+  document.getElementById('card-list').addEventListener('mouseover', e => {
+    const row = e.target.closest('.list-card-row');
+    if (row && row.dataset.image) {
+      const el = document.getElementById('commander-display');
+      if (!hoverPreviewActive) commanderHtml = el.innerHTML;
+      hoverPreviewActive = true;
+      const rarityColor = row.dataset.rarityColor || '#111';
+      el.innerHTML = `<div class="hover-preview-card">
+        <div class="sheet-card-img-wrap" style="--rarity-color:${rarityColor};--set-color:#111">
+          <img src="${esc(row.dataset.image)}" alt="Card preview">
+        </div>
+      </div>`;
+      el.style.display = '';
+    }
+  });
+
+  document.getElementById('card-list').addEventListener('mouseleave', () => {
+    if (hoverPreviewActive) {
+      hoverPreviewActive = false;
+      const el = document.getElementById('commander-display');
+      el.innerHTML = commanderHtml;
+      el.style.display = commanderHtml ? '' : 'none';
+    }
+  });
+
+  // List card click — actions (replace, remove) handled via delegation
+  document.getElementById('card-list').addEventListener('click', e => {
+    const replBtn = e.target.closest('.list-replace-btn');
     if (replBtn) {
-      e.stopPropagation();
+      e.preventDefault();
       if (deck.hypothetical) {
         openReplaceModal(null, replBtn.dataset.name, replBtn.dataset.oracleId);
       } else {
-        openReplaceModal(parseInt(replBtn.dataset.cid), replBtn.dataset.name);
+        openReplaceModal(parseInt(replBtn.dataset.cid), replBtn.dataset.name, replBtn.dataset.oracleId);
       }
       return;
     }
-    const card = e.target.closest('.sheet-card');
-    if (card) window.location.href = `/card/${card.dataset.sc}/${card.dataset.cn}`;
+    const removeBtn = e.target.closest('.list-remove-btn');
+    if (removeBtn) {
+      e.preventDefault();
+      removeCard(removeBtn.dataset);
+      return;
+    }
   });
 
   // Close modals on backdrop click (except plan-variants — must choose a plan)
@@ -472,6 +428,16 @@
       if (e.target === el && el.id !== 'plan-variants-modal') el.classList.remove('active');
     });
   });
+
+  // --- Refresh all deck state after any mutation ---
+  async function refreshDeck() {
+    const res = await fetch(`/api/decks/${deck.id}`);
+    deck = await res.json();
+    renderDeckDetail();
+    await loadDeckCards();
+    await loadPlan();
+    loadCompleteness();
+  }
 
   // --- Render deck detail header ---
   function renderDeckDetail() {
@@ -491,7 +457,6 @@
     meta.push(`<span class="label">Cards</span><span>${deck.card_count}</span>`);
     if (deck.total_value) meta.push(`<span class="label">Value</span><span>$${Number(deck.total_value).toFixed(2)}</span>`);
     document.getElementById('deck-meta').innerHTML = meta.join('');
-    loadCompleteness();
   }
 
   // --- Card type from type_line ---
@@ -505,12 +470,19 @@
     return 'Other';
   }
 
+  function cardQty(c) { return c.quantity || 1; }
+  function cardKey(c) { return deck.hypothetical ? c.oracle_id : c.id; }
+  function selectedIdsBody() {
+    const ids = Array.from(selectedCardIds);
+    return deck.hypothetical ? { oracle_ids: ids } : { collection_ids: ids };
+  }
+
   function buildTypeFilters() {
     const typeCounts = {};
     const nonCmdCards = allDeckCards.filter(c => c.deck_zone !== 'commander');
     for (const c of nonCmdCards) {
       const t = primaryType(c.type_line);
-      typeCounts[t] = (typeCounts[t] || 0) + 1;
+      typeCounts[t] = (typeCounts[t] || 0) + cardQty(c);
     }
     // Sort by TYPE_ORDER, then Other at end
     const types = Object.keys(typeCounts).sort((a, b) => {
@@ -519,7 +491,7 @@
     });
 
     const container = document.getElementById('type-filters');
-    const allCount = nonCmdCards.length;
+    const allCount = nonCmdCards.reduce((sum, c) => sum + cardQty(c), 0);
     let html = `<div class="tab${activeTypeFilter === null ? ' active' : ''}" data-type="all">All (${allCount})</div>`;
     for (const t of types) {
       html += `<div class="tab${activeTypeFilter === t ? ' active' : ''}" data-type="${esc(t)}">${esc(t)} (${typeCounts[t]})</div>`;
@@ -572,6 +544,7 @@
       cmdEl.innerHTML = '';
       cmdEl.style.display = 'none';
     }
+    commanderHtml = cmdEl.innerHTML;
 
     buildTypeFilters();
     deckCards = getMainboardCards();
@@ -583,6 +556,13 @@
     if (activeRoleFilter === 'lands') {
       return deckCards.filter(c => (c.type_line || '').includes('Land'));
     }
+    const subTags = INFRA_SUB_TAGS[activeRoleFilter];
+    if (subTags) {
+      return deckCards.filter(c => {
+        const tags = c.tags ? c.tags.split(',') : [];
+        return tags.some(t => subTags.has(t));
+      });
+    }
     return deckCards.filter(c => {
       const tags = c.tags ? c.tags.split(',') : [];
       return tags.includes(activeRoleFilter);
@@ -591,13 +571,18 @@
 
   function getCardRoles(card) {
     const tags = card.tags ? card.tags.split(',') : [];
+    const tagSet = new Set(tags);
     const roles = [];
-    // Regular tag targets
-    for (const t of tags) {
-      if (planTargetTags.has(t)) {
-        const val = currentPlanTargets && currentPlanTargets[t];
-        const label = val.label;
-        roles.push(label);
+    // Check each plan target
+    for (const [key, val] of Object.entries(currentPlanTargets || {})) {
+      if (key === 'lands') continue;
+      if (val.type === 'query') continue;
+      const subTags = INFRA_SUB_TAGS[key];
+      if (subTags) {
+        // Infrastructure category: match if card has any sub-tag
+        if (tags.some(t => subTags.has(t))) roles.push(val.label);
+      } else if (tagSet.has(key)) {
+        roles.push(val.label);
       }
     }
     // Custom query targets — check card's custom_roles if present
@@ -625,8 +610,8 @@
       banner.style.display = 'none';
     }
 
-    if (currentView === 'grid') {
-      renderGrid(cards);
+    if (currentView === 'list') {
+      renderList(cards);
     } else {
       renderTable(cards);
     }
@@ -643,17 +628,18 @@
       const sc = c.set_code.toLowerCase();
       const cn = c.collector_number;
       const role = getCardRoles(c).join(', ');
-      const cbData = isHypo ? `data-oracle-id="${esc(c.oracle_id)}"` : `data-id="${c.id}"`;
-      const cbKey = isHypo ? c.oracle_id : c.id;
+      const key = cardKey(c);
       const ownershipBadge = isHypo
         ? (c.owned_copies > 0
           ? `<span class="own-badge owned" title="${c.free_copies} free / ${c.owned_copies} owned">&#10003;</span>`
           : '<span class="own-badge missing" title="Not owned">&#10007;</span>')
         : '';
-      const qtyPrefix = (isHypo && c.quantity > 1) ? `${c.quantity}x ` : '';
+      const qtyControls = isHypo
+        ? `<span class="qty-controls" data-oracle-id="${esc(c.oracle_id)}" data-zone="${esc(c.deck_zone || 'mainboard')}"><button class="qty-btn qty-minus">−</button><span class="qty-val">${c.quantity}</span><button class="qty-btn qty-plus">+</button></span> `
+        : '';
       return `<tr>
-        <td><input type="checkbox" ${cbData} ${selectedCardIds.has(cbKey) ? 'checked' : ''}></td>
-        <td><a href="/card/${esc(sc)}/${esc(cn)}">${qtyPrefix}${esc(c.name)}</a> ${ownershipBadge}</td>
+        <td><input type="checkbox" data-key="${esc(String(key))}" ${selectedCardIds.has(key) ? 'checked' : ''}></td>
+        <td>${qtyControls}<a href="/card/${esc(sc)}/${esc(cn)}">${esc(c.name)}</a> ${ownershipBadge}</td>
         <td class="role-cell">${esc(role)}</td>
         <td>${esc(c.set_code.toUpperCase())} #${esc(cn)}</td>
         <td class="mana">${renderMana(c.mana_cost || '')}</td>
@@ -666,51 +652,158 @@
     // Wire up checkbox change handlers
     tbody.querySelectorAll('input[type="checkbox"]').forEach(cb => {
       cb.addEventListener('change', function() {
-        if (isHypo) {
-          const oid = this.dataset.oracleId;
-          if (this.checked) selectedCardIds.add(oid);
-          else selectedCardIds.delete(oid);
-        } else {
-          const id = parseInt(this.dataset.id);
-          if (this.checked) selectedCardIds.add(id);
-          else selectedCardIds.delete(id);
-        }
+        const key = isHypo ? this.dataset.key : parseInt(this.dataset.key);
+        if (this.checked) selectedCardIds.add(key);
+        else selectedCardIds.delete(key);
       });
     });
+
+    // Wire up quantity +/- buttons for hypothetical decks
+    if (isHypo) {
+      tbody.querySelectorAll('.qty-controls').forEach(ctrl => {
+        const oid = ctrl.dataset.oracleId;
+        const zone = ctrl.dataset.zone;
+        ctrl.querySelector('.qty-minus').addEventListener('click', () => updateQuantity(oid, zone, -1, ctrl));
+        ctrl.querySelector('.qty-plus').addEventListener('click', () => updateQuantity(oid, zone, 1, ctrl));
+      });
+    }
   }
 
-  function renderGrid(cards) {
-    const grid = document.getElementById('card-grid');
+  async function updateQuantity(oracleId, zone, delta, ctrl) {
+    const valSpan = ctrl.querySelector('.qty-val') || ctrl.querySelector('.qty-grid-val');
+    const current = parseInt(valSpan.textContent);
+    const newQty = current + delta;
+    if (newQty < 0) return;
+
+    const res = await fetch(`/api/decks/${deck.id}/cards/quantity`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oracle_id: oracleId, quantity: newQty, zone }),
+    });
+    const result = await res.json();
+    if (result.error) { alert(result.error); return; }
+    await refreshDeck();
+  }
+
+  function groupByType(cards) {
+    const groups = {};
+    for (const c of cards) {
+      const t = primaryType(c.type_line);
+      if (!groups[t]) groups[t] = [];
+      groups[t].push(c);
+    }
+    const sorted = TYPE_ORDER.filter(t => groups[t]);
+    if (groups['Other']) sorted.push('Other');
+    return sorted.map(t => ({ name: t, cards: groups[t] }));
+  }
+
+  function groupByRole(cards) {
+    const groups = {};
+    const unassigned = [];
+    for (const c of cards) {
+      const roles = getCardRoles(c);
+      if (roles.length === 0) {
+        unassigned.push(c);
+      } else {
+        for (const role of roles) {
+          if (!groups[role]) groups[role] = [];
+          groups[role].push(c);
+        }
+      }
+    }
+    const sorted = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+    const result = sorted.map(r => ({ name: r, cards: groups[r] }));
+    if (unassigned.length) result.push({ name: 'Unassigned', cards: unassigned });
+    return result;
+  }
+
+  function renderList(cards) {
+    const list = document.getElementById('card-list');
     if (cards.length === 0) {
-      grid.innerHTML = '<div style="padding:24px;color:var(--text-secondary);text-align:center;grid-column:1/-1">No cards in this zone</div>';
+      list.innerHTML = '<div style="padding:24px;color:var(--text-secondary);text-align:center">No cards in this zone</div>';
       return;
     }
 
+    const groups = groupBy === 'role' ? groupByRole(cards) : groupByType(cards);
     const isHypo = !!deck.hypothetical;
-    grid.innerHTML = cards.map(c => {
-      const sc = c.set_code.toLowerCase();
-      const cn = c.collector_number;
-      const rarityColor = getRarityColor(c.rarity);
-      const foilClass = (c.finish === 'foil' || c.finish === 'etched') ? ' foil' : '';
-      const roles = getCardRoles(c);
-      const primaryRole = roles.length ? roles[0] : '';
-      const replaceData = isHypo
-        ? `data-oracle-id="${esc(c.oracle_id)}" data-name="${esc(c.name)}"`
-        : `data-cid="${c.id}" data-name="${esc(c.name)}"`;
-      const ownershipOverlay = isHypo
-        ? (c.owned_copies > 0
-          ? '<span class="own-overlay owned">&#10003;</span>'
-          : '<span class="own-overlay missing">&#10007;</span>')
-        : '';
-      return `<div class="sheet-card" data-sc="${esc(sc)}" data-cn="${esc(cn)}">
-        <div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111">
-          <img src="${c.image_uri || ''}" alt="${esc(c.name)}" loading="lazy">
-          <button class="replace-btn" title="Replace" ${replaceData}>⇄</button>
-          ${primaryRole ? `<span class="role-overlay">${esc(primaryRole)}</span>` : ''}
-          ${ownershipOverlay}
-        </div>
-      </div>`;
-    }).join('');
+
+    let html = '';
+    for (const group of groups) {
+      const groupCount = group.cards.reduce((sum, c) => sum + cardQty(c), 0);
+      html += `<div class="list-group">`;
+      html += `<div class="list-group-header">${esc(group.name)} (${groupCount})</div>`;
+      for (const c of group.cards) {
+        const sc = c.set_code.toLowerCase();
+        const cn = c.collector_number;
+        const rarityColor = getRarityColor(c.rarity);
+        const qty = cardQty(c);
+        const qtyPrefix = qty > 1 ? `<span class="list-card-qty">${qty}x</span>` : '';
+
+        // Subtitle: show roles when grouped by type, show type when grouped by role
+        let subtitle = '';
+        if (groupBy === 'type') {
+          const roles = getCardRoles(c);
+          if (roles.length) subtitle = roles.join(', ');
+        } else {
+          subtitle = primaryType(c.type_line);
+        }
+
+        const replaceData = isHypo
+          ? `data-oracle-id="${esc(c.oracle_id)}" data-name="${esc(c.name)}"`
+          : `data-cid="${c.id}" data-name="${esc(c.name)}" data-oracle-id="${esc(c.oracle_id || '')}"`;
+        const removeData = isHypo
+          ? `data-oracle-id="${esc(c.oracle_id)}" data-zone="${esc(c.deck_zone || 'mainboard')}"`
+          : `data-cid="${c.id}"`;
+
+        const isBasic = isHypo && /\bBasic\b/.test(c.type_line || '');
+        let qtyControls = '';
+        if (isBasic && isHypo) {
+          qtyControls = `<span class="qty-controls list-qty-controls" data-oracle-id="${esc(c.oracle_id)}" data-zone="${esc(c.deck_zone || 'mainboard')}"><button class="qty-btn qty-minus">−</button><span class="qty-val">${qty}</span><button class="qty-btn qty-plus">+</button></span>`;
+        }
+
+        html += `<div class="list-card-row" data-image="${esc(c.image_uri || '')}" data-rarity-color="${rarityColor}" data-sc="${esc(sc)}" data-cn="${esc(cn)}">
+          ${qtyPrefix}
+          <div class="list-card-info">
+            <a href="/card/${esc(sc)}/${esc(cn)}" class="list-card-name">${esc(c.name)}</a>
+            ${subtitle ? `<span class="list-card-subtitle">${esc(subtitle)}</span>` : ''}
+          </div>
+          <span class="list-card-mana mana">${renderMana(c.mana_cost || '')}</span>
+          ${qtyControls}
+          <span class="list-card-actions">
+            <button class="list-replace-btn" title="Replace" ${replaceData}>⇄</button>
+            <button class="list-remove-btn" title="Remove" ${removeData}>✕</button>
+          </span>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+    list.innerHTML = html;
+
+    // Wire up quantity +/- buttons for basic lands
+    if (isHypo) {
+      list.querySelectorAll('.list-qty-controls').forEach(ctrl => {
+        const oid = ctrl.dataset.oracleId;
+        const zone = ctrl.dataset.zone;
+        ctrl.querySelector('.qty-minus').addEventListener('click', () => updateQuantity(oid, zone, -1, ctrl));
+        ctrl.querySelector('.qty-plus').addEventListener('click', () => updateQuantity(oid, zone, 1, ctrl));
+      });
+    }
+  }
+
+  async function removeCard(dataset) {
+    const isHypo = !!deck.hypothetical;
+    let body;
+    if (isHypo) {
+      body = { oracle_ids: [dataset.oracleId] };
+    } else {
+      body = { collection_ids: [parseInt(dataset.cid)] };
+    }
+    await fetch(`/api/decks/${deck.id}/cards`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await refreshDeck();
   }
 
   // --- Edit modal ---
@@ -755,8 +848,7 @@
     });
     deck = await res.json();
     closeModal('deck-modal');
-    renderDeckDetail();
-    await loadDeckCards();
+    await refreshDeck();
   }
 
   // --- Delete deck ---
@@ -769,126 +861,14 @@
   // --- Remove selected cards ---
   async function removeSelectedCards() {
     if (selectedCardIds.size === 0) { alert('No cards selected'); return; }
-    const ids = Array.from(selectedCardIds);
-    const body = deck.hypothetical
-      ? { oracle_ids: ids }
-      : { collection_ids: ids };
+    const body = selectedIdsBody();
     await fetch(`/api/decks/${deck.id}/cards`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     selectedCardIds.clear();
-
-    const res = await fetch(`/api/decks/${deck.id}`);
-    deck = await res.json();
-    renderDeckDetail();
-    await loadDeckCards();
-  }
-
-  // --- Add cards picker ---
-  function showAddCardsModal() {
-    pickerSelected.clear();
-    document.getElementById('picker-search').value = '';
-    document.getElementById('picker-cards').innerHTML =
-      '<div style="padding:12px;color:var(--text-secondary);">Type to search your collection...</div>';
-    document.getElementById('add-cards-modal').classList.add('active');
-  }
-
-  async function searchPickerCards() {
-    const q = document.getElementById('picker-search').value.trim();
-    if (q.length < 2) {
-      document.getElementById('picker-cards').innerHTML =
-        '<div style="padding:12px;color:var(--text-secondary);">Type at least 2 characters...</div>';
-      return;
-    }
-    const res = await fetch(`/api/collection?q=${encodeURIComponent(q)}&status=owned`);
-    const data = await res.json();
-    const cards = Array.isArray(data) ? data : data.cards || [];
-
-    const container = document.getElementById('picker-cards');
-    if (cards.length === 0) {
-      container.innerHTML = '<div style="padding:12px;color:var(--text-secondary);">No matching cards found</div>';
-      return;
-    }
-    container.innerHTML = cards.map(c => {
-      const key = c.printing_id + '|' + c.finish;
-      return `<div class="picker-card ${pickerSelected.has(key) ? 'selected' : ''}" data-key="${esc(key)}">
-        <span>${esc(c.name)}</span>
-        <span style="color:var(--text-secondary);font-size:0.85rem">${esc(c.set_code.toUpperCase())} #${esc(c.collector_number)} - ${esc(c.finish)}</span>
-        <span style="color:var(--text-secondary);font-size:0.85rem">x${c.qty}</span>
-      </div>`;
-    }).join('');
-
-    // Wire up picker card click handlers
-    container.querySelectorAll('.picker-card').forEach(el => {
-      el.addEventListener('click', function() {
-        const key = this.dataset.key;
-        if (pickerSelected.has(key)) {
-          pickerSelected.delete(key);
-          this.classList.remove('selected');
-        } else {
-          pickerSelected.add(key);
-          this.classList.add('selected');
-        }
-      });
-    });
-  }
-
-  async function addSelectedPickerCards() {
-    if (pickerSelected.size === 0) { alert('No cards selected'); return; }
-    const zone = document.getElementById('add-zone').value;
-
-    if (deck.hypothetical) {
-      // For hypothetical decks, resolve oracle_ids from printings
-      const oracleIds = [];
-      for (const key of pickerSelected) {
-        const [printingId] = key.split('|');
-        const res = await fetch(`/api/collection/copies?printing_id=${printingId}`);
-        const copies = await res.json();
-        if (copies.length > 0 && copies[0].oracle_id) {
-          oracleIds.push(copies[0].oracle_id);
-        }
-      }
-      if (oracleIds.length === 0) { alert('No cards found'); return; }
-      const res = await fetch(`/api/decks/${deck.id}/cards`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oracle_ids: oracleIds, zone }),
-      });
-      const result = await res.json();
-      if (result.error) { alert(result.error); return; }
-    } else {
-      const allIds = [];
-      for (const key of pickerSelected) {
-        const [printingId, finish] = key.split('|');
-        const res = await fetch(`/api/collection/copies?printing_id=${printingId}&finish=${finish}`);
-        const copies = await res.json();
-        for (const copy of copies) {
-          if (!copy.deck_id && !copy.binder_id) {
-            allIds.push(copy.id);
-          }
-        }
-      }
-      if (allIds.length === 0) {
-        alert('No unassigned copies found for the selected cards');
-        return;
-      }
-      const res = await fetch(`/api/decks/${deck.id}/cards`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection_ids: allIds, zone }),
-      });
-      const result = await res.json();
-      if (result.error) { alert(result.error); return; }
-    }
-
-    closeModal('add-cards-modal');
-
-    const deckRes = await fetch(`/api/decks/${deck.id}`);
-    deck = await deckRes.json();
-    renderDeckDetail();
-    await loadDeckCards();
+    await refreshDeck();
   }
 
   // --- Expected list import ---
@@ -921,6 +901,13 @@
   // --- Completeness ---
   async function loadCompleteness() {
     const section = document.getElementById('completeness-section');
+
+    // Hypothetical decks use deck_expected_cards for their card list,
+    // not for precon completeness tracking — hide this section entirely.
+    if (deck.hypothetical) {
+      section.style.display = 'none';
+      return;
+    }
 
     const expRes = await fetch(`/api/decks/${deck.id}/expected`);
     const expected = await expRes.json();
@@ -1015,11 +1002,7 @@
     });
     const result = await res.json();
     if (result.error) { alert(result.error); return; }
-
-    const deckRes = await fetch(`/api/decks/${deck.id}`);
-    deck = await deckRes.json();
-    renderDeckDetail();
-    await loadDeckCards();
+    await refreshDeck();
   }
 
   async function reassembleAll() {
@@ -1040,29 +1023,25 @@
     });
     const result = await moveRes.json();
     if (result.error) { alert(result.error); return; }
-
-    const deckRes = await fetch(`/api/decks/${deck.id}`);
-    deck = await deckRes.json();
-    renderDeckDetail();
-    await loadDeckCards();
+    await refreshDeck();
   }
 
   // --- Dynamic button visibility ---
   function updateDynamicButtons() {
-    const totalCards = allDeckCards.length;
+    const totalCards = allDeckCards.reduce((sum, c) => sum + cardQty(c), 0);
     const landCount = allDeckCards.filter(c =>
       (c.type_line || '').includes('Land') && c.deck_zone !== 'commander'
-    ).length;
+    ).reduce((sum, c) => sum + cardQty(c), 0);
     const hasPlan = !!(currentPlanTargets && Object.keys(currentPlanTargets).length);
 
-    // Weights: visible whenever a plan exists
-    document.getElementById('btn-weights').style.display = hasPlan ? '' : 'none';
+    // Plan actions row (Add Card): always visible
+    document.getElementById('plan-actions-row').style.display = '';
 
     // Autofill: hide if >90 cards or no plan
     const autofillBtn = document.getElementById('btn-autofill');
     autofillBtn.style.display = (hasPlan && totalCards <= 90) ? '' : 'none';
 
-    // Fill Lands: hide if >20 lands or no plan
+    // Autofill Lands: hide if >20 lands or no plan
     const fillLandsBtn = document.getElementById('btn-fill-lands');
     fillLandsBtn.style.display = (hasPlan && landCount <= 20) ? '' : 'none';
   }
@@ -1071,6 +1050,14 @@
   let planProgress = null;  // {tag: {current, target}} from audit
   let planTargetTags = new Set();  // tags from current plan targets
   let currentPlanTargets = null;  // {tag: count} — raw plan targets for editing
+
+  // Infrastructure broad categories → sub-tags (mirrors INFRASTRUCTURE in constants.py)
+  const INFRA_SUB_TAGS = {
+    "Ramp": new Set(["ramp", "mana-dork", "mana-rock", "adds-multiple-mana", "extra-land", "repeatable-treasures"]),
+    "Card Advantage": new Set(["draw", "card-advantage", "tutor", "repeatable-draw", "burst-draw", "impulse", "repeatable-impulsive-draw", "wheel", "curiosity-like", "life-for-cards", "bottle-draw"]),
+    "Targeted Disruption": new Set(["removal", "creature-removal", "artifact-removal", "enchantment-removal", "planeswalker-removal", "removal-exile", "removal-toughness", "disenchant", "counter", "edict", "bounce", "graveyard-hate", "land-removal", "hand-disruption", "burn-creature", "lockdown", "humble", "control-changing-effects"]),
+    "Mass Disruption": new Set(["boardwipe", "sweeper-one-sided", "multi-removal", "mass-land-denial", "tax"]),
+  };
 
   async function loadPlan() {
     // Show Generate Plan button for Commander decks
@@ -1138,6 +1125,7 @@
         renderCards();
       });
     });
+
   }
 
   function highlightPlanTag(tag) {
@@ -1314,162 +1302,101 @@
   }
 
   // --- Autofill ---
-  let autofillSuggestions = {};  // tag -> {cards: [...]}
 
   async function runAutofill() {
-    document.getElementById('autofill-modal').classList.add('active');
-    const body = document.getElementById('autofill-body');
-    body.innerHTML = '<span class="spinner"></span> Finding cards for your plan...';
-    document.getElementById('btn-autofill-add').disabled = true;
+    const btn = document.getElementById('btn-autofill');
+    btn.disabled = true;
+    btn.textContent = 'Filling...';
 
-    let res;
     try {
-      res = await fetch(`/api/decks/${deck.id}/autofill`, {
+      const res = await fetch(`/api/decks/${deck.id}/autofill`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reset: true }),
       });
-    } catch (_) {
-      body.innerHTML = '<div style="color:var(--error)">Connection to server failed.</div>';
-      return;
-    }
 
-    // Non-SSE error response (e.g. missing plan)
-    if (res.headers.get('content-type')?.includes('application/json')) {
-      const err = await res.json();
-      body.innerHTML = `<div style="color:var(--error)">${esc(err.error || 'Unknown error')}</div>`;
-      return;
-    }
+      // Non-SSE error response (e.g. missing plan)
+      if (res.headers.get('content-type')?.includes('application/json')) return;
 
-    // Parse SSE stream — render as soon as result arrives, don't wait for connection close
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let data = null;
-    let finished = false;
+      // Parse SSE stream
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let data = null;
+      let finished = false;
 
-    while (!finished) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      while (!finished) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-      while (buffer.includes('\n\n')) {
-        const idx = buffer.indexOf('\n\n');
-        const message = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
+        while (buffer.includes('\n\n')) {
+          const idx = buffer.indexOf('\n\n');
+          const message = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
 
-        let eventType = 'message';
-        let eventData = '';
-        for (const line of message.split('\n')) {
-          if (line.startsWith('event: ')) eventType = line.slice(7);
-          else if (line.startsWith('data: ')) eventData = line.slice(6);
-        }
-        if (!eventData) continue;
-        const parsed = JSON.parse(eventData);
+          let eventType = 'message';
+          let eventData = '';
+          for (const line of message.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7);
+            else if (line.startsWith('data: ')) eventData = line.slice(6);
+          }
+          if (!eventData) continue;
+          const parsed = JSON.parse(eventData);
 
-        if (eventType === 'status') {
-          body.innerHTML = `<span class="spinner"></span> ${esc(parsed.message)}`;
-        } else if (eventType === 'result') {
-          data = parsed;
-        } else if (eventType === 'error') {
-          body.innerHTML = `<div style="color:var(--error)">${esc(parsed.message)}</div>`;
-          reader.cancel();
-          return;
-        } else if (eventType === 'done') {
-          finished = true;
+          if (eventType === 'status') {
+            btn.textContent = parsed.message.length > 30
+              ? parsed.message.slice(0, 30) + '…'
+              : parsed.message;
+          } else if (eventType === 'result') {
+            data = parsed;
+          } else if (eventType === 'error') {
+            reader.cancel();
+            return;
+          } else if (eventType === 'done') {
+            finished = true;
+          }
         }
       }
-    }
-    reader.cancel();
+      reader.cancel();
 
-    if (!data) {
-      body.innerHTML = '<div style="color:var(--error)">No response from server.</div>';
-      return;
-    }
+      if (!data) return;
 
-    autofillSuggestions = data.suggestions || {};
-    const tags = Object.keys(autofillSuggestions);
+      const suggestions = data.suggestions || {};
+      const tags = Object.keys(suggestions);
+      if (tags.length === 0) return;
 
-    if (tags.length === 0) {
-      body.innerHTML = '<div style="padding:12px;color:var(--text-secondary)">All plan targets are already met!</div>';
-      return;
-    }
-
-    let html = '';
-    if (data.unvalidated) {
-      html += '<div class="autofill-warning">Suggestions are unvalidated (no API key). Some may not match their roles.</div>';
-    }
-    for (const tag of tags) {
-      const group = autofillSuggestions[tag];
-      const label = tag.replace(/-/g, ' ');
-      html += `<div class="autofill-group">`;
-      html += `<div class="autofill-tag-header">`;
-      html += `<strong>${esc(label)}</strong>`;
-      html += `<span style="color:var(--text-secondary);font-size:0.85rem">${group.current}/${group.target}</span>`;
-      html += `</div>`;
-      for (const card of group.cards) {
-        html += `<label class="autofill-card">`;
-        html += `<input type="checkbox" checked data-cid="${card.collection_id}" data-oracle-id="${card.oracle_id}" data-tag="${esc(tag)}">`;
-        html += `<span class="autofill-card-name">${esc(card.name)}</span>`;
-        html += `<span class="mana">${renderMana(card.mana_cost || '')}</span>`;
-        html += `<span class="autofill-card-type">${esc(card.type_line || '')}</span>`;
-        html += `<span class="autofill-card-set">${esc(card.set_code.toUpperCase())}</span>`;
-        html += `</label>`;
+      // Collect all suggested cards and add them directly
+      let addBody;
+      if (deck.hypothetical) {
+        const oids = [];
+        for (const tag of tags) {
+          for (const card of suggestions[tag].cards) oids.push(card.oracle_id);
+        }
+        if (oids.length === 0) return;
+        addBody = { oracle_ids: oids, zone: 'mainboard' };
+      } else {
+        const ids = [];
+        for (const tag of tags) {
+          for (const card of suggestions[tag].cards) ids.push(card.collection_id);
+        }
+        if (ids.length === 0) return;
+        addBody = { collection_ids: ids, zone: 'mainboard' };
       }
-      html += `</div>`;
+
+      const addRes = await fetch(`/api/decks/${deck.id}/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(addBody),
+      });
+      const result = await addRes.json();
+      if (result.error) return;
+
+      await refreshDeck();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Autofill Nonland';
     }
-    body.innerHTML = html;
-    document.getElementById('btn-autofill-add').disabled = false;
-
-    // Update button label with count
-    updateAutofillCount();
-    body.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-      cb.addEventListener('change', updateAutofillCount);
-    });
-  }
-
-  function updateAutofillCount() {
-    const checked = document.querySelectorAll('#autofill-body input[type="checkbox"]:checked');
-    const btn = document.getElementById('btn-autofill-add');
-    btn.textContent = `Add Selected (${checked.length})`;
-    btn.disabled = checked.length === 0;
-  }
-
-  async function addAutofillCards() {
-    const checked = document.querySelectorAll('#autofill-body input[type="checkbox"]:checked');
-    let body;
-    if (deck.hypothetical) {
-      const oids = [];
-      for (const cb of checked) { oids.push(cb.dataset.oracleId); }
-      if (oids.length === 0) return;
-      body = { oracle_ids: oids, zone: 'mainboard' };
-    } else {
-      const ids = [];
-      for (const cb of checked) { ids.push(parseInt(cb.dataset.cid)); }
-      if (ids.length === 0) return;
-      body = { collection_ids: ids, zone: 'mainboard' };
-    }
-
-    const btn = document.getElementById('btn-autofill-add');
-    btn.disabled = true;
-    btn.textContent = 'Adding...';
-
-    const res = await fetch(`/api/decks/${deck.id}/cards`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const result = await res.json();
-    if (result.error) { alert(result.error); btn.disabled = false; return; }
-
-    closeModal('autofill-modal');
-
-    // Refresh deck data
-    const deckRes = await fetch(`/api/decks/${deck.id}`);
-    deck = await deckRes.json();
-    renderDeckDetail();
-    await loadDeckCards();
-    await loadPlan();  // Refresh plan progress
   }
 
   // --- Mana Curve ---
@@ -1572,269 +1499,59 @@
     document.getElementById('curve-legend').innerHTML = legend;
   }
 
-  // --- Weights ---
 
-  const WEIGHT_LABELS = {
-    edhrec: { label: 'EDHREC', desc: () => {
-      const cmds = allDeckCards.filter(c => c.deck_zone === 'commander');
-      const name = cmds.length > 0 ? cmds[0].name : 'your commander';
-      return `Raise to choose more cards that are popular on EDHREC with ${name}`;
-    }},
-    salt: { label: 'Salt', desc: () => 'Raise to choose fewer annoying cards (according to EDHREC\'s "salt" score)' },
-    price: { label: 'Price', desc: () => 'Raise to choose more expensive cards' },
-    plan_overlap: { label: 'Plan overlap', desc: () => 'Raise to choose more cards that overlap with the Deck Plan' },
-    novelty: { label: 'Novelty', desc: () => 'Raise to choose more cards that have low popularity on EDHREC' },
-    bling: { label: 'Bling', desc: () => 'Raise to choose more cards from your collection that are full-art, borderless, showcase, etc.' },
-    rarity: { label: 'Rarity', desc: () => 'Raise to choose more rare and mythic cards over commons and uncommons' },
-    random: { label: 'Random', desc: () => 'Raise to choose cards more randomly' },
-  };
-  const WEIGHT_ORDER = ['edhrec', 'salt', 'price', 'plan_overlap', 'novelty', 'bling', 'rarity', 'random'];
-  const DEFAULT_WEIGHTS = { edhrec: 3, salt: 2, price: 1, plan_overlap: 3, novelty: 3, bling: 4, rarity: 3, random: 0 };
-  let currentWeights = null;
+  // --- Autofill Lands ---
 
-  async function openWeightsModal() {
-    document.getElementById('weights-modal').classList.add('active');
-    const body = document.getElementById('weights-body');
-    body.innerHTML = '<span class="spinner"></span> Loading...';
-
-    const res = await fetch(`/api/decks/${deck.id}/weights`);
-    if (!res.ok) {
-      body.innerHTML = '<div style="color:var(--error)">Failed to load weights.</div>';
-      return;
-    }
-    currentWeights = await res.json();
-    renderWeightsBody();
-  }
-
-  function renderWeightsBody() {
-    const body = document.getElementById('weights-body');
-    let html = '';
-    for (const key of WEIGHT_ORDER) {
-      const info = WEIGHT_LABELS[key];
-      const val = currentWeights[key] ?? DEFAULT_WEIGHTS[key];
-      html += `<div class="weight-row">
-        <div class="weight-row-top">
-          <span class="weight-label">${esc(info.label)}</span>
-          <div class="weight-controls">
-            <button class="weight-btn" data-key="${key}" data-dir="-1" ${val <= 0 ? 'disabled' : ''}>&minus;</button>
-            <span class="weight-value" id="wv-${key}">${val}</span>
-            <button class="weight-btn" data-key="${key}" data-dir="1" ${val >= 10 ? 'disabled' : ''}>+</button>
-          </div>
-        </div>
-        <div class="weight-desc">${esc(info.desc())}</div>
-      </div>`;
-    }
-    body.innerHTML = html;
-    body.querySelectorAll('.weight-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const key = btn.dataset.key;
-        const dir = parseInt(btn.dataset.dir);
-        const newVal = Math.max(0, Math.min(10, (currentWeights[key] ?? DEFAULT_WEIGHTS[key]) + dir));
-        currentWeights[key] = newVal;
-        renderWeightsBody();
-      });
-    });
-  }
-
-  async function saveWeights() {
-    const btn = document.getElementById('btn-weights-save');
-    btn.disabled = true;
-    btn.textContent = 'Saving...';
-
-    const res = await fetch(`/api/decks/${deck.id}/weights`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(currentWeights),
-    });
-    if (res.ok) {
-      closeModal('weights-modal');
-    } else {
-      const err = await res.json();
-      alert(err.error || 'Failed to save weights');
-    }
-    btn.disabled = false;
-    btn.textContent = 'Save';
-  }
-
-  function resetWeights() {
-    currentWeights = { ...DEFAULT_WEIGHTS };
-    renderWeightsBody();
-  }
-
-  // --- Fill Lands ---
-
-  const MANA_COLORS = { W: '#f9faf4', U: '#0e68ab', B: '#150b00', R: '#d3202a', G: '#00733e' };
-  const BASIC_LAND_NAMES = { W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest' };
-
-  // Fill-lands state
-  let fillLandsNonbasic = [];
-  let fillLandsBasic = [];
-  let fillLandsPipFractions = {};
 
   async function runFillLands() {
-    document.getElementById('fill-lands-modal').classList.add('active');
-    const body = document.getElementById('fill-lands-body');
-    body.innerHTML = '<span class="spinner"></span> Finding lands...';
-    document.getElementById('btn-fill-lands-add').disabled = true;
+    const btn = document.getElementById('btn-fill-lands');
+    btn.disabled = true;
+    btn.textContent = 'Filling...';
 
-    let res;
     try {
-      res = await fetch(`/api/decks/${deck.id}/fill-lands`, { method: 'POST' });
-    } catch (_) {
-      body.innerHTML = '<div style="color:var(--error)">Connection to server failed.</div>';
-      return;
-    }
+      const res = await fetch(`/api/decks/${deck.id}/fill-lands`, { method: 'POST' });
+      const data = await res.json();
+      if (data.error) return;
 
-    const data = await res.json();
-    if (data.error) {
-      body.innerHTML = `<div style="color:var(--error)">${esc(data.error)}</div>`;
-      return;
-    }
+      const nonbasic = data.suggestions?.nonbasic || [];
+      const basic = data.suggestions?.basic || [];
+      if (nonbasic.length === 0 && basic.length === 0) return;
 
-    fillLandsNonbasic = data.suggestions?.nonbasic || [];
-    fillLandsBasic = data.suggestions?.basic || [];
-    fillLandsPipFractions = data.pip_fractions || {};
-
-    if (fillLandsNonbasic.length === 0 && fillLandsBasic.length === 0) {
-      body.innerHTML = '<div style="padding:12px;color:var(--text-secondary)">No lands needed — deck has enough lands already.</div>';
-      return;
-    }
-
-    renderFillLandsBody(data);
-  }
-
-  function renderFillLandsBody(data) {
-    const body = document.getElementById('fill-lands-body');
-    const totalCount = fillLandsNonbasic.length + fillLandsBasic.reduce((a, b) => a + b.count, 0);
-
-    let html = `<div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px">` +
-      `Lands: ${data.existing_lands}/${data.land_target} — suggesting ${totalCount} lands</div>`;
-
-    if (fillLandsNonbasic.length > 0) {
-      html += '<div class="fill-lands-section-label">Nonbasic Lands</div>';
-      html += '<div class="card-grid fill-lands-grid">';
-      for (const land of fillLandsNonbasic) {
-        const rarityColor = getRarityColor(land.rarity);
-        const foilClass = (land.finish === 'foil' || land.finish === 'etched') ? ' foil' : '';
-        const dots = (land.produced_mana || []).map(c =>
-          `<span class="land-mana-dot" style="background:${MANA_COLORS[c] || '#888'}"></span>`
-        ).join('');
-        html += `<div class="sheet-card fill-land-card" data-cid="${land.collection_id}">
-          <div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111">
-            <img src="${land.image_uri || ''}" alt="${esc(land.name)}" loading="lazy">
-            <button class="fill-land-remove" title="Replace with basic">&times;</button>
-          </div>
-          <div class="fill-land-colors">${dots}</div>
-        </div>`;
-      }
-      html += '</div>';
-    }
-
-    if (fillLandsBasic.length > 0) {
-      html += '<div class="fill-lands-section-label">Basic Lands</div>';
-      html += '<div class="fill-lands-basics">';
-      for (const group of fillLandsBasic) {
-        html += `<span class="fill-lands-basic-pill">${esc(group.name)} &times;${group.count}</span>`;
-      }
-      html += '</div>';
-    }
-
-    body.innerHTML = html;
-    document.getElementById('btn-fill-lands-add').disabled = false;
-    document.getElementById('btn-fill-lands-add').textContent = `Add All (${totalCount})`;
-
-    // Wire X buttons on nonbasics
-    body.querySelectorAll('.fill-land-remove').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const card = btn.closest('.fill-land-card');
-        const cid = parseInt(card.dataset.cid);
-        removeNonbasicLand(cid, data);
-      });
-    });
-  }
-
-  function removeNonbasicLand(collectionId, data) {
-    // Find and remove the nonbasic
-    const idx = fillLandsNonbasic.findIndex(l => l.collection_id === collectionId);
-    if (idx === -1) return;
-    fillLandsNonbasic.splice(idx, 1);
-
-    // Add one basic land — pick the color with the highest pip fraction
-    // that has the fewest basics relative to its fraction
-    const currentBasicCounts = {};
-    const totalBasics = fillLandsBasic.reduce((a, b) => a + b.count, 0);
-    for (const g of fillLandsBasic) {
-      for (const [color, name] of Object.entries(BASIC_LAND_NAMES)) {
-        if (g.name === name) currentBasicCounts[color] = (currentBasicCounts[color] || 0) + g.count;
-      }
-    }
-
-    // Pick color most underrepresented vs pip fraction
-    let bestColor = null;
-    let bestDeficit = -Infinity;
-    for (const [color, frac] of Object.entries(fillLandsPipFractions)) {
-      const current = currentBasicCounts[color] || 0;
-      const expected = frac * (totalBasics + 1);
-      const deficit = expected - current;
-      if (deficit > bestDeficit) {
-        bestDeficit = deficit;
-        bestColor = color;
-      }
-    }
-
-    if (bestColor) {
-      const name = BASIC_LAND_NAMES[bestColor];
-      const existing = fillLandsBasic.find(g => g.name === name);
-      if (existing) {
-        existing.count++;
+      // Add all suggested lands directly
+      let addBody;
+      if (deck.hypothetical) {
+        const oids = nonbasic.map(l => l.oracle_id);
+        for (const g of basic) {
+          if (g.count > 0 && g.oracle_id) {
+            for (let i = 0; i < g.count; i++) oids.push(g.oracle_id);
+          }
+        }
+        if (oids.length === 0) return;
+        addBody = { oracle_ids: oids, zone: 'mainboard' };
       } else {
-        fillLandsBasic.push({ name, count: 1, collection_ids: [] });
-      }
-    }
-
-    renderFillLandsBody(data);
-  }
-
-  async function addFillLandsCards() {
-    let body;
-    if (deck.hypothetical) {
-      const oids = fillLandsNonbasic.map(l => l.oracle_id);
-      for (const g of fillLandsBasic) {
-        if (g.count > 0 && g.oracle_id) {
-          for (let i = 0; i < g.count; i++) oids.push(g.oracle_id);
+        const ids = nonbasic.map(l => l.collection_id);
+        for (const g of basic) {
+          if (g.count > 0 && g.collection_ids) {
+            ids.push(...g.collection_ids.slice(0, g.count));
+          }
         }
+        if (ids.length === 0) return;
+        addBody = { collection_ids: ids, zone: 'mainboard' };
       }
-      if (oids.length === 0) return;
-      body = { oracle_ids: oids, zone: 'mainboard' };
-    } else {
-      const ids = fillLandsNonbasic.map(l => l.collection_id);
-      for (const g of fillLandsBasic) {
-        if (g.count > 0 && g.collection_ids) {
-          ids.push(...g.collection_ids.slice(0, g.count));
-        }
-      }
-      if (ids.length === 0) return;
-      body = { collection_ids: ids, zone: 'mainboard' };
+
+      const addRes = await fetch(`/api/decks/${deck.id}/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(addBody),
+      });
+      const result = await addRes.json();
+      if (result.error) return;
+
+      await refreshDeck();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Autofill Lands';
     }
-
-    const btn = document.getElementById('btn-fill-lands-add');
-
-    const res = await fetch(`/api/decks/${deck.id}/cards`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const result = await res.json();
-    if (result.error) { alert(result.error); btn.disabled = false; return; }
-
-    closeModal('fill-lands-modal');
-
-    const deckRes = await fetch(`/api/decks/${deck.id}`);
-    deck = await deckRes.json();
-    renderDeckDetail();
-    await loadDeckCards();
-    await loadPlan();
   }
 
   async function clearPlan() {
@@ -1972,28 +1689,43 @@
     renderCards();  // Update role labels
   }
 
-  // --- Replacement modal ---
+  // --- Search modal (unified add/replace) ---
   let replaceCollectionId = null;
   let replaceOracleId = null;
   let replaceSelectedCandidate = null;
+  let replaceMode = 'replace'; // 'replace' or 'add'
+
+  function resetSearchModal() {
+    replaceSelectedCandidate = null;
+    document.getElementById('replace-confirm').disabled = true;
+    document.getElementById('replace-confirm').textContent = replaceMode === 'add' ? 'Add' : 'Confirm';
+    document.getElementById('replace-selection-label').textContent = 'No card selected';
+    // Clear all filters
+    document.getElementById('sf-name').value = '';
+    document.getElementById('sf-cmc').value = '';
+    document.getElementById('sf-tag').value = '';
+    document.querySelectorAll('#sf-colors input, #sf-types input').forEach(cb => { cb.checked = false; });
+    document.getElementById('sf-role').value = '';
+    renderReplaceGrid([]);
+  }
 
   async function openReplaceModal(collectionId, cardName, oracleId) {
+    replaceMode = 'replace';
     replaceCollectionId = collectionId;
     replaceOracleId = oracleId || null;
-    replaceSelectedCandidate = null;
-    document.getElementById('replace-card-name').textContent = cardName;
-    document.getElementById('replace-card-roles').innerHTML = '';
-    document.getElementById('replace-confirm').disabled = true;
-    document.getElementById('replace-selection-label').textContent = 'No card selected';
-    replaceCandidateData = { role: [], type: [], search: [] };
-    // Reset to Role tab
-    replaceActiveTab = 'role';
-    document.querySelectorAll('.replace-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'role'));
-    document.getElementById('replace-search-form').style.display = 'none';
-    renderReplaceGrid([]);
-    document.getElementById('replace-grid').innerHTML = '<div style="padding:24px;color:var(--text-secondary);text-align:center;grid-column:1/-1">Loading...</div>';
-    document.getElementById('replace-modal').classList.add('active');
+    resetSearchModal();
 
+    // Set title with role pills
+    let titleHtml = `Replace: ${esc(cardName)}`;
+    document.getElementById('search-modal-title').innerHTML = titleHtml;
+
+    // Populate role selector
+    populateRoleSelector();
+
+    document.getElementById('replace-grid').innerHTML = '<div style="padding:24px;color:var(--text-secondary);text-align:center;grid-column:1/-1">Loading...</div>';
+    document.getElementById('search-modal').classList.add('active');
+
+    // Fetch replacement data for role info
     const queryParam = deck.hypothetical
       ? `oracle_id=${encodeURIComponent(oracleId)}`
       : `collection_id=${collectionId}`;
@@ -2004,22 +1736,56 @@
     }
     const data = await res.json();
     const cardRoles = (data.card.tags || []);
-    if (cardRoles.length) {
-      document.getElementById('replace-card-roles').innerHTML = cardRoles.map(r => `<span class="replace-role-pill">${esc(r)}</span>`).join('');
-    }
-    replaceCandidateData.role = data.role_suggestions || [];
-    replaceCandidateData.type = data.type_suggestions || [];
-    renderReplaceGrid(replaceCandidateData[replaceActiveTab]);
 
-    // Pre-fill search inputs from card data
-    document.getElementById('rs-name').value = '';
-    document.getElementById('rs-cmc').value = data.card.cmc != null ? Math.floor(data.card.cmc) : '';
-    document.getElementById('rs-set').value = '';
-    const tl = data.card.type_line || '';
-    const dashIdx = tl.indexOf('\u2014');
-    document.getElementById('rs-type').value = (dashIdx >= 0 ? tl.substring(0, dashIdx).trim() : tl).split(' ').find(w =>
-      ['Creature','Artifact','Enchantment','Instant','Sorcery','Planeswalker'].includes(w)
-    ) || '';
+    // Add role pills to title
+    if (cardRoles.length) {
+      titleHtml += ' ' + cardRoles.map(r => `<span class="replace-role-pill">${esc(r)}</span>`).join('');
+      document.getElementById('search-modal-title').innerHTML = titleHtml;
+    }
+
+    // Auto-select primary role in tag filter
+    if (cardRoles.length > 0) {
+      const primaryRole = cardRoles[0];
+      document.getElementById('sf-tag').value = primaryRole;
+      // Also select in role dropdown if it exists
+      const roleSelect = document.getElementById('sf-role');
+      if (roleSelect.querySelector(`option[value="${primaryRole}"]`)) {
+        roleSelect.value = primaryRole;
+      }
+    }
+
+    searchCards();
+  }
+
+  function openAddCardModal() {
+    replaceMode = 'add';
+    replaceCollectionId = null;
+    replaceOracleId = null;
+    resetSearchModal();
+
+    document.getElementById('search-modal-title').textContent = 'Search';
+    populateRoleSelector();
+    document.getElementById('search-modal').classList.add('active');
+    searchCards();
+  }
+
+  function populateRoleSelector() {
+    const roleSelect = document.getElementById('sf-role');
+    if (currentPlanTargets && Object.keys(currentPlanTargets).length > 0) {
+      const sorted = Object.entries(currentPlanTargets).sort(([a], [b]) => {
+        if (a === 'lands') return -1;
+        if (b === 'lands') return 1;
+        return a.localeCompare(b);
+      });
+      roleSelect.innerHTML = '<option value="">— Role —</option>' +
+        sorted.map(([tag, val]) => {
+          const current = (planProgress && planProgress[tag]) ? planProgress[tag].current : 0;
+          return `<option value="${esc(tag)}">${esc(val.label)} (${current}/${val.count})</option>`;
+        }).join('');
+      roleSelect.style.display = '';
+    } else {
+      roleSelect.style.display = 'none';
+    }
   }
 
   function renderReplaceGrid(candidates) {
@@ -2029,14 +1795,10 @@
       return;
     }
     grid.innerHTML = candidates.map(c => {
-      const tags = (c.tags || '').split(',').filter(t => t && planTargetTags.has(t));
-      const rolesText = tags.map(t => {
-        const val = currentPlanTargets && currentPlanTargets[t];
-        return val ? val.label : t.replace(/-/g, ' ');
-      }).join(', ');
+      const rolesText = getCardRoles(c).join(', ');
       const rarityColor = getRarityColor(c.rarity);
       const foilClass = (c.finish === 'foil' || c.finish === 'etched') ? ' foil' : '';
-      return `<div class="sheet-card replace-candidate" data-cid="${c.collection_id}" data-name="${esc(c.name)}">
+      return `<div class="sheet-card replace-candidate" data-cid="${c.collection_id}" data-oracle-id="${esc(c.oracle_id || '')}" data-name="${esc(c.name)}">
         <div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111">
           <img src="${c.image_uri || ''}" alt="${esc(c.name)}" loading="lazy">
           ${rolesText ? `<span class="role-overlay" style="opacity:1">${esc(rolesText)}</span>` : ''}
@@ -2054,28 +1816,34 @@
     el.classList.add('selected');
     replaceSelectedCandidate = {
       collection_id: parseInt(el.dataset.cid),
+      oracle_id: el.dataset.oracleId || null,
       name: el.dataset.name,
     };
     document.getElementById('replace-selection-label').textContent = replaceSelectedCandidate.name;
     document.getElementById('replace-confirm').disabled = false;
   }
 
-  async function searchReplacements() {
-    const name = document.getElementById('rs-name').value.trim();
-    const cmc = document.getElementById('rs-cmc').value.trim();
-    const set = document.getElementById('rs-set').value.trim();
-    const type = document.getElementById('rs-type').value.trim();
-    const tag = document.getElementById('rs-tag').value.trim();
+  async function searchCards() {
+    const name = document.getElementById('sf-name').value.trim();
+    const cmc = document.getElementById('sf-cmc').value.trim();
+    const tag = document.getElementById('sf-tag').value.trim();
 
-    const params = new URLSearchParams({ status: 'owned' });
+    // Collect color checkboxes
+    const colors = [...document.querySelectorAll('#sf-colors input:checked')].map(cb => cb.value);
+    // Collect type checkboxes
+    const types = [...document.querySelectorAll('#sf-types input:checked')].map(cb => cb.value);
+
+    const params = new URLSearchParams();
+    params.set('status', 'owned');
     if (name) params.set('q', name);
-    if (cmc) params.set('cmc', cmc);
-    if (set) params.set('filter_set', set);
-    if (type) params.set('type', type);
+    if (cmc) params.set('filter_cmc_min', cmc);
+    if (cmc) params.set('filter_cmc_max', cmc);
     if (tag) params.set('filter_tag', tag);
+    for (const c of colors) params.append('filter_color', c);
+    for (const t of types) params.append('filter_type[]', t);
 
     // Get commander CI for filtering
-    const commanders = deckCards.filter(c => c.deck_zone === 'commander');
+    const commanders = allDeckCards.filter(c => c.deck_zone === 'commander');
     if (commanders.length > 0) {
       const ci = new Set();
       commanders.forEach(c => {
@@ -2094,8 +1862,9 @@
       return;
     }
     const cards = await res.json();
-    replaceCandidateData.search = cards.filter(c => c.collection_id).map(c => ({
+    const candidates = cards.filter(c => c.collection_id || c.oracle_id).map(c => ({
       collection_id: c.collection_id,
+      oracle_id: c.oracle_id,
       name: c.name,
       mana_cost: c.mana_cost,
       image_uri: c.image_uri,
@@ -2103,11 +1872,27 @@
       finish: c.finish,
       tags: (c.card_tags || []).join(','),
     }));
-    renderReplaceGrid(replaceCandidateData.search);
+    renderReplaceGrid(candidates);
   }
 
   async function confirmReplacement() {
     if (!replaceSelectedCandidate) return;
+
+    if (replaceMode === 'add') {
+      const body = deck.hypothetical
+        ? { oracle_ids: [replaceSelectedCandidate.oracle_id], zone: 'mainboard' }
+        : { collection_ids: [replaceSelectedCandidate.collection_id], zone: 'mainboard' };
+      const res = await fetch(`/api/decks/${deck.id}/cards`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      const result = await res.json();
+      if (result.error) { alert(result.error); return; }
+      closeModal('search-modal');
+      await refreshDeck();
+      return;
+    }
 
     let body;
     if (deck.hypothetical) {
@@ -2140,8 +1925,8 @@
       alert(err.error || 'Replacement failed');
       return;
     }
-    closeModal('replace-modal');
-    loadDeckCards();
+    closeModal('search-modal');
+    await refreshDeck();
   }
 
   // --- Utils ---
@@ -2152,8 +1937,10 @@
   // --- Initial render ---
   renderDeckDetail();
   loadPlan();
+  loadCompleteness();
   fetch('/api/settings').then(r => r.json()).then(s => {
-    currentView = s.default_card_view || 'grid';
+    const saved = s.default_card_view || 'list';
+    currentView = saved === 'grid' ? 'list' : saved;
     updateViewButtons();
     loadDeckCards();
   });

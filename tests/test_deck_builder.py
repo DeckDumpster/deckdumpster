@@ -29,7 +29,7 @@ from mtg_collector.db.models import (
     SetRepository,
 )
 from mtg_collector.db.schema import init_db
-from mtg_collector.services.deck_builder.service import DeckBuilderService
+from mtg_collector.services.deck_builder.service import DeckBuilderService, DeckContext
 
 
 def _make_raw_json(legalities=None, edhrec_rank=None, produced_mana=None):
@@ -360,7 +360,6 @@ class TestLifecycle:
         result = svc.create_deck("Atraxa, Praetors' Voice")
         assert result["deck_id"] > 0
         assert result["commander"] == "Atraxa, Praetors' Voice"
-        assert result["copy_assigned"] is True
 
     def test_create_deck_search_by_name(self, seeded_db):
         db, entries = seeded_db
@@ -648,9 +647,45 @@ class TestPlan:
         svc.add_card(deck["deck_id"], "Reanimate")
         cards = svc.deck_repo.get_cards(deck["deck_id"])
         plan = svc.get_plan(deck["deck_id"])
-        progress = svc._get_plan_progress(deck["deck_id"], cards, plan)
+        progress = svc._get_plan_progress(deck["deck_id"], cards, plan, svc._deck_context(deck["deck_id"]))
         assert progress["reanimate"]["current"] == 1
         assert progress["reanimate"]["target"] == 5
+
+    def test_plan_progress_infrastructure_aggregation(self, seeded_db):
+        """Infrastructure categories aggregate across sub-tags without double-counting."""
+        db, entries = seeded_db
+        svc = DeckBuilderService(db)
+        deck = svc.create_deck("Atraxa, Praetors' Voice")
+        deck_id = deck["deck_id"]
+
+        sol_oid = db.execute(
+            "SELECT oracle_id FROM cards WHERE name = 'Sol Ring'"
+        ).fetchone()["oracle_id"]
+
+        # Give Sol Ring both "ramp" and "mana-rock" — two sub-tags of Ramp
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   (sol_oid, "ramp"))
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   (sol_oid, "mana-rock"))
+        # Also give it "draw" — a sub-tag of Card Advantage
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   (sol_oid, "draw"))
+        db.commit()
+
+        svc.add_card(deck_id, "Sol Ring")
+        svc.set_plan(deck_id, {"Ramp": 10, "Card Advantage": 12})
+
+        cards = svc.deck_repo.get_cards(deck_id)
+        plan = svc.get_plan(deck_id)
+        progress = svc._get_plan_progress(deck_id, cards, plan, svc._deck_context(deck_id))
+
+        # Sol Ring has [ramp, mana-rock] but counts as 1 Ramp card (not 2)
+        assert progress["Ramp"]["current"] == 1
+        assert progress["Ramp"]["target"] == 10
+
+        # Sol Ring also has [draw] so counts toward Card Advantage too
+        assert progress["Card Advantage"]["current"] == 1
+        assert progress["Card Advantage"]["target"] == 12
 
     def test_clear_plan(self, seeded_db):
         db, entries = seeded_db
@@ -1232,20 +1267,32 @@ class TestAutofill:
             result = svc.autofill(deck["deck_id"])
         assert "unvalidated" not in result
 
-    def test_autofill_validator_filters_invalid(self, seeded_db):
-        """Validator should filter out invalid tag assignments."""
+    def test_autofill_invalidated_tags_excluded(self, seeded_db):
+        """Tags marked invalid in card_tag_validations are excluded from autofill."""
         db, entries = seeded_db
-        svc = DeckBuilderService(db, api_key="test-key")
+        svc = DeckBuilderService(db)
         deck = svc.create_deck("Atraxa, Praetors' Voice")
-        svc.set_plan(deck["deck_id"], {"ramp": 2})
-        from unittest.mock import patch, MagicMock
-        mock_validator = MagicMock()
-        # Filter out all candidates (simulates all being invalid)
-        mock_validator.validate_and_filter.return_value = []
-        with patch("mtg_collector.services.deck_builder.tag_validator.TagValidator", return_value=mock_validator):
-            result = svc.autofill(deck["deck_id"])
-        # No valid candidates means no suggestions for ramp
-        assert "ramp" not in result["suggestions"]
+        deck_id = deck["deck_id"]
+
+        # Tag Sol Ring with "ramp" then invalidate it
+        sol_oid = db.execute(
+            "SELECT oracle_id FROM cards WHERE name = 'Sol Ring'"
+        ).fetchone()["oracle_id"]
+        db.execute("INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                   (sol_oid, "ramp"))
+        db.execute(
+            "INSERT OR REPLACE INTO card_tag_validations "
+            "(oracle_id, tag, valid, reason, validated_at) VALUES (?, ?, ?, ?, ?)",
+            (sol_oid, "ramp", 0, "Not ramp", "2024-01-01T00:00:00Z"),
+        )
+        db.commit()
+
+        svc.set_plan(deck_id, {"ramp": 2})
+        result = svc.autofill(deck_id)
+        # Sol Ring's ramp tag is invalidated — it should not appear as a ramp suggestion
+        ramp_cards = result["suggestions"].get("ramp", {}).get("cards", [])
+        ramp_names = [c["name"] for c in ramp_cards]
+        assert "Sol Ring" not in ramp_names
 
     def test_autofill_reset_clears_non_commander_cards(self, seeded_db):
         """reset=True should remove non-commander cards before suggesting."""
@@ -1330,24 +1377,20 @@ class TestAutofill:
             f"{[(t, [c['name'] for c in g['cards']]) for t, g in suggestions.items()]}"
         )
 
-    def test_autofill_creature_fallback(self, seeded_db):
-        """When tag targets are filled but budget remains, fill with creatures."""
+    def test_autofill_stops_when_targets_met(self, seeded_db):
+        """When all targets are met, autofill stops (no creature fallback)."""
         db, entries = seeded_db
         svc = DeckBuilderService(db)
         deck = svc.create_deck("Atraxa, Praetors' Voice")
-        # Small tag target leaves most of the budget unfilled
+        # Small tag target — should fill exactly what's needed, then stop
         svc.set_plan(deck["deck_id"], {"ramp": 1, "lands": 37})
         result = svc.autofill(deck["deck_id"])
 
         suggestions = result["suggestions"]
-        assert "creatures" in suggestions, (
-            f"Expected creature fallback, got tags: {list(suggestions.keys())}"
-        )
-        # Total should fill up to budget (99 - 1 commander - 37 lands = 61)
         total = sum(len(g["cards"]) for g in suggestions.values())
-        assert total <= 61, f"Over budget: {total}"
-        # Should have more than just the 1 ramp card
-        assert total > 1, f"Fallback should have added creatures, got {total} total"
+        # Should have exactly 1 card for the 1 ramp target
+        assert total == 1, f"Expected 1 suggestion, got {total}: {list(suggestions.keys())}"
+        assert "creatures" not in suggestions
 
 
 # =============================================================================
@@ -1923,7 +1966,7 @@ class TestCustomQueryTargets:
 
         cards = svc.deck_repo.get_cards(deck_id)
         plan = svc.get_plan(deck_id)
-        progress = svc._get_plan_progress(deck_id, cards, plan)
+        progress = svc._get_plan_progress(deck_id, cards, plan, svc._deck_context(deck_id))
 
         # Atraxa is commander with "deathtouch" in text — should count
         assert progress["deathtouch"]["target"] == 5
@@ -2000,5 +2043,84 @@ class TestCustomQueryTargets:
         # Rhystic Study (CMC 3, deficit 7) should have higher curve_fit
         # than Sol Ring (CMC 1, deficit 0 since 10 > target 7)
         assert by_name["Rhystic Study"]["_curve_fit"] > by_name["Sol Ring"]["_curve_fit"]
+
+
+# =============================================================================
+# Hypothetical Deck Support
+# =============================================================================
+
+def _create_hypothetical_deck(db):
+    """Helper: create a hypothetical deck with Atraxa as commander."""
+    svc = DeckBuilderService(db)
+    result = svc.create_deck("Atraxa, Praetors' Voice", hypothetical=True)
+    deck_id = result["deck_id"]
+    deck = DeckRepository(db).get(deck_id)
+    assert deck["hypothetical"] == 1
+    return svc, deck_id
+
+
+class TestHypotheticalDeck:
+    def test_create_hypothetical_deck(self, seeded_db):
+        db, _ = seeded_db
+        svc, deck_id = _create_hypothetical_deck(db)
+        # Commander should be in deck_expected_cards, not collection
+        expected = DeckRepository(db).get_expected_cards_full(deck_id)
+        commanders = [c for c in expected if c.get("deck_zone") == "commander"]
+        assert len(commanders) == 1
+        assert commanders[0]["name"] == "Atraxa, Praetors' Voice"
+        # Physical collection should not have the commander assigned
+        physical = DeckRepository(db).get_cards(deck_id)
+        assert len(physical) == 0
+
+    def test_hypothetical_get_commander_identity(self, seeded_db):
+        db, _ = seeded_db
+        svc, deck_id = _create_hypothetical_deck(db)
+        ci = svc._get_commander_identity(deck_id)
+        assert ci == {"W", "U", "B", "G"}
+
+    def test_hypothetical_get_commander_identity_derives_from_deck(self, seeded_db):
+        """_get_commander_identity derives hypothetical from deck — no flag needed."""
+        db, _ = seeded_db
+        svc, deck_id = _create_hypothetical_deck(db)
+        # Should find the commander even without an explicit hypothetical flag,
+        # because the method now derives it from the deck's own hypothetical column
+        ci = svc._get_commander_identity(deck_id)
+        assert ci == {"W", "U", "B", "G"}
+
+    def test_hypothetical_audit_deck(self, seeded_db):
+        db, _ = seeded_db
+        svc, deck_id = _create_hypothetical_deck(db)
+        audit = svc.audit_deck(deck_id)
+        assert audit["total"] == 1  # just the commander
+        assert audit["deck_id"] == deck_id
+
+    def test_hypothetical_check_deck(self, seeded_db):
+        db, _ = seeded_db
+        svc, deck_id = _create_hypothetical_deck(db)
+        result = svc.check_deck(deck_id)
+        # Should not crash, should report issues (not 100 cards, etc.)
+        assert "issues" in result
+        # Should NOT report "No commander assigned"
+        assert all("No commander" not in i for i in result["issues"])
+
+    def test_hypothetical_suggest_lands(self, seeded_db):
+        db, _ = seeded_db
+        svc, deck_id = _create_hypothetical_deck(db)
+        result = svc.suggest_lands(deck_id)
+        # Should not crash, should suggest lands from the full card pool
+        assert "suggestions" in result
+        assert result["hypothetical"] is True
+        nonbasic = result["suggestions"]["nonbasic"]
+        basic = result["suggestions"]["basic"]
+        assert len(nonbasic) > 0 or len(basic) > 0
+
+    def test_hypothetical_suggest_lands_returns_oracle_ids(self, seeded_db):
+        """Basic land suggestions should have oracle_ids for hypothetical decks."""
+        db, _ = seeded_db
+        svc, deck_id = _create_hypothetical_deck(db)
+        result = svc.suggest_lands(deck_id)
+        for group in result["suggestions"]["basic"]:
+            if group["count"] > 0:
+                assert group["oracle_id"] is not None
 
 

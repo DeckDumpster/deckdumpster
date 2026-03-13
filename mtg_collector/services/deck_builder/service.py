@@ -17,33 +17,42 @@ from mtg_collector.db.models import (
 from mtg_collector.services.deck_builder.constants import (
     ANY_NUMBER_CARDS,
     AUTOFILL_WEIGHTS,
-    AUTOFILL_WEIGHTS_RAW,
     AVG_CMC_TARGET,
     BASIC_LANDS,
     BLING_WEIGHTS,
     CREATURE_CURVE_LIMITS,
     CREATURE_CURVE_TARGETS,
+    DB_SCHEMA_FOR_PLAN,
     DECK_SIZE,
     DEFAULT_FORMAT,
+    DYNAMIC_WEIGHT_CURVE_FIT,
+    DYNAMIC_WEIGHT_DEFICIT,
+    DYNAMIC_WEIGHT_EXPONENT,
+    DYNAMIC_WEIGHT_RARITY,
     INFRASTRUCTURE,
     LAND_COUNTS,
     LAND_TARGET_DEFAULT,
     LAND_WEIGHTS,
     NONCREATURE_CURVE_LIMITS,
     NONCREATURE_CURVE_TARGETS,
+    PLAN_GENERATE_MAX_TOKENS,
+    PLAN_GENERATE_MAX_TOOL_ROUNDS,
+    PLAN_GENERATE_MODEL,
+    PLAN_GENERATE_PROMPT,
+    QUERY_DB_TOOL,
     SNOW_BASICS,
     ZONE_COMMANDER,
     ZONE_MAINBOARD,
-    _normalize_weights,
 )
 from mtg_collector.utils import parse_json_array
 
 # ── Autofill ranking weights ─────────────────────────────────────
-# Default weights — user-tunable via the Weights modal on the deck page.
-# User-adjustable keys (exposed in UI):
-ADJUSTABLE_WEIGHT_KEYS = {"edhrec", "salt", "price", "plan_overlap", "novelty", "bling", "rarity", "random"}
-# Internal-only keys (always use defaults, not exposed):
-INTERNAL_WEIGHT_KEYS = {"recency", "curve_fit"}
+# Default weights for autofill scoring. All weights are internal —
+# no longer user-adjustable.
+# Weight for deficit bonus in autofill scoring. Higher = prefer filling gaps
+# over raw card quality. This scales the sum-of-deficit-ratios signal.
+
+
 # Tag aliases — when autofill searches for a tag, also include cards
 # with these related tags.  Covers Scryfall tagging gaps where a card
 # fulfills a role but uses a more specific or adjacent tag name.
@@ -113,8 +122,90 @@ TAG_ALIASES: dict[str, list[str]] = {
     # ── Counters ──
     "counters-matter": ["gives-pp-counters", "gives-mm-counters"],
     "gives-pp-counters": ["counters-matter"],
+    # ── Infrastructure broad categories ──
+    # These expand to all sub-tags in an infrastructure group so autofill
+    # searches across all related tags for a single broad target.
+    "Ramp": sorted(INFRASTRUCTURE["Ramp"]["tags"]),
+    "Card Advantage": sorted(INFRASTRUCTURE["Card Advantage"]["tags"]),
+    "Targeted Disruption": sorted(INFRASTRUCTURE["Targeted Disruption"]["tags"]),
+    "Mass Disruption": sorted(INFRASTRUCTURE["Mass Disruption"]["tags"]),
 }
 
+
+
+class DeckContext:
+    """All deck-scoped query modifiers, derived once from deck_id.
+
+    Centralizes hypothetical-vs-physical branching so callers never need
+    to remember to pass a flag — just call _deck_context(deck_id).
+    """
+
+    def __init__(self, hypothetical: bool):
+        self.hypothetical = hypothetical
+
+    def availability_sql(self) -> str:
+        """SQL fragment restricting to unassigned cards (physical only)."""
+        if self.hypothetical:
+            return ""
+        return "AND c.deck_id IS NULL AND c.binder_id IS NULL"
+
+    def exclude_deck_sql(self, deck_id: int) -> tuple[str, list]:
+        """SQL clause + params to exclude cards already in this deck."""
+        if self.hypothetical:
+            return (
+                "AND card.oracle_id NOT IN "
+                "(SELECT oracle_id FROM deck_expected_cards WHERE deck_id = ?)",
+                [deck_id],
+            )
+        return (
+            "AND c.deck_id IS NULL "
+            "AND card.oracle_id NOT IN "
+            "(SELECT p2.oracle_id FROM collection c2 "
+            "JOIN printings p2 ON c2.printing_id = p2.printing_id "
+            "WHERE c2.deck_id = ?)",
+            [deck_id],
+        )
+
+    def card_source_sql(self) -> tuple[str, str]:
+        """(FROM clause, WHERE clause) for querying cards IN this deck."""
+        if self.hypothetical:
+            return (
+                "FROM deck_expected_cards e"
+                " JOIN cards card ON e.oracle_id = card.oracle_id",
+                "e.deck_id = ?",
+            )
+        return (
+            "FROM collection c"
+            " JOIN printings p ON c.printing_id = p.printing_id"
+            " JOIN cards card ON p.oracle_id = card.oracle_id",
+            "c.deck_id = ?",
+        )
+
+    def card_source_ext_sql(self) -> tuple[str, str]:
+        """Extended card source with printings for custom queries."""
+        if self.hypothetical:
+            return (
+                "FROM deck_expected_cards e"
+                " JOIN cards card ON e.oracle_id = card.oracle_id"
+                " LEFT JOIN printings p ON p.printing_id = ("
+                "   SELECT MIN(p2.printing_id) FROM printings p2"
+                "   WHERE p2.oracle_id = card.oracle_id)",
+                "e.deck_id = ?",
+            )
+        card_from, card_where = self.card_source_sql()
+        return card_from, card_where
+
+    def count_expr(self) -> str:
+        """SQL expression for counting cards (SUM for hypothetical, COUNT for physical)."""
+        if self.hypothetical:
+            return "COALESCE(SUM(e.quantity), 0)"
+        return "COUNT(*)"
+
+    def tag_count_expr(self) -> str:
+        """SQL expression for counting distinct cards per tag."""
+        if self.hypothetical:
+            return "COALESCE(SUM(e.quantity), 0)"
+        return "COUNT(DISTINCT p.oracle_id)"
 
 
 class DeckBuilderService:
@@ -128,25 +219,19 @@ class DeckBuilderService:
         self.collection_repo = CollectionRepository(conn)
         self.deck_repo = DeckRepository(conn)
 
-    def _is_hypothetical(self, deck_id: int) -> bool:
-        """Check if a deck is hypothetical."""
+    def _deck_context(self, deck_id: int) -> DeckContext:
+        """Build a DeckContext from a deck_id, deriving hypothetical from the DB."""
         deck = self.deck_repo.get(deck_id)
-        return bool(deck and deck.get("hypothetical"))
+        return DeckContext(bool(deck and deck.get("hypothetical")))
 
     @staticmethod
-    def _availability_filter(hypothetical: bool) -> str:
-        """SQL fragment for card availability filtering.
-
-        Physical decks: only unassigned cards.
-        Hypothetical decks: all owned cards (regardless of assignment).
-        """
-        if hypothetical:
-            return ""
-        return "AND c.deck_id IS NULL AND c.binder_id IS NULL"
+    def _card_qty(card: dict) -> int:
+        """Get effective quantity for a card row (hypothetical cards have quantity > 1)."""
+        return card.get("quantity") or 1
 
     # ── Deck lifecycle ──────────────────────────────────────────────
 
-    def create_deck(self, commander_name: str) -> dict:
+    def create_deck(self, commander_name: str, hypothetical: bool = False) -> dict:
         """Create a new Commander deck with the given commander."""
         card = self._resolve_card(commander_name)
 
@@ -154,16 +239,25 @@ class DeckBuilderService:
         self._validate_commander(card.oracle_id, card.name, card.type_line)
 
         # Create deck
-        deck = Deck(id=None, name=card.name, format=DEFAULT_FORMAT)
+        deck = Deck(id=None, name=card.name, format=DEFAULT_FORMAT,
+                    hypothetical=hypothetical)
         deck_id = self.deck_repo.add(deck)
 
-        # Find best owned copy and assign as commander
-        copy_id = self._find_best_copy(card.oracle_id, deck_id)
-        if copy_id:
-            self.deck_repo.add_cards(deck_id, [copy_id], zone=ZONE_COMMANDER)
+        if hypothetical:
+            # Add commander as expected card
+            self.conn.execute(
+                "INSERT INTO deck_expected_cards (deck_id, oracle_id, zone, quantity)"
+                " VALUES (?, ?, ?, 1)",
+                (deck_id, card.oracle_id, ZONE_COMMANDER),
+            )
+        else:
+            # Find best owned copy and assign as commander
+            copy_id = self._find_best_copy(card.oracle_id, deck_id)
+            if copy_id:
+                self.deck_repo.add_cards(deck_id, [copy_id], zone=ZONE_COMMANDER)
 
         self.conn.commit()
-        return {"deck_id": deck_id, "commander": card.name, "copy_assigned": copy_id is not None}
+        return {"deck_id": deck_id, "commander": card.name}
 
     def delete_deck(self, deck_id: int) -> dict:
         """Delete a deck, unassigning all cards."""
@@ -251,8 +345,8 @@ class DeckBuilderService:
         if not deck:
             raise ValueError(f"Deck not found: {deck_id}")
 
-        hypothetical = bool(deck.get("hypothetical"))
-        if hypothetical:
+        ctx = self._deck_context(deck_id)
+        if ctx.hypothetical:
             cards = self.deck_repo.get_expected_cards_full(deck_id)
             current_count = sum(c.get("quantity", 1) for c in cards)
         else:
@@ -278,7 +372,7 @@ class DeckBuilderService:
 
         result = {
             "deck_id": deck_id,
-            "hypothetical": hypothetical,
+            "hypothetical": ctx.hypothetical,
             "land_target": land_target,
             "existing_lands": existing_lands,
             "pip_fractions": pip_fractions,
@@ -290,38 +384,28 @@ class DeckBuilderService:
 
         # --- Nonbasic candidates ---
         ci_clauses = self._ci_exclusion_sql(commander_ci)
-        avail = self._availability_filter(hypothetical)
-        if hypothetical:
-            exclude_in_deck = (
-                "AND card.oracle_id NOT IN ("
-                "SELECT oracle_id FROM deck_expected_cards WHERE deck_id = ?)"
-            )
-        else:
-            exclude_in_deck = (
-                "AND card.oracle_id NOT IN ("
-                "SELECT p2.oracle_id FROM collection c2 "
-                "JOIN printings p2 ON c2.printing_id = p2.printing_id "
-                "WHERE c2.deck_id = ?)"
-            )
+        avail = ctx.availability_sql()
+        exclude_sql, exclude_params = ctx.exclude_deck_sql(deck_id)
         rows = self.conn.execute(
             f"""SELECT card.oracle_id, card.name, card.type_line, card.oracle_text,
                        p.set_code, p.collector_number, p.printing_id,
                        p.image_uri, p.rarity,
                        json_extract(p.raw_json, '$.produced_mana') AS produced_mana,
                        json_extract(p.raw_json, '$.edhrec_rank') AS edhrec_rank,
-                       c.id AS collection_id, c.finish, p.frame_effects, p.full_art, p.promo
-                FROM collection c
-                JOIN printings p ON c.printing_id = p.printing_id
-                JOIN cards card ON p.oracle_id = card.oracle_id
+                       MIN(c.id) AS collection_id, c.finish,
+                       p.frame_effects, p.full_art, p.promo
+                FROM cards card
+                JOIN printings p ON p.oracle_id = card.oracle_id
+                JOIN collection c ON c.printing_id = p.printing_id
                 WHERE card.type_line LIKE '%Land%'
                   AND card.type_line NOT LIKE '%Basic%'
                   AND c.status = 'owned'
                   {avail}
-                  {exclude_in_deck}
+                  {exclude_sql}
                   {ci_clauses}
                 GROUP BY card.oracle_id
                 ORDER BY edhrec_rank ASC NULLS LAST""",
-            (deck_id,),
+            exclude_params,
         ).fetchall()
         candidates = [dict(r) for r in rows]
 
@@ -348,27 +432,37 @@ class DeckBuilderService:
                 if n <= 0:
                     continue
                 land_name = [name for name, c in BASIC_LANDS.items() if c == color][0]
-                cids = self._find_basic_land_copies(color, deck_id, n,
-                                                    hypothetical=hypothetical)
-                if cids:
-                    # count = how many to actually use (rest are spare for swaps)
-                    use_count = round(basic_needed * pip_fractions[color]) if basic_needed > 0 else 0
-                    if i == len(ci_colors) - 1:
-                        use_count = basic_needed - sum(
-                            b["count"] for b in result["suggestions"]["basic"]
-                        )
-                    use_count = max(0, min(use_count, len(cids)))
+                oid_row = self.conn.execute(
+                    "SELECT oracle_id FROM cards WHERE name = ?", (land_name,)
+                ).fetchone()
+                use_count = round(basic_needed * pip_fractions[color]) if basic_needed > 0 else 0
+                if i == len(ci_colors) - 1:
+                    use_count = basic_needed - sum(
+                        b["count"] for b in result["suggestions"]["basic"]
+                    )
+
+                # Hypothetical: no physical copies needed, just oracle_id + count
+                if ctx.hypothetical:
+                    use_count = max(0, use_count)
                     basic_entry = {
                         "name": land_name, "count": use_count,
-                        "collection_ids": cids,
+                        "collection_ids": [],
+                        "oracle_id": oid_row["oracle_id"] if oid_row else None,
                     }
-                    # Include oracle_id for hypothetical deck support
-                    oid_row = self.conn.execute(
-                        "SELECT oracle_id FROM cards WHERE name = ?", (land_name,)
-                    ).fetchone()
-                    if oid_row:
-                        basic_entry["oracle_id"] = oid_row["oracle_id"]
                     result["suggestions"]["basic"].append(basic_entry)
+                    continue
+
+                # Physical: find owned unassigned copies
+                cids = self._find_basic_land_copies(color, deck_id, n)
+                if not cids:
+                    continue
+                use_count = max(0, min(use_count, len(cids)))
+                basic_entry = {
+                    "name": land_name, "count": use_count,
+                    "collection_ids": cids,
+                    "oracle_id": oid_row["oracle_id"] if oid_row else None,
+                }
+                result["suggestions"]["basic"].append(basic_entry)
 
         return result
 
@@ -513,11 +607,15 @@ class DeckBuilderService:
         if not deck:
             raise ValueError(f"Deck not found: {deck_id}")
 
-        cards = self.deck_repo.get_cards(deck_id)
+        ctx = self._deck_context(deck_id)
+        if ctx.hypothetical:
+            cards = self.deck_repo.get_expected_cards_full(deck_id)
+        else:
+            cards = self.deck_repo.get_cards(deck_id)
         issues = []
 
         # Count check
-        total = len(cards)
+        total = sum(self._card_qty(c) for c in cards)
         if total != DECK_SIZE:
             issues.append(f"Deck has {total} cards (need exactly {DECK_SIZE})")
 
@@ -538,13 +636,13 @@ class DeckBuilderService:
         name_counts = {}
         for card in cards:
             name = card["name"]
-            name_counts[name] = name_counts.get(name, 0) + 1
+            name_counts[name] = name_counts.get(name, 0) + self._card_qty(card)
         for name, cnt in name_counts.items():
             if cnt > 1 and not self._is_basic_land(name) and not self._is_any_number(name, card.get("oracle_text")):
                 issues.append(f"'{name}' appears {cnt} times (singleton rule)")
 
         # Land count
-        land_count = sum(1 for c in cards if self._is_land_type(c.get("type_line", "")))
+        land_count = sum(self._card_qty(c) for c in cards if self._is_land_type(c.get("type_line", "")))
         if land_count < 30:
             issues.append(f"Only {land_count} lands (recommend at least 33)")
 
@@ -556,17 +654,23 @@ class DeckBuilderService:
         if not deck:
             raise ValueError(f"Deck not found: {deck_id}")
 
-        cards = self.deck_repo.get_cards(deck_id)
-        total = len(cards)
+        ctx = self._deck_context(deck_id)
+        if ctx.hypothetical:
+            cards = self.deck_repo.get_expected_cards_full(deck_id)
+        else:
+            cards = self.deck_repo.get_cards(deck_id)
+        qty = self._card_qty
+        total = sum(qty(c) for c in cards)
 
         # Category counts
         categories = {}
         for card in cards:
+            q = qty(card)
             for cat in self._classify_card(card):
-                categories[cat] = categories.get(cat, 0) + 1
+                categories[cat] = categories.get(cat, 0) + q
 
         # Land count
-        land_count = sum(1 for c in cards if self._is_land_type(c.get("type_line", "")))
+        land_count = sum(qty(c) for c in cards if self._is_land_type(c.get("type_line", "")))
         categories["Lands"] = land_count
 
         # Infrastructure gaps
@@ -592,28 +696,29 @@ class DeckBuilderService:
         for c in nonland:
             cmc = int(c.get("cmc", 0) or 0)
             bucket = min(cmc, 7)
-            curve[bucket] = curve.get(bucket, 0) + 1
+            curve[bucket] = curve.get(bucket, 0) + qty(c)
         for c in creatures:
             cmc = int(c.get("cmc", 0) or 0)
             bucket = min(cmc, 7)
-            creature_curve[bucket] = creature_curve.get(bucket, 0) + 1
+            creature_curve[bucket] = creature_curve.get(bucket, 0) + qty(c)
         for c in noncreatures:
             cmc = int(c.get("cmc", 0) or 0)
             bucket = min(cmc, 7)
-            noncreature_curve[bucket] = noncreature_curve.get(bucket, 0) + 1
+            noncreature_curve[bucket] = noncreature_curve.get(bucket, 0) + qty(c)
 
-        # Average CMC
-        if nonland:
-            avg_cmc = sum(float(c.get("cmc", 0) or 0) for c in nonland) / len(nonland)
+        # Average CMC (weighted by quantity)
+        nonland_total = sum(qty(c) for c in nonland)
+        if nonland_total:
+            avg_cmc = sum(float(c.get("cmc", 0) or 0) * qty(c) for c in nonland) / nonland_total
         else:
             avg_cmc = 0.0
 
         # Plan progress
         plan = self.get_plan(deck_id)
-        plan_progress = self._get_plan_progress(deck_id, cards, plan)
+        plan_progress = self._get_plan_progress(deck_id, cards, plan, ctx)
 
         # Tag coverage and avg roles per card
-        coverage, avg_roles, zero_role_cards = self._tag_coverage(deck_id)
+        coverage, avg_roles, zero_role_cards = self._tag_coverage(deck_id, ctx)
 
         # Next steps
         next_steps = self._suggest_next_steps(
@@ -669,6 +774,178 @@ class DeckBuilderService:
             else:
                 result[key] = val  # already in storage format
         return result
+
+    def generate_plan_variants(self, deck_id: int, progress_cb=None):
+        """Generate 2 plan variants for a Commander deck using Claude.
+
+        Args:
+            deck_id: The deck to generate plans for.
+            progress_cb: Optional callback(message: str) for status updates.
+
+        Returns:
+            dict with "variants" key containing the generated plans.
+
+        Raises:
+            ValueError: If deck not found or no commander assigned.
+            RuntimeError: If plan generation exceeds max tool rounds.
+        """
+        import re
+
+        import anthropic
+
+        from mtg_collector.services.retry import anthropic_retry
+
+        def emit(msg):
+            if progress_cb:
+                progress_cb(msg)
+
+        deck = self.deck_repo.get(deck_id)
+        if not deck:
+            raise ValueError("Deck not found")
+
+        ctx = self._deck_context(deck_id)
+        card_from, card_where = ctx.card_source_sql()
+        zone_col = "e.zone" if ctx.hypothetical else "c.deck_zone"
+        commander = self.conn.execute(
+            f"""SELECT card.name, card.type_line, card.mana_cost, card.colors,
+                      card.color_identity, card.oracle_text
+               {card_from}
+               WHERE {card_where} AND {zone_col} = 'commander'
+               LIMIT 1""",
+            (deck_id,),
+        ).fetchone()
+
+        if not commander:
+            raise ValueError("No commander assigned to this deck")
+        commander = dict(commander)
+
+        color_identity = commander.get("color_identity") or "[]"
+        if isinstance(color_identity, str):
+            try:
+                color_identity = json.loads(color_identity)
+            except (ValueError, TypeError):
+                color_identity = []
+        colors_str = ", ".join(color_identity) if color_identity else "Colorless"
+
+        tag_rows = self.conn.execute(
+            "SELECT tag, COUNT(*) AS cnt FROM card_tags "
+            "WHERE tag NOT LIKE 'type:%' GROUP BY tag ORDER BY cnt DESC"
+        ).fetchall()
+        tag_list = ", ".join(f"{r['tag']} ({r['cnt']})" for r in tag_rows)
+
+        infra_lines = []
+        for cat, info in INFRASTRUCTURE.items():
+            tags_str = ", ".join(sorted(info["tags"]))
+            infra_lines.append(f"- **{cat}** (min {info['min']}): {tags_str}")
+
+        prompt = PLAN_GENERATE_PROMPT.format(
+            commander_name=commander["name"],
+            commander_type=commander.get("type_line", "Unknown"),
+            commander_mana_cost=commander.get("mana_cost", "Unknown"),
+            colors_str=colors_str,
+            commander_oracle_text=commander.get("oracle_text", "N/A"),
+            tag_list=tag_list,
+            db_schema=DB_SCHEMA_FOR_PLAN,
+            infra_lines="\n".join(infra_lines),
+        )
+
+        def execute_safe_query(sql):
+            sql = sql.strip()
+            lower = sql.lower()
+            for forbidden in ("drop ", "delete ", "insert ", "update ",
+                              "alter ", "create ", "attach ", "detach ", "pragma "):
+                if forbidden in lower:
+                    return {"error": f"Forbidden: {forbidden.strip()} not allowed"}
+            self.conn.execute("SAVEPOINT query_db_check")
+            try:
+                rows = self.conn.execute(sql).fetchall()
+                result = [dict(r) for r in rows[:20]]
+                return {"rows": result, "count": len(result)}
+            except sqlite3.OperationalError as e:
+                return {"error": str(e)}
+            finally:
+                try:
+                    self.conn.execute("ROLLBACK TO SAVEPOINT query_db_check")
+                except Exception:
+                    pass
+                try:
+                    self.conn.execute("RELEASE SAVEPOINT query_db_check")
+                except Exception:
+                    pass
+
+        emit("Analyzing commander and generating deck plans...")
+
+        client = anthropic.Anthropic()
+        messages = [{"role": "user", "content": prompt}]
+
+        for _round in range(PLAN_GENERATE_MAX_TOOL_ROUNDS + 1):
+            response = anthropic_retry(lambda: client.messages.create(
+                model=PLAN_GENERATE_MODEL,
+                max_tokens=PLAN_GENERATE_MAX_TOKENS,
+                tools=[QUERY_DB_TOOL],
+                messages=messages,
+            ))
+
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        sql = block.input.get("sql", "")
+                        emit(f"Testing query: {sql[:80]}...")
+                        result = execute_safe_query(sql)
+                        if "error" in result:
+                            emit(f"Query error: {result['error']}")
+                        else:
+                            emit(f"Query returned {result['count']} rows")
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result),
+                        })
+
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": tool_results})
+                continue
+
+            # Final text response — extract JSON
+            collected_text = ""
+            for block in response.content:
+                if hasattr(block, "text"):
+                    collected_text += block.text
+
+            json_text = collected_text.strip()
+            fence_match = re.search(r'```(?:json)?\s*\n(.*?)```', json_text, re.DOTALL)
+            if fence_match:
+                json_text = fence_match.group(1).strip()
+            else:
+                brace_start = json_text.find('{')
+                if brace_start >= 0:
+                    json_text = json_text[brace_start:]
+                    depth = 0
+                    for i, ch in enumerate(json_text):
+                        if ch == '{':
+                            depth += 1
+                        elif ch == '}':
+                            depth -= 1
+                            if depth == 0:
+                                json_text = json_text[:i + 1]
+                                break
+
+            result = json.loads(json_text)
+            for variant in result.get("variants", []):
+                if "targets" in variant:
+                    variant["targets"] = self._normalize_targets(variant["targets"])
+                    # Ensure all infrastructure categories are present with minimums
+                    for cat_name, cat_info in INFRASTRUCTURE.items():
+                        if cat_name not in variant["targets"]:
+                            variant["targets"][cat_name] = {
+                                "count": cat_info["min"],
+                                "label": cat_name,
+                                "type": "tag",
+                            }
+            return result
+
+        raise RuntimeError("Plan generation exceeded maximum tool rounds")
 
     def set_plan(self, deck_id: int, targets: dict) -> dict:
         """Store a build plan with numeric targets as JSON in decks.plan.
@@ -728,78 +1005,28 @@ class DeckBuilderService:
         self.conn.commit()
         return {"deck_id": deck_id}
 
-    # ── Weights ──────────────────────────────────────────────────
-
-    def get_weights(self, deck_id: int) -> dict:
-        """Return raw autofill weights for this deck.
-
-        Returns deck-specific overrides merged with defaults.
-        Only user-adjustable keys are returned.
-        """
-        plan = self.get_plan(deck_id)
-        saved = (plan or {}).get("weights", {})
-        result = {}
-        for k in ADJUSTABLE_WEIGHT_KEYS:
-            result[k] = saved.get(k, AUTOFILL_WEIGHTS_RAW[k])
-        return result
-
-    def set_weights(self, deck_id: int, weights: dict) -> dict:
-        """Save user-adjustable autofill weights into the plan JSON."""
-        deck = self.deck_repo.get(deck_id)
-        if not deck:
-            raise ValueError(f"Deck not found: {deck_id}")
-
-        plan = self.get_plan(deck_id)
-        if not plan:
-            raise ValueError("No plan set — generate a plan first")
-
-        # Validate: only adjustable keys, integer values 0-10
-        clean = {}
-        for k in ADJUSTABLE_WEIGHT_KEYS:
-            if k in weights:
-                val = int(weights[k])
-                if val < 0 or val > 10:
-                    raise ValueError(f"Weight '{k}' must be 0-10, got {val}")
-                clean[k] = val
-
-        plan["weights"] = clean
-        self.deck_repo.update(deck_id, {"plan": json.dumps(plan)})
-        self.conn.commit()
-        return {"deck_id": deck_id, "weights": clean}
-
-    def _effective_weights(self, deck_id: int) -> dict:
-        """Build normalized weights merging deck overrides with defaults."""
-        plan = self.get_plan(deck_id)
-        saved = (plan or {}).get("weights", {})
-        # Start with raw defaults, override adjustable keys
-        merged = dict(AUTOFILL_WEIGHTS_RAW)
-        for k in ADJUSTABLE_WEIGHT_KEYS:
-            if k in saved:
-                merged[k] = saved[k]
-        return _normalize_weights(merged)
-
     # ── Autofill ──────────────────────────────────────────────────
 
     def autofill(self, deck_id: int, progress_cb=None, reset: bool = False) -> dict:
-        """Suggest cards to fill plan tag targets from the user's collection.
+        """Suggest cards to fill plan targets from the user's collection.
 
-        For each unfilled tag target, queries SQL for owned unassigned cards
-        with that tag in the commander's color identity, scores the small
-        result set, and picks the best cards. A card picked for one tag is
-        excluded from subsequent tags.
+        Picks one card at a time. Each candidate is scored with static
+        weights (edhrec, bling, novelty, etc.) plus a dynamic deficit
+        bonus: categories that still need cards contribute more to a
+        card's score. Multi-role cards naturally win because they
+        accumulate deficit bonus from multiple categories.
 
         If reset=True, removes all non-commander cards from the deck first.
-        This is useful when the plan has been modified and the user wants
-        a fresh autofill.
 
-        Returns suggestions grouped by tag. Does NOT add cards — caller
-        decides which to accept.
+        Returns suggestions grouped by the category with the highest
+        deficit at pick time. Does NOT add cards — caller decides which
+        to accept.
         """
         deck = self.deck_repo.get(deck_id)
         if not deck:
             raise ValueError(f"Deck not found: {deck_id}")
 
-        hypothetical = bool(deck.get("hypothetical"))
+        ctx = self._deck_context(deck_id)
 
         plan = self.get_plan(deck_id)
         if not plan or "targets" not in plan:
@@ -807,8 +1034,7 @@ class DeckBuilderService:
 
         # Reset: remove all non-commander cards before suggesting
         if reset:
-            if hypothetical:
-                # For hypothetical decks, clear expected cards (keep commander)
+            if ctx.hypothetical:
                 self.conn.execute(
                     "DELETE FROM deck_expected_cards WHERE deck_id = ? AND zone != 'commander'",
                     (deck_id,),
@@ -829,12 +1055,12 @@ class DeckBuilderService:
                     progress_cb(f"Cleared {len(non_commander_ids)} cards from deck")
 
         targets = plan["targets"]
-        effective_w = self._effective_weights(deck_id)
-        if hypothetical:
+        effective_w = dict(AUTOFILL_WEIGHTS)
+        if ctx.hypothetical:
             cards_in_deck = self.deck_repo.get_expected_cards_full(deck_id)
         else:
             cards_in_deck = self.deck_repo.get_cards(deck_id)
-        commander_ci = self._get_commander_identity(deck_id, hypothetical=hypothetical)
+        commander_ci = self._get_commander_identity(deck_id)
         if commander_ci is None:
             raise ValueError("No commander assigned")
 
@@ -850,19 +1076,31 @@ class DeckBuilderService:
         )
         remaining_budget = nonland_budget - existing_nonland
 
-        # Count current progress per tag (for tag-based targets)
-        tag_counts: dict[str, int] = {}
-        for card in cards_in_deck:
-            oracle_id = card.get("oracle_id")
-            if oracle_id:
-                for tag in self._get_card_tags(oracle_id):
-                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
+        # ── Category tracking ──
+        # Build a unified category state: {key: {target, current, tags_set}}
+        # For infrastructure categories, current = distinct oracle_ids with any sub-tag.
+        # For regular tags, current = count of cards with that tag.
+        # For custom queries, current = count of cards matching the query.
+        cat_state: dict[str, dict] = {}
+        deck_oids = {c.get("oracle_id") for c in cards_in_deck if c.get("oracle_id")}
 
-        # For custom query targets, count matching cards in deck
-        custom_query_counts: dict[str, int] = {}
         for key, val in targets.items():
-            if val["type"] == "query":
-                deck_oids = {c.get("oracle_id") for c in cards_in_deck if c.get("oracle_id")}
+            if key == "lands":
+                continue
+            entry: dict = {"target": val["count"], "type": val["type"], "label": val["label"]}
+            if key in INFRASTRUCTURE:
+                # Count distinct oracle_ids matching any sub-tag
+                sub_tags = INFRASTRUCTURE[key]["tags"]
+                entry["sub_tags"] = sub_tags
+                oids_in_cat: set[str] = set()
+                for card in cards_in_deck:
+                    oid = card.get("oracle_id")
+                    if oid and self._get_card_tags(oid) & sub_tags:
+                        oids_in_cat.add(oid)
+                entry["current"] = len(oids_in_cat)
+                entry["oids"] = oids_in_cat
+            elif val["type"] == "query":
+                entry["query"] = val["query"]
                 if deck_oids:
                     oid_list = ",".join(f"'{o}'" for o in deck_oids)
                     cnt = self.conn.execute(
@@ -872,12 +1110,21 @@ class DeckBuilderService:
                         f"WHERE ({val['query']}) "
                         f"AND card.oracle_id IN ({oid_list})"
                     ).fetchone()["cnt"]
-                    custom_query_counts[key] = cnt
+                    entry["current"] = cnt
                 else:
-                    custom_query_counts[key] = 0
+                    entry["current"] = 0
+            else:
+                # Regular tag
+                tag_count = 0
+                for card in cards_in_deck:
+                    oid = card.get("oracle_id")
+                    if oid and key in self._get_card_tags(oid):
+                        tag_count += 1
+                entry["current"] = tag_count
+            cat_state[key] = entry
 
-        # Fetch per-commander EDHREC data for novelty scoring
-        if hypothetical:
+        # Fetch per-commander EDHREC data
+        if ctx.hypothetical:
             commanders = [c for c in cards_in_deck if c.get("deck_zone") == "commander"]
         else:
             commanders = self.deck_repo.get_cards(deck_id, zone=ZONE_COMMANDER)
@@ -890,205 +1137,325 @@ class DeckBuilderService:
             if progress_cb and edhrec_data:
                 progress_cb(f"Loaded EDHREC data for {commander_name}")
 
-        # Build color identity exclusion SQL (reused per query)
         ci_clauses = self._ci_exclusion_sql(commander_ci)
 
-        # Oracle IDs to exclude: already in deck + already suggested
-        exclude_oids: set[str] = set()
-        for c in cards_in_deck:
-            oid = c.get("oracle_id")
-            if oid:
-                exclude_oids.add(oid)
-
-        # Build expanded plan tag set: each plan category + its aliases
-        expanded_plan_tags: set[str] = set()
-        for tag, val in targets.items():
-            if tag == "lands":
-                continue
-            if val["type"] == "query":
-                continue  # custom query targets don't expand to tag aliases
-            expanded_plan_tags.add(tag)
-            for alias in TAG_ALIASES.get(tag, []):
-                expanded_plan_tags.add(alias)
-
-        # Build initial curve state from cards already in deck
-        curve_state = self._compute_curve_state(cards_in_deck)
-
-        # Create validator if API key is available
+        # Create validator for on-pick tag validation
         validator = None
         if self.api_key:
             from mtg_collector.services.deck_builder.tag_validator import TagValidator
             validator = TagValidator(self.conn)
 
-        suggestions: dict[str, dict] = {}
-        # Tags that have been exhausted (no candidates available)
-        exhausted_tags: set[str] = set()
+        exclude_oids: set[str] = set(deck_oids)
 
-        while remaining_budget > 0:
-            # Recalculate needs from current counts each iteration
-            tag_needs = []
-            for key, val in targets.items():
-                if key == "lands" or key in exhausted_tags:
-                    continue
-                target_count = val["count"]
-                if val["type"] == "query":
-                    current = custom_query_counts.get(key, 0)
-                else:
-                    current = tag_counts.get(key, 0)
-                need = max(0, target_count - current)
-                if need > 0:
-                    tag_needs.append((key, target_count, current, need))
-
-            if not tag_needs:
-                break
-
-            # Sort by deficit descending — fill most-needed tag first
-            tag_needs.sort(key=lambda t: -t[3])
-            tag, target_count, current, need = tag_needs[0]
-
-            target_val = targets[tag]
-            is_custom = target_val["type"] == "query"
-            label = target_val["label"]
-            if progress_cb:
-                progress_cb(f"Searching for {label}")
-
-            # Cap picks at remaining budget
-            pick_count = min(need, remaining_budget)
-
-            if is_custom:
-                # Custom query target — use _query_custom_candidates
-                fetch_limit = pick_count * 3
-                candidates = self._query_custom_candidates(
-                    target_val["query"], deck_id, commander_ci, ci_clauses,
-                    exclude_oids, limit=fetch_limit,
-                    hypothetical=hypothetical,
-                )
-            else:
-                # Tag-based target
-                # Overfetch 3x when validator is available to account for filtering
-                fetch_limit = pick_count * 3 if validator else None
-                candidates = self._query_tag_candidates(
-                    tag, deck_id, commander_ci, ci_clauses, exclude_oids,
-                    limit=fetch_limit, hypothetical=hypothetical,
-                )
-
-                # Validate tags via Haiku if available
-                if validator:
-                    candidates = validator.validate_and_filter(
-                        candidates, tag, progress_cb=progress_cb,
-                    )
-
-            scored = self._score_candidates(candidates, edhrec_data=edhrec_data,
-                                              plan_tags=expanded_plan_tags,
-                                              curve_state=curve_state,
-                                              weights=effective_w)
-            scored.sort(key=lambda c: -c["score"])
-
-            picks = scored[:pick_count]
-
-            if not picks:
-                # No candidates available for this tag — mark exhausted
-                exhausted_tags.add(tag)
+        # Build expanded plan tag set for scoring
+        expanded_plan_tags: set[str] = set()
+        for tag, val in targets.items():
+            if tag == "lands" or val["type"] == "query":
                 continue
+            expanded_plan_tags.add(tag)
+            for alias in TAG_ALIASES.get(tag, []):
+                expanded_plan_tags.add(alias)
 
-            # Record suggestions (append to existing tag group if revisited)
-            if tag not in suggestions:
-                suggestions[tag] = {
-                    "target": target_count,
-                    "current": current,
+        curve_state = self._compute_curve_state(cards_in_deck)
+
+        # ── Fetch candidate pool ──
+        # One big query: all owned cards in CI matching ANY plan/infra tag.
+        if progress_cb:
+            progress_cb("Fetching candidate pool...")
+        all_tag_targets = [t for t in expanded_plan_tags
+                           if t not in INFRASTRUCTURE]
+        pool = self._query_tag_candidates_pool(
+            all_tag_targets, deck_id, commander_ci, ci_clauses, exclude_oids,
+        )
+        # Also fetch custom query candidates and merge
+        for key, val in targets.items():
+            if val["type"] == "query":
+                custom_cands = self._query_custom_candidates(
+                    val["query"], deck_id, commander_ci, ci_clauses,
+                    exclude_oids, limit=200,
+                )
+                existing_oids = {c["oracle_id"] for c in pool}
+                for c in custom_cands:
+                    if c["oracle_id"] not in existing_oids:
+                        pool.append(c)
+                        existing_oids.add(c["oracle_id"])
+
+        # Hard filter: never add lands during nonland autofill
+        pool = [c for c in pool if "Land" not in (c.get("type_line") or "")]
+
+        if progress_cb:
+            progress_cb(f"Scoring {len(pool)} candidates...")
+
+        # Pre-compute static scores for the whole pool
+        pool = self._score_candidates(pool, edhrec_data=edhrec_data,
+                                       plan_tags=expanded_plan_tags,
+                                       curve_state=curve_state,
+                                       weights=effective_w)
+
+        # Batch-fetch tags for all candidates (for deficit bonus computation)
+        pool_oids = [c["oracle_id"] for c in pool]
+        tags_by_oid: dict[str, set[str]] = {}
+        if pool_oids:
+            placeholders = ",".join("?" for _ in pool_oids)
+            rows = self.conn.execute(
+                f"SELECT ct.oracle_id, ct.tag FROM card_tags ct "  # noqa: S608
+                f"WHERE ct.oracle_id IN ({placeholders})"
+                f" AND {tag_validation_filter()}",
+                pool_oids,
+            ).fetchall()
+            for row in rows:
+                tags_by_oid.setdefault(row["oracle_id"], set()).add(row["tag"])
+            # Apply hard-coded tag rules
+            type_by_oid = {c["oracle_id"]: c.get("type_line", "") for c in pool}
+            for oid, tags in tags_by_oid.items():
+                self._clean_tags(tags, type_by_oid.get(oid, ""))
+
+        # Pre-check which candidates match each custom query
+        custom_match: dict[str, set[str]] = {}  # query_key -> set of oracle_ids
+        for key, val in targets.items():
+            if val["type"] == "query" and pool_oids:
+                oid_list = ",".join(f"'{o}'" for o in pool_oids)
+                matched = self.conn.execute(
+                    f"SELECT DISTINCT card.oracle_id FROM cards card "  # noqa: S608
+                    f"JOIN printings p ON p.oracle_id = card.oracle_id "
+                    f"WHERE ({val['query']}) AND card.oracle_id IN ({oid_list})"
+                ).fetchall()
+                custom_match[key] = {r["oracle_id"] for r in matched}
+
+        # Index pool by oracle_id for fast removal
+        pool_by_oid: dict[str, dict] = {c["oracle_id"]: c for c in pool}
+
+        # ── Pick loop: one card at a time ──
+        suggestions: dict[str, dict] = {}
+        pick_number = 0
+        total_budget = remaining_budget  # snapshot for fill_ratio
+
+        while remaining_budget > 0 and pool_by_oid:
+            # Check if any category still has a deficit
+            any_deficit = False
+            for cs in cat_state.values():
+                if cs["current"] < cs["target"]:
+                    any_deficit = True
+                    break
+
+            if not any_deficit:
+                break  # all targets met
+
+            # Score each remaining candidate: static_score + deficit_bonus
+            best_card = None
+            best_score = -1.0
+            best_category = None
+
+            for oid, card in pool_by_oid.items():
+                card_tags = tags_by_oid.get(oid, set())
+
+                # Deficit bonus = max deficit ratio across all matching
+                # categories (infra + plan). Each category contributes
+                # its own (target - current) / target ratio independently.
+                deficit_bonus = 0.0
+                top_cat = None
+
+                for cat_key, cs in cat_state.items():
+                    if cs["current"] >= cs["target"]:
+                        continue
+                    cat_matches = False
+                    if cat_key in INFRASTRUCTURE:
+                        cat_matches = bool(card_tags & cs["sub_tags"])
+                    elif cs["type"] == "query":
+                        cat_matches = oid in custom_match.get(cat_key, set())
+                    else:
+                        cat_matches = cat_key in card_tags
+                    if cat_matches:
+                        cat_deficit = (cs["target"] - cs["current"]) / cs["target"]
+                        if cat_deficit > deficit_bonus:
+                            deficit_bonus = cat_deficit
+                            top_cat = cat_key
+
+                if deficit_bonus == 0:
+                    continue  # card doesn't help any deficit category
+
+                fill_ratio = pick_number / total_budget if total_budget > 0 else 0.0
+                total_score = self._weighted_score(
+                    card, effective_w, deficit=deficit_bonus, fill_ratio=fill_ratio,
+                )
+                if total_score > best_score:
+                    best_score = total_score
+                    best_card = card
+                    best_category = top_cat
+
+            if best_card is None:
+                break  # no candidates help any remaining deficit
+
+            # Validate tags before committing the pick
+            pick_oid = best_card["oracle_id"]
+            if validator:
+                old_tags = tags_by_oid.get(pick_oid, set()).copy()
+                validator._validate_card(best_card)
+                # Refresh tags from DB after validation
+                fresh_rows = self.conn.execute(
+                    f"SELECT ct.tag FROM card_tags ct WHERE ct.oracle_id = ?"
+                    f" AND {tag_validation_filter()}", (pick_oid,)
+                ).fetchall()
+                new_tags = {r["tag"] for r in fresh_rows}
+                tags_by_oid[pick_oid] = new_tags
+                if new_tags != old_tags:
+                    if progress_cb:
+                        lost = old_tags - new_tags
+                        if lost:
+                            progress_cb(f"Invalidated tags for {best_card['name']}: {', '.join(sorted(lost))}")
+                    # Tags changed — skip this pick, it'll be re-scored next iteration
+                    continue
+
+            # Pick this card
+            pick_tags = tags_by_oid.get(pick_oid, set())
+            del pool_by_oid[pick_oid]
+            remaining_budget -= 1
+            pick_number += 1
+
+            # Update category counts
+            for cat_key, cs in cat_state.items():
+                if cs["current"] >= cs["target"]:
+                    continue
+                matches = False
+                if cat_key in INFRASTRUCTURE:
+                    if pick_tags & cs["sub_tags"] and pick_oid not in cs.get("oids", set()):
+                        matches = True
+                        cs.setdefault("oids", set()).add(pick_oid)
+                elif cs["type"] == "query":
+                    matches = pick_oid in custom_match.get(cat_key, set())
+                else:
+                    matches = cat_key in pick_tags
+                if matches:
+                    cs["current"] += 1
+
+            # Update curve state
+            cmc = int(best_card.get("cmc", 0) or 0)
+            bucket = min(cmc, 7)
+            type_line = best_card.get("type_line") or ""
+            if "Creature" in type_line:
+                curve_state["creature"][bucket] = curve_state["creature"].get(bucket, 0) + 1
+            else:
+                curve_state["noncreature"][bucket] = curve_state["noncreature"].get(bucket, 0) + 1
+
+            # Record suggestion under its primary (highest deficit) category
+            cat_label = best_category
+            if cat_label not in suggestions:
+                cs = cat_state[cat_label]
+                suggestions[cat_label] = {
+                    "target": cs["target"],
+                    "current": cs["current"],
                     "cards": [],
                 }
-                if is_custom:
-                    suggestions[tag]["label"] = target_val["label"]
-            suggestions[tag]["cards"].extend([
-                {
-                    "oracle_id": p["oracle_id"],
-                    "name": p["name"],
-                    "mana_cost": p["mana_cost"],
-                    "cmc": p["cmc"],
-                    "type_line": p["type_line"],
-                    "set_code": p["set_code"],
-                    "collector_number": p["collector_number"],
-                    "collection_id": p["collection_id"],
-                    "score": round(p["score"], 3),
-                    "edhrec_rank": p["edhrec_rank"],
-                    "tag_count": p["tag_count"],
-                }
-                for p in picks
-            ])
+                if cs["type"] == "query":
+                    suggestions[cat_label]["label"] = cs["label"]
+            suggestions[cat_label]["cards"].append({
+                "oracle_id": best_card["oracle_id"],
+                "name": best_card["name"],
+                "mana_cost": best_card["mana_cost"],
+                "cmc": best_card["cmc"],
+                "type_line": best_card["type_line"],
+                "set_code": best_card["set_code"],
+                "collector_number": best_card["collector_number"],
+                "collection_id": best_card["collection_id"],
+                "score": round(best_score, 3),
+                "edhrec_rank": best_card["edhrec_rank"],
+                "tag_count": best_card["tag_count"],
+            })
 
-            # Update counts for picked cards
-            for p in picks:
-                exclude_oids.add(p["oracle_id"])
-                # Update tag counts for ALL plan tags each picked card satisfies
-                card_tags = self._get_card_tags(p["oracle_id"])
-                for t in card_tags:
-                    if t in targets and targets[t]["type"] == "tag":
-                        tag_counts[t] = tag_counts.get(t, 0) + 1
+            if progress_cb and pick_number % 10 == 0:
+                filled = sum(1 for cs in cat_state.values() if cs["current"] >= cs["target"])
+                progress_cb(f"Picked {pick_number} cards ({filled}/{len(cat_state)} categories filled)")
 
-                # Update custom query counts — check if this card matches each custom query
-                for cq_key, cq_val in targets.items():
-                    if cq_val["type"] == "query":
-                        match = self.conn.execute(
-                            f"SELECT 1 FROM cards card "  # noqa: S608
-                            f"JOIN printings p ON p.oracle_id = card.oracle_id "
-                            f"WHERE card.oracle_id = ? AND ({cq_val['query']})",
-                            (p["oracle_id"],),
-                        ).fetchone()
-                        if match:
-                            custom_query_counts[cq_key] = custom_query_counts.get(cq_key, 0) + 1
-
-                # Update curve state
-                cmc = int(p.get("cmc", 0) or 0)
-                bucket = min(cmc, 7)
-                type_line = p.get("type_line") or ""
-                if "Creature" in type_line:
-                    curve_state["creature"][bucket] = curve_state["creature"].get(bucket, 0) + 1
-                else:
-                    curve_state["noncreature"][bucket] = curve_state["noncreature"].get(bucket, 0) + 1
-
-            remaining_budget -= len(picks)
-
-        # Fallback: fill remaining slots with creatures
-        if remaining_budget > 0:
+        # ── Fill remaining budget with best pool cards ──
+        # All targets are met but the deck isn't full yet. Pick the
+        # highest-quality remaining pool cards (by static score) that
+        # match at least one plan or infra tag.
+        if remaining_budget > 0 and pool_by_oid:
             if progress_cb:
-                progress_cb(f"Filling {remaining_budget} remaining slots with creatures")
-            candidates = self._query_creature_candidates(
-                deck_id, commander_ci, ci_clauses, exclude_oids,
-                limit=remaining_budget * 3, hypothetical=hypothetical,
+                progress_cb(f"Filling {remaining_budget} remaining slots by quality")
+            remaining_sorted = sorted(
+                pool_by_oid.values(),
+                key=lambda c: -self._weighted_score(c, effective_w, fill_ratio=1.0),
             )
-            scored = self._score_candidates(candidates, edhrec_data=edhrec_data,
-                                              plan_tags=expanded_plan_tags,
-                                              curve_state=curve_state,
-                                              weights=effective_w)
-            scored.sort(key=lambda c: -c["score"])
-            picks = scored[:remaining_budget]
+            for card in remaining_sorted:
+                if remaining_budget <= 0:
+                    break
+                oid = card["oracle_id"]
+                card_tags = tags_by_oid.get(oid, set())
 
-            if picks:
-                fallback_tag = "creatures"
-                suggestions[fallback_tag] = {
-                    "target": remaining_budget,
-                    "current": 0,
-                    "cards": [
-                        {
-                            "oracle_id": p["oracle_id"],
-                            "name": p["name"],
-                            "mana_cost": p["mana_cost"],
-                            "cmc": p["cmc"],
-                            "type_line": p["type_line"],
-                            "set_code": p["set_code"],
-                            "collector_number": p["collector_number"],
-                            "collection_id": p["collection_id"],
-                            "score": round(p["score"], 3),
-                            "edhrec_rank": p["edhrec_rank"],
-                            "tag_count": p["tag_count"],
+                # Find the best category to attribute this card to
+                best_cat = None
+                best_cat_deficit = -1
+                for cat_key, cs in cat_state.items():
+                    cat_matches = False
+                    if cat_key in INFRASTRUCTURE:
+                        cat_matches = bool(card_tags & cs["sub_tags"])
+                    elif cs["type"] == "query":
+                        cat_matches = oid in custom_match.get(cat_key, set())
+                    else:
+                        cat_matches = cat_key in card_tags
+                    if cat_matches:
+                        # Prefer categories still furthest from target
+                        gap = cs["target"] - cs["current"]
+                        if gap > best_cat_deficit:
+                            best_cat_deficit = gap
+                            best_cat = cat_key
+                if not best_cat:
+                    best_cat = "_quality"  # generic quality pick, no tag match
+
+                remaining_budget -= 1
+                pick_number += 1
+
+                # Update category counts
+                pick_tags = card_tags
+                for cat_key, cs in cat_state.items():
+                    cat_matches = False
+                    if cat_key in INFRASTRUCTURE:
+                        if pick_tags & cs["sub_tags"] and oid not in cs.get("oids", set()):
+                            cat_matches = True
+                            cs.setdefault("oids", set()).add(oid)
+                    elif cs["type"] == "query":
+                        cat_matches = oid in custom_match.get(cat_key, set())
+                    else:
+                        cat_matches = cat_key in pick_tags
+                    if cat_matches:
+                        cs["current"] += 1
+
+                if best_cat not in suggestions:
+                    if best_cat in cat_state:
+                        cs = cat_state[best_cat]
+                        suggestions[best_cat] = {
+                            "target": cs["target"],
+                            "current": cs["current"],
+                            "cards": [],
                         }
-                        for p in picks
-                    ],
-                }
-                for p in picks:
-                    exclude_oids.add(p["oracle_id"])
-                remaining_budget -= len(picks)
+                        if cs["type"] == "query":
+                            suggestions[best_cat]["label"] = cs["label"]
+                    else:
+                        suggestions[best_cat] = {
+                            "target": remaining_budget + pick_number,
+                            "current": 0,
+                            "cards": [],
+                        }
+                fill_score = self._weighted_score(card, effective_w, fill_ratio=1.0)
+                suggestions[best_cat]["cards"].append({
+                    "oracle_id": card["oracle_id"],
+                    "name": card["name"],
+                    "mana_cost": card["mana_cost"],
+                    "cmc": card["cmc"],
+                    "type_line": card["type_line"],
+                    "set_code": card["set_code"],
+                    "collector_number": card["collector_number"],
+                    "collection_id": card["collection_id"],
+                    "score": round(fill_score, 3),
+                    "edhrec_rank": card["edhrec_rank"],
+                    "tag_count": card["tag_count"],
+                })
+
+        # Update suggestion entries with final category counts
+        for cat_key, data in suggestions.items():
+            if cat_key in cat_state:
+                data["current"] = cat_state[cat_key]["current"]
 
         result = {"deck_id": deck_id, "suggestions": suggestions}
         if not self.api_key:
@@ -1196,12 +1563,11 @@ class DeckBuilderService:
     def _query_custom_candidates(self, where_clause: str, deck_id: int,
                                   commander_ci: Set[str], ci_clauses: str,
                                   exclude_oids: Set[str],
-                                  limit: int | None = None,
-                                  hypothetical: bool = False) -> list[dict]:
+                                  limit: int | None = None) -> list[dict]:
         """Query owned cards matching a custom WHERE clause, in CI, not excluded."""
         exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
         limit_clause = f"LIMIT {int(limit)}" if limit else ""
-        avail = self._availability_filter(hypothetical)
+        avail = self._deck_context(deck_id).availability_sql()
 
         query = f"""
             SELECT card.oracle_id, card.name, card.type_line,
@@ -1240,12 +1606,11 @@ class DeckBuilderService:
     def _query_tag_candidates(self, tag: str, deck_id: int,
                                commander_ci: Set[str], ci_clauses: str,
                                exclude_oids: Set[str],
-                               limit: int | None = None,
-                               hypothetical: bool = False) -> list[dict]:
+                               limit: int | None = None) -> list[dict]:
         """Query owned cards with a specific tag, in CI, not excluded."""
         exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
         limit_clause = f"LIMIT {int(limit)}" if limit else ""
-        avail = self._availability_filter(hypothetical)
+        avail = self._deck_context(deck_id).availability_sql()
 
         # Expand tag to include aliases
         tags = [tag] + TAG_ALIASES.get(tag, [])
@@ -1287,15 +1652,59 @@ class DeckBuilderService:
         rows = self.conn.execute(query, tags).fetchall()
         return [dict(r) for r in rows]
 
+    def _query_tag_candidates_pool(self, tags: list[str], deck_id: int,
+                                    commander_ci: Set[str], ci_clauses: str,
+                                    exclude_oids: Set[str]) -> list[dict]:
+        """Fetch all owned cards matching ANY of the given tags, in CI."""
+        if not tags:
+            return []
+        exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
+        avail = self._deck_context(deck_id).availability_sql()
+        tag_placeholders = ",".join("?" for _ in tags)
+
+        query = f"""
+            SELECT card.oracle_id, card.name, card.type_line,
+                   card.mana_cost, card.cmc, card.oracle_text,
+                   p.set_code, p.collector_number, p.raw_json,
+                   MIN(c.id) AS collection_id,
+                   s.released_at,
+                   COUNT(ct_all.tag) AS tag_count,
+                   COALESCE(salt.salt_score, 1.0) AS salt_score,
+                   MAX(CASE WHEN p.full_art = 1
+                            OR p.frame_effects LIKE '%borderless%'
+                            OR p.frame_effects LIKE '%extendedart%'
+                            OR p.frame_effects LIKE '%showcase%'
+                       THEN 1 ELSE 0 END) AS is_bling
+            FROM card_tags ct
+            JOIN cards card ON ct.oracle_id = card.oracle_id
+            JOIN printings p ON p.oracle_id = card.oracle_id
+            JOIN collection c ON c.printing_id = p.printing_id
+            JOIN sets s ON p.set_code = s.set_code
+            LEFT JOIN card_tags ct_all ON ct_all.oracle_id = card.oracle_id
+              AND {tag_validation_filter("ct_all")}
+            LEFT JOIN salt_scores salt ON salt.card_name = card.name
+            WHERE ct.tag IN ({tag_placeholders})
+              AND {tag_validation_filter()}
+              AND c.status = 'owned'
+              {avail}
+              AND card.oracle_id NOT IN ({exclude_list})
+              AND card.type_line NOT LIKE '%Basic Land%'
+              AND card.type_line NOT LIKE 'Token%'
+              {ci_clauses}
+            GROUP BY card.oracle_id
+            ORDER BY json_extract(p.raw_json, '$.edhrec_rank') ASC NULLS LAST
+        """  # noqa: S608
+        rows = self.conn.execute(query, tags).fetchall()
+        return [dict(r) for r in rows]
+
     def _query_creature_candidates(self, deck_id: int,
                                     commander_ci: Set[str], ci_clauses: str,
                                     exclude_oids: Set[str],
-                                    limit: int | None = None,
-                                    hypothetical: bool = False) -> list[dict]:
+                                    limit: int | None = None) -> list[dict]:
         """Query owned creatures in CI, not excluded — fallback for autofill."""
         exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
         limit_clause = f"LIMIT {int(limit)}" if limit else ""
-        avail = self._availability_filter(hypothetical)
+        avail = self._deck_context(deck_id).availability_sql()
 
         query = f"""
             SELECT card.oracle_id, card.name, card.type_line,
@@ -1462,22 +1871,49 @@ class DeckBuilderService:
         _norm("_rarity")
         _norm("_curve_fit")
 
-        w = weights or AUTOFILL_WEIGHTS
+        # Store random jitter once so it's stable across re-scores
         for c in candidates:
-            c["score"] = (
-                c["_edhrec_n"] * w["edhrec"]                 # higher commander inclusion = better
-                + (1.0 - c["_salt_n"]) * w["salt"]           # lower salt = better
-                + c["_price_n"] * w["price"]                 # higher price = better
-                + c["_plan_overlap_n"] * w["plan_overlap"]   # more plan tags = better
-                + c["_novelty_n"] * w["novelty"]             # higher novelty = better
-                + c["_recency_n"] * w["recency"]             # newer = better
-                + c.get("is_bling", 0) * w["bling"]          # full-art/borderless/extended/showcase
-                + c["_rarity_n"] * w["rarity"]               # higher rarity = better
-                + c["_curve_fit_n"] * w["curve_fit"]         # under-represented CMC = better
-                + random.random() * w["random"]              # uniform jitter for variety
-            )
+            c["_random"] = random.random()
 
         return candidates
+
+    @staticmethod
+    def _weighted_score(card: dict, weights: dict,
+                        deficit: float = 0.0,
+                        fill_ratio: float = 0.0) -> float:
+        """Compute weighted score for a candidate card.
+
+        Static weights (edhrec, bling, etc.) are constant. Dynamic weights:
+        - deficit, curve_fit: exponential ramp (negligible until ~85%, dominant near 100%)
+        - rarity: starts high (splashy picks early), linear decline 30%-80% fill
+        """
+        w = weights
+        # Exponential ramp for deficit and curve_fit
+        ramp = fill_ratio ** DYNAMIC_WEIGHT_EXPONENT
+        deficit_w = DYNAMIC_WEIGHT_DEFICIT[0] + (DYNAMIC_WEIGHT_DEFICIT[1] - DYNAMIC_WEIGHT_DEFICIT[0]) * ramp
+        curve_w = DYNAMIC_WEIGHT_CURVE_FIT[0] + (DYNAMIC_WEIGHT_CURVE_FIT[1] - DYNAMIC_WEIGHT_CURVE_FIT[0]) * ramp
+        # Linear ramp-down for rarity
+        r = DYNAMIC_WEIGHT_RARITY
+        if fill_ratio <= r["start_at"]:
+            rarity_w = r["start_weight"]
+        elif fill_ratio >= r["end_at"]:
+            rarity_w = r["end_weight"]
+        else:
+            t = (fill_ratio - r["start_at"]) / (r["end_at"] - r["start_at"])
+            rarity_w = r["start_weight"] + (r["end_weight"] - r["start_weight"]) * t
+        return (
+            card["_edhrec_n"] * w["edhrec"]
+            + (1.0 - card["_salt_n"]) * w["salt"]
+            + card["_price_n"] * w["price"]
+            + card["_plan_overlap_n"] * w["plan_overlap"]
+            + card["_novelty_n"] * w["novelty"]
+            + card["_recency_n"] * w["recency"]
+            + card.get("is_bling", 0) * w["bling"]
+            + card["_rarity_n"] * rarity_w
+            + card.get("_random", 0) * w["random"]
+            + card["_curve_fit_n"] * curve_w
+            + deficit * deficit_w
+        )
 
     # ── Tag inspection ─────────────────────────────────────────────
 
@@ -1590,10 +2026,9 @@ class DeckBuilderService:
         if not any(p.raw_json for p in printings):
             raise ValueError(f"No card data for '{name}' — run `mtg cache all` to populate")
 
-    def _get_commander_identity(self, deck_id: int,
-                                hypothetical: bool = False) -> Optional[Set[str]]:
+    def _get_commander_identity(self, deck_id: int) -> Optional[Set[str]]:
         """Get the color identity set from the commander card."""
-        if hypothetical:
+        if self._deck_context(deck_id).hypothetical:
             commanders = [c for c in self.deck_repo.get_expected_cards_full(deck_id)
                           if c.get("deck_zone") == "commander"]
         else:
@@ -1621,18 +2056,38 @@ class DeckBuilderService:
                 categories.add(cat_name)
         return categories
 
+    @staticmethod
+    def _clean_tags(tags: set[str], type_line: str) -> set[str]:
+        """Apply hard-coded post-validation tag rules.
+
+        These catch systematic tagging errors that Haiku validation
+        doesn't reliably fix.
+        """
+        type_line = type_line or ""
+        if "Creature" not in type_line:
+            tags.discard("mana-dork")
+        if "Land" in type_line:
+            # Lands aren't ramp — they're the baseline mana source.
+            # Tags like adds-multiple-mana on dual lands don't mean ramp.
+            for t in ("ramp", "mana-rock", "adds-multiple-mana"):
+                tags.discard(t)
+        return tags
+
     def _get_card_tags(self, oracle_id: str) -> set:
-        """Get all validated tags for a card."""
+        """Get all validated tags for a card, with post-validation rules applied."""
         rows = self.conn.execute(
             f"SELECT ct.tag FROM card_tags ct WHERE ct.oracle_id = ?"
             f" AND {tag_validation_filter()}", (oracle_id,)
         ).fetchall()
-        return {row["tag"] for row in rows}
+        tags = {row["tag"] for row in rows}
+        card = self.conn.execute(
+            "SELECT type_line FROM cards WHERE oracle_id = ?", (oracle_id,)
+        ).fetchone()
+        return self._clean_tags(tags, card["type_line"] if card else "")
 
-    def _find_best_copy(self, oracle_id: str, deck_id: int,
-                        hypothetical: bool = False) -> Optional[int]:
+    def _find_best_copy(self, oracle_id: str, deck_id: int) -> Optional[int]:
         """Find the best unassigned owned copy by bling score."""
-        avail = self._availability_filter(hypothetical)
+        avail = self._deck_context(deck_id).availability_sql()
         rows = self.conn.execute(
             f"""SELECT c.id, c.finish, p.frame_effects, p.full_art, p.promo, p.promo_types
                FROM collection c
@@ -1690,14 +2145,13 @@ class DeckBuilderService:
         copies = self._find_basic_land_copies(color, deck_id, 1)
         return copies[0] if copies else None
 
-    def _find_basic_land_copies(self, color: str, deck_id: int, count: int,
-                                hypothetical: bool = False) -> List[int]:
+    def _find_basic_land_copies(self, color: str, deck_id: int, count: int) -> List[int]:
         """Find up to `count` unassigned basic land copies for the given color."""
         land_names = [name for name, c in {**BASIC_LANDS, **SNOW_BASICS}.items() if c == color]
         if not land_names:
             return []
         placeholders = ",".join("?" * len(land_names))
-        avail = self._availability_filter(hypothetical)
+        avail = self._deck_context(deck_id).availability_sql()
         rows = self.conn.execute(
             f"""SELECT c.id
                 FROM collection c
@@ -1776,7 +2230,8 @@ class DeckBuilderService:
         return {"total": row["total"] or 0, "categories": categories}
 
     def _get_plan_progress(self, deck_id: int, cards: List[dict],
-                           plan: Optional[dict]) -> Optional[dict]:
+                           plan: Optional[dict],
+                           ctx: DeckContext) -> Optional[dict]:
         """Get plan progress by counting cards with matching tags or queries.
 
         Plan targets are tag names from card_tags, custom SQL queries,
@@ -1787,23 +2242,25 @@ class DeckBuilderService:
 
         targets = plan["targets"]
 
+        card_from, card_where = ctx.card_source_sql()
+        card_from_ext, _ = ctx.card_source_ext_sql()
+        count_expr = ctx.count_expr()
+        tag_count_expr = ctx.tag_count_expr()
+
         # Count all tag occurrences + land count in two queries
         tag_rows = self.conn.execute(
-            f"""SELECT ct.tag, COUNT(DISTINCT p.oracle_id) AS cnt
-               FROM collection c
-               JOIN printings p ON c.printing_id = p.printing_id
-               JOIN card_tags ct ON ct.oracle_id = p.oracle_id
-               WHERE c.deck_id = ? AND {tag_validation_filter()}
+            f"""SELECT ct.tag, {tag_count_expr} AS cnt
+               {card_from}
+               JOIN card_tags ct ON ct.oracle_id = card.oracle_id
+               WHERE {card_where} AND {tag_validation_filter()}
                GROUP BY ct.tag""",
             (deck_id,),
         ).fetchall()
         tag_counts = {r["tag"]: r["cnt"] for r in tag_rows}
 
         land_row = self.conn.execute(
-            """SELECT COUNT(*) AS cnt FROM collection c
-               JOIN printings p ON c.printing_id = p.printing_id
-               JOIN cards card ON p.oracle_id = card.oracle_id
-               WHERE c.deck_id = ? AND card.type_line LIKE '%Land%'""",
+            f"""SELECT {count_expr} AS cnt {card_from}
+               WHERE {card_where} AND card.type_line LIKE '%Land%'""",
             (deck_id,),
         ).fetchone()
 
@@ -1813,13 +2270,27 @@ class DeckBuilderService:
             if target_val["type"] == "lands":
                 current = land_row["cnt"]
             elif target_val["type"] == "query":
+                # Use extended join with printings for custom queries that may reference p.*
+                cnt_row = self.conn.execute(
+                    f"""SELECT {count_expr} AS cnt
+                       {card_from_ext}
+                       WHERE {card_where} AND ({target_val['query']})""",  # noqa: S608
+                    (deck_id,),
+                ).fetchone()
+                current = cnt_row["cnt"]
+            elif target_name in INFRASTRUCTURE:
+                # Infrastructure broad category: count distinct oracle_ids
+                # matching ANY sub-tag to avoid double-counting.
+                sub_tags = INFRASTRUCTURE[target_name]["tags"]
+                placeholders = ",".join("?" for _ in sub_tags)
                 cnt_row = self.conn.execute(
                     f"""SELECT COUNT(DISTINCT card.oracle_id) AS cnt
-                       FROM collection c
-                       JOIN printings p ON c.printing_id = p.printing_id
-                       JOIN cards card ON p.oracle_id = card.oracle_id
-                       WHERE c.deck_id = ? AND ({target_val['query']})""",  # noqa: S608
-                    (deck_id,),
+                       {card_from}
+                       JOIN card_tags ct ON ct.oracle_id = card.oracle_id
+                       WHERE {card_where}
+                         AND ct.tag IN ({placeholders})
+                         AND {tag_validation_filter()}""",
+                    (deck_id, *sorted(sub_tags)),
                 ).fetchone()
                 current = cnt_row["cnt"]
             else:
@@ -1828,19 +2299,18 @@ class DeckBuilderService:
             progress[target_name] = entry
         return progress
 
-    def _tag_coverage(self, deck_id: int) -> tuple:
+    def _tag_coverage(self, deck_id: int, ctx: DeckContext) -> tuple:
         """Compute tag coverage stats for nonland cards in a deck.
 
         Returns (coverage_pct, avg_roles, zero_role_card_names).
         """
+        card_from, card_where = ctx.card_source_sql()
         rows = self.conn.execute(
             f"""SELECT card.name, COUNT(ct.tag) AS role_count
-               FROM collection c
-               JOIN printings p ON c.printing_id = p.printing_id
-               JOIN cards card ON p.oracle_id = card.oracle_id
+               {card_from}
                LEFT JOIN card_tags ct ON ct.oracle_id = card.oracle_id
                  AND {tag_validation_filter()}
-               WHERE c.deck_id = ? AND card.type_line NOT LIKE '%Land%'
+               WHERE {card_where} AND card.type_line NOT LIKE '%Land%'
                GROUP BY card.oracle_id""",
             (deck_id,),
         ).fetchall()
@@ -1856,23 +2326,12 @@ class DeckBuilderService:
         avg_roles = round(total_roles / n_cards, 1)
         return coverage, avg_roles, zero_role
 
-    def _suggest_utility_lands(self, deck_id: int, commander_ci: Set[str],
-                               hypothetical: bool = False) -> List[dict]:
+    def _suggest_utility_lands(self, deck_id: int, commander_ci: Set[str]) -> List[dict]:
         """Find owned unassigned nonbasic lands in commander CI, sorted by EDHREC rank."""
+        ctx = self._deck_context(deck_id)
         ci_clauses = self._ci_exclusion_sql(commander_ci)
-        avail = self._availability_filter(hypothetical)
-        if hypothetical:
-            exclude_in_deck = (
-                "AND card.oracle_id NOT IN ("
-                "SELECT oracle_id FROM deck_expected_cards WHERE deck_id = ?)"
-            )
-        else:
-            exclude_in_deck = (
-                "AND card.oracle_id NOT IN ("
-                "SELECT p2.oracle_id FROM collection c2 "
-                "JOIN printings p2 ON c2.printing_id = p2.printing_id "
-                "WHERE c2.deck_id = ?)"
-            )
+        avail = ctx.availability_sql()
+        exclude_sql, exclude_params = ctx.exclude_deck_sql(deck_id)
         rows = self.conn.execute(
             f"""SELECT card.name, p.set_code,
                        json_extract(p.raw_json, '$.edhrec_rank') AS edhrec_rank
@@ -1883,12 +2342,12 @@ class DeckBuilderService:
                   {avail}
                   AND card.type_line LIKE '%Land%'
                   AND card.type_line NOT LIKE '%Basic%'
-                  {exclude_in_deck}
+                  {exclude_sql}
                   {ci_clauses}
                 GROUP BY card.oracle_id
                 ORDER BY edhrec_rank ASC NULLS LAST
                 LIMIT 10""",
-            (deck_id,),
+            exclude_params,
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1914,11 +2373,10 @@ class DeckBuilderService:
         For physical decks, pass collection_id. For hypothetical, pass oracle_id.
         Returns role-based and type-based suggestions from owned collection.
         """
-        deck = self.deck_repo.get(deck_id)
-        hypothetical = bool(deck and deck.get("hypothetical"))
+        ctx = self._deck_context(deck_id)
 
         # Find the card being replaced
-        if hypothetical:
+        if ctx.hypothetical:
             if not oracle_id:
                 raise ValueError("oracle_id is required for hypothetical decks")
             deck_cards = self.deck_repo.get_expected_cards_full(deck_id)
@@ -1939,7 +2397,7 @@ class DeckBuilderService:
             if not card:
                 raise ValueError(f"Collection entry {collection_id} not in deck {deck_id}")
 
-        commander_ci = self._get_commander_identity(deck_id, hypothetical=hypothetical)
+        commander_ci = self._get_commander_identity(deck_id)
         ci_clauses = self._ci_exclusion_sql(commander_ci) if commander_ci else ""
 
         # Build exclude set: all oracle_ids already in the deck
@@ -1970,13 +2428,11 @@ class DeckBuilderService:
 
         # Role-based suggestions: from tag matches + custom query matches
         role_suggestions = self._query_role_replacements(
-            target_cmc, ci_clauses, exclude_list, card_plan_tags=card_plan_tags,
-            hypothetical=hypothetical,
+            deck_id, target_cmc, ci_clauses, exclude_list, card_plan_tags=card_plan_tags,
         )
         for cq in card_custom_queries:
             cq_results = self._query_role_replacements(
-                target_cmc, ci_clauses, exclude_list, custom_where=cq["query"],
-                hypothetical=hypothetical,
+                deck_id, target_cmc, ci_clauses, exclude_list, custom_where=cq["query"],
             )
             # Merge without duplicates
             seen = {r["oracle_id"] for r in role_suggestions}
@@ -1987,8 +2443,7 @@ class DeckBuilderService:
 
         # Type-based suggestions
         type_suggestions = self._query_type_replacements(
-            card, target_cmc, ci_clauses, exclude_list,
-            hypothetical=hypothetical,
+            deck_id, card, target_cmc, ci_clauses, exclude_list,
         )
 
         all_labels = sorted(card_plan_tags) + [cq["label"] for cq in card_custom_queries]
@@ -2008,11 +2463,10 @@ class DeckBuilderService:
             "type_suggestions": type_suggestions,
         }
 
-    def _query_role_replacements(self, target_cmc: int,
+    def _query_role_replacements(self, deck_id: int, target_cmc: int,
                                   ci_clauses: str, exclude_list: str,
                                   *, card_plan_tags: set | None = None,
-                                  custom_where: str | None = None,
-                                  hypothetical: bool = False) -> list:
+                                  custom_where: str | None = None) -> list:
         """Find replacement candidates by plan tags or custom query at same CMC."""
         if card_plan_tags:
             tags = sorted(card_plan_tags)
@@ -2030,7 +2484,7 @@ class DeckBuilderService:
             return []
 
         custom_clause = f"AND ({custom_where})" if custom_where else ""
-        avail = self._availability_filter(hypothetical)
+        avail = self._deck_context(deck_id).availability_sql()
 
         rows = self.conn.execute(
             f"""SELECT card.oracle_id, card.name, card.type_line,
@@ -2057,9 +2511,8 @@ class DeckBuilderService:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def _query_type_replacements(self, card: dict, target_cmc: int,
-                                  ci_clauses: str, exclude_list: str,
-                                  hypothetical: bool = False) -> list:
+    def _query_type_replacements(self, deck_id: int, card: dict, target_cmc: int,
+                                  ci_clauses: str, exclude_list: str) -> list:
         """Find replacement candidates matching type, CMC, color, and P/T."""
         type_line = card.get("type_line", "")
         # Extract primary supertype
@@ -2092,7 +2545,7 @@ class DeckBuilderService:
                              " AND json_extract(p.raw_json, '$.toughness') = ?")
                 params.extend([row["power"], row["toughness"]])
 
-        avail = self._availability_filter(hypothetical)
+        avail = self._deck_context(deck_id).availability_sql()
         rows = self.conn.execute(
             f"""SELECT card.oracle_id, card.name, card.type_line,
                        card.mana_cost, card.cmc, card.colors,

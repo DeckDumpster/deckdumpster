@@ -347,8 +347,6 @@ main { padding: 24px; }
 .commander-results .cmdr-info { flex: 1; }
 .commander-results .cmdr-name { font-weight: bold; }
 .commander-results .cmdr-meta { font-size: 0.8rem; color: #aaa; }
-.commander-results .cmdr-owned { color: #27ae60; font-size: 0.75rem; margin-left: 4px; }
-.commander-results .cmdr-unowned { color: #e94560; font-size: 0.75rem; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -741,13 +739,10 @@ async function searchCommanders(q) {
   for (const card of results) {
     const li = document.createElement('li');
     const imgSrc = card.image_uri ? card.image_uri.replace('/normal/', '/art_crop/') : '';
-    const ownedBadge = card.owned
-      ? '<span class="cmdr-owned">✓ owned</span>'
-      : '<span class="cmdr-unowned">not owned</span>';
     li.innerHTML = `
       ${imgSrc ? `<img class="cmdr-img" src="${imgSrc}" alt="">` : ''}
       <div class="cmdr-info">
-        <div class="cmdr-name">${esc(card.name)}${ownedBadge}</div>
+        <div class="cmdr-name">${esc(card.name)}</div>
         <div class="cmdr-meta">${esc(card.type_line || '')}</div>
       </div>
     `;
