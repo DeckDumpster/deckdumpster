@@ -1,0 +1,14 @@
+start_page: /collection
+involves:
+  - "sidebar toggle button (#sidebar-toggle-btn)"
+  - "set search multi-select (#set-search, #set-dropdown)"
+  - "include unowned button (#include-unowned-btn) cycling through base/full"
+  - "status text div (#status) with owned/missing counts and dual dollar values"
+fixture_data:
+  demo_cards: "12 owned FDN cards out of 730+ in the set"
+notes: >
+  1. Navigate to /collection. 2. Open sidebar. 3. Type "Foundations" in set
+  search, click the FDN option to select it. 4. Click the include-unowned
+  button to enable base mode. 5. Wait for cards to reload. 6. Verify status
+  text contains "owned" count, "missing" count, "(base)" label, and both
+  "owned" and "total" dollar value labels. 7. Screenshot final state.

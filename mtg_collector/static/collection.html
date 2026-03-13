@@ -3019,9 +3019,9 @@ function applyFilter(type, value) {
 }
 
 // --- View toggle ---
-viewTableBtn.addEventListener('click', () => { currentView = 'table'; groupByOrder = false; updateViewButtons(); render(); });
-viewGridBtn.addEventListener('click', () => { currentView = 'grid'; groupByOrder = false; updateViewButtons(); render(); });
-viewOrdersBtn.addEventListener('click', () => { groupByOrder = !groupByOrder; if (groupByOrder) currentView = 'orders'; else currentView = 'table'; updateViewButtons(); render(); });
+viewTableBtn.addEventListener('click', () => { currentView = 'table'; groupByOrder = false; updateViewButtons(); render(); serializeFiltersToURL(); });
+viewGridBtn.addEventListener('click', () => { currentView = 'grid'; groupByOrder = false; updateViewButtons(); render(); serializeFiltersToURL(); });
+viewOrdersBtn.addEventListener('click', () => { groupByOrder = !groupByOrder; if (groupByOrder) currentView = 'orders'; else currentView = 'table'; updateViewButtons(); render(); serializeFiltersToURL(); });
 
 function updateViewButtons() {
   viewTableBtn.classList.toggle('active', currentView === 'table');
@@ -3296,6 +3296,7 @@ function refilterAndRender() {
   allCards = applyClientSort(applyAllClientFilters([...allCardsUnfiltered]));
   updateStatusText();
   render();
+  serializeFiltersToURL();
 }
 
 function updateStatusText() {
@@ -3310,8 +3311,13 @@ function updateStatusText() {
       const p = parseFloat(c[priceField]) || 0;
       return s + (floor > 0 && p < floor ? 0 : p * c.qty);
     }, 0);
+    const totalValue = allCards.reduce((s, c) => {
+      const p = parseFloat(c[priceField]) || 0;
+      const effectiveQty = c.owned ? c.qty : 1;
+      return s + (floor > 0 && p < floor ? 0 : p * effectiveQty);
+    }, 0);
     const modeLabel = includeUnowned === 'full' ? 'full' : 'base';
-    statusEl.textContent = `${ownedCards.length} owned, ${missingCards.length} missing (${modeLabel}) \u2014 ${priceLabel} $${ownedValue.toFixed(2)}`;
+    statusEl.textContent = `${ownedCards.length} owned, ${missingCards.length} missing (${modeLabel}) \u2014 ${priceLabel} $${ownedValue.toFixed(2)} owned / $${totalValue.toFixed(2)} total`;
   } else {
     const totalQty = allCards.reduce((s, c) => s + c.qty, 0);
     const totalValue = allCards.reduce((s, c) => {
@@ -3341,6 +3347,7 @@ async function fetchCollection() {
   allCards = applyClientSort(applyAllClientFilters([...allCardsUnfiltered]));
   updateStatusText();
   render();
+  serializeFiltersToURL();
 }
 
 function populateSetOptions() {
@@ -4192,6 +4199,138 @@ async function assignSelectedToBinder() {
   loadContainerData();
 }
 
+// --- URL filter persistence ---
+function serializeFiltersToURL() {
+  const params = new URLSearchParams();
+
+  const q = searchInput.value.trim();
+  if (q) params.set('q', q);
+
+  const colors = Array.from(document.querySelectorAll('#color-filters input:checked')).map(cb => cb.value);
+  if (colors.length) params.set('colors', colors.join(','));
+
+  const rarities = Array.from(document.querySelectorAll('#rarity-filters input:checked')).map(cb => cb.value);
+  if (rarities.length) params.set('rarities', rarities.join(','));
+
+  const types = Array.from(document.querySelectorAll('#type-filters input:checked')).map(cb => cb.value);
+  if (types.length) params.set('types', types.join(','));
+
+  const finishes = Array.from(document.querySelectorAll('#finish-filters input:checked')).map(cb => cb.value);
+  if (finishes.length) params.set('finishes', finishes.join(','));
+
+  const badges = Array.from(document.querySelectorAll('#badge-filters input:checked')).map(cb => cb.value);
+  if (badges.length) params.set('badges', badges.join(','));
+
+  const statuses = Array.from(document.querySelectorAll('#status-filters input:checked')).map(cb => cb.value);
+  if (statuses.length) params.set('statuses', statuses.join(','));
+
+  if (selectedSets.size) params.set('sets', Array.from(selectedSets.keys()).join(','));
+  if (selectedSubtypes.size) params.set('subtypes', Array.from(selectedSubtypes).join(','));
+
+  const container = document.getElementById('container-filter').value;
+  if (container) params.set('container', container);
+
+  if (cnMinEl.value) params.set('cn_min', cnMinEl.value);
+  if (cnMaxEl.value) params.set('cn_max', cnMaxEl.value);
+  if (cmcMinEl.value) params.set('cmc_min', cmcMinEl.value);
+  if (cmcMaxEl.value) params.set('cmc_max', cmcMaxEl.value);
+  if (priceMinEl.value) params.set('price_min', priceMinEl.value);
+  if (priceMaxEl.value) params.set('price_max', priceMaxEl.value);
+  if (dateMinEl.value) params.set('date_min', dateMinEl.value);
+  if (dateMaxEl.value) params.set('date_max', dateMaxEl.value);
+
+  if (includeUnowned) params.set('unowned', includeUnowned);
+
+  if (sortColumn !== 'name') params.set('sort', sortColumn);
+  if (sortOrder !== 'asc') params.set('sort_dir', sortOrder);
+  if (currentView !== 'table') params.set('view', currentView);
+
+  const qs = params.toString();
+  history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname);
+}
+
+let _pendingContainerValue = '';
+
+function restoreFiltersFromURL() {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.toString()) return;
+
+  // Search
+  const q = params.get('q');
+  if (q) searchInput.value = q;
+
+  // Checkboxes
+  const colorMap = { 'W': 'cf-W', 'U': 'cf-U', 'B': 'cf-B', 'R': 'cf-R', 'G': 'cf-G', 'C': 'cf-C' };
+  (params.get('colors') || '').split(',').filter(Boolean).forEach(v => {
+    const el = document.getElementById(colorMap[v]);
+    if (el) el.checked = true;
+  });
+
+  (params.get('rarities') || '').split(',').filter(Boolean).forEach(v => {
+    const el = document.getElementById('rf-' + v);
+    if (el) el.checked = true;
+  });
+
+  (params.get('types') || '').split(',').filter(Boolean).forEach(v => {
+    const el = document.getElementById('tf-' + v.toLowerCase());
+    if (el) el.checked = true;
+  });
+
+  (params.get('finishes') || '').split(',').filter(Boolean).forEach(v => {
+    const el = document.getElementById('ff-' + v);
+    if (el) el.checked = true;
+  });
+
+  (params.get('badges') || '').split(',').filter(Boolean).forEach(v => {
+    const el = document.getElementById('bf-' + v);
+    if (el) el.checked = true;
+  });
+
+  (params.get('statuses') || '').split(',').filter(Boolean).forEach(v => {
+    const el = document.getElementById('sf-' + v);
+    if (el) el.checked = true;
+  });
+
+  // Multi-selects: sets (codes only — names resolved after cachedSets loads)
+  (params.get('sets') || '').split(',').filter(Boolean).forEach(code => {
+    selectedSets.set(code, code.toUpperCase());
+  });
+
+  (params.get('subtypes') || '').split(',').filter(Boolean).forEach(v => {
+    selectedSubtypes.add(v);
+  });
+
+  // Container — defer to after loadContainerData populates options
+  const container = params.get('container');
+  if (container) _pendingContainerValue = container;
+
+  // Range inputs
+  if (params.get('cn_min')) cnMinEl.value = params.get('cn_min');
+  if (params.get('cn_max')) cnMaxEl.value = params.get('cn_max');
+  if (params.get('cmc_min')) cmcMinEl.value = params.get('cmc_min');
+  if (params.get('cmc_max')) cmcMaxEl.value = params.get('cmc_max');
+  if (params.get('price_min')) priceMinEl.value = params.get('price_min');
+  if (params.get('price_max')) priceMaxEl.value = params.get('price_max');
+  if (params.get('date_min')) dateMinEl.value = params.get('date_min');
+  if (params.get('date_max')) dateMaxEl.value = params.get('date_max');
+
+  // Include unowned
+  const unowned = params.get('unowned');
+  if (unowned === 'base' || unowned === 'full') includeUnowned = unowned;
+
+  // Sort
+  if (params.get('sort')) sortColumn = params.get('sort');
+  if (params.get('sort_dir') === 'desc') sortOrder = 'desc';
+
+  // View
+  const view = params.get('view');
+  if (view === 'grid' || view === 'orders') {
+    currentView = view;
+    if (view === 'orders') groupByOrder = true;
+    updateViewButtons();
+  }
+}
+
 // --- Init ---
 (async () => {
   const [settingsRes, cachedSetsRes, _] = await Promise.all([
@@ -4202,8 +4341,25 @@ async function assignSelectedToBinder() {
   _settings = await settingsRes.json();
   cachedSets = await cachedSetsRes.json();
   applySettings();
+  restoreFiltersFromURL();
+  // Resolve set names from cachedSets for any URL-restored set codes
+  if (selectedSets.size) {
+    const setNameMap = new Map(cachedSets.map(s => [s.code, s.name]));
+    for (const [code] of selectedSets) {
+      const name = setNameMap.get(code);
+      if (name) selectedSets.set(code, name);
+    }
+    setMultiSelect.renderPills();
+  }
+  if (selectedSubtypes.size) subtypeMultiSelect.renderPills();
   fetchCollection();
-  loadContainerData();
+  // Load containers, then restore pending container filter value
+  await loadContainerData();
+  if (_pendingContainerValue) {
+    document.getElementById('container-filter').value = _pendingContainerValue;
+    _pendingContainerValue = '';
+    refilterAndRender();
+  }
 })();
 </script>
 
