@@ -1,0 +1,15 @@
+start_page: /collection
+involves:
+  - "rarity filter checkboxes (#rf-rare, #rf-mythic, etc.) in sidebar"
+  - "sidebar toggle button (#sidebar-toggle-btn) to open filter panel"
+  - "column headers with sort click handlers"
+  - "status text div (#status) showing entry/card counts"
+  - "URL query params (rarities, sort, sort_dir)"
+fixture_data:
+  demo_cards: "43 collection entries, 18 are rare/mythic"
+notes: >
+  1. Navigate to /collection?rarities=rare&sort=price&sort_dir=desc
+  (simulating a refreshed page with persisted filters). 2. Wait for cards
+  to load. 3. Open the sidebar and verify the rare checkbox is checked.
+  4. Verify the status text shows a reduced count (not all 43 cards).
+  5. Screenshot to confirm filters are visually active and table is sorted.

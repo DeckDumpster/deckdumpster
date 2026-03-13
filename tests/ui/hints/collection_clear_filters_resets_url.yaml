@@ -1,0 +1,14 @@
+start_page: /collection
+involves:
+  - "rarity filter checkboxes in sidebar"
+  - "search input (#search-input) with placeholder 'Search cards...'"
+  - "clear filters button (#clear-filters-btn)"
+  - "status text div (#status) showing entry/card counts"
+fixture_data:
+  demo_cards: "43 collection entries total"
+notes: >
+  1. Navigate to /collection?rarities=rare&q=art (with filters pre-applied
+  via URL). 2. Wait for filtered results. 3. Verify status shows reduced
+  count. 4. Click "Clear Filters" button. 5. Wait for full collection to
+  reload. 6. Verify status shows all 43 entries. 7. Verify search input
+  is empty. 8. Screenshot final state showing full unfiltered collection.
