@@ -1,0 +1,19 @@
+start_page: /decks/2
+involves:
+  - "card grid with .sheet-card elements"
+  - "replace button .replace-btn with ⇄ text, visible on hover"
+  - "replace modal #replace-modal with .modal-backdrop"
+  - "header span #replace-card-name showing card name"
+  - "role column #replace-role with .replace-candidate items"
+  - "type column #replace-type with .replace-candidate items"
+fixture_data:
+  deck_id: "2"
+  plan: '{"removal":3,"ramp":2,"draw":2}'
+  card_with_tags_cid: "22"
+  card_with_tags_name: "Slick Sequence"
+notes: >
+  Navigate to /decks/2. The plan must be set first via API. The page renders in
+  grid view by default. Click the .replace-btn on a card (Slick Sequence, cid=22).
+  The #replace-modal gains class "active". #replace-card-name shows "Slick Sequence".
+  #replace-role should contain at least one .replace-candidate (Cathar Commando).
+  Each candidate has .replace-thumb img, .replace-candidate-name, and .mana spans.

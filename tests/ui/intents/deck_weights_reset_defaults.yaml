@@ -1,0 +1,13 @@
+# Scenario: Reset to Defaults reverts all weight values
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   Deck 2 must have a plan set and custom weights saved via the API.
+
+description: >
+  When I have custom weights saved and open the Weights modal, I see
+  my custom values. Clicking "Reset to Defaults" reverts all weights
+  to their default values. Clicking Save persists the defaults.

@@ -1,0 +1,19 @@
+start_page: /decks/2
+involves:
+  - "replace modal #replace-modal"
+  - "candidate .replace-candidate with .selected class on click"
+  - "confirm bar #replace-selection-label and #replace-confirm button"
+  - "card grid refreshes after swap"
+fixture_data:
+  deck_id: "2"
+  plan: '{"removal":3,"ramp":2,"draw":2}'
+  card_cid: "22"
+  card_name: "Slick Sequence"
+  replacement_name: "Cathar Commando"
+notes: >
+  Navigate to /decks/2 with plan set. Open replace modal for Slick Sequence.
+  Wait for role suggestions. Click the first .replace-candidate in #replace-role.
+  It gains .selected class. #replace-selection-label updates to show the candidate
+  name. #replace-confirm is no longer disabled. Click Confirm. Modal closes
+  (#replace-modal loses "active"). The card grid refreshes — Slick Sequence is
+  gone and the replacement appears.

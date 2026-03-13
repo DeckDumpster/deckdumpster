@@ -1,0 +1,15 @@
+start_page: /decks
+involves:
+  - "New Deck button"
+  - "deck modal #deck-modal"
+  - "format select #f-format"
+  - "commander field #commander-field"
+  - "commander search input #f-commander with placeholder 'Search for a legendary creature...'"
+  - "commander results dropdown #commander-results"
+fixture_data: {}
+notes: >
+  Navigate to /decks. Click 'New Deck' button. Wait for #deck-modal.active.
+  Select 'commander' from #f-format to trigger toggleCommanderField().
+  #commander-field becomes visible. Type 'judith' in #f-commander.
+  Wait for #commander-results.open to appear with results. Verify a
+  result showing 'Judith, Carnage Connoisseur' appears with owned badge.

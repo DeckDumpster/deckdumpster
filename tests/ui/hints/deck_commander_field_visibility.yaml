@@ -1,0 +1,13 @@
+start_page: /decks
+involves:
+  - "New Deck button"
+  - "deck modal #deck-modal"
+  - "format select #f-format"
+  - "commander field #commander-field (display:none by default)"
+fixture_data: {}
+notes: >
+  Navigate to /decks. Click 'New Deck'. Verify #commander-field is hidden.
+  Select 'commander' from #f-format. Verify #commander-field is visible.
+  Switch to 'standard'. Verify #commander-field is hidden again.
+  Switch back to 'commander'. Verify #commander-field is visible.
+  Close modal. Done.

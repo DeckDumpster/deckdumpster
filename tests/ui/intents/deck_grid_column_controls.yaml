@@ -1,0 +1,10 @@
+# Scenario: Adjusting cards-per-row in deck grid view
+#
+# Related:
+#   pull_requests: [203]
+
+description: >
+  When I am in grid view on the deck detail page, I can adjust the
+  number of cards per row using minus and plus buttons. The current
+  column count is displayed between the buttons. The controls only
+  appear when grid view is active.

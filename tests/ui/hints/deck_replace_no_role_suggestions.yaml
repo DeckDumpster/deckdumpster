@@ -1,0 +1,15 @@
+start_page: /decks/2
+involves:
+  - "replace modal #replace-modal"
+  - "empty state text 'No candidates found' in #replace-role"
+  - "search column #replace-search still functional"
+fixture_data:
+  deck_id: "2"
+  plan: '{"removal":3,"ramp":2,"draw":2}'
+  card_cid: "23"
+  card_name: "Disruptor Flute"
+notes: >
+  Navigate to /decks/2 with plan set. Open replace modal for Disruptor Flute
+  (cid=23, tags=hate,type:artifact — no plan-relevant tags). #replace-role shows
+  "No candidates found". The search column remains usable — inputs are present
+  and typing triggers search.

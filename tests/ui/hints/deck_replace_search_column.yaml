@@ -1,0 +1,16 @@
+start_page: /decks/2
+involves:
+  - "replace modal #replace-modal"
+  - "search inputs: #rs-name, #rs-cmc, #rs-set, #rs-type"
+  - "search results container #replace-search"
+  - "candidate cards .replace-candidate in search column"
+fixture_data:
+  deck_id: "2"
+  plan: '{"removal":3,"ramp":2,"draw":2}'
+  card_cid: "22"
+notes: >
+  Navigate to /decks/2 with plan set. Open replace modal for Slick Sequence.
+  The search inputs are pre-filled: #rs-cmc=2, #rs-type=Instant. Wait for search
+  results to appear in #replace-search. Clear #rs-type and type a new value.
+  Results update after 300ms debounce. Results should not include cards already
+  in the deck.

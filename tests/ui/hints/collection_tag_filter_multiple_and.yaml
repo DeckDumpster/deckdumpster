@@ -1,0 +1,15 @@
+start_page: /collection
+involves:
+  - "sidebar toggle #sidebar-toggle-btn"
+  - "tag search input #tag-search"
+  - "tag dropdown #tag-dropdown"
+  - "tag pills #tag-pills"
+  - "clear filters button #clear-filters-btn"
+fixture_data:
+  seed_tags: "burn on 3 cards, removal on 5 cards — 'Incinerating Blast' has both"
+notes: >
+  Navigate to /collection. Wait for table. Open sidebar. Select 'removal' tag
+  from the search. Note filtered count (~5 cards). Then add 'burn' tag.
+  Cards should now show only cards with BOTH removal AND burn tags
+  (e.g., Incinerating Blast). Count decreases further. Screenshot.
+  Click #clear-filters-btn. All cards restore.

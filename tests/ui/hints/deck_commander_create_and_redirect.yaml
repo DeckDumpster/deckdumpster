@@ -1,0 +1,17 @@
+start_page: /decks
+involves:
+  - "New Deck button"
+  - "deck modal #deck-modal"
+  - "format select #f-format"
+  - "commander search #f-commander"
+  - "commander results #commander-results li"
+  - "Save button in modal"
+  - "deck detail page /decks/:id"
+fixture_data: {}
+notes: >
+  Navigate to /decks. Click 'New Deck'. Select 'commander' format.
+  Type 'judith' in #f-commander. Wait for results. Click the result
+  for 'Judith, Carnage Connoisseur' (mousedown on li). Verify
+  #f-name auto-fills with the commander name. Click Save button.
+  Wait for redirect to /decks/:id. Verify the page shows 'Judith,
+  Carnage Connoisseur' as deck name and the commander is listed.

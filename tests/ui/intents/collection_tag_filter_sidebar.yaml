@@ -1,0 +1,9 @@
+# Scenario: Tag filter appears in collection sidebar
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I open the filter sidebar on the Collection page, I can see a
+  Tag filter section with a search input and dropdown. The tag filter
+  follows the same multi-select pattern as the Set and Subtype filters.

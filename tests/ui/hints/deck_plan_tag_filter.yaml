@@ -1,0 +1,20 @@
+start_page: /decks/2
+involves:
+  - "Plan progress section with clickable category labels"
+  - "Filter banner with Clear button"
+  - "Card table rows filtered by card tags"
+fixture_data:
+  deck_id: "2"
+  plan_targets: '{"ramp": 8, "draw": 6, "removal": 4}'
+  card_notes: "Cards 21,26=ramp; 22,23=draw; 24,25=removal"
+notes: >
+  1. Navigate to /decks/2. Wait for plan section to load.
+  2. Verify all 6 cards are visible in the table.
+  3. Click the "ramp" category label in the plan progress section.
+  4. Verify the filter banner appears showing "ramp".
+  5. Verify only 2 cards are visible (the ramp-noted ones).
+  6. Click "Clear" button in the filter banner.
+  7. Verify all 6 cards are visible again.
+  Plan category labels have class "cat clickable" with data-tag attribute.
+  Filter banner has id "active-filter-banner".
+  Clear button has id "btn-clear-filter".

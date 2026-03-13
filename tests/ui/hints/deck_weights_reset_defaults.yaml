@@ -1,0 +1,18 @@
+start_page: /decks/2
+involves:
+  - "Weights button #btn-weights"
+  - "weights modal #weights-modal"
+  - "Reset to Defaults button #btn-weights-reset"
+  - "Save button #btn-weights-save"
+  - "weight value displays .weight-value"
+fixture_data:
+  deck_id: "2"
+  plan: '{"targets":{"ramp":8,"removal":5,"draw":4}}'
+  weights: '{"edhrec":5,"salt":1,"price":3,"plan_overlap":3,"novelty":3,"bling":4,"random":2}'
+notes: >
+  POST a plan to /api/decks/2/plan. POST custom weights with edhrec=5,
+  salt=1, price=3 via /api/decks/2/weights. Navigate to /decks/2. Wait
+  for plan to load. Click #btn-weights. Verify custom values are shown
+  (e.g. #wv-edhrec shows "5", #wv-price shows "3"). Click "Reset to
+  Defaults". Verify values revert (edhrec=3, salt=2, price=1). Click
+  Save. Modal closes. Reopen and verify defaults persisted.

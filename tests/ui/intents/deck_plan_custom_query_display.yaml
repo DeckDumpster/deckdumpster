@@ -1,0 +1,16 @@
+# Scenario: Plan sidebar shows custom query target labels
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   Deck 2 must have a plan set with both tag-based and custom query targets.
+
+description: >
+  When I set a plan that includes custom query targets (dict with
+  count/query/label) alongside regular tag targets, the plan sidebar
+  displays the custom label text instead of the raw key name. For
+  example, a target keyed "big-eldrazi" with label "Big Creatures
+  (7+ MV)" shows "Big Creatures (7+ MV)" in the sidebar, not
+  "big eldrazi". Regular tag targets still show their tag name.

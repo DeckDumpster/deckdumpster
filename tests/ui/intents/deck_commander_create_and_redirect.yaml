@@ -1,0 +1,10 @@
+# Scenario: Create commander deck and redirect to detail page
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I select a commander from the search results and save the deck,
+  a new Commander deck is created with the commander assigned to the
+  commander zone. I am redirected to the deck detail page showing the
+  new deck with the commander card listed.

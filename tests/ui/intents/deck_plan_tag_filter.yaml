@@ -1,0 +1,14 @@
+# Scenario: Clicking a plan category filters deck cards by role
+#
+# Related:
+#   pull_requests: [203]
+#
+# Prerequisites:
+#   Deck 2 must have a plan with targets and cards with matching tags.
+
+description: >
+  When I view a Commander deck that has a plan, I can click on a plan
+  category label (e.g. "ramp") to filter the card list to only cards
+  assigned that role. A filter banner appears showing the active filter
+  with a Clear button. Clicking the same category again or the Clear
+  button removes the filter and shows all cards.

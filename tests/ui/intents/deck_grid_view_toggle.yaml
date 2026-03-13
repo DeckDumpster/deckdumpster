@@ -1,0 +1,10 @@
+# Scenario: Switching between table and grid view on deck detail
+#
+# Related:
+#   pull_requests: [203]
+
+description: >
+  When I view a deck, I can switch between table view and grid view
+  using toggle buttons next to the zone tabs. Grid view shows card
+  images in a responsive grid. Table view shows the standard text
+  table with columns for name, role, set, mana, type, etc.

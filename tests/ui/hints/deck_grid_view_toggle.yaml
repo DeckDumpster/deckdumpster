@@ -1,0 +1,17 @@
+start_page: /decks/2
+involves:
+  - "View toggle buttons (table/grid) in deck-view-bar"
+  - "Card table (#card-table)"
+  - "Card grid (#card-grid) with .sheet-card elements"
+fixture_data:
+  deck_id: "2"
+notes: >
+  1. Navigate to /decks/2. Wait for cards to load.
+  2. Verify table view is active by default (table visible, grid hidden).
+  3. Click the grid view toggle button (#view-grid-btn).
+  4. Verify card grid is visible with card images (.sheet-card elements).
+  5. Verify card table is hidden.
+  6. Click the table view toggle button (#view-table-btn).
+  7. Verify table is visible again and grid is hidden.
+  View toggle buttons are in .view-toggle-group. Active button has .active class.
+  Grid cards use .sheet-card with .sheet-card-img-wrap containing img elements.

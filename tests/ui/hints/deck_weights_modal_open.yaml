@@ -1,0 +1,18 @@
+start_page: /decks/2
+involves:
+  - "Weights button #btn-weights in .sidebar-actions"
+  - "weights modal #weights-modal with .weight-row entries"
+  - "weight labels: EDHREC, Salt, Price, Plan overlap, Novelty, Bling, Random"
+  - "weight descriptions in .weight-desc spans"
+  - "+/- buttons in .weight-controls"
+fixture_data:
+  deck_id: "2"
+  plan: '{"targets":{"ramp":8,"removal":5,"draw":4}}'
+notes: >
+  POST a plan to /api/decks/2/plan with targets. Navigate to /decks/2.
+  Wait for #plan-section to appear (plan loaded). Verify #btn-weights
+  is visible. Click #btn-weights. Wait for #weights-modal to be active.
+  Verify "Autofill Weights" text is present. Verify all 7 weight labels
+  are present: EDHREC, Salt, Price, Plan overlap, Novelty, Bling, Random.
+  Verify default values are shown (edhrec=3, salt=2, price=1,
+  plan_overlap=3, novelty=3, bling=4, random=2).

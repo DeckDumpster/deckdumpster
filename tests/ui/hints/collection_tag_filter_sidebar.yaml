@@ -1,0 +1,13 @@
+start_page: /collection
+involves:
+  - "sidebar toggle #sidebar-toggle-btn"
+  - "filter sidebar #sidebar"
+  - "tag search input #tag-search with placeholder 'Search tags...'"
+  - "tag dropdown #tag-dropdown"
+  - "tag pills container #tag-pills"
+fixture_data: {}
+notes: >
+  Navigate to /collection. Wait for cards to load. Click #sidebar-toggle-btn
+  to open filters. Wait for #sidebar. Verify #tag-search input exists with
+  placeholder 'Search tags...'. Verify #tag-dropdown and #tag-pills elements
+  exist. The tag filter section is between Subtype and Collector # filters.

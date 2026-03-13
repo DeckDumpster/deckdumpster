@@ -1,0 +1,9 @@
+# Scenario: Commander search autocomplete in new deck modal
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I create a new deck with Commander format selected, a commander
+  search field appears. I can type a legendary creature's name and see
+  autocomplete results with card name, type line, and owned status.

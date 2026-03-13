@@ -8,11 +8,20 @@ MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gath
 - Code, models, deploy scripts, all go in the repo.
 - STORE DATA IN THE LOCAL DB. DO NOT add website queries that require the internet at runtime.
 - `ruff` is a dev dependency — always available via `uv run ruff`
-- **NEVER add fallback logic.** Errors should propagate to the user.
-- No fallback content, no silent defaults, no swallowed exceptions.
+- **NEVER ADD FALLBACK LOGIC.** Errors MUST propagate to the user. NO EXCEPTIONS.
+  - **NO** "assume valid on failure". **NO** "use default on error". **NO** "return empty on exception".
+  - **NO** caching error states as success (e.g. marking tags "valid" when validation failed).
+  - If an API call fails after retries, **RAISE THE ERROR**. Let the user see it. Let it crash.
+  - If you catch yourself writing `except: return <some_default>`, DELETE IT. That is a fallback.
+  - The ONLY acceptable retry is for **429 rate-limit / transient network errors** with exponential backoff.
+  - **500 errors from external APIs must propagate to the user.** Do not swallow, wrap, or "gracefully degrade" them. Surface the error.
 - As few error paths as possible. Let it crash visibly.
+- **API retry policy:** Retry ONLY on 429/rate-limit (`anthropic.RateLimitError`) with exponential backoff (3s, 6s, 12s, 24s). **Use `services/retry.py:anthropic_retry()`** — do NOT write ad-hoc retry loops. **400 errors: bail immediately. 500 errors: RAISE TO THE USER. Do NOT catch-and-default on server errors.**
 - Tests use pre-populated `tests/fixtures/test-cards.sqlite` for offline testing. Corner identification tests require `ANTHROPIC_API_KEY`.
 - Aggressively limit modality. Defaults are good enough for everyone.
+- **Do data work in SQL, not Python.** Filtering, joining, and aggregating belong in the query. Python should score/rank small result sets, not build giant in-memory data structures from broad queries. Prefer N targeted queries over 1 superset query + Python filtering.
+- **DRY applies to SQL too.** If the same SQL subquery or fragment appears in multiple places, extract it into a Python function that returns the SQL string (see `validated_tags_sql()` in `models.py`). Copy-pasted SQL is a bug factory — when the logic changes, some copies get missed.
+- **Normalize polymorphic values at the boundary.** If a data structure has values that can be different shapes (int vs dict, string vs object), normalize to a single canonical shape at read/write time. Downstream code should never need `isinstance`/`typeof` checks to handle variant shapes. If the same type-dispatch branch appears in 3+ places, extract a helper or normalize the data.
 - **Tests that demonstrate bugs must fail.** If a test exists to reproduce a known bug, it should assert the correct/fixed behavior — not the broken behavior. A passing test means the bug is fixed; a failing test means the bug still exists. Never write a test that passes when the bug is present.
 - **After implementing any feature with UI changes, run `/qa-finish`** to generate UI scenario tests (intents, hints, implementations). This is a skill defined in `.claude/skills/qa-finish/SKILL.md`. It deploys a test container, walks the feature, and writes test artifacts under `tests/ui/`.
 
@@ -152,7 +161,7 @@ Claude tool-use loop with two tools: `query_local_db` (SQL against local SQLite)
 
 ### Claude API retry behavior
 
-Exponential backoff at 3s, 6s, 12s, 24s intervals. Bails immediately on 400 errors (no retry). See `services/claude.py`.
+**Use `services/retry.py:anthropic_retry(fn)`** for ALL Anthropic API calls. Retries only on 429 (RateLimitError) with exponential backoff (3s, 6s, 12s, 24s). All other errors (400, 500, auth, JSON parse) raise immediately. Legacy callers (`services/claude.py`, `services/agent.py`) still have ad-hoc retry loops — these should be migrated to `anthropic_retry()` when touched.
 
 ### Card ingestion via `resolve_and_add_ids()`
 

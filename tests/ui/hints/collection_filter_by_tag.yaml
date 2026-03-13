@@ -1,0 +1,16 @@
+start_page: /collection
+involves:
+  - "sidebar toggle #sidebar-toggle-btn"
+  - "tag search input #tag-search"
+  - "tag dropdown #tag-dropdown with clickable li items"
+  - "tag pills #tag-pills showing selected tags"
+  - "card count in status text"
+fixture_data:
+  seed_tags: "removal tag on 5 cards, burn on 3 cards, card-draw on 5 cards"
+notes: >
+  Navigate to /collection. Wait for table to load. Note the initial card count.
+  Click #sidebar-toggle-btn. Wait for #sidebar. Type 'removal' in #tag-search.
+  Wait for dropdown items to appear. Click the 'removal' option in #tag-dropdown.
+  The card list should filter to only cards tagged with 'removal' (5 cards).
+  A pill appears in #tag-pills. Screenshot filtered state.
+  Click the × on the removal pill to remove it. Cards restore to full list.

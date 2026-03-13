@@ -1,0 +1,14 @@
+# Scenario: Adjust weights with +/- buttons and save
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   Deck 2 must have a plan set via the API.
+
+description: >
+  When I open the Weights modal, I can adjust a weight's value using
+  the + and - buttons. The value updates immediately. Clicking Save
+  persists the changes and closes the modal. Reopening the modal
+  shows the saved values.

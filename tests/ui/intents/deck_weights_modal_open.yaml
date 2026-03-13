@@ -1,0 +1,14 @@
+# Scenario: Weights button appears after plan and opens modal with defaults
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   Deck 2 must have a plan set via the API.
+
+description: >
+  When I navigate to a deck that has a plan, I see a "Weights" button
+  in the sidebar. Clicking it opens a modal titled "Autofill Weights"
+  showing all 7 weight controls (EDHREC, Salt, Price, Plan overlap,
+  Novelty, Bling, Random) with their default values and descriptions.

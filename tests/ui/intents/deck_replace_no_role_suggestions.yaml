@@ -1,0 +1,13 @@
+# Scenario: Replace modal shows empty role column for untagged card
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   A commander deck with a plan, containing a card with no plan-relevant tags.
+
+description: >
+  When I click replace on a card that has no plan-relevant tags, the replacement
+  modal opens with the Role-based column showing "No candidates found". The Search
+  column remains functional and I can still search for replacement cards.

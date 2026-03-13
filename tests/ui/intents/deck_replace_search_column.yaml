@@ -1,0 +1,14 @@
+# Scenario: Replace modal search column filters collection
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   A commander deck with a saved plan and cards in the deck.
+
+description: >
+  In the replacement modal, the Search column has name, mana value, set, and type
+  inputs. Typing into the name field triggers a search against the owned collection
+  filtered to the commander's color identity, excluding cards already in the deck.
+  Results appear as selectable candidates in the search column.

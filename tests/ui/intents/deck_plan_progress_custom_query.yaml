@@ -1,0 +1,15 @@
+# Scenario: Plan progress reflects custom query matching cards
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   Deck 2 must have a plan with a custom query target, and the deck
+#   must contain cards that match (and don't match) the query.
+
+description: >
+  When I have a deck with a custom query plan target, the progress
+  bar for that target correctly counts how many cards in the deck
+  match the SQL query. Adding a card that matches the query increases
+  the count; cards that don't match are not counted.

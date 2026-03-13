@@ -1,0 +1,17 @@
+start_page: /decks/2
+involves:
+  - "Weights button #btn-weights"
+  - "weights modal #weights-modal"
+  - "+/- buttons .weight-btn with data-key and data-dir attributes"
+  - "weight value display .weight-value with id wv-{key}"
+  - "Save button #btn-weights-save"
+fixture_data:
+  deck_id: "2"
+  plan: '{"targets":{"ramp":8,"removal":5,"draw":4}}'
+notes: >
+  POST a plan to /api/decks/2/plan. Reset weights to defaults via
+  POST /api/decks/2/weights. Navigate to /decks/2. Wait for plan to load.
+  Click #btn-weights. Wait for modal. Click the + button for "price"
+  (data-key=price, data-dir=1) twice to increase from 1 to 3. Verify
+  #wv-price shows "3". Click Save. Modal closes. Verify weights persisted
+  by reopening modal and checking #wv-price is still "3".

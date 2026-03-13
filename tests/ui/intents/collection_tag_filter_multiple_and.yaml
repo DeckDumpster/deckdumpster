@@ -1,0 +1,12 @@
+# Scenario: Multiple tag filters use AND logic
+#
+# Related:
+#   pull_requests: []
+#
+# Prerequisites:
+#   card_tags table must be populated with tag data
+
+description: >
+  When I select multiple tags in the Tag filter, only cards that have
+  ALL selected tags are shown (AND logic). The card count decreases
+  as I add more tags. Clearing filters restores all cards.

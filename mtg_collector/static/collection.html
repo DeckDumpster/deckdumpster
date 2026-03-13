@@ -1421,6 +1421,13 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
       <div class="selected-pills" id="subtype-pills"></div>
     </div>
 
+    <h3>Tag</h3>
+    <div class="multi-select-wrap" id="tag-filter-wrap">
+      <input type="text" class="multi-search-input" id="tag-search" placeholder="Search tags..." autocomplete="off">
+      <ul class="multi-dropdown" id="tag-dropdown"></ul>
+      <div class="selected-pills" id="tag-pills"></div>
+    </div>
+
     <h3>Collector #</h3>
     <div class="range-row">
       <input type="number" id="cn-min" min="1" placeholder="Min">
@@ -1656,8 +1663,10 @@ function keyruneSetCode(code) {
 // Multi-select state
 let selectedSets = new Map();   // code -> name
 let selectedSubtypes = new Set();
+let selectedTags = new Set();
 let allSetOptions = [];         // [{code, name}]
 let allSubtypeOptions = [];     // [string]
+let allTagOptions = [];         // [string]
 let cachedSets = [];            // [{code, name}] from /api/cached-sets
 
 // --- Column definitions ---
@@ -2951,6 +2960,23 @@ const subtypeMultiSelect = initMultiSelect({
   getSelected: () => Array.from(selectedSubtypes).map(s => [s, s]),
 });
 
+// Tag multi-select
+const tagMultiSelect = initMultiSelect({
+  searchId: 'tag-search',
+  dropdownId: 'tag-dropdown',
+  pillsId: 'tag-pills',
+  getOptions: () => allTagOptions,
+  getLabel: (item) => item,
+  getKey: (item) => item,
+  isSelected: (key) => selectedTags.has(key),
+  toggle: (key) => {
+    if (selectedTags.has(key)) selectedTags.delete(key);
+    else selectedTags.add(key);
+  },
+  remove: (key) => selectedTags.delete(key),
+  getSelected: () => Array.from(selectedTags).map(s => [s, s]),
+});
+
 // --- Filterable click helpers ---
 const TYPE_KEYWORDS = ['Creature','Instant','Sorcery','Enchantment','Artifact','Planeswalker','Land','Battle','Kindred','Token'];
 function getPrimaryType(mainType) {
@@ -2988,6 +3014,12 @@ function applyFilter(type, value) {
       if (!selectedSubtypes.has(value)) {
         selectedSubtypes.add(value);
         subtypeMultiSelect.renderPills();
+      }
+      break;
+    case 'tag':
+      if (!selectedTags.has(value)) {
+        selectedTags.add(value);
+        tagMultiSelect.renderPills();
       }
       break;
     case 'cmc':
@@ -3104,6 +3136,7 @@ function hasAnyFilter() {
   if (document.querySelectorAll('#rarity-filters input:checked').length) return true;
   if (document.querySelectorAll('#type-filters input:checked').length) return true;
   if (selectedSubtypes.size) return true;
+  if (selectedTags.size) return true;
   if (document.querySelectorAll('#finish-filters input:checked').length) return true;
   if (document.querySelectorAll('#badge-filters input:checked').length) return true;
   if (document.querySelectorAll('#status-filters input:checked').length) return true;
@@ -3158,6 +3191,14 @@ function applyAllClientFilters(cards) {
     cards = cards.filter(c => {
       const tl = c.type_line || '';
       return Array.from(selectedSubtypes).some(st => tl.includes(st));
+    });
+  }
+
+  // Tags
+  if (selectedTags.size) {
+    cards = cards.filter(c => {
+      const tags = c.card_tags || [];
+      return Array.from(selectedTags).every(t => tags.includes(t));
     });
   }
 
@@ -3325,9 +3366,10 @@ async function fetchCollection() {
   lastSelectedIdx = null;
   updateSelectionBar();
 
-  // Populate set/subtype options from unfiltered data
+  // Populate set/subtype/tag options from unfiltered data
   populateSetOptions();
   populateSubtypeOptions();
+  populateTagOptions();
   updateOrdersBtn();
 
   // All filtering + sorting happens client-side
@@ -3351,6 +3393,18 @@ function populateSetOptions() {
   allSetOptions = Array.from(sets.entries())
     .map(([code, name]) => ({ code, name }))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function populateTagOptions() {
+  const tags = new Set();
+  for (const card of allCardsUnfiltered) {
+    if (card.card_tags) {
+      for (const t of card.card_tags) {
+        tags.add(t);
+      }
+    }
+  }
+  allTagOptions = Array.from(tags).sort();
 }
 
 function populateSubtypeOptions() {
@@ -3808,10 +3862,12 @@ clearFiltersBtn.addEventListener('click', () => {
   });
   selectedSets.clear();
   selectedSubtypes.clear();
+  selectedTags.clear();
   includeUnowned = '';
   updateUnownedBtn();
   setMultiSelect.renderPills();
   subtypeMultiSelect.renderPills();
+  tagMultiSelect.renderPills();
   searchInput.value = '';
   cnMinEl.value = '';
   cnMaxEl.value = '';

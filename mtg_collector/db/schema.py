@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 37
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -71,12 +71,14 @@ CREATE TABLE IF NOT EXISTS decks (
     description TEXT,
     format TEXT,
     is_precon INTEGER NOT NULL DEFAULT 0,
+    hypothetical INTEGER NOT NULL DEFAULT 0,
     sleeve_color TEXT,
     deck_box TEXT,
     storage_location TEXT,
     origin_set_code TEXT,
     origin_theme TEXT,
     origin_variation INTEGER,
+    plan TEXT,              -- JSON: build plan with tag-based targets
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -140,6 +142,7 @@ CREATE TABLE IF NOT EXISTS collection (
     deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
     binder_id INTEGER REFERENCES binders(id) ON DELETE SET NULL,
     deck_zone TEXT CHECK(deck_zone IN ('mainboard', 'sideboard', 'commander') OR deck_zone IS NULL),
+    deck_note TEXT,
     batch_id INTEGER REFERENCES batches(id)
 );
 CREATE INDEX IF NOT EXISTS idx_collection_deck ON collection(deck_id);
@@ -263,6 +266,43 @@ CREATE INDEX IF NOT EXISTS idx_ingest_images_status ON ingest_images(status);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- EDHREC salt scores (annoyance/grief metric)
+CREATE TABLE IF NOT EXISTS salt_scores (
+    card_name TEXT PRIMARY KEY,
+    salt_score REAL NOT NULL,
+    num_decks INTEGER,
+    fetched_at TEXT NOT NULL
+);
+
+-- Scryfall tagger tags (synced from oracletag: search)
+CREATE TABLE IF NOT EXISTS card_tags (
+    oracle_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    PRIMARY KEY (oracle_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_card_tags_tag ON card_tags(tag);
+
+-- Haiku-validated tag assignments (cache of LLM validation results)
+CREATE TABLE IF NOT EXISTS card_tag_validations (
+    oracle_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    valid INTEGER NOT NULL,
+    reason TEXT,
+    validated_at TEXT NOT NULL,
+    PRIMARY KEY (oracle_id, tag)
+);
+
+-- Per-commander card inclusion data from EDHREC
+CREATE TABLE IF NOT EXISTS edhrec_commander_cards (
+    commander_name TEXT NOT NULL,
+    card_name TEXT NOT NULL,
+    inclusion INTEGER NOT NULL,
+    num_decks INTEGER NOT NULL,
+    synergy REAL,
+    fetched_at TEXT NOT NULL,
+    PRIMARY KEY (commander_name, card_name)
 );
 
 -- Schema version tracking
@@ -630,6 +670,16 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v30_to_v31(conn)
         if current < 32:
             _migrate_v31_to_v32(conn)
+        if current < 33:
+            _migrate_v32_to_v33(conn)
+        if current < 34:
+            _migrate_v33_to_v34(conn)
+        if current < 35:
+            _migrate_v34_to_v35(conn)
+        if current < 36:
+            _migrate_v35_to_v36(conn)
+        if current < 37:
+            _migrate_v36_to_v37(conn)
 
     # Record schema version
     conn.execute(
@@ -738,6 +788,7 @@ def _seed_default_settings(conn: sqlite3.Connection):
         ("image_display", "crop"),
         ("price_sources", "tcg,ck"),
         ("price_floor", "0"),
+        ("default_card_view", "grid"),
     ]:
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
@@ -1941,6 +1992,77 @@ def _migrate_v31_to_v32(conn: sqlite3.Connection):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_spc_product ON sealed_product_cards(sealed_product_uuid)")
 
 
+def _migrate_v32_to_v33(conn: sqlite3.Connection):
+    """Add card_tags table for Scryfall tagger tags."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS card_tags (
+            oracle_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            PRIMARY KEY (oracle_id, tag)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_card_tags_tag ON card_tags(tag)")
+
+
+def _migrate_v33_to_v34(conn: sqlite3.Connection):
+    """Add salt_scores table, plan column on decks, deck_note on collection."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS salt_scores (
+            card_name TEXT PRIMARY KEY,
+            salt_score REAL NOT NULL,
+            num_decks INTEGER,
+            fetched_at TEXT NOT NULL
+        )
+    """)
+    # Add plan column to decks
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(decks)").fetchall()]
+    if "plan" not in cols:
+        conn.execute("ALTER TABLE decks ADD COLUMN plan TEXT")
+    # Add deck_note column to collection
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(collection)").fetchall()]
+    if "deck_note" not in cols:
+        conn.execute("ALTER TABLE collection ADD COLUMN deck_note TEXT")
+
+
+def _migrate_v34_to_v35(conn: sqlite3.Connection):
+    """Add card_tag_validations table for Haiku-based tag validation cache."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS card_tag_validations (
+            oracle_id TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            valid INTEGER NOT NULL,
+            reason TEXT,
+            validated_at TEXT NOT NULL,
+            PRIMARY KEY (oracle_id, tag)
+        )
+    """)
+
+
+def _migrate_v35_to_v36(conn: sqlite3.Connection):
+    """Add edhrec_commander_cards table and backfill type tags."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS edhrec_commander_cards (
+            commander_name TEXT NOT NULL,
+            card_name TEXT NOT NULL,
+            inclusion INTEGER NOT NULL,
+            num_decks INTEGER NOT NULL,
+            synergy REAL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (commander_name, card_name)
+        )
+    """)
+    # Backfill type-derived tags into card_tags for existing databases
+    from mtg_collector.services.deck_builder.type_tags import insert_type_tags
+    insert_type_tags(conn)
+
+
+def _migrate_v36_to_v37(conn: sqlite3.Connection):
+    """Add hypothetical column to decks table."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(decks)").fetchall()]
+    if "hypothetical" not in cols:
+        conn.execute("ALTER TABLE decks ADD COLUMN hypothetical INTEGER NOT NULL DEFAULT 0")
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -1948,6 +2070,10 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP VIEW IF EXISTS sealed_collection_view;
         DROP VIEW IF EXISTS collection_view;
         DROP TABLE IF EXISTS latest_prices;
+        DROP TABLE IF EXISTS edhrec_commander_cards;
+        DROP TABLE IF EXISTS card_tag_validations;
+        DROP TABLE IF EXISTS card_tags;
+        DROP TABLE IF EXISTS salt_scores;
         DROP TABLE IF EXISTS tcgplayer_groups;
         DROP TABLE IF EXISTS sealed_prices;
         DROP TABLE IF EXISTS sealed_product_cards;

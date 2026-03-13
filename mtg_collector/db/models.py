@@ -7,6 +7,32 @@ from typing import Any, Dict, List, Optional
 from mtg_collector.utils import now_iso, parse_json_array, to_json_array
 
 
+def tag_validation_filter(ct_alias: str = "ct") -> str:
+    """SQL NOT EXISTS clause that excludes invalidated tags.
+
+    This is the ONE place that defines the validation condition.
+    Use in any query that touches card_tags — JOINs, subqueries, counts.
+    """
+    return (
+        f"NOT EXISTS ("
+        f"SELECT 1 FROM card_tag_validations v"
+        f" WHERE v.oracle_id = {ct_alias}.oracle_id"
+        f" AND v.tag = {ct_alias}.tag AND v.valid = 0)"
+    )
+
+
+def validated_tags_sql(oracle_id_col: str, *, alias: str = "tags") -> str:
+    """SQL subquery fragment for validated tags as GROUP_CONCAT.
+
+    All tag display queries must use this — never query card_tags directly.
+    """
+    return (
+        f"(SELECT GROUP_CONCAT(ct.tag) FROM card_tags ct"
+        f" WHERE ct.oracle_id = {oracle_id_col}"
+        f" AND {tag_validation_filter()}) AS {alias}"
+    )
+
+
 @dataclass
 class Card:
     """Abstract card (oracle-level)."""
@@ -111,6 +137,7 @@ class Deck:
     description: Optional[str] = None
     format: Optional[str] = None
     is_precon: bool = False
+    hypothetical: bool = False
     sleeve_color: Optional[str] = None
     deck_box: Optional[str] = None
     storage_location: Optional[str] = None
@@ -1824,14 +1851,15 @@ class DeckRepository:
     def add(self, deck: Deck) -> int:
         ts = now_iso()
         is_precon = 1 if (deck.is_precon or deck.origin_set_code) else 0
+        hypothetical = 1 if deck.hypothetical else 0
         cursor = self.conn.execute(
             """INSERT INTO decks (name, description, format, is_precon,
-               sleeve_color, deck_box, storage_location,
+               hypothetical, sleeve_color, deck_box, storage_location,
                origin_set_code, origin_theme, origin_variation,
                created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (deck.name, deck.description, deck.format, is_precon,
-             deck.sleeve_color, deck.deck_box, deck.storage_location,
+             hypothetical, deck.sleeve_color, deck.deck_box, deck.storage_location,
              deck.origin_set_code, deck.origin_theme, deck.origin_variation,
              ts, ts),
         )
@@ -1840,8 +1868,15 @@ class DeckRepository:
     def get(self, deck_id: int) -> Optional[Dict[str, Any]]:
         row = self.conn.execute(
             """SELECT d.*,
-                      COUNT(c.id) as card_count,
-                      COALESCE(SUM(c.purchase_price), 0) as total_value
+                      CASE WHEN d.hypothetical = 1
+                           THEN (SELECT COALESCE(SUM(quantity), 0)
+                                 FROM deck_expected_cards WHERE deck_id = d.id)
+                           ELSE COUNT(c.id)
+                      END as card_count,
+                      CASE WHEN d.hypothetical = 1
+                           THEN 0
+                           ELSE COALESCE(SUM(c.purchase_price), 0)
+                      END as total_value
                FROM decks d
                LEFT JOIN collection c ON c.deck_id = d.id
                WHERE d.id = ?
@@ -1854,13 +1889,15 @@ class DeckRepository:
         fields = []
         params = []
         allowed = ("name", "description", "format", "is_precon",
+                    "hypothetical",
                     "sleeve_color", "deck_box", "storage_location",
-                    "origin_set_code", "origin_theme", "origin_variation")
+                    "origin_set_code", "origin_theme", "origin_variation",
+                    "plan")
         for key in allowed:
             if key in data:
                 fields.append(f"{key} = ?")
                 val = data[key]
-                if key == "is_precon":
+                if key in ("is_precon", "hypothetical"):
                     val = 1 if val else 0
                 params.append(val)
         # Auto-set is_precon when origin_set_code is provided
@@ -1896,8 +1933,15 @@ class DeckRepository:
     def list_all(self) -> List[Dict[str, Any]]:
         cursor = self.conn.execute(
             """SELECT d.*,
-                      COUNT(c.id) as card_count,
-                      COALESCE(SUM(c.purchase_price), 0) as total_value
+                      CASE WHEN d.hypothetical = 1
+                           THEN (SELECT COALESCE(SUM(quantity), 0)
+                                 FROM deck_expected_cards WHERE deck_id = d.id)
+                           ELSE COUNT(c.id)
+                      END as card_count,
+                      CASE WHEN d.hypothetical = 1
+                           THEN 0
+                           ELSE COALESCE(SUM(c.purchase_price), 0)
+                      END as total_value
                FROM decks d
                LEFT JOIN collection c ON c.deck_id = d.id
                GROUP BY d.id
@@ -1906,7 +1950,7 @@ class DeckRepository:
         return [dict(row) for row in cursor]
 
     def get_cards(self, deck_id: int, zone: Optional[str] = None) -> List[Dict[str, Any]]:
-        query = """
+        query = f"""
             SELECT c.id, c.printing_id, c.finish, c.condition, c.language,
                    c.purchase_price, c.acquired_at, c.deck_zone,
                    p.set_code, p.collector_number, p.rarity, p.artist,
@@ -1914,7 +1958,8 @@ class DeckRepository:
                    p.promo, p.promo_types, p.finishes,
                    card.name, card.type_line, card.mana_cost, card.cmc,
                    card.colors, card.color_identity, p.oracle_id,
-                   s.set_name
+                   s.set_name,
+                   {validated_tags_sql("p.oracle_id")}
             FROM collection c
             JOIN printings p ON c.printing_id = p.printing_id
             JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2019,6 +2064,147 @@ class DeckRepository:
             (deck_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_expected_cards_full(self, deck_id: int) -> List[Dict[str, Any]]:
+        """Return expected cards with full display data + ownership info.
+
+        Prefers the printing the user actually owns (via collection) so the
+        image matches the collection view.  Falls back to any printing if
+        the card isn't owned.
+        """
+        query = f"""
+            SELECT e.oracle_id, e.zone AS deck_zone, e.quantity,
+                   card.name, card.type_line, card.mana_cost, card.cmc,
+                   card.colors, card.color_identity,
+                   COALESCE(op.set_code, fp.set_code) AS set_code,
+                   COALESCE(op.collector_number, fp.collector_number) AS collector_number,
+                   COALESCE(op.rarity, fp.rarity) AS rarity,
+                   COALESCE(op.image_uri, fp.image_uri) AS image_uri,
+                   COALESCE(op.artist, fp.artist) AS artist,
+                   COALESCE(op.frame_effects, fp.frame_effects) AS frame_effects,
+                   COALESCE(op.border_color, fp.border_color) AS border_color,
+                   COALESCE(op.full_art, fp.full_art) AS full_art,
+                   COALESCE(op.promo, fp.promo) AS promo,
+                   COALESCE(op.promo_types, fp.promo_types) AS promo_types,
+                   COALESCE(op.finishes, fp.finishes) AS finishes,
+                   COALESCE(op.printing_id, fp.printing_id) AS printing_id,
+                   COALESCE(os.set_name, fs.set_name) AS set_name,
+                   {validated_tags_sql("e.oracle_id")},
+                   (SELECT COUNT(*) FROM collection c2
+                    JOIN printings p2 ON c2.printing_id = p2.printing_id
+                    WHERE p2.oracle_id = e.oracle_id AND c2.status = 'owned') AS owned_copies,
+                   (SELECT COUNT(*) FROM collection c3
+                    JOIN printings p3 ON c3.printing_id = p3.printing_id
+                    WHERE p3.oracle_id = e.oracle_id AND c3.status = 'owned'
+                      AND c3.deck_id IS NULL AND c3.binder_id IS NULL) AS free_copies
+            FROM deck_expected_cards e
+            JOIN cards card ON e.oracle_id = card.oracle_id
+            -- Preferred: printing the user owns (pick one via MIN)
+            LEFT JOIN (
+                SELECT p.oracle_id, p.printing_id, p.set_code, p.collector_number,
+                       p.rarity, p.image_uri, p.artist, p.frame_effects,
+                       p.border_color, p.full_art, p.promo, p.promo_types,
+                       p.finishes, MIN(c.id) AS _cid
+                FROM collection c
+                JOIN printings p ON c.printing_id = p.printing_id
+                WHERE c.status = 'owned'
+                GROUP BY p.oracle_id
+            ) op ON op.oracle_id = e.oracle_id
+            LEFT JOIN sets os ON op.set_code = os.set_code
+            -- Fallback: any printing
+            LEFT JOIN printings fp ON fp.oracle_id = e.oracle_id
+            LEFT JOIN sets fs ON fp.set_code = fs.set_code
+            WHERE e.deck_id = ?
+            GROUP BY e.oracle_id, e.zone
+            ORDER BY card.name
+        """
+        return [dict(row) for row in self.conn.execute(query, (deck_id,))]
+
+    def add_expected_cards(self, deck_id: int, oracle_ids: List[str],
+                           zone: str = "mainboard") -> int:
+        """Add oracle_ids to deck_expected_cards, incrementing quantity on conflict."""
+        count = 0
+        for oid in oracle_ids:
+            self.conn.execute(
+                "INSERT INTO deck_expected_cards (deck_id, oracle_id, zone, quantity) "
+                "VALUES (?, ?, ?, 1) "
+                "ON CONFLICT(deck_id, oracle_id, zone) "
+                "DO UPDATE SET quantity = quantity + 1",
+                (deck_id, oid, zone),
+            )
+            count += 1
+        return count
+
+    def remove_expected_cards(self, deck_id: int, oracle_ids: List[str]) -> int:
+        """Remove oracle_ids from deck_expected_cards."""
+        if not oracle_ids:
+            return 0
+        placeholders = ",".join("?" * len(oracle_ids))
+        cursor = self.conn.execute(
+            f"DELETE FROM deck_expected_cards WHERE deck_id = ? "
+            f"AND oracle_id IN ({placeholders})",
+            [deck_id] + oracle_ids,
+        )
+        return cursor.rowcount
+
+    def set_hypothetical(self, deck_id: int, hypothetical: bool) -> None:
+        """Toggle a deck between physical and hypothetical, migrating cards."""
+        deck = self.get(deck_id)
+        if not deck:
+            raise ValueError(f"Deck not found: {deck_id}")
+
+        was_hypothetical = bool(deck.get("hypothetical"))
+        if was_hypothetical == hypothetical:
+            return  # No change
+
+        if hypothetical:
+            # Physical → Hypothetical: copy deck cards to expected, then unassign
+            cards = self.get_cards(deck_id)
+            for c in cards:
+                zone = c.get("deck_zone") or "mainboard"
+                self.conn.execute(
+                    "INSERT INTO deck_expected_cards (deck_id, oracle_id, zone, quantity) "
+                    "VALUES (?, ?, ?, 1) "
+                    "ON CONFLICT(deck_id, oracle_id, zone) "
+                    "DO UPDATE SET quantity = quantity + 1",
+                    (deck_id, c["oracle_id"], zone),
+                )
+            # Unassign all collection entries
+            cids = [c["id"] for c in cards]
+            if cids:
+                self.remove_cards(deck_id, cids)
+        else:
+            # Hypothetical → Physical: try to assign free copies
+            expected = self.conn.execute(
+                "SELECT oracle_id, zone, quantity FROM deck_expected_cards WHERE deck_id = ?",
+                (deck_id,),
+            ).fetchall()
+            for row in expected:
+                for _ in range(row["quantity"]):
+                    copy = self.conn.execute(
+                        """SELECT c.id FROM collection c
+                           JOIN printings p ON c.printing_id = p.printing_id
+                           WHERE p.oracle_id = ? AND c.status = 'owned'
+                             AND c.deck_id IS NULL AND c.binder_id IS NULL
+                           LIMIT 1""",
+                        (row["oracle_id"],),
+                    ).fetchone()
+                    if copy:
+                        self.conn.execute(
+                            "UPDATE collection SET deck_id = ?, deck_zone = ? WHERE id = ?",
+                            (deck_id, row["zone"], copy["id"]),
+                        )
+                        _log_movement(self.conn, copy["id"], None, deck_id,
+                                      None, None, None, row["zone"])
+            # Clear expected cards (now they're physical assignments)
+            self.conn.execute(
+                "DELETE FROM deck_expected_cards WHERE deck_id = ?", (deck_id,)
+            )
+
+        self.conn.execute(
+            "UPDATE decks SET hypothetical = ?, updated_at = ? WHERE id = ?",
+            (1 if hypothetical else 0, now_iso(), deck_id),
+        )
 
     def get_deck_completeness(self, deck_id: int) -> Dict:
         """Compare expected cards against actual deck contents.

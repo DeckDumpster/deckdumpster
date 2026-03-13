@@ -139,6 +139,10 @@
         ${card.artist ? `<div class="detail-row"><span class="label">Artist</span><span class="value">${esc(card.artist)}</span></div>` : ''}
       </div>
       ${tagsHtml ? `<div class="detail-section"><span class="detail-section-title">Treatments</span><div class="detail-tags">${tagsHtml}</div></div>` : ''}
+      <div class="detail-section" id="card-tags-section" style="display:none">
+        <span class="detail-section-title">Tags</span>
+        <div class="detail-tags" id="card-tags-container"><span style="color:#888;font-size:0.85rem">Loading tags...</span></div>
+      </div>
       <div class="detail-section">
         <div class="detail-links">
           <a class="badge link" href="${sfUrl}" target="_blank" rel="noopener">SF${tcgPrice ? ' ' + tcgPrice : ''}</a>
@@ -170,10 +174,38 @@
     document.getElementById('add-btn').addEventListener('click', handleAdd);
     // Load copies
     loadCopies();
+    // Load tags
+    loadCardTags();
   }
 
   renderDetails(0);
   renderPriceChart();
+
+  // --- Card tags ---
+  async function loadCardTags() {
+    const section = document.getElementById('card-tags-section');
+    const container = document.getElementById('card-tags-container');
+    if (!section || !container) return;
+
+    try {
+      const res = await fetch(`/api/card/tags?oracle_id=${encodeURIComponent(card.oracle_id)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const tags = data.tags || [];
+      if (tags.length === 0) return;
+
+      section.style.display = '';
+      container.innerHTML = tags.map(t => {
+        if (t.validated && !t.valid) {
+          return `<span class="card-tag invalid" title="${esc(t.reason || 'Invalid')}">${esc(t.tag)}</span>`;
+        }
+        if (t.validated && t.valid) {
+          return `<span class="card-tag valid" title="${esc(t.reason || 'Validated')}">${esc(t.tag)}</span>`;
+        }
+        return `<span class="card-tag unvalidated" title="Not yet validated">${esc(t.tag)}</span>`;
+      }).join('');
+    } catch {}
+  }
 
   // --- Want handler ---
   async function handleWant() {

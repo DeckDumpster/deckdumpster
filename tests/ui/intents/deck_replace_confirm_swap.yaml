@@ -1,0 +1,16 @@
+# Scenario: Confirm replacement swaps cards in deck
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   A commander deck with a saved plan and at least one card with replacement
+#   candidates available.
+
+description: >
+  After opening the replacement modal and clicking a candidate card, the candidate
+  becomes highlighted and the confirm bar shows the selected card name with the
+  Confirm button enabled. Clicking Confirm swaps the cards — the old card is removed
+  and the new card is added — the modal closes and the deck refreshes to show the
+  new card.

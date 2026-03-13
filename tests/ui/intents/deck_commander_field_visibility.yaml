@@ -1,0 +1,9 @@
+# Scenario: Commander field only visible for Commander format
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  The commander search field only appears in the new deck modal when
+  the format is set to "Commander / EDH". Switching to another format
+  hides it. The field does not appear when editing an existing deck.

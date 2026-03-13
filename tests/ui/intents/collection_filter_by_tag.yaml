@@ -1,0 +1,13 @@
+# Scenario: Filter collection cards by tag
+#
+# Related:
+#   pull_requests: []
+#
+# Prerequisites:
+#   card_tags table must be populated with tag data
+
+description: >
+  I can open the filter sidebar on the Collection page, search for a
+  tag in the Tag filter, and select it to filter the displayed cards.
+  Only cards with the selected tag are shown. I can remove the tag
+  pill to restore all cards.

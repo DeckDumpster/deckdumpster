@@ -1,0 +1,14 @@
+# Scenario: Replace modal opens with role and type suggestions
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   A commander deck with a saved plan and cards with plan-relevant tags.
+
+description: >
+  When I view a deck in grid view, I can hover over a card to reveal a replace
+  button (⇄). Clicking it opens a replacement modal showing the card name in the
+  header and populating Role-based and Type-based suggestion columns with
+  candidate cards. Each candidate shows a thumbnail, name, and mana cost.

@@ -2,6 +2,9 @@
 
 import json
 import sys
+import time
+import urllib.error
+import urllib.request
 
 from mtg_collector.db import get_connection, init_db
 from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
@@ -10,6 +13,7 @@ from mtg_collector.services.scryfall import ScryfallAPI
 from mtg_collector.utils import get_mtgc_home
 
 _BULK_DATA_URL = "https://api.scryfall.com/bulk-data"
+_SCRYFALL_HEADERS = {"User-Agent": "mtg-collector/1.0", "Accept": "application/json"}
 
 
 def register(subparsers):
@@ -29,6 +33,14 @@ def register(subparsers):
         help="Refresh a specific set from the Scryfall per-set API",
     )
     set_parser.add_argument("set_code", help="Set code to refresh (e.g. tmc)")
+    tags_parser = cache_sub.add_parser(
+        "tags",
+        help="Fetch Scryfall tagger tags for all known tags",
+    )
+    tags_parser.add_argument(
+        "--file",
+        help="Load tags from a local JSON file instead of fetching from Scryfall",
+    )
     parser.set_defaults(func=run)
 
 
@@ -38,8 +50,10 @@ def run(args):
         cache_all(db_path=args.db_path)
     elif args.cache_command == "set":
         cache_set(db_path=args.db_path, set_code=args.set_code)
+    elif args.cache_command == "tags":
+        cache_tags(db_path=args.db_path, file_path=getattr(args, "file", None))
     else:
-        print("Usage: mtg cache {all,set}")
+        print("Usage: mtg cache {all,set,tags}")
         sys.exit(1)
 
 
@@ -252,6 +266,16 @@ def cache_all(db_path: str):
     print(f"  Cards processed: {processed}")
     print(f"  Sets updated: {len(all_set_codes)}")
 
+    # Step 9: Load Scryfall tagger tags
+    # Check if tag_all_cards.json exists in mtgc home for fast path
+    tag_file = get_mtgc_home() / "tag_all_cards.json"
+    if tag_file.exists():
+        print(f"\nLoading tags from {tag_file}...")
+        cache_tags(db_path=db_path, file_path=str(tag_file))
+    else:
+        print("\nFetching tags from Scryfall API...")
+        cache_tags(db_path=db_path)
+
 
 def cache_set(db_path: str, set_code: str):
     """Fetch all cards for a specific set from the Scryfall per-set API."""
@@ -299,3 +323,125 @@ def cache_set(db_path: str, set_code: str):
     conn.commit()
 
     print(f"\nDone! {set_code.upper()}: {local_before} → {processed} cards")
+
+
+# --- Tag list: all tags known from Scryfall Tagger ---
+# Sourced from https://scryfall.com/docs/tagger-tags
+# To discover new tags: browse Scryfall tagger or run oracletag: searches
+KNOWN_TAGS = [
+    "adds-multiple-mana", "anthems", "aristocrats", "artifact-destruction",
+    "attack-triggers", "blink", "board-wipes", "bounce", "burn",
+    "cantrips", "card-advantage", "card-draw", "cascade", "changeling",
+    "clone", "combat-tricks", "commander-matters", "convoke",
+    "copying", "cost-reduction", "counter-manipulation", "counterspells",
+    "damage-prevention", "damage-triggers", "death-triggers",
+    "discard", "double-strike", "draw-triggers", "edict",
+    "enchantment-destruction", "energy", "enter-the-battlefield",
+    "equipment", "evasion", "exile-matters", "extra-combat",
+    "extra-turns", "fight", "first-strike", "flash",
+    "flicker", "flying", "fog", "food",
+    "forced-combat", "free-spells", "go-wide", "graveyard-hate",
+    "graveyard-recursion", "group-hug", "haste", "hexproof",
+    "impulse-draw", "indestructible", "infect", "land-destruction",
+    "land-ramp", "lifegain", "lifelink", "looting",
+    "madness", "mana-dork", "mana-rock", "manifest",
+    "mass-tokens", "mill", "monarch", "morph",
+    "mutate", "ninjutsu", "overrun", "party",
+    "phasing", "pillowfort", "planeswalker-removal", "player-removal",
+    "populate", "power-matters", "proliferate", "protection",
+    "prowess", "pump", "ramp", "reanimation",
+    "removal", "sacrifice-outlet", "scry", "self-mill",
+    "shroud", "stax", "storm", "superfriends",
+    "surveil", "topdeck-matters", "treasure", "tribal",
+    "tuck", "tutor", "unblockable", "untap",
+    "vehicle", "vigilance", "voltron", "wheels",
+]
+
+
+def _fetch_tag_oracle_ids(tag: str) -> list[str]:
+    """Fetch all oracle_ids for a tag from Scryfall, paginating through all results."""
+    oracle_ids = []
+    has_more = True
+    url = f"https://api.scryfall.com/cards/search?q=oracletag%3A{urllib.request.quote(tag)}&unique=cards"
+
+    while has_more:
+        req = urllib.request.Request(url, headers=_SCRYFALL_HEADERS)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return oracle_ids
+            raise
+
+        for card in data.get("data", []):
+            oid = card.get("oracle_id")
+            if oid:
+                oracle_ids.append(oid)
+
+        has_more = data.get("has_more", False)
+        if has_more:
+            url = data["next_page"]
+            time.sleep(0.1)
+
+    return oracle_ids
+
+
+def cache_tags(db_path: str, file_path: str | None = None):
+    """Fetch Scryfall tagger tags and store in card_tags table.
+
+    With --file: load from a local JSON file ({tag: [oracle_id, ...]}).
+    Without --file: fetch all tags from Scryfall API (~12 minutes).
+    """
+    conn = get_connection(db_path)
+    init_db(conn)
+
+    if file_path:
+        # Load from local JSON file
+        print(f"Loading tags from {file_path}...")
+        with open(file_path) as f:
+            tag_data = json.load(f)
+        print(f"  {len(tag_data)} tags loaded")
+    else:
+        # Fetch from Scryfall API
+        tags = KNOWN_TAGS
+        print(f"Fetching tags from Scryfall API ({len(tags)} tags)...")
+        tag_data = {}
+        for i, tag in enumerate(tags):
+            t0 = time.time()
+            oracle_ids = _fetch_tag_oracle_ids(tag)
+            elapsed = time.time() - t0
+            tag_data[tag] = oracle_ids
+            print(f"  [{i + 1}/{len(tags)}] {tag}: {len(oracle_ids)} cards ({elapsed:.1f}s)", flush=True)
+
+    # Get set of known oracle_ids in local DB
+    known_oracle_ids = set()
+    cursor = conn.execute("SELECT oracle_id FROM cards")
+    for row in cursor:
+        known_oracle_ids.add(row[0])
+    print(f"  {len(known_oracle_ids)} cards in local DB")
+
+    # Clear existing tags and bulk-insert
+    conn.execute("DELETE FROM card_tags")
+
+    total_pairs = 0
+    skipped = 0
+    for tag, oracle_ids in tag_data.items():
+        pairs = [(oid, tag) for oid in oracle_ids if oid in known_oracle_ids]
+        skipped += len(oracle_ids) - len(pairs)
+        if pairs:
+            conn.executemany(
+                "INSERT OR IGNORE INTO card_tags (oracle_id, tag) VALUES (?, ?)",
+                pairs,
+            )
+            total_pairs += len(pairs)
+
+    # Insert type-derived tags (type:creature, type:pirate, etc.)
+    from mtg_collector.services.deck_builder.type_tags import insert_type_tags
+    type_count = insert_type_tags(conn)
+
+    conn.commit()
+    print(f"\nDone! {len(tag_data)} tags, {total_pairs} card-tag pairs inserted")
+    print(f"  + {type_count} type-derived tags")
+    if skipped:
+        print(f"  ({skipped} pairs skipped — oracle_id not in local DB)")

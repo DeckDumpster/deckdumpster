@@ -1,0 +1,14 @@
+start_page: /decks/2
+involves:
+  - "plan sidebar #plan-section with progress rows"
+  - "custom query label text in .cat.clickable span"
+  - "progress counts in .counts span"
+fixture_data:
+  deck_id: "2"
+  plan: '{"targets":{"lands":37,"ramp":8,"removal":5,"big-eldrazi":{"count":10,"query":"CAST(card.cmc AS INTEGER) >= 7 AND card.type_line LIKE ''%Creature%''","label":"Big Creatures (7+ MV)"}}}'
+notes: >
+  POST a plan to /api/decks/2/plan with mixed targets (int + dict).
+  Navigate to /decks/2 and wait for #plan-section to appear. Verify
+  "Big Creatures (7+ MV)" text is present (the custom label). Verify
+  "ramp" and "removal" text are present (tag-based labels). Verify
+  progress counts are displayed (e.g. "0/10", "1/8", "2/5").

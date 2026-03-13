@@ -1,0 +1,15 @@
+start_page: /decks/2
+involves:
+  - "plan sidebar #plan-section with progress rows"
+  - "custom query progress count reflecting deck cards"
+  - "progress bar width for custom query target"
+fixture_data:
+  deck_id: "2"
+  plan: '{"targets":{"removal":5,"removal-query":{"count":3,"query":"card.oracle_text LIKE ''%destroy%'' OR card.oracle_text LIKE ''%exile%'' OR card.oracle_text LIKE ''%damage%''","label":"Destroy/Exile/Damage"}}}'
+notes: >
+  POST a plan to /api/decks/2/plan with a custom query target that
+  matches some cards already in the deck. Deck 2 contains Phlage
+  (burn/damage text) and Slick Sequence (damage text) which match
+  the oracle text query. Navigate to /decks/2, wait for plan to load.
+  Verify the custom query progress shows a nonzero current count.
+  Also verify the tag-based "removal" target shows its count separately.
