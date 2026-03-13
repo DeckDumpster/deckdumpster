@@ -164,6 +164,9 @@
         <div class="form-group">
           <label><input type="checkbox" id="f-precon"> Preconstructed deck</label>
         </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="f-hypothetical"> Hypothetical deck (cards not physically assigned)</label>
+        </div>
         <div class="precon-fields" id="precon-fields" style="display:none">
           <div class="form-group">
             <label>Origin Set</label>
@@ -256,11 +259,11 @@
 
     <!-- Fill Lands Modal -->
     <div class="modal-backdrop" id="fill-lands-modal">
-      <div class="modal" style="max-width:700px;max-height:80vh;overflow-y:auto">
+      <div class="modal fill-lands-modal">
         <h3>Land Suggestions</h3>
         <div id="fill-lands-body"><span class="spinner"></span> Finding lands...</div>
         <div class="form-actions">
-          <button id="btn-fill-lands-add" disabled>Add Selected</button>
+          <button id="btn-fill-lands-add" disabled>Add All</button>
           <button class="secondary" id="btn-fill-lands-cancel">Cancel</button>
         </div>
       </div>
@@ -318,6 +321,7 @@
           <input placeholder="Mana value" id="rs-cmc" type="number">
           <input placeholder="Set code" id="rs-set">
           <input placeholder="Type" id="rs-type">
+          <input placeholder="Tag (e.g. removal)" id="rs-tag">
         </div>
         <div class="replace-grid-wrap">
           <div class="card-grid replace-card-grid" id="replace-grid"></div>
@@ -393,7 +397,7 @@
 
   // Replace search debounce
   let replaceSearchTimer = null;
-  ['rs-name', 'rs-cmc', 'rs-set', 'rs-type'].forEach(id => {
+  ['rs-name', 'rs-cmc', 'rs-set', 'rs-type', 'rs-tag'].forEach(id => {
     document.getElementById(id).addEventListener('input', () => {
       clearTimeout(replaceSearchTimer);
       replaceSearchTimer = setTimeout(searchReplacements, 300);
@@ -413,11 +417,13 @@
     currentView = 'table';
     updateViewButtons();
     renderCards();
+    fetch('/api/settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_card_view: 'table' }) });
   });
   document.getElementById('view-grid-btn').addEventListener('click', () => {
     currentView = 'grid';
     updateViewButtons();
     renderCards();
+    fetch('/api/settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ default_card_view: 'grid' }) });
   });
 
   function updateViewButtons() {
@@ -449,7 +455,11 @@
     const replBtn = e.target.closest('.replace-btn');
     if (replBtn) {
       e.stopPropagation();
-      openReplaceModal(parseInt(replBtn.dataset.cid), replBtn.dataset.name);
+      if (deck.hypothetical) {
+        openReplaceModal(null, replBtn.dataset.name, replBtn.dataset.oracleId);
+      } else {
+        openReplaceModal(parseInt(replBtn.dataset.cid), replBtn.dataset.name);
+      }
       return;
     }
     const card = e.target.closest('.sheet-card');
@@ -470,6 +480,7 @@
     const meta = [];
     if (deck.format) meta.push(`<span class="label">Format</span><span>${esc(deck.format)}</span>`);
     if (deck.is_precon) meta.push(`<span class="label">Type</span><span>Preconstructed</span>`);
+  if (deck.hypothetical) meta.push(`<span class="label">Mode</span><span class="hypothetical-badge">Hypothetical</span>`);
     if (deck.origin_set_code) meta.push(`<span class="label">Set</span><span>${esc(deck.origin_set_code.toUpperCase())}</span>`);
     if (deck.origin_theme) meta.push(`<span class="label">Theme</span><span>${esc(deck.origin_theme)}</span>`);
     if (deck.origin_variation) meta.push(`<span class="label">Variation</span><span>${deck.origin_variation}</span>`);
@@ -627,28 +638,43 @@
       tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-secondary); padding:24px;">No cards in this zone</td></tr>';
       return;
     }
+    const isHypo = !!deck.hypothetical;
     tbody.innerHTML = cards.map(c => {
       const sc = c.set_code.toLowerCase();
       const cn = c.collector_number;
       const role = getCardRoles(c).join(', ');
+      const cbData = isHypo ? `data-oracle-id="${esc(c.oracle_id)}"` : `data-id="${c.id}"`;
+      const cbKey = isHypo ? c.oracle_id : c.id;
+      const ownershipBadge = isHypo
+        ? (c.owned_copies > 0
+          ? `<span class="own-badge owned" title="${c.free_copies} free / ${c.owned_copies} owned">&#10003;</span>`
+          : '<span class="own-badge missing" title="Not owned">&#10007;</span>')
+        : '';
+      const qtyPrefix = (isHypo && c.quantity > 1) ? `${c.quantity}x ` : '';
       return `<tr>
-        <td><input type="checkbox" data-id="${c.id}" ${selectedCardIds.has(c.id) ? 'checked' : ''}></td>
-        <td><a href="/card/${esc(sc)}/${esc(cn)}">${esc(c.name)}</a></td>
+        <td><input type="checkbox" ${cbData} ${selectedCardIds.has(cbKey) ? 'checked' : ''}></td>
+        <td><a href="/card/${esc(sc)}/${esc(cn)}">${qtyPrefix}${esc(c.name)}</a> ${ownershipBadge}</td>
         <td class="role-cell">${esc(role)}</td>
         <td>${esc(c.set_code.toUpperCase())} #${esc(cn)}</td>
         <td class="mana">${renderMana(c.mana_cost || '')}</td>
         <td>${esc(c.type_line || '')}</td>
-        <td>${esc(c.finish)}</td>
-        <td>${esc(c.condition)}</td>
+        <td>${isHypo ? '' : esc(c.finish || '')}</td>
+        <td>${isHypo ? '' : esc(c.condition || '')}</td>
       </tr>`;
     }).join('');
 
     // Wire up checkbox change handlers
     tbody.querySelectorAll('input[type="checkbox"]').forEach(cb => {
       cb.addEventListener('change', function() {
-        const id = parseInt(this.dataset.id);
-        if (this.checked) selectedCardIds.add(id);
-        else selectedCardIds.delete(id);
+        if (isHypo) {
+          const oid = this.dataset.oracleId;
+          if (this.checked) selectedCardIds.add(oid);
+          else selectedCardIds.delete(oid);
+        } else {
+          const id = parseInt(this.dataset.id);
+          if (this.checked) selectedCardIds.add(id);
+          else selectedCardIds.delete(id);
+        }
       });
     });
   }
@@ -660,6 +686,7 @@
       return;
     }
 
+    const isHypo = !!deck.hypothetical;
     grid.innerHTML = cards.map(c => {
       const sc = c.set_code.toLowerCase();
       const cn = c.collector_number;
@@ -667,11 +694,20 @@
       const foilClass = (c.finish === 'foil' || c.finish === 'etched') ? ' foil' : '';
       const roles = getCardRoles(c);
       const primaryRole = roles.length ? roles[0] : '';
+      const replaceData = isHypo
+        ? `data-oracle-id="${esc(c.oracle_id)}" data-name="${esc(c.name)}"`
+        : `data-cid="${c.id}" data-name="${esc(c.name)}"`;
+      const ownershipOverlay = isHypo
+        ? (c.owned_copies > 0
+          ? '<span class="own-overlay owned">&#10003;</span>'
+          : '<span class="own-overlay missing">&#10007;</span>')
+        : '';
       return `<div class="sheet-card" data-sc="${esc(sc)}" data-cn="${esc(cn)}">
         <div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111">
           <img src="${c.image_uri || ''}" alt="${esc(c.name)}" loading="lazy">
-          <button class="replace-btn" title="Replace" data-cid="${c.id}" data-name="${esc(c.name)}">⇄</button>
+          <button class="replace-btn" title="Replace" ${replaceData}>⇄</button>
           ${primaryRole ? `<span class="role-overlay">${esc(primaryRole)}</span>` : ''}
+          ${ownershipOverlay}
         </div>
       </div>`;
     }).join('');
@@ -685,6 +721,7 @@
     document.getElementById('f-format').value = deck.format || '';
     document.getElementById('f-description').value = deck.description || '';
     document.getElementById('f-precon').checked = !!deck.is_precon;
+    document.getElementById('f-hypothetical').checked = !!deck.hypothetical;
     document.getElementById('f-origin-set').value = deck.origin_set_code || '';
     document.getElementById('f-origin-theme').value = deck.origin_theme || '';
     document.getElementById('f-origin-variation').value = deck.origin_variation || '';
@@ -701,6 +738,7 @@
       format: document.getElementById('f-format').value || null,
       description: document.getElementById('f-description').value.trim() || null,
       is_precon: document.getElementById('f-precon').checked,
+      hypothetical: document.getElementById('f-hypothetical').checked,
       sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
       deck_box: document.getElementById('f-deckbox').value.trim() || null,
       storage_location: document.getElementById('f-location').value.trim() || null,
@@ -718,6 +756,7 @@
     deck = await res.json();
     closeModal('deck-modal');
     renderDeckDetail();
+    await loadDeckCards();
   }
 
   // --- Delete deck ---
@@ -731,10 +770,13 @@
   async function removeSelectedCards() {
     if (selectedCardIds.size === 0) { alert('No cards selected'); return; }
     const ids = Array.from(selectedCardIds);
+    const body = deck.hypothetical
+      ? { oracle_ids: ids }
+      : { collection_ids: ids };
     await fetch(`/api/decks/${deck.id}/cards`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection_ids: ids }),
+      body: JSON.stringify(body),
     });
     selectedCardIds.clear();
 
@@ -797,30 +839,49 @@
     if (pickerSelected.size === 0) { alert('No cards selected'); return; }
     const zone = document.getElementById('add-zone').value;
 
-    const allIds = [];
-    for (const key of pickerSelected) {
-      const [printingId, finish] = key.split('|');
-      const res = await fetch(`/api/collection/copies?printing_id=${printingId}&finish=${finish}`);
-      const copies = await res.json();
-      for (const copy of copies) {
-        if (!copy.deck_id && !copy.binder_id) {
-          allIds.push(copy.id);
+    if (deck.hypothetical) {
+      // For hypothetical decks, resolve oracle_ids from printings
+      const oracleIds = [];
+      for (const key of pickerSelected) {
+        const [printingId] = key.split('|');
+        const res = await fetch(`/api/collection/copies?printing_id=${printingId}`);
+        const copies = await res.json();
+        if (copies.length > 0 && copies[0].oracle_id) {
+          oracleIds.push(copies[0].oracle_id);
         }
       }
+      if (oracleIds.length === 0) { alert('No cards found'); return; }
+      const res = await fetch(`/api/decks/${deck.id}/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oracle_ids: oracleIds, zone }),
+      });
+      const result = await res.json();
+      if (result.error) { alert(result.error); return; }
+    } else {
+      const allIds = [];
+      for (const key of pickerSelected) {
+        const [printingId, finish] = key.split('|');
+        const res = await fetch(`/api/collection/copies?printing_id=${printingId}&finish=${finish}`);
+        const copies = await res.json();
+        for (const copy of copies) {
+          if (!copy.deck_id && !copy.binder_id) {
+            allIds.push(copy.id);
+          }
+        }
+      }
+      if (allIds.length === 0) {
+        alert('No unassigned copies found for the selected cards');
+        return;
+      }
+      const res = await fetch(`/api/decks/${deck.id}/cards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection_ids: allIds, zone }),
+      });
+      const result = await res.json();
+      if (result.error) { alert(result.error); return; }
     }
-
-    if (allIds.length === 0) {
-      alert('No unassigned copies found for the selected cards');
-      return;
-    }
-
-    const res = await fetch(`/api/decks/${deck.id}/cards`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection_ids: allIds, zone }),
-    });
-    const result = await res.json();
-    if (result.error) { alert(result.error); return; }
 
     closeModal('add-cards-modal');
 
@@ -1348,7 +1409,7 @@
       html += `</div>`;
       for (const card of group.cards) {
         html += `<label class="autofill-card">`;
-        html += `<input type="checkbox" checked data-cid="${card.collection_id}" data-tag="${esc(tag)}">`;
+        html += `<input type="checkbox" checked data-cid="${card.collection_id}" data-oracle-id="${card.oracle_id}" data-tag="${esc(tag)}">`;
         html += `<span class="autofill-card-name">${esc(card.name)}</span>`;
         html += `<span class="mana">${renderMana(card.mana_cost || '')}</span>`;
         html += `<span class="autofill-card-type">${esc(card.type_line || '')}</span>`;
@@ -1376,11 +1437,18 @@
 
   async function addAutofillCards() {
     const checked = document.querySelectorAll('#autofill-body input[type="checkbox"]:checked');
-    const ids = [];
-    for (const cb of checked) {
-      ids.push(parseInt(cb.dataset.cid));
+    let body;
+    if (deck.hypothetical) {
+      const oids = [];
+      for (const cb of checked) { oids.push(cb.dataset.oracleId); }
+      if (oids.length === 0) return;
+      body = { oracle_ids: oids, zone: 'mainboard' };
+    } else {
+      const ids = [];
+      for (const cb of checked) { ids.push(parseInt(cb.dataset.cid)); }
+      if (ids.length === 0) return;
+      body = { collection_ids: ids, zone: 'mainboard' };
     }
-    if (ids.length === 0) return;
 
     const btn = document.getElementById('btn-autofill-add');
     btn.disabled = true;
@@ -1389,7 +1457,7 @@
     const res = await fetch(`/api/decks/${deck.id}/cards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection_ids: ids, zone: 'mainboard' }),
+      body: JSON.stringify(body),
     });
     const result = await res.json();
     if (result.error) { alert(result.error); btn.disabled = false; return; }
@@ -1596,6 +1664,12 @@
   // --- Fill Lands ---
 
   const MANA_COLORS = { W: '#f9faf4', U: '#0e68ab', B: '#150b00', R: '#d3202a', G: '#00733e' };
+  const BASIC_LAND_NAMES = { W: 'Plains', U: 'Island', B: 'Swamp', R: 'Mountain', G: 'Forest' };
+
+  // Fill-lands state
+  let fillLandsNonbasic = [];
+  let fillLandsBasic = [];
+  let fillLandsPipFractions = {};
 
   async function runFillLands() {
     document.getElementById('fill-lands-modal').classList.add('active');
@@ -1617,90 +1691,139 @@
       return;
     }
 
-    const nonbasic = data.suggestions?.nonbasic || [];
-    const basic = data.suggestions?.basic || [];
+    fillLandsNonbasic = data.suggestions?.nonbasic || [];
+    fillLandsBasic = data.suggestions?.basic || [];
+    fillLandsPipFractions = data.pip_fractions || {};
 
-    if (nonbasic.length === 0 && basic.length === 0) {
+    if (fillLandsNonbasic.length === 0 && fillLandsBasic.length === 0) {
       body.innerHTML = '<div style="padding:12px;color:var(--text-secondary)">No lands needed — deck has enough lands already.</div>';
       return;
     }
 
-    let html = `<div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px">` +
-      `Lands: ${data.existing_lands}/${data.land_target} — suggesting ${nonbasic.length + basic.reduce((a,b) => a+b.count, 0)} lands</div>`;
+    renderFillLandsBody(data);
+  }
 
-    if (nonbasic.length > 0) {
-      html += '<div class="autofill-group">';
-      html += '<div class="autofill-tag-header"><strong>Nonbasic Lands</strong></div>';
-      for (const land of nonbasic) {
-        const tappedLabel = land.enters_tapped ? ' <span class="land-etb-tapped">ETB tapped</span>' : '';
+  function renderFillLandsBody(data) {
+    const body = document.getElementById('fill-lands-body');
+    const totalCount = fillLandsNonbasic.length + fillLandsBasic.reduce((a, b) => a + b.count, 0);
+
+    let html = `<div style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:12px">` +
+      `Lands: ${data.existing_lands}/${data.land_target} — suggesting ${totalCount} lands</div>`;
+
+    if (fillLandsNonbasic.length > 0) {
+      html += '<div class="fill-lands-section-label">Nonbasic Lands</div>';
+      html += '<div class="card-grid fill-lands-grid">';
+      for (const land of fillLandsNonbasic) {
+        const rarityColor = getRarityColor(land.rarity);
+        const foilClass = (land.finish === 'foil' || land.finish === 'etched') ? ' foil' : '';
         const dots = (land.produced_mana || []).map(c =>
           `<span class="land-mana-dot" style="background:${MANA_COLORS[c] || '#888'}"></span>`
         ).join('');
-        html += `<label class="autofill-card">`;
-        html += `<input type="checkbox" checked data-cid="${land.collection_id}" data-type="nonbasic">`;
-        html += `<span class="autofill-card-name">${esc(land.name)}</span>`;
-        html += `<span class="land-mana-dots">${dots}</span>`;
-        html += `<span class="autofill-card-set">${esc(land.set_code.toUpperCase())}${tappedLabel}</span>`;
-        html += `</label>`;
+        html += `<div class="sheet-card fill-land-card" data-cid="${land.collection_id}">
+          <div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111">
+            <img src="${land.image_uri || ''}" alt="${esc(land.name)}" loading="lazy">
+            <button class="fill-land-remove" title="Replace with basic">&times;</button>
+          </div>
+          <div class="fill-land-colors">${dots}</div>
+        </div>`;
       }
       html += '</div>';
     }
 
-    if (basic.length > 0) {
-      html += '<div class="autofill-group">';
-      html += '<div class="autofill-tag-header"><strong>Basic Lands</strong></div>';
-      for (const group of basic) {
-        html += `<label class="autofill-card">`;
-        html += `<input type="checkbox" checked data-cids='${JSON.stringify(group.collection_ids)}' data-type="basic">`;
-        html += `<span class="autofill-card-name">${esc(group.name)} x${group.count}</span>`;
-        html += `</label>`;
+    if (fillLandsBasic.length > 0) {
+      html += '<div class="fill-lands-section-label">Basic Lands</div>';
+      html += '<div class="fill-lands-basics">';
+      for (const group of fillLandsBasic) {
+        html += `<span class="fill-lands-basic-pill">${esc(group.name)} &times;${group.count}</span>`;
       }
       html += '</div>';
     }
 
     body.innerHTML = html;
     document.getElementById('btn-fill-lands-add').disabled = false;
-    updateFillLandsCount();
-    body.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-      cb.addEventListener('change', updateFillLandsCount);
+    document.getElementById('btn-fill-lands-add').textContent = `Add All (${totalCount})`;
+
+    // Wire X buttons on nonbasics
+    body.querySelectorAll('.fill-land-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const card = btn.closest('.fill-land-card');
+        const cid = parseInt(card.dataset.cid);
+        removeNonbasicLand(cid, data);
+      });
     });
   }
 
-  function updateFillLandsCount() {
-    const checked = document.querySelectorAll('#fill-lands-body input[type="checkbox"]:checked');
-    let count = 0;
-    for (const cb of checked) {
-      if (cb.dataset.type === 'basic') {
-        count += JSON.parse(cb.dataset.cids).length;
-      } else {
-        count++;
+  function removeNonbasicLand(collectionId, data) {
+    // Find and remove the nonbasic
+    const idx = fillLandsNonbasic.findIndex(l => l.collection_id === collectionId);
+    if (idx === -1) return;
+    fillLandsNonbasic.splice(idx, 1);
+
+    // Add one basic land — pick the color with the highest pip fraction
+    // that has the fewest basics relative to its fraction
+    const currentBasicCounts = {};
+    const totalBasics = fillLandsBasic.reduce((a, b) => a + b.count, 0);
+    for (const g of fillLandsBasic) {
+      for (const [color, name] of Object.entries(BASIC_LAND_NAMES)) {
+        if (g.name === name) currentBasicCounts[color] = (currentBasicCounts[color] || 0) + g.count;
       }
     }
-    const btn = document.getElementById('btn-fill-lands-add');
-    btn.textContent = `Add Selected (${count})`;
-    btn.disabled = count === 0;
+
+    // Pick color most underrepresented vs pip fraction
+    let bestColor = null;
+    let bestDeficit = -Infinity;
+    for (const [color, frac] of Object.entries(fillLandsPipFractions)) {
+      const current = currentBasicCounts[color] || 0;
+      const expected = frac * (totalBasics + 1);
+      const deficit = expected - current;
+      if (deficit > bestDeficit) {
+        bestDeficit = deficit;
+        bestColor = color;
+      }
+    }
+
+    if (bestColor) {
+      const name = BASIC_LAND_NAMES[bestColor];
+      const existing = fillLandsBasic.find(g => g.name === name);
+      if (existing) {
+        existing.count++;
+      } else {
+        fillLandsBasic.push({ name, count: 1, collection_ids: [] });
+      }
+    }
+
+    renderFillLandsBody(data);
   }
 
   async function addFillLandsCards() {
-    const checked = document.querySelectorAll('#fill-lands-body input[type="checkbox"]:checked');
-    const ids = [];
-    for (const cb of checked) {
-      if (cb.dataset.type === 'basic') {
-        ids.push(...JSON.parse(cb.dataset.cids));
-      } else {
-        ids.push(parseInt(cb.dataset.cid));
+    let body;
+    if (deck.hypothetical) {
+      const oids = fillLandsNonbasic.map(l => l.oracle_id);
+      for (const g of fillLandsBasic) {
+        if (g.count > 0 && g.oracle_id) {
+          for (let i = 0; i < g.count; i++) oids.push(g.oracle_id);
+        }
       }
+      if (oids.length === 0) return;
+      body = { oracle_ids: oids, zone: 'mainboard' };
+    } else {
+      const ids = fillLandsNonbasic.map(l => l.collection_id);
+      for (const g of fillLandsBasic) {
+        if (g.count > 0 && g.collection_ids) {
+          ids.push(...g.collection_ids.slice(0, g.count));
+        }
+      }
+      if (ids.length === 0) return;
+      body = { collection_ids: ids, zone: 'mainboard' };
     }
-    if (ids.length === 0) return;
 
     const btn = document.getElementById('btn-fill-lands-add');
-    btn.disabled = true;
-    btn.textContent = 'Adding...';
 
     const res = await fetch(`/api/decks/${deck.id}/cards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection_ids: ids, zone: 'mainboard' }),
+      body: JSON.stringify(body),
     });
     const result = await res.json();
     if (result.error) { alert(result.error); btn.disabled = false; return; }
@@ -1851,10 +1974,12 @@
 
   // --- Replacement modal ---
   let replaceCollectionId = null;
+  let replaceOracleId = null;
   let replaceSelectedCandidate = null;
 
-  async function openReplaceModal(collectionId, cardName) {
+  async function openReplaceModal(collectionId, cardName, oracleId) {
     replaceCollectionId = collectionId;
+    replaceOracleId = oracleId || null;
     replaceSelectedCandidate = null;
     document.getElementById('replace-card-name').textContent = cardName;
     document.getElementById('replace-card-roles').innerHTML = '';
@@ -1869,7 +1994,10 @@
     document.getElementById('replace-grid').innerHTML = '<div style="padding:24px;color:var(--text-secondary);text-align:center;grid-column:1/-1">Loading...</div>';
     document.getElementById('replace-modal').classList.add('active');
 
-    const res = await fetch(`/api/decks/${encodeURIComponent(deckId)}/replacements?collection_id=${collectionId}`);
+    const queryParam = deck.hypothetical
+      ? `oracle_id=${encodeURIComponent(oracleId)}`
+      : `collection_id=${collectionId}`;
+    const res = await fetch(`/api/decks/${encodeURIComponent(deckId)}/replacements?${queryParam}`);
     if (!res.ok) {
       document.getElementById('replace-grid').innerHTML = '<div style="padding:24px;color:#e74c3c;text-align:center;grid-column:1/-1">Failed to load</div>';
       return;
@@ -1937,12 +2065,14 @@
     const cmc = document.getElementById('rs-cmc').value.trim();
     const set = document.getElementById('rs-set').value.trim();
     const type = document.getElementById('rs-type').value.trim();
+    const tag = document.getElementById('rs-tag').value.trim();
 
     const params = new URLSearchParams({ status: 'owned' });
     if (name) params.set('q', name);
     if (cmc) params.set('cmc', cmc);
     if (set) params.set('filter_set', set);
     if (type) params.set('type', type);
+    if (tag) params.set('filter_tag', tag);
 
     // Get commander CI for filtering
     const commanders = deckCards.filter(c => c.deck_zone === 'commander');
@@ -1964,7 +2094,7 @@
       return;
     }
     const cards = await res.json();
-    replaceCandidateData.search = cards.filter(c => c.collection_id).slice(0, 20).map(c => ({
+    replaceCandidateData.search = cards.filter(c => c.collection_id).map(c => ({
       collection_id: c.collection_id,
       name: c.name,
       mana_cost: c.mana_cost,
@@ -1977,18 +2107,33 @@
   }
 
   async function confirmReplacement() {
-    if (!replaceSelectedCandidate || !replaceCollectionId) return;
-    const card = deckCards.find(c => c.id === replaceCollectionId);
-    const zone = card ? (card.deck_zone || 'mainboard') : 'mainboard';
+    if (!replaceSelectedCandidate) return;
+
+    let body;
+    if (deck.hypothetical) {
+      if (!replaceOracleId) return;
+      const card = deckCards.find(c => c.oracle_id === replaceOracleId);
+      const zone = card ? (card.deck_zone || 'mainboard') : 'mainboard';
+      body = {
+        remove_oracle_id: replaceOracleId,
+        add_oracle_id: replaceSelectedCandidate.oracle_id,
+        zone: zone,
+      };
+    } else {
+      if (!replaceCollectionId) return;
+      const card = deckCards.find(c => c.id === replaceCollectionId);
+      const zone = card ? (card.deck_zone || 'mainboard') : 'mainboard';
+      body = {
+        remove_collection_id: replaceCollectionId,
+        add_collection_id: replaceSelectedCandidate.collection_id,
+        zone: zone,
+      };
+    }
 
     const res = await fetch(`/api/decks/${encodeURIComponent(deckId)}/replace`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        remove_collection_id: replaceCollectionId,
-        add_collection_id: replaceSelectedCandidate.collection_id,
-        zone: zone,
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -2007,5 +2152,9 @@
   // --- Initial render ---
   renderDeckDetail();
   loadPlan();
-  loadDeckCards();
+  fetch('/api/settings').then(r => r.json()).then(s => {
+    currentView = s.default_card_view || 'grid';
+    updateViewButtons();
+    loadDeckCards();
+  });
 })();

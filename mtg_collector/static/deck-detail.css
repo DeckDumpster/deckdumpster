@@ -174,7 +174,7 @@
   width: calc(100% - 4px);
   height: calc(100% - 4px);
   object-fit: cover;
-  border-radius: 6px;
+  border-radius: 10px;
   image-rendering: high-quality;
 }
 .sheet-card-img-wrap.foil::before {
@@ -811,6 +811,78 @@ button.danger:hover { background: #a93226; }
   line-height: 1.3;
 }
 
+/* Fill Lands modal */
+.fill-lands-modal {
+  width: 95vw;
+  max-width: 1400px;
+  height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fill-lands-modal h3 { margin: 0 0 12px; }
+.fill-lands-modal #fill-lands-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.fill-lands-grid {
+  grid-template-columns: repeat(var(--grid-cols, 5), 1fr);
+}
+.fill-lands-section-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin: 12px 0 8px;
+}
+.fill-land-remove {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 2rem;
+  cursor: pointer;
+  line-height: 56px;
+  text-align: center;
+  padding: 0;
+  opacity: 0.3;
+  transition: opacity 0.15s;
+  z-index: 2;
+}
+.fill-land-remove:hover { opacity: 0.9; }
+.fill-land-colors {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.land-mana-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.3);
+}
+.fill-lands-basics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.fill-lands-basic-pill {
+  padding: 6px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .deck-detail-layout { padding: 16px; }
@@ -821,3 +893,30 @@ button.danger:hover { background: #a93226; }
   .replace-modal { width: 98vw; }
   .replace-search-inputs { grid-template-columns: 1fr 1fr; }
 }
+
+/* Hypothetical deck styles */
+.hypothetical-badge {
+  background: #2980b9;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.own-badge {
+  font-size: 0.85rem;
+  margin-left: 4px;
+}
+.own-badge.owned { color: #2ecc71; }
+.own-badge.missing { color: #e74c3c; }
+
+.own-overlay {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  font-size: 1rem;
+  font-weight: bold;
+  text-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+.own-overlay.owned { color: #2ecc71; }
+.own-overlay.missing { color: #e74c3c; }

@@ -119,6 +119,7 @@ main { padding: 24px; }
 }
 
 .deck-card .meta .badge.precon { background: #8e44ad; }
+.deck-card .meta .badge.hypothetical { background: #2980b9; font-style: italic; }
 
 .deck-card .stats {
   margin-top: 12px;
@@ -567,6 +568,7 @@ function renderDeckList() {
       <div class="meta">
         ${d.format ? `<span><span class="badge">${esc(d.format)}</span></span>` : ''}
         ${d.is_precon ? '<span><span class="badge precon">Precon</span></span>' : ''}
+        ${d.hypothetical ? '<span><span class="badge hypothetical">Hypothetical</span></span>' : ''}
         ${d.storage_location ? `<span>${esc(d.storage_location)}</span>` : ''}
         ${d.description ? `<span>${esc(d.description)}</span>` : ''}
       </div>

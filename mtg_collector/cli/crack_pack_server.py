@@ -19,7 +19,7 @@ from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse
 
 from mtg_collector.db.connection import get_db_path
-from mtg_collector.db.models import validated_tags_sql
+from mtg_collector.db.models import tag_validation_filter, validated_tags_sql
 from mtg_collector.services.pack_generator import PackGenerator
 
 
@@ -1714,6 +1714,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         filter_exclude_deck = params.get("exclude_deck_id", [""])[0]
         filter_cmc_exact = params.get("cmc", [""])[0]
         filter_type = params.get("type", [""])[0]
+        filter_tag = params.get("filter_tag", [""])[0]
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
@@ -1859,6 +1860,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if filter_type:
             where_clauses.append("card.type_line LIKE ?")
             sql_params.append(f"%{filter_type}%")
+        if filter_tag:
+            where_clauses.append(
+                f"card.oracle_id IN ("
+                f"SELECT ct.oracle_id FROM card_tags ct "
+                f"WHERE ct.tag = ? AND {tag_validation_filter('ct')})"
+            )
+            sql_params.append(filter_tag)
 
         where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
@@ -4994,6 +5002,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         deck = Deck(
             id=None, name=name, description=data.get("description"),
             format=data.get("format"), is_precon=bool(data.get("is_precon")),
+            hypothetical=bool(data.get("hypothetical")),
             sleeve_color=data.get("sleeve_color"), deck_box=data.get("deck_box"),
             storage_location=data.get("storage_location"),
             origin_set_code=data.get("origin_set_code"),
@@ -5504,12 +5513,25 @@ After analysis, respond with ONLY valid JSON in this exact format:
         conn.row_factory = sqlite3.Row
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
-        if not repo.get(deck_id):
+        deck = repo.get(deck_id)
+        if not deck:
             conn.close()
             self._send_json({"error": "Deck not found"}, 404)
             return
-        repo.update(deck_id, data)
-        conn.commit()
+
+        # Handle hypothetical toggle with card migration
+        if "hypothetical" in data:
+            new_hypo = bool(data["hypothetical"])
+            old_hypo = bool(deck.get("hypothetical"))
+            if new_hypo != old_hypo:
+                repo.set_hypothetical(deck_id, new_hypo)
+                conn.commit()
+                # Remove from data so update() doesn't double-set it
+                data = {k: v for k, v in data.items() if k != "hypothetical"}
+
+        if data:
+            repo.update(deck_id, data)
+            conn.commit()
         result = repo.get(deck_id)
         conn.close()
         self._send_json(result)
@@ -5532,81 +5554,166 @@ After analysis, respond with ONLY valid JSON in this exact format:
         conn.row_factory = sqlite3.Row
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
-        zone = params.get("zone", [None])[0]
-        cards = repo.get_cards(deck_id, zone=zone)
+        deck = repo.get(deck_id)
+        if not deck:
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        if deck.get("hypothetical"):
+            cards = repo.get_expected_cards_full(deck_id)
+        else:
+            zone = params.get("zone", [None])[0]
+            cards = repo.get_cards(deck_id, zone=zone)
         conn.close()
         self._send_json(cards)
 
     def _api_deck_replacements(self, deck_id: int, params: dict):
-        cid = params.get("collection_id", [""])[0]
-        if not cid or not cid.isdigit():
-            self._send_json({"error": "collection_id is required"}, 400)
-            return
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        deck = DeckRepository(conn).get(deck_id)
+        if not deck:
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+
         from mtg_collector.services.deck_builder.service import DeckBuilderService
         svc = DeckBuilderService(conn)
-        try:
-            result = svc.get_replacements(deck_id, int(cid))
-        except ValueError as e:
-            conn.close()
-            self._send_json({"error": str(e)}, 404)
-            return
+
+        if deck.get("hypothetical"):
+            oid = params.get("oracle_id", [""])[0]
+            if not oid:
+                conn.close()
+                self._send_json({"error": "oracle_id is required for hypothetical decks"}, 400)
+                return
+            try:
+                result = svc.get_replacements(deck_id, oracle_id=oid)
+            except ValueError as e:
+                conn.close()
+                self._send_json({"error": str(e)}, 404)
+                return
+        else:
+            cid = params.get("collection_id", [""])[0]
+            if not cid or not cid.isdigit():
+                conn.close()
+                self._send_json({"error": "collection_id is required"}, 400)
+                return
+            try:
+                result = svc.get_replacements(deck_id, collection_id=int(cid))
+            except ValueError as e:
+                conn.close()
+                self._send_json({"error": str(e)}, 404)
+                return
         conn.close()
         self._send_json(result)
 
     def _api_deck_replace(self, deck_id: int, data: dict):
-        remove_cid = data.get("remove_collection_id")
-        add_cid = data.get("add_collection_id")
-        zone = data.get("zone", "mainboard")
-        if remove_cid is None or add_cid is None:
-            self._send_json({"error": f"remove_collection_id and add_collection_id required (got remove={remove_cid!r}, add={add_cid!r})"}, 400)
-            return
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
-        repo.remove_cards(deck_id, [remove_cid])
-        try:
-            repo.add_cards(deck_id, [add_cid], zone=zone)
-        except ValueError as e:
+        deck = repo.get(deck_id)
+        if not deck:
             conn.close()
-            self._send_json({"error": str(e)}, 409)
+            self._send_json({"error": "Deck not found"}, 404)
             return
-        conn.commit()
-        conn.close()
-        self._send_json({"ok": True})
+
+        zone = data.get("zone", "mainboard")
+
+        if deck.get("hypothetical"):
+            remove_oid = data.get("remove_oracle_id")
+            add_oid = data.get("add_oracle_id")
+            if not remove_oid or not add_oid:
+                conn.close()
+                self._send_json({"error": "remove_oracle_id and add_oracle_id required"}, 400)
+                return
+            repo.remove_expected_cards(deck_id, [remove_oid])
+            repo.add_expected_cards(deck_id, [add_oid], zone=zone)
+            conn.commit()
+            conn.close()
+            self._send_json({"ok": True})
+        else:
+            remove_cid = data.get("remove_collection_id")
+            add_cid = data.get("add_collection_id")
+            if remove_cid is None or add_cid is None:
+                conn.close()
+                self._send_json({"error": f"remove_collection_id and add_collection_id required (got remove={remove_cid!r}, add={add_cid!r})"}, 400)
+                return
+            repo.remove_cards(deck_id, [remove_cid])
+            try:
+                repo.add_cards(deck_id, [add_cid], zone=zone)
+            except ValueError as e:
+                conn.close()
+                self._send_json({"error": str(e)}, 409)
+                return
+            conn.commit()
+            conn.close()
+            self._send_json({"ok": True})
 
     def _api_deck_add_cards(self, deck_id: int, data: dict):
-        collection_ids = data.get("collection_ids", [])
-        zone = data.get("zone", "mainboard")
-        if not collection_ids:
-            self._send_json({"error": "collection_ids is required"}, 400)
-            return
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
-        try:
-            count = repo.add_cards(deck_id, collection_ids, zone=zone)
-            conn.commit()
-        except ValueError as e:
+        deck = repo.get(deck_id)
+        if not deck:
             conn.close()
-            self._send_json({"error": str(e)}, 409)
+            self._send_json({"error": "Deck not found"}, 404)
             return
-        conn.close()
-        self._send_json({"ok": True, "count": count})
+
+        zone = data.get("zone", "mainboard")
+
+        if deck.get("hypothetical"):
+            oracle_ids = data.get("oracle_ids", [])
+            if not oracle_ids:
+                conn.close()
+                self._send_json({"error": "oracle_ids is required for hypothetical decks"}, 400)
+                return
+            count = repo.add_expected_cards(deck_id, oracle_ids, zone=zone)
+            conn.commit()
+            conn.close()
+            self._send_json({"ok": True, "count": count})
+        else:
+            collection_ids = data.get("collection_ids", [])
+            if not collection_ids:
+                conn.close()
+                self._send_json({"error": "collection_ids is required"}, 400)
+                return
+            try:
+                count = repo.add_cards(deck_id, collection_ids, zone=zone)
+                conn.commit()
+            except ValueError as e:
+                conn.close()
+                self._send_json({"error": str(e)}, 409)
+                return
+            conn.close()
+            self._send_json({"ok": True, "count": count})
 
     def _api_deck_remove_cards(self, deck_id: int, data: dict):
-        collection_ids = data.get("collection_ids", [])
-        if not collection_ids:
-            self._send_json({"error": "collection_ids is required"}, 400)
-            return
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
-        count = repo.remove_cards(deck_id, collection_ids)
+        deck = repo.get(deck_id)
+        if not deck:
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+
+        if deck.get("hypothetical"):
+            oracle_ids = data.get("oracle_ids", [])
+            if not oracle_ids:
+                conn.close()
+                self._send_json({"error": "oracle_ids is required for hypothetical decks"}, 400)
+                return
+            count = repo.remove_expected_cards(deck_id, oracle_ids)
+        else:
+            collection_ids = data.get("collection_ids", [])
+            if not collection_ids:
+                conn.close()
+                self._send_json({"error": "collection_ids is required"}, 400)
+                return
+            count = repo.remove_cards(deck_id, collection_ids)
         conn.commit()
         conn.close()
         self._send_json({"ok": True, "count": count})

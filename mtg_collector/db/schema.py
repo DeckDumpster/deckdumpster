@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS decks (
     description TEXT,
     format TEXT,
     is_precon INTEGER NOT NULL DEFAULT 0,
+    hypothetical INTEGER NOT NULL DEFAULT 0,
     sleeve_color TEXT,
     deck_box TEXT,
     storage_location TEXT,
@@ -677,6 +678,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v34_to_v35(conn)
         if current < 36:
             _migrate_v35_to_v36(conn)
+        if current < 37:
+            _migrate_v36_to_v37(conn)
 
     # Record schema version
     conn.execute(
@@ -785,6 +788,7 @@ def _seed_default_settings(conn: sqlite3.Connection):
         ("image_display", "crop"),
         ("price_sources", "tcg,ck"),
         ("price_floor", "0"),
+        ("default_card_view", "grid"),
     ]:
         conn.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
@@ -2050,6 +2054,13 @@ def _migrate_v35_to_v36(conn: sqlite3.Connection):
     # Backfill type-derived tags into card_tags for existing databases
     from mtg_collector.services.deck_builder.type_tags import insert_type_tags
     insert_type_tags(conn)
+
+
+def _migrate_v36_to_v37(conn: sqlite3.Connection):
+    """Add hypothetical column to decks table."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(decks)").fetchall()]
+    if "hypothetical" not in cols:
+        conn.execute("ALTER TABLE decks ADD COLUMN hypothetical INTEGER NOT NULL DEFAULT 0")
 
 
 def drop_all_tables(conn: sqlite3.Connection):

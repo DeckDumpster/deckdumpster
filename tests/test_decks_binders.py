@@ -84,8 +84,8 @@ def seeded_db(db):
 # =============================================================================
 
 class TestMigration:
-    def test_fresh_install_has_v36(self, db):
-        assert get_current_version(db) == 36
+    def test_fresh_install_has_v37(self, db):
+        assert get_current_version(db) == 37
 
     def test_tables_exist(self, db):
         tables = [r[0] for r in db.execute(

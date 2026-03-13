@@ -128,6 +128,22 @@ class DeckBuilderService:
         self.collection_repo = CollectionRepository(conn)
         self.deck_repo = DeckRepository(conn)
 
+    def _is_hypothetical(self, deck_id: int) -> bool:
+        """Check if a deck is hypothetical."""
+        deck = self.deck_repo.get(deck_id)
+        return bool(deck and deck.get("hypothetical"))
+
+    @staticmethod
+    def _availability_filter(hypothetical: bool) -> str:
+        """SQL fragment for card availability filtering.
+
+        Physical decks: only unassigned cards.
+        Hypothetical decks: all owned cards (regardless of assignment).
+        """
+        if hypothetical:
+            return ""
+        return "AND c.deck_id IS NULL AND c.binder_id IS NULL"
+
     # ── Deck lifecycle ──────────────────────────────────────────────
 
     def create_deck(self, commander_name: str) -> dict:
@@ -235,8 +251,13 @@ class DeckBuilderService:
         if not deck:
             raise ValueError(f"Deck not found: {deck_id}")
 
-        cards = self.deck_repo.get_cards(deck_id)
-        current_count = len(cards)
+        hypothetical = bool(deck.get("hypothetical"))
+        if hypothetical:
+            cards = self.deck_repo.get_expected_cards_full(deck_id)
+            current_count = sum(c.get("quantity", 1) for c in cards)
+        else:
+            cards = self.deck_repo.get_cards(deck_id)
+            current_count = len(cards)
 
         commander_ci = self._get_commander_identity(deck_id)
         if commander_ci is None:
@@ -257,8 +278,10 @@ class DeckBuilderService:
 
         result = {
             "deck_id": deck_id,
+            "hypothetical": hypothetical,
             "land_target": land_target,
             "existing_lands": existing_lands,
+            "pip_fractions": pip_fractions,
             "suggestions": {"nonbasic": [], "basic": []},
         }
 
@@ -267,9 +290,23 @@ class DeckBuilderService:
 
         # --- Nonbasic candidates ---
         ci_clauses = self._ci_exclusion_sql(commander_ci)
+        avail = self._availability_filter(hypothetical)
+        if hypothetical:
+            exclude_in_deck = (
+                "AND card.oracle_id NOT IN ("
+                "SELECT oracle_id FROM deck_expected_cards WHERE deck_id = ?)"
+            )
+        else:
+            exclude_in_deck = (
+                "AND card.oracle_id NOT IN ("
+                "SELECT p2.oracle_id FROM collection c2 "
+                "JOIN printings p2 ON c2.printing_id = p2.printing_id "
+                "WHERE c2.deck_id = ?)"
+            )
         rows = self.conn.execute(
             f"""SELECT card.oracle_id, card.name, card.type_line, card.oracle_text,
                        p.set_code, p.collector_number, p.printing_id,
+                       p.image_uri, p.rarity,
                        json_extract(p.raw_json, '$.produced_mana') AS produced_mana,
                        json_extract(p.raw_json, '$.edhrec_rank') AS edhrec_rank,
                        c.id AS collection_id, c.finish, p.frame_effects, p.full_art, p.promo
@@ -279,12 +316,8 @@ class DeckBuilderService:
                 WHERE card.type_line LIKE '%Land%'
                   AND card.type_line NOT LIKE '%Basic%'
                   AND c.status = 'owned'
-                  AND c.deck_id IS NULL AND c.binder_id IS NULL
-                  AND card.oracle_id NOT IN (
-                      SELECT p2.oracle_id FROM collection c2
-                      JOIN printings p2 ON c2.printing_id = p2.printing_id
-                      WHERE c2.deck_id = ?
-                  )
+                  {avail}
+                  {exclude_in_deck}
                   {ci_clauses}
                 GROUP BY card.oracle_id
                 ORDER BY edhrec_rank ASC NULLS LAST""",
@@ -294,28 +327,48 @@ class DeckBuilderService:
 
         if candidates:
             scored = self._score_land_candidates(candidates, ci_colors, pip_fractions)
-            max_nonbasic = lands_needed // 2
-            nonbasic_picks = scored[:max_nonbasic]
+            nonbasic_picks = scored[:lands_needed]
             result["suggestions"]["nonbasic"] = nonbasic_picks
-            lands_needed -= len(nonbasic_picks)
+            basic_needed = lands_needed - len(nonbasic_picks)
+        else:
+            basic_needed = lands_needed
 
-        # --- Basic land distribution ---
-        if lands_needed > 0 and ci_colors:
-            remaining = lands_needed
+        # --- Basic land pool ---
+        # Fetch enough basics for the full lands_needed (not just the remainder)
+        # so the UI can swap nonbasics for basics without re-fetching.
+        basic_pool_size = lands_needed
+        if basic_pool_size > 0 and ci_colors:
+            remaining = basic_pool_size
             for i, color in enumerate(ci_colors):
                 if i == len(ci_colors) - 1:
                     n = remaining
                 else:
-                    n = round(lands_needed * pip_fractions[color])
+                    n = round(basic_pool_size * pip_fractions[color])
                     remaining -= n
                 if n <= 0:
                     continue
                 land_name = [name for name, c in BASIC_LANDS.items() if c == color][0]
-                cids = self._find_basic_land_copies(color, deck_id, n)
+                cids = self._find_basic_land_copies(color, deck_id, n,
+                                                    hypothetical=hypothetical)
                 if cids:
-                    result["suggestions"]["basic"].append({
-                        "name": land_name, "count": len(cids), "collection_ids": cids,
-                    })
+                    # count = how many to actually use (rest are spare for swaps)
+                    use_count = round(basic_needed * pip_fractions[color]) if basic_needed > 0 else 0
+                    if i == len(ci_colors) - 1:
+                        use_count = basic_needed - sum(
+                            b["count"] for b in result["suggestions"]["basic"]
+                        )
+                    use_count = max(0, min(use_count, len(cids)))
+                    basic_entry = {
+                        "name": land_name, "count": use_count,
+                        "collection_ids": cids,
+                    }
+                    # Include oracle_id for hypothetical deck support
+                    oid_row = self.conn.execute(
+                        "SELECT oracle_id FROM cards WHERE name = ?", (land_name,)
+                    ).fetchone()
+                    if oid_row:
+                        basic_entry["oracle_id"] = oid_row["oracle_id"]
+                    result["suggestions"]["basic"].append(basic_entry)
 
         return result
 
@@ -328,11 +381,9 @@ class DeckBuilderService:
         edhrec_max = max(edhrec_ranks) if edhrec_ranks else 1
         edhrec_range = max(edhrec_max - edhrec_min, 1)
 
-        bling_scores = [self._bling_score(c) for c in candidates]
-        bling_max = max(bling_scores) if bling_scores else 1
-
         scored = []
-        for i, c in enumerate(candidates):
+        bling_raw = []
+        for c in candidates:
             # Color coverage
             produced = json.loads(c["produced_mana"]) if c["produced_mana"] else []
             oracle = (c["oracle_text"] or "").lower()
@@ -340,6 +391,10 @@ class DeckBuilderService:
             if not produced and "search your library for a basic land" in oracle:
                 produced = list(ci_colors)
             coverage = sum(pip_fractions.get(color, 0) for color in ci_colors if color in produced)
+
+            # Skip lands that produce none of the commander's colors
+            if coverage == 0:
+                continue
 
             # Untapped
             enters_tapped = "enters the battlefield tapped" in oracle or "enters tapped" in oracle
@@ -357,32 +412,47 @@ class DeckBuilderService:
             else:
                 edhrec_score = 0.0
 
-            # Bling (normalized)
-            bling_norm = bling_scores[i] / bling_max if bling_max > 0 else 0.0
+            bling = self._bling_score(c)
+            bling_raw.append((len(scored), bling))
 
-            # Random jitter
+            scored.append({
+                "candidate": c, "coverage": coverage,
+                "untapped_score": untapped_score, "edhrec_score": edhrec_score,
+                "bling": bling, "produced": produced, "enters_tapped": enters_tapped,
+            })
+
+        bling_max = max((b for _, b in bling_raw), default=1) or 1
+
+        final = []
+        for entry in scored:
+            c = entry["candidate"]
+            bling_norm = entry["bling"] / bling_max if bling_max > 0 else 0.0
             jitter = random.random()
 
             total = (
-                LAND_WEIGHTS["color_coverage"] * coverage
-                + LAND_WEIGHTS["untapped"] * untapped_score
-                + LAND_WEIGHTS["edhrec"] * edhrec_score
+                LAND_WEIGHTS["color_coverage"] * entry["coverage"]
+                + LAND_WEIGHTS["untapped"] * entry["untapped_score"]
+                + LAND_WEIGHTS["edhrec"] * entry["edhrec_score"]
                 + LAND_WEIGHTS["bling"] * bling_norm
                 + LAND_WEIGHTS["random"] * jitter
             )
 
-            scored.append({
+            final.append({
                 "name": c["name"],
+                "oracle_id": c["oracle_id"],
                 "collection_id": c["collection_id"],
                 "score": round(total, 3),
-                "produced_mana": produced,
-                "enters_tapped": enters_tapped,
+                "produced_mana": entry["produced"],
+                "enters_tapped": entry["enters_tapped"],
                 "set_code": c["set_code"],
                 "collector_number": c["collector_number"],
+                "image_uri": c["image_uri"],
+                "rarity": c["rarity"],
+                "finish": c["finish"],
             })
 
-        scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored
+        final.sort(key=lambda x: x["score"], reverse=True)
+        return final
 
     def fill_lands(self, deck_id: int) -> dict:
         """Auto-fill lands using suggest_lands(), then add all suggestions."""
@@ -396,10 +466,12 @@ class DeckBuilderService:
             self.deck_repo.add_cards(deck_id, [land["collection_id"]], zone=ZONE_MAINBOARD)
             added[land["name"]] = added.get(land["name"], 0) + 1
 
-        # Add basic lands
+        # Add basic lands (only use 'count' IDs, not the full pool)
         for group in basic:
-            self.deck_repo.add_cards(deck_id, group["collection_ids"], zone=ZONE_MAINBOARD)
-            added[group["name"]] = added.get(group["name"], 0) + group["count"]
+            use_ids = group["collection_ids"][:group["count"]]
+            if use_ids:
+                self.deck_repo.add_cards(deck_id, use_ids, zone=ZONE_MAINBOARD)
+                added[group["name"]] = added.get(group["name"], 0) + len(use_ids)
 
         self.conn.commit()
         total_added = sum(added.values())
@@ -727,27 +799,42 @@ class DeckBuilderService:
         if not deck:
             raise ValueError(f"Deck not found: {deck_id}")
 
+        hypothetical = bool(deck.get("hypothetical"))
+
         plan = self.get_plan(deck_id)
         if not plan or "targets" not in plan:
             raise ValueError("No plan set — generate a plan first")
 
         # Reset: remove all non-commander cards before suggesting
         if reset:
-            all_cards = self.deck_repo.get_cards(deck_id)
-            non_commander_ids = [
-                c["id"] for c in all_cards
-                if c.get("deck_zone") != ZONE_COMMANDER
-            ]
-            if non_commander_ids:
-                self.deck_repo.remove_cards(deck_id, non_commander_ids)
+            if hypothetical:
+                # For hypothetical decks, clear expected cards (keep commander)
+                self.conn.execute(
+                    "DELETE FROM deck_expected_cards WHERE deck_id = ? AND zone != 'commander'",
+                    (deck_id,),
+                )
+                self.conn.commit()
+                if progress_cb:
+                    progress_cb("Cleared expected cards from deck")
+            else:
+                all_cards = self.deck_repo.get_cards(deck_id)
+                non_commander_ids = [
+                    c["id"] for c in all_cards
+                    if c.get("deck_zone") != ZONE_COMMANDER
+                ]
+                if non_commander_ids:
+                    self.deck_repo.remove_cards(deck_id, non_commander_ids)
                 self.conn.commit()
                 if progress_cb:
                     progress_cb(f"Cleared {len(non_commander_ids)} cards from deck")
 
         targets = plan["targets"]
         effective_w = self._effective_weights(deck_id)
-        cards_in_deck = self.deck_repo.get_cards(deck_id)
-        commander_ci = self._get_commander_identity(deck_id)
+        if hypothetical:
+            cards_in_deck = self.deck_repo.get_expected_cards_full(deck_id)
+        else:
+            cards_in_deck = self.deck_repo.get_cards(deck_id)
+        commander_ci = self._get_commander_identity(deck_id, hypothetical=hypothetical)
         if commander_ci is None:
             raise ValueError("No commander assigned")
 
@@ -790,7 +877,10 @@ class DeckBuilderService:
                     custom_query_counts[key] = 0
 
         # Fetch per-commander EDHREC data for novelty scoring
-        commanders = self.deck_repo.get_cards(deck_id, zone=ZONE_COMMANDER)
+        if hypothetical:
+            commanders = [c for c in cards_in_deck if c.get("deck_zone") == "commander"]
+        else:
+            commanders = self.deck_repo.get_cards(deck_id, zone=ZONE_COMMANDER)
         commander_name = commanders[0]["name"] if commanders else None
         edhrec_data: dict[str, float] = {}
         if commander_name:
@@ -871,6 +961,7 @@ class DeckBuilderService:
                 candidates = self._query_custom_candidates(
                     target_val["query"], deck_id, commander_ci, ci_clauses,
                     exclude_oids, limit=fetch_limit,
+                    hypothetical=hypothetical,
                 )
             else:
                 # Tag-based target
@@ -878,7 +969,7 @@ class DeckBuilderService:
                 fetch_limit = pick_count * 3 if validator else None
                 candidates = self._query_tag_candidates(
                     tag, deck_id, commander_ci, ci_clauses, exclude_oids,
-                    limit=fetch_limit,
+                    limit=fetch_limit, hypothetical=hypothetical,
                 )
 
                 # Validate tags via Haiku if available
@@ -964,7 +1055,7 @@ class DeckBuilderService:
                 progress_cb(f"Filling {remaining_budget} remaining slots with creatures")
             candidates = self._query_creature_candidates(
                 deck_id, commander_ci, ci_clauses, exclude_oids,
-                limit=remaining_budget * 3,
+                limit=remaining_budget * 3, hypothetical=hypothetical,
             )
             scored = self._score_candidates(candidates, edhrec_data=edhrec_data,
                                               plan_tags=expanded_plan_tags,
@@ -1105,10 +1196,12 @@ class DeckBuilderService:
     def _query_custom_candidates(self, where_clause: str, deck_id: int,
                                   commander_ci: Set[str], ci_clauses: str,
                                   exclude_oids: Set[str],
-                                  limit: int | None = None) -> list[dict]:
+                                  limit: int | None = None,
+                                  hypothetical: bool = False) -> list[dict]:
         """Query owned cards matching a custom WHERE clause, in CI, not excluded."""
         exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
         limit_clause = f"LIMIT {int(limit)}" if limit else ""
+        avail = self._availability_filter(hypothetical)
 
         query = f"""
             SELECT card.oracle_id, card.name, card.type_line,
@@ -1132,6 +1225,7 @@ class DeckBuilderService:
             LEFT JOIN salt_scores salt ON salt.card_name = card.name
             WHERE ({where_clause})
               AND c.status = 'owned'
+              {avail}
               AND card.oracle_id NOT IN ({exclude_list})
               AND card.type_line NOT LIKE '%Basic Land%'
               AND card.type_line NOT LIKE 'Token%'
@@ -1146,14 +1240,12 @@ class DeckBuilderService:
     def _query_tag_candidates(self, tag: str, deck_id: int,
                                commander_ci: Set[str], ci_clauses: str,
                                exclude_oids: Set[str],
-                               limit: int | None = None) -> list[dict]:
-        """Query owned cards with a specific tag, in CI, not excluded.
-
-        Cards in other decks/binders are still eligible — these are digital
-        cards and speculative deck building is fine.
-        """
+                               limit: int | None = None,
+                               hypothetical: bool = False) -> list[dict]:
+        """Query owned cards with a specific tag, in CI, not excluded."""
         exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
         limit_clause = f"LIMIT {int(limit)}" if limit else ""
+        avail = self._availability_filter(hypothetical)
 
         # Expand tag to include aliases
         tags = [tag] + TAG_ALIASES.get(tag, [])
@@ -1183,6 +1275,7 @@ class DeckBuilderService:
             WHERE ct.tag IN ({tag_placeholders})
               AND {tag_validation_filter()}
               AND c.status = 'owned'
+              {avail}
               AND card.oracle_id NOT IN ({exclude_list})
               AND card.type_line NOT LIKE '%Basic Land%'
               AND card.type_line NOT LIKE 'Token%'
@@ -1197,10 +1290,12 @@ class DeckBuilderService:
     def _query_creature_candidates(self, deck_id: int,
                                     commander_ci: Set[str], ci_clauses: str,
                                     exclude_oids: Set[str],
-                                    limit: int | None = None) -> list[dict]:
+                                    limit: int | None = None,
+                                    hypothetical: bool = False) -> list[dict]:
         """Query owned creatures in CI, not excluded — fallback for autofill."""
         exclude_list = ",".join(f"'{oid}'" for oid in exclude_oids) if exclude_oids else "''"
         limit_clause = f"LIMIT {int(limit)}" if limit else ""
+        avail = self._availability_filter(hypothetical)
 
         query = f"""
             SELECT card.oracle_id, card.name, card.type_line,
@@ -1224,6 +1319,7 @@ class DeckBuilderService:
             LEFT JOIN salt_scores salt ON salt.card_name = card.name
             WHERE card.type_line LIKE '%Creature%'
               AND c.status = 'owned'
+              {avail}
               AND card.oracle_id NOT IN ({exclude_list})
               AND card.type_line NOT LIKE '%Basic Land%'
               AND card.type_line NOT LIKE 'Token%'
@@ -1494,9 +1590,14 @@ class DeckBuilderService:
         if not any(p.raw_json for p in printings):
             raise ValueError(f"No card data for '{name}' — run `mtg cache all` to populate")
 
-    def _get_commander_identity(self, deck_id: int) -> Optional[Set[str]]:
+    def _get_commander_identity(self, deck_id: int,
+                                hypothetical: bool = False) -> Optional[Set[str]]:
         """Get the color identity set from the commander card."""
-        commanders = self.deck_repo.get_cards(deck_id, zone=ZONE_COMMANDER)
+        if hypothetical:
+            commanders = [c for c in self.deck_repo.get_expected_cards_full(deck_id)
+                          if c.get("deck_zone") == "commander"]
+        else:
+            commanders = self.deck_repo.get_cards(deck_id, zone=ZONE_COMMANDER)
         if not commanders:
             return None
         ci = set()
@@ -1528,16 +1629,17 @@ class DeckBuilderService:
         ).fetchall()
         return {row["tag"] for row in rows}
 
-    def _find_best_copy(self, oracle_id: str, deck_id: int) -> Optional[int]:
+    def _find_best_copy(self, oracle_id: str, deck_id: int,
+                        hypothetical: bool = False) -> Optional[int]:
         """Find the best unassigned owned copy by bling score."""
+        avail = self._availability_filter(hypothetical)
         rows = self.conn.execute(
-            """SELECT c.id, c.finish, p.frame_effects, p.full_art, p.promo, p.promo_types
+            f"""SELECT c.id, c.finish, p.frame_effects, p.full_art, p.promo, p.promo_types
                FROM collection c
                JOIN printings p ON c.printing_id = p.printing_id
                WHERE p.oracle_id = ?
                  AND c.status = 'owned'
-                 AND c.deck_id IS NULL
-                 AND c.binder_id IS NULL
+                 {avail}
                ORDER BY c.id""",
             (oracle_id,),
         ).fetchall()
@@ -1588,12 +1690,14 @@ class DeckBuilderService:
         copies = self._find_basic_land_copies(color, deck_id, 1)
         return copies[0] if copies else None
 
-    def _find_basic_land_copies(self, color: str, deck_id: int, count: int) -> List[int]:
+    def _find_basic_land_copies(self, color: str, deck_id: int, count: int,
+                                hypothetical: bool = False) -> List[int]:
         """Find up to `count` unassigned basic land copies for the given color."""
         land_names = [name for name, c in {**BASIC_LANDS, **SNOW_BASICS}.items() if c == color]
         if not land_names:
             return []
         placeholders = ",".join("?" * len(land_names))
+        avail = self._availability_filter(hypothetical)
         rows = self.conn.execute(
             f"""SELECT c.id
                 FROM collection c
@@ -1601,8 +1705,7 @@ class DeckBuilderService:
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 WHERE card.name IN ({placeholders})
                   AND c.status = 'owned'
-                  AND c.deck_id IS NULL
-                  AND c.binder_id IS NULL
+                  {avail}
                 LIMIT ?""",
             [*land_names, count],
         ).fetchall()
@@ -1753,9 +1856,23 @@ class DeckBuilderService:
         avg_roles = round(total_roles / n_cards, 1)
         return coverage, avg_roles, zero_role
 
-    def _suggest_utility_lands(self, deck_id: int, commander_ci: Set[str]) -> List[dict]:
+    def _suggest_utility_lands(self, deck_id: int, commander_ci: Set[str],
+                               hypothetical: bool = False) -> List[dict]:
         """Find owned unassigned nonbasic lands in commander CI, sorted by EDHREC rank."""
         ci_clauses = self._ci_exclusion_sql(commander_ci)
+        avail = self._availability_filter(hypothetical)
+        if hypothetical:
+            exclude_in_deck = (
+                "AND card.oracle_id NOT IN ("
+                "SELECT oracle_id FROM deck_expected_cards WHERE deck_id = ?)"
+            )
+        else:
+            exclude_in_deck = (
+                "AND card.oracle_id NOT IN ("
+                "SELECT p2.oracle_id FROM collection c2 "
+                "JOIN printings p2 ON c2.printing_id = p2.printing_id "
+                "WHERE c2.deck_id = ?)"
+            )
         rows = self.conn.execute(
             f"""SELECT card.name, p.set_code,
                        json_extract(p.raw_json, '$.edhrec_rank') AS edhrec_rank
@@ -1763,15 +1880,10 @@ class DeckBuilderService:
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 WHERE c.status = 'owned'
-                  AND c.deck_id IS NULL
-                  AND c.binder_id IS NULL
+                  {avail}
                   AND card.type_line LIKE '%Land%'
                   AND card.type_line NOT LIKE '%Basic%'
-                  AND card.oracle_id NOT IN (
-                      SELECT p2.oracle_id FROM collection c2
-                      JOIN printings p2 ON c2.printing_id = p2.printing_id
-                      WHERE c2.deck_id = ?
-                  )
+                  {exclude_in_deck}
                   {ci_clauses}
                 GROUP BY card.oracle_id
                 ORDER BY edhrec_rank ASC NULLS LAST
@@ -1795,22 +1907,39 @@ class DeckBuilderService:
 
     # ── Replacements ────────────────────────────────────────────
 
-    def get_replacements(self, deck_id: int, collection_id: int) -> dict:
+    def get_replacements(self, deck_id: int, collection_id: int = None,
+                         oracle_id: str = None) -> dict:
         """Get replacement candidates for a card in a deck.
 
+        For physical decks, pass collection_id. For hypothetical, pass oracle_id.
         Returns role-based and type-based suggestions from owned collection.
         """
-        # Find the card being replaced
-        deck_cards = self.deck_repo.get_cards(deck_id)
-        card = None
-        for c in deck_cards:
-            if c["id"] == collection_id:
-                card = c
-                break
-        if not card:
-            raise ValueError(f"Collection entry {collection_id} not in deck {deck_id}")
+        deck = self.deck_repo.get(deck_id)
+        hypothetical = bool(deck and deck.get("hypothetical"))
 
-        commander_ci = self._get_commander_identity(deck_id)
+        # Find the card being replaced
+        if hypothetical:
+            if not oracle_id:
+                raise ValueError("oracle_id is required for hypothetical decks")
+            deck_cards = self.deck_repo.get_expected_cards_full(deck_id)
+            card = None
+            for c in deck_cards:
+                if c["oracle_id"] == oracle_id:
+                    card = c
+                    break
+            if not card:
+                raise ValueError(f"Card {oracle_id} not in deck {deck_id}")
+        else:
+            deck_cards = self.deck_repo.get_cards(deck_id)
+            card = None
+            for c in deck_cards:
+                if c["id"] == collection_id:
+                    card = c
+                    break
+            if not card:
+                raise ValueError(f"Collection entry {collection_id} not in deck {deck_id}")
+
+        commander_ci = self._get_commander_identity(deck_id, hypothetical=hypothetical)
         ci_clauses = self._ci_exclusion_sql(commander_ci) if commander_ci else ""
 
         # Build exclude set: all oracle_ids already in the deck
@@ -1841,11 +1970,13 @@ class DeckBuilderService:
 
         # Role-based suggestions: from tag matches + custom query matches
         role_suggestions = self._query_role_replacements(
-            target_cmc, ci_clauses, exclude_list, card_plan_tags=card_plan_tags
+            target_cmc, ci_clauses, exclude_list, card_plan_tags=card_plan_tags,
+            hypothetical=hypothetical,
         )
         for cq in card_custom_queries:
             cq_results = self._query_role_replacements(
-                target_cmc, ci_clauses, exclude_list, custom_where=cq["query"]
+                target_cmc, ci_clauses, exclude_list, custom_where=cq["query"],
+                hypothetical=hypothetical,
             )
             # Merge without duplicates
             seen = {r["oracle_id"] for r in role_suggestions}
@@ -1856,7 +1987,8 @@ class DeckBuilderService:
 
         # Type-based suggestions
         type_suggestions = self._query_type_replacements(
-            card, target_cmc, ci_clauses, exclude_list
+            card, target_cmc, ci_clauses, exclude_list,
+            hypothetical=hypothetical,
         )
 
         all_labels = sorted(card_plan_tags) + [cq["label"] for cq in card_custom_queries]
@@ -1879,7 +2011,8 @@ class DeckBuilderService:
     def _query_role_replacements(self, target_cmc: int,
                                   ci_clauses: str, exclude_list: str,
                                   *, card_plan_tags: set | None = None,
-                                  custom_where: str | None = None) -> list:
+                                  custom_where: str | None = None,
+                                  hypothetical: bool = False) -> list:
         """Find replacement candidates by plan tags or custom query at same CMC."""
         if card_plan_tags:
             tags = sorted(card_plan_tags)
@@ -1897,6 +2030,7 @@ class DeckBuilderService:
             return []
 
         custom_clause = f"AND ({custom_where})" if custom_where else ""
+        avail = self._availability_filter(hypothetical)
 
         rows = self.conn.execute(
             f"""SELECT card.oracle_id, card.name, card.type_line,
@@ -1911,7 +2045,7 @@ class DeckBuilderService:
                 LEFT JOIN card_tags ct2 ON ct2.oracle_id = card.oracle_id
                   AND {tag_validation_filter("ct2")}
                 WHERE c.status = 'owned'
-                  AND c.deck_id IS NULL AND c.binder_id IS NULL
+                  {avail}
                   AND card.oracle_id NOT IN ({exclude_list})
                   AND CAST(card.cmc AS INTEGER) = ?
                   {ci_clauses}
@@ -1924,7 +2058,8 @@ class DeckBuilderService:
         return [dict(r) for r in rows]
 
     def _query_type_replacements(self, card: dict, target_cmc: int,
-                                  ci_clauses: str, exclude_list: str) -> list:
+                                  ci_clauses: str, exclude_list: str,
+                                  hypothetical: bool = False) -> list:
         """Find replacement candidates matching type, CMC, color, and P/T."""
         type_line = card.get("type_line", "")
         # Extract primary supertype
@@ -1957,6 +2092,7 @@ class DeckBuilderService:
                              " AND json_extract(p.raw_json, '$.toughness') = ?")
                 params.extend([row["power"], row["toughness"]])
 
+        avail = self._availability_filter(hypothetical)
         rows = self.conn.execute(
             f"""SELECT card.oracle_id, card.name, card.type_line,
                        card.mana_cost, card.cmc, card.colors,
@@ -1968,7 +2104,7 @@ class DeckBuilderService:
                 JOIN printings p ON p.oracle_id = card.oracle_id
                 JOIN collection c ON c.printing_id = p.printing_id
                 WHERE c.status = 'owned'
-                  AND c.deck_id IS NULL AND c.binder_id IS NULL
+                  {avail}
                   AND card.oracle_id NOT IN ({exclude_list})
                   AND CAST(card.cmc AS INTEGER) = ?
                   AND card.colors = ?
