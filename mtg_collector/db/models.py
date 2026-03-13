@@ -2066,16 +2066,30 @@ class DeckRepository:
         return [dict(r) for r in rows]
 
     def get_expected_cards_full(self, deck_id: int) -> List[Dict[str, Any]]:
-        """Return expected cards with full display data + ownership info."""
+        """Return expected cards with full display data + ownership info.
+
+        Prefers the printing the user actually owns (via collection) so the
+        image matches the collection view.  Falls back to any printing if
+        the card isn't owned.
+        """
         query = f"""
             SELECT e.oracle_id, e.zone AS deck_zone, e.quantity,
                    card.name, card.type_line, card.mana_cost, card.cmc,
                    card.colors, card.color_identity,
-                   p.set_code, p.collector_number, p.rarity, p.image_uri,
-                   p.artist, p.frame_effects, p.border_color, p.full_art,
-                   p.promo, p.promo_types, p.finishes, p.printing_id,
-                   s.set_name,
-                   {validated_tags_sql("p.oracle_id")},
+                   COALESCE(op.set_code, fp.set_code) AS set_code,
+                   COALESCE(op.collector_number, fp.collector_number) AS collector_number,
+                   COALESCE(op.rarity, fp.rarity) AS rarity,
+                   COALESCE(op.image_uri, fp.image_uri) AS image_uri,
+                   COALESCE(op.artist, fp.artist) AS artist,
+                   COALESCE(op.frame_effects, fp.frame_effects) AS frame_effects,
+                   COALESCE(op.border_color, fp.border_color) AS border_color,
+                   COALESCE(op.full_art, fp.full_art) AS full_art,
+                   COALESCE(op.promo, fp.promo) AS promo,
+                   COALESCE(op.promo_types, fp.promo_types) AS promo_types,
+                   COALESCE(op.finishes, fp.finishes) AS finishes,
+                   COALESCE(op.printing_id, fp.printing_id) AS printing_id,
+                   COALESCE(os.set_name, fs.set_name) AS set_name,
+                   {validated_tags_sql("e.oracle_id")},
                    (SELECT COUNT(*) FROM collection c2
                     JOIN printings p2 ON c2.printing_id = p2.printing_id
                     WHERE p2.oracle_id = e.oracle_id AND c2.status = 'owned') AS owned_copies,
@@ -2085,8 +2099,21 @@ class DeckRepository:
                       AND c3.deck_id IS NULL AND c3.binder_id IS NULL) AS free_copies
             FROM deck_expected_cards e
             JOIN cards card ON e.oracle_id = card.oracle_id
-            JOIN printings p ON p.oracle_id = card.oracle_id
-            JOIN sets s ON p.set_code = s.set_code
+            -- Preferred: printing the user owns (pick one via MIN)
+            LEFT JOIN (
+                SELECT p.oracle_id, p.printing_id, p.set_code, p.collector_number,
+                       p.rarity, p.image_uri, p.artist, p.frame_effects,
+                       p.border_color, p.full_art, p.promo, p.promo_types,
+                       p.finishes, MIN(c.id) AS _cid
+                FROM collection c
+                JOIN printings p ON c.printing_id = p.printing_id
+                WHERE c.status = 'owned'
+                GROUP BY p.oracle_id
+            ) op ON op.oracle_id = e.oracle_id
+            LEFT JOIN sets os ON op.set_code = os.set_code
+            -- Fallback: any printing
+            LEFT JOIN printings fp ON fp.oracle_id = e.oracle_id
+            LEFT JOIN sets fs ON fp.set_code = fs.set_code
             WHERE e.deck_id = ?
             GROUP BY e.oracle_id, e.zone
             ORDER BY card.name
