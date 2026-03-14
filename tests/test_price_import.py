@@ -395,6 +395,30 @@ class TestLatestPricesTable:
         assert prices[("neo", "1", "cardkingdom")] == 1.50
         assert prices[("neo", "2", "tcgplayer")] == 2.00
 
+    def test_retains_cards_not_in_latest_import(self, test_db):
+        """Cards with prices only from older dates must not be dropped."""
+        from mtg_collector.db.schema import refresh_latest_prices
+
+        _, conn = test_db
+        conn.executemany(
+            "INSERT INTO prices (set_code, collector_number, source, price_type, price, observed_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                # Card only has prices from an older date
+                ("fic", "228", "cardkingdom", "normal", 3.00, "2024-01-10"),
+                # Another card gets a newer price
+                ("neo", "1", "cardkingdom", "normal", 1.50, "2024-01-15"),
+            ],
+        )
+        conn.commit()
+        refresh_latest_prices(conn)
+        conn.commit()
+
+        rows = conn.execute("SELECT * FROM latest_prices ORDER BY set_code, collector_number").fetchall()
+        assert len(rows) == 2
+        prices = {(r[0], r[1]): r[4] for r in rows}
+        assert prices[("fic", "228")] == 3.00
+        assert prices[("neo", "1")] == 1.50
+
 
 class TestPriceFetchLog:
     def test_log_entry(self, test_db, mock_allprintings, mock_allpricestoday):

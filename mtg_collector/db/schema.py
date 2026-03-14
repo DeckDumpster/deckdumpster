@@ -524,8 +524,16 @@ def refresh_latest_prices(conn: sqlite3.Connection) -> int:
     conn.execute("DELETE FROM latest_prices")
     cursor = conn.execute(
         "INSERT INTO latest_prices (set_code, collector_number, source, price_type, price, observed_at) "
-        "SELECT set_code, collector_number, source, price_type, price, observed_at "
-        "FROM prices WHERE observed_at = (SELECT MAX(observed_at) FROM prices)"
+        "SELECT p.set_code, p.collector_number, p.source, p.price_type, p.price, p.observed_at "
+        "FROM prices p "
+        "INNER JOIN ("
+        "  SELECT set_code, collector_number, source, price_type, MAX(observed_at) AS max_at "
+        "  FROM prices GROUP BY set_code, collector_number, source, price_type"
+        ") latest ON p.set_code = latest.set_code "
+        "  AND p.collector_number = latest.collector_number "
+        "  AND p.source = latest.source "
+        "  AND p.price_type = latest.price_type "
+        "  AND p.observed_at = latest.max_at"
     )
     return cursor.rowcount
 
