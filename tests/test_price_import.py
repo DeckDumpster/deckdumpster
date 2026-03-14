@@ -289,8 +289,8 @@ class TestImportPrices:
         assert rows[2][0] == "2024-01-15"
         conn2.close()
 
-    def test_ck_imports_buylist_not_retail(self, test_db, mock_allprintings, tmp_path):
-        """CK prices use buylist price types; CK retail data is ignored."""
+    def test_ck_imports_buylist_and_retail(self, test_db, mock_allprintings, tmp_path):
+        """CK imports both buylist and retail prices."""
         from mtg_collector.cli.data_cmd import import_prices
 
         db_path, conn = test_db
@@ -337,8 +337,8 @@ class TestImportPrices:
         # CK buylist prices imported
         assert prices[("cardkingdom", "buylist_normal")] == 2.50
         assert prices[("cardkingdom", "buylist_foil")] == 4.00
-        # CK retail NOT imported
-        assert ("cardkingdom", "normal") not in prices
+        # CK retail also imported (fallback for cards without buylist)
+        assert prices[("cardkingdom", "normal")] == 5.00
         # TCG retail imported as usual
         assert prices[("tcgplayer", "normal")] == 3.00
 

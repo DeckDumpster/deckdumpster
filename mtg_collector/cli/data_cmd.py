@@ -646,10 +646,10 @@ def import_prices(db_path: str):
         paper = card_prices.get("paper", {})
         for provider_key, source_name in provider_map.items():
             prov = paper.get(provider_key, {})
-            # CK: import buylist prices (what CK will pay you)
+            # CK: import buylist (what CK will pay you) + retail (fallback)
             # TCG: import retail prices (what you'd pay)
             price_categories = (
-                [("buylist", "buylist_")]
+                [("buylist", "buylist_"), ("retail", "")]
                 if provider_key == "cardkingdom"
                 else [("retail", "")]
             )
