@@ -24,7 +24,7 @@ Build a Magic: The Gathering Commander deck from the user's collection using the
 Plan Cards: 34 (Cards advancing the deck's strategy/win condition)
 Ramp: 10 (Mana acceleration: mana dorks, mana rocks, land tutors)
 Card Advantage: 12 (Card draw, selection, recursion, impulse draw)
-Targeted Disruption: 12 (Single-target removal, counters, targeted exile)
+Targeted Disruption: 12 (Single-target removal, targeted exile — prefer removal over counterspells, they're less fun in casual games)
 Mass Disruption: 6 (Board wipes, mass bounce, mass exile)
 Mana-producing lands: 38
 
