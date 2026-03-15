@@ -98,8 +98,8 @@ def main():
                         help="Pack color")
     parser.add_argument("--theme", required=True, help="Pack theme name")
     parser.add_argument("--description", required=True, help="Pack description/synergies")
-    parser.add_argument("--basics", type=int, default=None,
-                        help="Number of basic lands (default: 20 - spells - 1 thriving)")
+    parser.add_argument("--basics", type=int, default=7,
+                        help="Number of basic lands (default: 7)")
     args = parser.parse_args()
 
     # Check for duplicate card names
@@ -126,7 +126,7 @@ def main():
     # Resolve lands
     thriving_name = THRIVING_NAMES[args.color]
     basic_name = BASIC_NAMES[args.color]
-    basic_count = args.basics if args.basics is not None else (20 - len(args.cards) - 1)
+    basic_count = args.basics
 
     thriving_oracle_id = resolve_card(conn, thriving_name)
     basic_oracle_id = resolve_card(conn, basic_name)

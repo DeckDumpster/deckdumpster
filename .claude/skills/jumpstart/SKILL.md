@@ -13,10 +13,10 @@ Build custom Jumpstart 2025-style 20-card packs using cards the user actually ow
 
 Every J25 pack follows this formula (derived from analyzing all 121 real J25 decks):
 
-- **20 cards total**: 8-9 lands + 11-12 non-land spells
-- **Lands**: 1 Thriving land (color-matched) + 6-7 basics + 0-1 special non-basic
+- **20 cards total**: 8 lands + 12 non-land spells
+- **Lands**: 1 Thriving land (color-matched) + 7 basics (always)
 - **Mono-colored** (all colored spells share one color; colorless artifacts OK)
-- **Rarity**: 1-2 rare/mythic, 3-5 uncommon, rest common (among non-lands)
+- **Rarity**: 1 mythic + 1 rare (prefer mythic as identity card; fall back to 2 rares if no mythic available), 3-5 uncommon, rest common
 - **Creatures**: 5-8 creature-typed cards (usually 7-8)
 - **Non-creature spells**: 3-7 (usually 4)
 - **Curve**: MV 0 always empty. MV 2 and MV 3 always have at least 1 card each. MV 2+3 combined is 4-10 (usually 6-7). MV 5+ combined is 0-4.
@@ -96,22 +96,30 @@ Insert a finished pack as a hypothetical deck.
 
 The user says something like "Green Elves with a lord" or "Black Zombies with a bomb." If they just say "Green deck," suggest themes based on their collection and ask for a rare category.
 
-### Step 2: Find the identity card
+### Step 2: Find the identity card (mythic slot)
 
-Search for rare/mythic candidates matching the color, theme, and category:
+Search for a **mythic** first — this is the preferred identity card rarity:
 
 ```bash
 # Bomb (MV 4+):
-uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r rare --mv-min 4 -o --theme elf
+uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r mythic --mv-min 4 -o --theme elf
 
 # Lord/Enabler (MV 1-3):
-uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r rare --mv-max 3 -o --theme elf
+uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r mythic --mv-max 3 -o --theme elf
 
 # Engine (any MV):
-uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r rare -o --theme elf
+uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r mythic -o --theme elf
 ```
 
-If no rare matches, try mythic, then broaden the theme search. Read oracle text of the top 2-3 candidates. Pick the one that most strongly defines what the pack wants to do.
+If no mythic matches the theme, fall back to rare for the identity card (and use 2 rares total instead). Read oracle text of the top 2-3 candidates. Pick the one that most strongly defines what the pack wants to do.
+
+### Step 2b: Find the second rare/mythic
+
+After picking the identity card, fill the other R/M slot:
+- If identity is mythic → search for a **rare** that supports the theme
+- If identity is rare (mythic fallback) → search for another **rare**
+
+This card should complement the identity card's game plan, not compete with it.
 
 ### Step 3: Generate the soft shape
 
@@ -172,8 +180,9 @@ uv run python .claude/skills/jumpstart/scripts/jumpstart-insert-deck.py \
 ## Soft Shape Constraints
 
 The soft shape is a guide. These constraints are hard:
-- **Rarity budget**: 1-2 R/M, 3-5 U, rest C (among non-lands)
-- **Total spells**: 11-12 (matching land count of 8-9)
+- **Rarity budget**: 1 mythic + 1 rare (fall back to 2 rares if no mythic available), 3-5 U, rest C
+- **Total spells**: 12 (always)
+- **Lands**: 8 (always: 1 Thriving + 7 basics)
 - **Creature count**: 5-9 (need board presence)
 - **Curve**: MV2 and MV3 each have at least 1 card
 - **No MV0 spells**
@@ -185,6 +194,16 @@ These are soft (deviate if it gets a better card):
 - Exact uncommon/common split (total rarity budget matters more)
 
 **Curve discipline matters.** With only 8 lands in a 40-card shuffled deck (~16 lands total), top-heavy curves brick. Resist the urge to jam multiple splashy high-MV cards even when they're on-theme. Stick to the curve targets — if the shape says 1 card at MV5+, don't put 3 there.
+
+## Card Selection Rules
+
+These rules apply to ALL card choices in the pack:
+
+1. **No wrath effects.** Do not include board wipes, mass removal, "destroy all creatures", or similar mass disruption. These packs are meant to be fun and interactive — wraths are miserable in Jumpstart.
+
+2. **No triple-pip mana costs.** Avoid cards with 3+ colored pips of the same color in their mana cost (e.g., {W}{W}{W}, {B}{B}{B}{B}). With only 8 lands per half-deck (~16 lands total in a shuffled game), triple-pip costs are unreliable. Double-pip is the maximum.
+
+3. **Focus on interactivity.** Prefer cards that create interesting game states over cards that shut opponents out. Prioritize creatures with combat tricks, ETB effects, auras, equipment, and targeted removal over pillowfort, stax, or prison effects. The goal is two players trading blows, not one player locked out.
 
 ## Theme Search Strategy
 

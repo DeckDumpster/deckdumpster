@@ -114,9 +114,9 @@ Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` 
 
 Standalone page at `/card/:set/:cn` (e.g. `/card/lci/150`). Served by `card_detail.html`, with page-specific styles in `card-detail.css` and logic in `card-detail.js`. First consumer of the shared CSS/JS foundation. API endpoint: `GET /api/card/by-set-cn?set=X&cn=Y`. Linked from the collection modal via "Full page" badge.
 
-### Deck detail page
+### Unified deck page
 
-Standalone page at `/decks/:id` (e.g. `/decks/1`). Served by `deck_detail.html`, with page-specific styles in `deck-detail.css` and logic in `deck-detail.js`. Uses `shared.css` + `shared.js`. All deck detail logic (zone tabs, card table, edit/delete, add/remove cards, import expected list, completeness, reassemble) ported from `decks.html` inline view. Card names in the table link to `/card/:set/:cn`. Deck list page (`decks.html`) links to this standalone page. No new API endpoints — uses existing `/api/decks/` routes.
+Both `/decks/:id` and `/deck-builder/:id` serve `deck_builder.html` with `deck-builder.js` and `deck-builder.css`. The page combines the builder's type-grouped list view with the detail page's grid view, zone tabs, edit modal, expected list import, and completeness tracking. View toggle switches between list (type-grouped, multi-column) and grid (card images with rarity borders). Zone tabs filter the grid view; list view shows all zones combined. Card names link to `/card/:set/:cn`. Deck list page (`decks.html`) links via single "View" link to `/decks/:id`.
 
 ### Shared CSS/JS foundation
 

@@ -955,7 +955,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path == "/decks":
             self._serve_static("decks.html")
         elif path.startswith("/decks/"):
-            self._serve_static("deck_detail.html")
+            self._serve_static("deck_builder.html")
         elif path == "/binders":
             self._serve_static("binders.html")
         elif path == "/set-value":
@@ -5345,6 +5345,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 commander = dict(row)
         # Get deck cards grouped by type, collapsed by oracle_id
         cards = repo.get_cards(deck_id)
+        if not cards and deck.get("hypothetical"):
+            cards = repo.get_expected_cards_as_cards(deck_id)
         groups = {}
         type_order = ["Creatures", "Planeswalkers", "Instants", "Sorceries",
                       "Enchantments", "Artifacts", "Lands", "Other"]
@@ -5357,7 +5359,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 group[oid]["collection_ids"].append(c["id"])
             else:
                 entry = dict(c)
-                entry["quantity"] = 1
+                entry["quantity"] = c.get("quantity") or 1
                 entry["collection_ids"] = [c["id"]]
                 group[oid] = entry
         ordered_groups = {}

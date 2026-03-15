@@ -2098,22 +2098,37 @@ class DeckRepository:
         For each expected card, picks the most recent non-digital printing.
         Cards with quantity > 1 produce one row with a quantity field.
         """
+        # Use a subquery to pick the best printing per oracle_id:
+        # prefer owned printings, then most recent non-digital
         rows = self.conn.execute(
-            """SELECT e.oracle_id, e.zone, e.quantity,
-                      card.name, card.type_line, card.mana_cost, card.cmc,
-                      card.colors, card.color_identity,
-                      p.printing_id, p.set_code, p.collector_number, p.rarity,
-                      p.artist, p.image_uri, p.frame_effects, p.border_color,
-                      p.full_art, p.promo, p.promo_types, p.finishes,
-                      json_extract(p.raw_json, '$.layout') as layout,
-                      s.set_name
-               FROM deck_expected_cards e
-               JOIN cards card ON e.oracle_id = card.oracle_id
-               JOIN printings p ON p.oracle_id = card.oracle_id
-               JOIN sets s ON p.set_code = s.set_code
-               WHERE e.deck_id = ? AND s.digital = 0
-               GROUP BY e.oracle_id
-               ORDER BY card.name""",
+            """SELECT sub.oracle_id, sub.zone, sub.quantity,
+                      sub.name, sub.type_line, sub.mana_cost, sub.cmc,
+                      sub.colors, sub.color_identity,
+                      sub.printing_id, sub.set_code, sub.collector_number, sub.rarity,
+                      sub.artist, sub.image_uri, sub.frame_effects, sub.border_color,
+                      sub.full_art, sub.promo, sub.promo_types, sub.finishes,
+                      sub.layout, sub.set_name
+               FROM (
+                   SELECT e.oracle_id, e.zone, e.quantity,
+                          card.name, card.type_line, card.mana_cost, card.cmc,
+                          card.colors, card.color_identity,
+                          p.printing_id, p.set_code, p.collector_number, p.rarity,
+                          p.artist, p.image_uri, p.frame_effects, p.border_color,
+                          p.full_art, p.promo, p.promo_types, p.finishes,
+                          json_extract(p.raw_json, '$.layout') as layout,
+                          s.set_name,
+                          (SELECT 1 FROM collection col
+                           WHERE col.printing_id = p.printing_id
+                             AND col.status = 'owned' LIMIT 1) as is_owned
+                   FROM deck_expected_cards e
+                   JOIN cards card ON e.oracle_id = card.oracle_id
+                   JOIN printings p ON p.oracle_id = card.oracle_id
+                   JOIN sets s ON p.set_code = s.set_code
+                   WHERE e.deck_id = ? AND s.digital = 0
+                   ORDER BY is_owned DESC, s.released_at DESC
+               ) sub
+               GROUP BY sub.oracle_id
+               ORDER BY sub.name""",
             (deck_id,),
         ).fetchall()
         result = []
