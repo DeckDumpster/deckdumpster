@@ -2020,9 +2020,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             price_keys = []
             for card in results:
                 finishes = json.loads(card["finishes"]) if card["finishes"] else []
-                foil_only = finishes == ["foil"]
-                foil = card["finish"] in ("foil", "etched") or foil_only
-                price_type = "foil" if foil else "normal"
+                price_type = "normal" if "nonfoil" in finishes else "foil"
                 sc = card["set_code"].lower()
                 cn = card["collector_number"]
                 price_keys.append((sc, cn, price_type))
@@ -2128,7 +2126,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         sc = row["set_code"].lower()
         cn = row["collector_number"]
         finishes = json.loads(row["finishes"]) if row["finishes"] else []
-        foil_only = finishes == ["foil"]
+        foil_only = "nonfoil" not in finishes
         price_type = "foil" if foil_only else "normal"
         result["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
         result["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
@@ -2208,7 +2206,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         printing_id = row["printing_id"]
         finishes = json.loads(row["finishes"]) if row["finishes"] else []
-        foil_only = finishes == ["foil"]
+        foil_only = "nonfoil" not in finishes
         price_type = "foil" if foil_only else "normal"
         result["ck_price"] = _get_sqlite_price(self.db_path, set_code, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self.db_path, set_code, cn, "cardkingdom", price_type)
         result["tcg_price"] = _get_sqlite_price(self.db_path, set_code, cn, "tcgplayer", price_type)
@@ -4960,8 +4958,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if cards:
             price_keys = []
             for card in cards:
-                foil = card["finish"] in ("foil", "etched")
-                price_type = "foil" if foil else "normal"
+                finishes = json.loads(card["finishes"]) if card.get("finishes") else []
+                price_type = "normal" if "nonfoil" in finishes else "foil"
                 sc = card["set_code"].lower()
                 cn = card["collector_number"]
                 price_keys.append((sc, cn, price_type))
