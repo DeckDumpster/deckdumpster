@@ -2019,8 +2019,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if results:
             price_keys = []
             for card in results:
-                foil = card["finish"] in ("foil", "etched")
-                price_type = "foil" if foil else "normal"
+                finishes = json.loads(card["finishes"]) if card["finishes"] else []
+                foil_only = finishes == ["foil"]
+                price_type = "foil" if foil_only else "normal"
                 sc = card["set_code"].lower()
                 cn = card["collector_number"]
                 price_keys.append((sc, cn, price_type))
