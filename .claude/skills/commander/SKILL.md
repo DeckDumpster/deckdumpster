@@ -19,28 +19,37 @@ Build a Magic: The Gathering Commander deck from the user's collection using the
 
 ## Command Zone 2025 Template
 
-The template totals **108 slots across 6 categories** — intentionally over 99 because many cards serve multiple roles. A Sol Ring is both Ramp and a Plan Card. A Swords to Plowshares is Targeted Disruption but could also be a Plan Card in a lifegain deck.
+38 lands, 61 nonland cards, 1 Commander. Template:
 
-| Category | Target | Description |
-|----------|--------|-------------|
-| Lands | 38 | Mana base (including utility lands) |
-| Ramp | 10 | Mana acceleration — mana dorks, mana rocks, land tutors |
-| Card Advantage | 12 | Card draw, selection, recursion, impulse draw |
-| Targeted Disruption | 12 | Single-target removal, counters, targeted exile |
-| Mass Disruption | 6 | Board wipes, mass bounce, mass exile |
-| Plan Cards | 30 | Cards advancing the deck's strategy/win condition |
+Plan Cards: 34 (Cards advancing the deck's strategy/win condition)
+Ramp: 10 (Mana acceleration: mana dorks, mana rocks, land tutors)
+Card Advantage: 12 (Card draw, selection, recursion, impulse draw)
+Targeted Disruption: 12 (Single-target removal, counters, targeted exile)
+Mass Disruption: 6 (Board wipes, mass bounce, mass exile)
+Mana-producing lands: 38
 
-Every card you add is **explicitly assigned** to one or more categories via `--categories`. The audit tool tracks counts based on these assignments, not regex. Use your MTG knowledge to decide what role a card fills. MORE OVERLAP is BETTER. Get the total to 130 or more if you can.
+Multiple roles: The template totals more than 99 because many cards should serve multiple roles.
 
-## Search Hints by Category
+**Explicitly assign** cards to categories via `--categories`. The add-card tool tracks counts based on these assignments. Use your MTG knowledge to decide what role a card fills. MORE OVERLAP is BETTER. Get the total to 90 or more if you can.
 
-Run `commander-sample-queries.py --<category>` to get sample SQL WHERE clauses for any category. Covers all template roles (ramp, card-advantage, targeted-disruption, mass-disruption, lands) and common sub-plan themes (sacrifice, reanimation, tokens, counters, discard, etb, voltron, tribal). Run `--list` to see all available categories.
+## Ideal Mana Curve Minimums
 
-Use the sample queries as starting points, then adapt with additional filters (CMC caps, type constraints, rarity, etc.) as needed.
+Plan cards will be woven throughout.
+
+CMC 0: 0 (don't bother)
+CMC 1: 5 (strong utility, disruption/removal only)
+CMC 2: 17 (strong utility, disruption/removal, enters effects on creatures, cantrips, ramp)
+CMC 3: 17 (ramp, utility creatures, disruption, card draw)
+CMC 4: 12 (utility, modal choices)
+CMC 5: 7 (high-impact cards)
+CMC 6+: 10 (powerful effects: game-ending threats, board wipes, repeatable card advantage)
 
 ## Tools
 
 All tools are invoked via `uv run python .claude/skills/commander/scripts/<tool>.py <args>`.
+
+### commander-find.py `[options]`
+Browse owned legendary creatures for commander selection. Run with `--help` for all filter flags (colors, CMC, set year, type, oracle text, sort).
 
 ### commander-create-deck.py `<commander name query>`
 Search collection for legendary creatures and create a deck. If multiple matches, prints all — re-run with a more specific query. Pre-populates template role categories for tracking.
@@ -55,13 +64,10 @@ Save the deck plan/theme and sub-plan categories. Sub-plans JSON format:
 - `search_hint`: optional, for reference only
 
 ### commander-sample-queries.py `--<category>` | `--list`
-Print sample SQL WHERE clauses for a card category. Covers template roles (ramp, card-advantage, targeted-disruption, mass-disruption, lands) and common sub-plan themes (sacrifice, reanimation, tokens, counters, discard, etb, voltron, tribal). Use the output as starting points for `commander-search.py`.
+Print sample SQL WHERE clauses for a card category. This is a **growing query library** — it covers template roles (ramp, card-advantage, targeted-disruption, mass-disruption, lands) and common sub-plan themes (sacrifice, reanimation, tokens, counters, discard, etb, voltron, tribal). Use the output as starting points for `commander-search.py`.
 
 ### commander-mana-analysis.py `<deck_id>`
 Mana base sizing tool. Run after all spells are added, before adding lands. Shows colored pip counts, color weight percentages, mana curve, and recommends total land count and basic land split based on pip ratios, average CMC, and ramp count.
-
-### commander-deck-audit.py `<deck_id>`
-Full audit: template role distribution, sub-plan progress, mana curve, EDHREC recommendations (if data exists), next priority. All counts are based on explicit `--categories` assignments from `commander-add-card.py`.
 
 ### commander-search.py `<deck_id> "<sql_where_clause>"` | `--schema`
 Search owned cards using a SQL WHERE clause. The query runs against `cards c`, `printings p`, and `collection col` (already joined). Cards already in the deck are excluded, and color identity is filtered to match the commander. EDHREC inclusion rates are shown when data exists.
@@ -74,7 +80,7 @@ commander-search.py 62 "p.rarity IN ('rare', 'mythic') AND c.cmc <= 4"
 ```
 
 ### commander-add-card.py `<deck_id> <collection_id> --categories "<name>" ...`
-Add a card to the deck. Validates singleton rule and color identity. Use `--categories` to assign the card to template roles and/or sub-plan categories. A card can belong to multiple categories. Examples:
+Add a card to the deck. Validates singleton rule and color identity. After adding, **automatically prints deck status**: nonland count, mana curve progress, next category to fill, and phase-appropriate selection guidance. When all 61 nonland cards are in, it tells you to proceed to Phase 4. Use `--categories` to assign the card to template roles and/or sub-plan categories. A card can belong to multiple categories. Examples:
 ```
 --categories "Ramp"
 --categories "Targeted Disruption" "Plan Cards"
@@ -89,7 +95,7 @@ Bulk-add basic lands to the deck. Prefers full-art printings, then printings fro
 ### commander-bling-it-up.py `<deck_id> [--dry-run]`
 Upgrade every card in the deck to the blingiest printing you own (matched by `oracle_id`). Bling ranking: Serialized > Double Rainbow > Borderless > Full Art > Showcase > Extended Art > Foil > Promo > standard. Use `--dry-run` to preview changes without applying them. Run this as a final polish step after the deck is complete.
 
-## Three-Phase Process
+## Deck building process
 
 ### Phase 1: Choose Commander & Create Deck
 
@@ -110,66 +116,44 @@ Analyze the commander's abilities and propose 2-3 deck themes to the user.
    - A reanimation deck: `{"name": "Reanimation", "target": 12}`, `{"name": "Discard Enablers", "target": 8}`
    - A counters deck: `{"name": "+1/+1 Counter Synergy", "target": 12}`, `{"name": "Counter Payoffs", "target": 8}`
    - A tokens deck: `{"name": "Token Generators", "target": 14}`, `{"name": "Anthem Effects", "target": 6}`
-5. Present the sub-plan categories to the user for approval
-6. Save everything with `commander-save-plan.py <deck_id> "<plan>" --sub-plans '<json>'`
+5. **Check the query library** — run `commander-sample-queries.py --list` to see if existing categories overlap with your sub-plans. Re-use their tested queries during card search when they align. If your sub-plan categories aren't covered, you may add them after deckbuilding.
+6. Present the sub-plan categories to the user for approval
+7. Save with `commander-save-plan.py <deck_id> "<plan>" --sub-plans '<json>'`
 
-Sub-plan targets should sum to roughly the Plan Cards target (30) but can overlap — a card can satisfy multiple sub-plans. The audit tool tracks progress against each sub-plan.
+Sub-plan targets should sum to roughly the Plan Cards target (30) but can overlap — a card can satisfy multiple sub-plans. Progress is tracked automatically by `commander-add-card.py`.
 
-### Phase 3: Add Cards — Spells First, Lands Last
+### Phase 3: Add 61 nonland cards
 
-Build the deck's spells before the mana base. You cannot know the right land count or color distribution until you know what spells you are casting (EDHREC, Chimera Gaming, and other guides all recommend this). The order below ensures every support card directly reinforces the gameplan.
+**Start by finding a good Plan card to go with the commander.** The output of `commander-add-card.py` will tell you what's next — it prints deck status, curve progress, the next category to fill, and phase-appropriate guidance after every add. Follow its instructions.
 
-#### Build order (non-land categories first)
+Repeat this loop until add-card says "61 NONLAND CARDS COMPLETE":
 
-1. **Plan Cards (win conditions & synergy)** — Start here. These define what the deck does. Use the sub-plan categories to guide your search — fill the sub-plans in priority order. Everything else exists to support these. Choose BIG SPLASHY cards. Rare, mythic rare, expensive, lots of bling.
-2. **Ramp** — Mana acceleration that enables the plan. Choose ramp that fits the curve (e.g., 2-mana rocks/dorks for a 4+ CMC commander). Prefer cards that fetch multiple land, artifacts that generate multple mana.
-3. **Card Advantage** — Draw, selection, and recursion to keep the engine running. Prefer card advantage that synergizes with the plan.
-4. **Targeted Disruption** — Single-target removal, counters, and interaction. Pick answers that handle the threats your deck cares about.
-5. **Mass Disruption** — Board wipes and mass removal. Choose wipes that leave your board intact when possible (asymmetric wipes).
-6. **Lands (last)** — After all spells are chosen, build the mana base. Use the deck's color pip requirements and mana curve to determine the right split of basics, duals, utility lands, and color-fixing.
+1. **Search** — Use `commander-search.py` to find candidates for the category suggested by the last add-card output. Run **multiple searches** with different queries for a diverse pool.
 
-#### Iterative loop (within each category)
+2. **Compare** — Follow the selection guidance from the add-card output. Always compare at least 2-3 options and explain why the winner beats the alternatives.
 
-For each category in the order above:
+3. **Add ONE card** — `commander-add-card.py <deck_id> <collection_id> --categories "<role>" "<sub-plan>" ...`
+   Assign ALL categories the card belongs to (template roles + sub-plans). Read the output — it tells you what to do next. Go back to step 1.
 
-1. **Audit** — Run `commander-deck-audit.py <deck_id>` to see current distribution and sub-plan progress
-2. **Search** — Use `commander-search.py` to find candidates for the current category. Run **multiple searches** with different queries to get a diverse candidate pool. See "Search Hints by Category" above.
-3. **Compare** — For every slot, find **at least 2-3 candidate cards** and choose the best one. Never add the first card you find. What matters shifts as the deck fills up:
+**DO NOT add the first card you find.** Search, compare, then add.
 
-   **Early (0-50 cards) — prioritize impact:**
-   - Splashy, powerful cards first. Rare/mythic over common/uncommon.
-   - Cards that define the deck's identity and advance the plan
-   - Multi-effect cards (does two things) over single-effect
-   - Special treatments: prefer Borderless, Extended Art, Showcase, Full Art printings
-   - EDHREC popularity — higher inclusion rate = more proven
+**DO NOT FILL ENTIRE CATEGORIES.** **LISTEN TO ADD CARD.** It CHANGES as you add cards, helping you balance card additions.
 
-   **Late (50+ cards) — prioritize curve and gaps:**
-   - Check the mana curve in the audit. Fill CMC gaps — if you're heavy at 3, look for 1-2 drops.
-   - Flexible cards (good early AND late) beat narrow ones
-   - Prefer cards that fill multiple categories (a removal spell that also draws, a ramp creature with an ETB)
-   - If a sub-plan is short, weight candidates toward filling it
-4. **Add** — After comparing candidates, add the winner with explicit category assignments:
-   `commander-add-card.py <deck_id> <collection_id> --categories "<role>" "<sub-plan>" ...`
-   Always specify ALL categories the card belongs to (template roles + sub-plans).
-5. **Repeat** until the category is filled, then move to the next category
+#### Phase 4: Mana base
 
-**DO NOT add the first card you find.** Always search, compare at least 2-3 options, explain why the chosen card beats the alternatives, then add it. This produces better decks than grabbing the first match.
-
-**DO NOT add multiple cards at once.** Evaluate deck slots at a time, it's easier to build coherent decks that way. DO NOT combine commands with newlines, that makes the user need to approve the commands.
-
-#### Sizing the mana base (Phase 3, step 6)
-
-Once all spells are in, run `commander-mana-analysis.py <deck_id>` to get pip counts, color weights, curve data, and a recommended land count with basic split. Then:
+When add-card says "61 NONLAND CARDS COMPLETE", run `commander-mana-analysis.py <deck_id>` to get pip counts, color weights, curve data, and a recommended land count with basic split. Then:
 
 - Use the recommended land count as a starting point (accounts for curve and ramp)
-- Add nonbasic lands first: dual lands, utility lands that support the plan (e.g., sacrifice lands for a sacrifice deck)
+- Add nonbasic lands first, again use a variety of searches to find the right colors
 - Fill remaining slots with basics, weighted by the pip percentages from the analysis
 - Re-run the analysis after adding lands to verify the final count
 
 ### Completion
 
-When `commander-deck-audit.py` shows 99/99 cards, the deck is complete. Run `commander-bling-it-up.py <deck_id>` to upgrade all cards to the blingiest printings owned. Summarize the final build for the user.
+When the deck has 99 cards (+1 commander = 100), it's complete. Run `commander-bling-it-up.py <deck_id>` to upgrade all cards to the blingiest printings owned. Summarize the final build for the user.
 
 ## Notes
 
 - Hypothetical decks allow cards already assigned to other decks/binders
+- **Contributing new queries:** When you define a new sub-plan category for a commander that isn't already covered by an existing query category, consider adding it to this tool's `CATEGORIES` dict so it can be re-used in future deck builds. Add a corresponding test in `tests/test_commander_queries.py` with expected staple cards.
+

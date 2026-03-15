@@ -124,7 +124,7 @@
     const previewName = commander ? commander.name : '';
 
     let totalCards = 0;
-    for (const g of Object.values(groups)) totalCards += g.length;
+    for (const g of Object.values(groups)) for (const c of g) totalCards += (c.quantity || 1);
 
     root.innerHTML = `
       <div class="builder-layout">
@@ -205,13 +205,18 @@
       </div>`;
     }
     for (const [type, cards] of Object.entries(groups)) {
+      let typeTotal = 0;
+      for (const c of cards) typeTotal += (c.quantity || 1);
       html += `<div class="type-group">
-        <div class="type-group-header">${esc(type)} <span class="group-count">(${cards.length})</span></div>`;
+        <div class="type-group-header">${esc(type)} <span class="group-count">(${typeTotal})</span></div>`;
       for (const c of cards) {
+        const qty = c.quantity || 1;
+        const qtyStr = qty > 1 ? `<span class="card-qty">${qty}x</span> ` : '';
+        const cids = c.collection_ids || [c.id];
         html += `<div class="card-row" data-image-uri="${esc(c.image_uri || '')}" data-card-name="${esc(c.name)}">
-          <span class="card-name"><a href="/card/${esc(c.set_code)}/${esc(c.collector_number)}">${esc(c.name)}</a></span>
+          <span class="card-name">${qtyStr}<a href="/card/${esc(c.set_code)}/${esc(c.collector_number)}">${esc(c.name)}</a></span>
           <span class="mana-icons">${renderMana(c.mana_cost)}</span>
-          <button class="remove-btn" data-collection-id="${c.id}" title="Remove">&times;</button>
+          <button class="remove-btn" data-collection-id="${cids[0]}" title="Remove">&times;</button>
         </div>`;
       }
       html += '</div>';

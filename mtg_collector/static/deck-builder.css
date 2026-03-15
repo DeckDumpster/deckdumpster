@@ -235,6 +235,11 @@
   white-space: nowrap;
 }
 
+.card-row .card-qty {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
 .card-row .card-name a {
   color: var(--text-primary);
   text-decoration: none;

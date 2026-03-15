@@ -5332,18 +5332,27 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             ).fetchone()
             if row:
                 commander = dict(row)
-        # Get deck cards grouped by type
+        # Get deck cards grouped by type, collapsed by oracle_id
         cards = repo.get_cards(deck_id)
         groups = {}
         type_order = ["Creatures", "Planeswalkers", "Instants", "Sorceries",
                       "Enchantments", "Artifacts", "Lands", "Other"]
         for c in cards:
             cat = self._categorize_card_type(c.get("type_line", ""))
-            groups.setdefault(cat, []).append(c)
+            group = groups.setdefault(cat, {})
+            oid = c.get("oracle_id", c["id"])
+            if oid in group:
+                group[oid]["quantity"] += 1
+                group[oid]["collection_ids"].append(c["id"])
+            else:
+                entry = dict(c)
+                entry["quantity"] = 1
+                entry["collection_ids"] = [c["id"]]
+                group[oid] = entry
         ordered_groups = {}
         for t in type_order:
             if t in groups:
-                ordered_groups[t] = groups[t]
+                ordered_groups[t] = list(groups[t].values())
         conn.close()
         self._send_json({
             "deck": deck,

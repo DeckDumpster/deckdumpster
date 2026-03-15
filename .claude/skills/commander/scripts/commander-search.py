@@ -204,7 +204,5 @@ for card in results:
     print(f"      collection_id: {card['id']}")
     oracle = card.get("oracle_text") or ""
     if oracle:
-        if len(oracle) > 150:
-            oracle = oracle[:147] + "..."
         print(f"      Text: {oracle}")
     print()

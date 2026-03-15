@@ -49,9 +49,48 @@ except ValueError as e:
 
 conn.close()
 
-roles_str = ", ".join(result["roles"])
-print(f"Added: {result['name']}")
-print(f"  Detected roles (hint): {roles_str}")
-if result.get("categories"):
-    print(f"  Assigned to: {', '.join(result['categories'])}")
-print(f"  Deck now has {result['deck_card_count']}/99 cards (+1 Commander)")
+# --- Card confirmation ---
+print(f"Added: {result['name']} [{', '.join(result['categories'])}]")
+
+# --- Abbreviated audit (for AI consumption) ---
+audit = result["audit"]
+nonland = audit["nonland_count"]
+
+if nonland >= 61:
+    print(f"\n>>> 61 NONLAND CARDS COMPLETE ({nonland}/61). Proceed to Phase 4 — run commander-mana-analysis.py {deck_id}")
+    sys.exit(0)
+
+# Curve: inline format for AI
+CURVE_TARGETS = {0: 0, 1: 5, 2: 17, 3: 17, 4: 12, 5: 7, 6: 10}
+curve_parts = []
+for cmc in range(7):
+    count = audit["curve"].get(cmc, 0)
+    if cmc == 6:
+        count += audit["curve"].get(7, 0)
+        label = "6+"
+    else:
+        label = str(cmc)
+    target = CURVE_TARGETS[cmc]
+    if target > 0:
+        curve_parts.append(f"CMC{label}:{count}/{target}")
+print(f"\nNonland: {nonland}/61 | {' '.join(curve_parts)}")
+
+# Next priority
+if audit["next_priority"]:
+    print(f"IMPORTANT: Next priority category: {audit['next_priority']} (need {audit['next_priority_gap']} more)")
+
+# Phase-dependent selection criteria
+if nonland < 30:
+    print("Prefer high-impact win conditions, rares/mythics, high EDHREC inclusion, multi-effect cards")
+elif nonland < 50:
+    print("Deck is about half done: Fill in curve gaps, prefer multi-role cards (2+ categories), multi-effect over single-effect")
+else:
+    print("Deck is nearly done: Try to fill curve gaps above and least-filled categories")
+    # Show category breakdown in late phase
+    for role, info in audit["template"].items():
+        if role == "Lands":
+            continue
+        print(f"  {role}: {info['have']}/{info['target']} {info['status']}")
+    if audit.get("sub_plans"):
+        for sp in audit["sub_plans"]:
+            print(f"  {sp['name']}: {sp['have']}/{sp['target']} {sp['status']}")

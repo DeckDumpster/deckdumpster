@@ -255,12 +255,14 @@ class DeckBuilderService:
                 ci_raw = cmd_row["color_identity"]
                 cmd_ci = json.loads(ci_raw) if isinstance(ci_raw, str) and ci_raw else []
 
-        # Mana curve (non-land)
+        # Count nonland cards and build mana curve
+        nonland_count = 0
         curve: dict[int, int] = {}
         for card in cards:
             type_line = (card.get("type_line") or "").lower()
             if "land" in type_line and "creature" not in type_line:
                 continue
+            nonland_count += 1
             cmc = int(card.get("cmc") or 0)
             bucket = min(cmc, 7)  # 7+ grouped
             curve[bucket] = curve.get(bucket, 0) + 1
@@ -318,7 +320,8 @@ class DeckBuilderService:
         # Ordered template comparison
         template_comparison = {role: template_status[role] for role in DeckTemplate.ORDER}
 
-        # Find biggest gap for next priority (Lands only after all spells are filled)
+        # Find biggest gap for next priority (non-land roles only —
+        # lands use a separate workflow via mana-analysis + add-basics)
         biggest_gap_role = None
         biggest_gap = 0
         non_land_roles = [r for r in DeckTemplate.ORDER if r != "Lands"]
@@ -327,12 +330,6 @@ class DeckBuilderService:
             if info["gap"] > biggest_gap:
                 biggest_gap = info["gap"]
                 biggest_gap_role = role
-        # Only suggest Lands when all non-land categories are complete
-        if biggest_gap <= 0:
-            lands_info = template_comparison["Lands"]
-            if lands_info["gap"] > 0:
-                biggest_gap = lands_info["gap"]
-                biggest_gap_role = "Lands"
 
         return {
             "deck_id": deck_id,
@@ -341,6 +338,7 @@ class DeckBuilderService:
             "commander": cmd_name,
             "color_identity": cmd_ci,
             "card_count": len(cards),
+            "nonland_count": nonland_count,
             "template": template_comparison,
             "sub_plans": sub_plan_status,
             "curve": curve,
@@ -574,6 +572,10 @@ class DeckBuilderService:
         ).fetchone()[0]
 
         roles = self.classifier.classify(card)
+
+        # Run abbreviated audit for immediate feedback
+        audit = self.audit(deck_id)
+
         return {
             "name": card["name"],
             "collection_id": collection_id,
@@ -581,4 +583,5 @@ class DeckBuilderService:
             "primary_role": roles[0],
             "deck_card_count": count,
             "categories": assigned_categories,
+            "audit": audit,
         }
