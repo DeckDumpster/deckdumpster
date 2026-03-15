@@ -1,0 +1,14 @@
+start_page: /deck-builder
+involves:
+  - "input#cmd-input: placeholder 'Search your collection...'"
+  - "autocomplete dropdown: div#cmd-autocomplete with .autocomplete-item children"
+  - "each autocomplete item shows card name and mana icons"
+  - "clicking an item sets input value and enables #create-btn"
+fixture_data:
+  legendary_creature: "Glarb, Calamity's Augur (oracle_id: df9409e6-bd6d-4b5b-b807-fcf347ee940a)"
+notes: >
+  1. Navigate to /deck-builder. 2. Type "Glarb" into #cmd-input.
+  3. Wait for autocomplete dropdown to appear (250ms debounce).
+  4. Verify "Glarb, Calamity's Augur" appears in dropdown.
+  5. Click the autocomplete item. 6. Verify input value is now the commander name.
+  7. Verify Create Deck button is enabled.

@@ -1,0 +1,13 @@
+# Scenario: Create a commander deck and view builder layout
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  After selecting a commander and clicking Create Deck, the page
+  transitions to builder mode showing a two-column layout. The left
+  column displays the commander's card image. The right column shows
+  the deck name (defaulting to the commander name), a card count
+  badge showing "0/100", and a "Commander" section listing the
+  commander. An "+ Add Card" button is available.

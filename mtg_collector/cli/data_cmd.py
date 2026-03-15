@@ -101,6 +101,21 @@ def register(subparsers):
         help="Only import products for this set code",
     )
 
+    fetch_edhrec_parser = data_sub.add_parser(
+        "fetch-edhrec",
+        help="Download EDHREC recommendation data for owned commanders",
+    )
+    fetch_edhrec_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download even if data already exists",
+    )
+
+    data_sub.add_parser(
+        "import-edhrec",
+        help="Import downloaded EDHREC data into SQLite",
+    )
+
     parser.set_defaults(func=run)
 
 
@@ -130,8 +145,16 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         import_sealed_products(db_path, set_code=getattr(args, "set_code", None))
+    elif args.data_command == "fetch-edhrec":
+        from mtg_collector.db.connection import get_db_path
+        db_path = get_db_path(getattr(args, "db_path", None))
+        fetch_edhrec(db_path, force=args.force)
+    elif args.data_command == "import-edhrec":
+        from mtg_collector.db.connection import get_db_path
+        db_path = get_db_path(getattr(args, "db_path", None))
+        import_edhrec(db_path)
     else:
-        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products} [options]")
+        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec} [options]")
         sys.exit(1)
 
 
@@ -1104,3 +1127,181 @@ def import_sealed_products(db_path: str, set_code: str = None):
     print(f"  Inserted: {total_inserted} new sealed products")
     print(f"  Skipped: {total_skipped_existing} already existed, {total_skipped_cards} were individual cards")
     print(f"  Elapsed: {elapsed:.1f}s")
+
+
+def _edhrec_slug(name: str) -> str:
+    """Convert a card name to an EDHREC URL slug."""
+    import re
+    slug = name.lower()
+    slug = re.sub(r"[',.]", "", slug)
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug
+
+
+def get_edhrec_dir() -> Path:
+    """Get the EDHREC data directory."""
+    return get_mtgc_home() / "edhrec"
+
+
+def fetch_edhrec(db_path: str, force: bool = False):
+    """Download EDHREC recommendation data for owned commanders."""
+    t0 = time.time()
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    # Find legendary creatures the user owns
+    rows = conn.execute(
+        """SELECT DISTINCT c.oracle_id, c.name
+           FROM cards c
+           JOIN printings p ON p.oracle_id = c.oracle_id
+           JOIN collection col ON col.printing_id = p.printing_id
+           WHERE ((c.type_line LIKE '%Legendary%' AND c.type_line LIKE '%Creature%')
+              OR c.oracle_text LIKE '%can be your commander%')
+           AND col.status = 'owned'
+           ORDER BY c.name"""
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        print("No legendary creatures found in collection.")
+        return
+
+    dest_dir = get_edhrec_dir()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Fetching EDHREC data for {len(rows)} commanders...")
+    fetched = 0
+    skipped = 0
+    errors = 0
+
+    for row in rows:
+        slug = _edhrec_slug(row["name"])
+        dest = dest_dir / f"{slug}.json"
+
+        if dest.exists() and not force:
+            skipped += 1
+            continue
+
+        url = f"https://json.edhrec.com/pages/commanders/{slug}.json"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read()
+            with open(dest, "wb") as f:
+                f.write(data)
+            fetched += 1
+            print(f"  {row['name']} -> {slug}.json")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print(f"  {row['name']}: not found on EDHREC (404)")
+            else:
+                print(f"  {row['name']}: HTTP {e.code}")
+            errors += 1
+        except Exception as e:
+            print(f"  {row['name']}: {e}")
+            errors += 1
+
+        time.sleep(0.2)  # rate limit
+
+    elapsed = time.time() - t0
+    print(f"\nFetched: {fetched}, Skipped (cached): {skipped}, Errors: {errors}")
+    print(f"Elapsed: {elapsed:.1f}s")
+
+
+def import_edhrec(db_path: str):
+    """Import downloaded EDHREC data into SQLite."""
+    from mtg_collector.db.schema import init_db
+
+    t0 = time.time()
+
+    edhrec_dir = get_edhrec_dir()
+    if not edhrec_dir.exists():
+        print(f"No EDHREC data directory at {edhrec_dir}")
+        print("Run: mtg data fetch-edhrec")
+        return
+
+    json_files = list(edhrec_dir.glob("*.json"))
+    if not json_files:
+        print("No EDHREC JSON files found.")
+        return
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+
+    # Build name -> oracle_id lookup
+    card_rows = conn.execute("SELECT oracle_id, name FROM cards").fetchall()
+    name_to_oracle = {r["name"].lower(): r["oracle_id"] for r in card_rows}
+
+    commanders_processed = 0
+    cards_imported = 0
+
+    for jf in json_files:
+        try:
+            with open(jf) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        # Extract commander name and cardlists from container.json_dict
+        json_dict = (data.get("container") or {}).get("json_dict") or {}
+        card_info = json_dict.get("card") or {}
+        commander_name = card_info.get("name")
+        if not commander_name:
+            continue
+
+        commander_oid = name_to_oracle.get(commander_name.lower())
+        if not commander_oid:
+            continue
+
+        commanders_processed += 1
+
+        # Total decks for this commander (inclusion values are raw counts)
+        num_decks = data.get("num_decks_avg") or 1
+
+        # Extract card recommendations from cardlists
+        cardlists = json_dict.get("cardlists") or []
+        rank = 0
+        rows_to_insert = []
+        fetched_at = now_iso()
+
+        for cardlist in cardlists:
+            cards = cardlist.get("cardviews") or []
+            for card_entry in cards:
+                card_name = card_entry.get("name")
+                if not card_name:
+                    continue
+                card_oid = name_to_oracle.get(card_name.lower())
+                if not card_oid:
+                    continue
+
+                rank += 1
+                inclusion = card_entry.get("inclusion")
+                synergy = card_entry.get("synergy")
+
+                rows_to_insert.append((
+                    commander_oid, card_oid,
+                    inclusion / num_decks if inclusion is not None else None,
+                    rank,
+                    synergy if synergy is not None else None,
+                    fetched_at,
+                ))
+
+        if rows_to_insert:
+            conn.executemany(
+                """INSERT OR REPLACE INTO edhrec_recommendations
+                   (commander_oracle_id, card_oracle_id, inclusion_rate, rank, synergy_score, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                rows_to_insert,
+            )
+            cards_imported += len(rows_to_insert)
+
+    conn.commit()
+    conn.close()
+
+    elapsed = time.time() - t0
+    print(f"Commanders processed: {commanders_processed}")
+    print(f"Cards imported: {cards_imported}")
+    print(f"Elapsed: {elapsed:.1f}s")

@@ -1,0 +1,12 @@
+# Scenario: Deck builder create form renders correctly
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I navigate to /deck-builder, I see a centered create form with
+  a "New Commander Deck" heading, a commander search input with placeholder
+  "Search your collection...", physical/hypothetical radio buttons with
+  physical selected by default, and a disabled Create Deck button. The
+  site header includes a "Build" nav link.

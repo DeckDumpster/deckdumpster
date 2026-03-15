@@ -1,0 +1,12 @@
+# Scenario: Add and remove cards from a commander deck
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  In the deck builder, I can click "+ Add Card" to open a search modal.
+  Typing a card name shows matching owned cards. Clicking "Add" on a
+  result adds it to the deck list grouped by card type. The card count
+  increments. I can then remove the card by clicking the X button on
+  its row, which decrements the count back to 0.

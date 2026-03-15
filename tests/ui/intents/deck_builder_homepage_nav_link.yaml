@@ -1,0 +1,11 @@
+# Scenario: Navigate to Deck Builder from the homepage
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can see a "Deck Builder" link in the Collection section of the
+  homepage navigation with the subtitle "Build Commander decks from
+  your collection". Clicking it takes me to the deck builder page
+  showing the create form.

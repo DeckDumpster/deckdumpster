@@ -30,6 +30,17 @@
 
 .deck-detail-header .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
+.btn-builder-link {
+  padding: 6px 14px;
+  color: #aaa;
+  border: 1px solid #555;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-builder-link:hover { background: #333; color: #fff; }
+
 /* Zone tabs */
 .zone-tabs {
   display: flex;

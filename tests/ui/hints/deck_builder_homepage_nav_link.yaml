@@ -1,0 +1,11 @@
+start_page: /
+involves:
+  - "homepage nav link: <a href='/deck-builder'>Deck Builder<span>Build Commander decks from your collection</span></a>"
+  - "link is in the Collection section of the nav grid"
+  - "deck builder page shows 'New Commander Deck' heading"
+fixture_data:
+  none: "No fixture data needed"
+notes: >
+  1. Navigate to /. 2. Verify "Deck Builder" link text is visible.
+  3. Click "Deck Builder" text. 4. Wait for the deck builder page to load.
+  5. Verify "New Commander Deck" heading appears.

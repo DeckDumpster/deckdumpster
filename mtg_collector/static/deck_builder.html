@@ -4,13 +4,11 @@
 <meta charset="utf-8">
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Deck Detail</title>
+<title>Deck Builder</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/keyrune@latest/css/keyrune.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mana-font@latest/css/mana.min.css">
 <link rel="stylesheet" href="/static/shared.css">
-<link rel="stylesheet" href="/static/shared-card-table.css">
-<link rel="stylesheet" href="/static/shared-card-modal.css">
-<link rel="stylesheet" href="/static/deck-detail.css">
+<link rel="stylesheet" href="/static/deck-builder.css">
 </head>
 <body>
 
@@ -23,15 +21,13 @@
   <a href="/sealed">Sealed</a>
 </div>
 
-<div class="deck-detail-layout" id="deck-detail-layout">
+<div id="deck-builder-root">
   <div class="loading-state" id="loading-state">
-    <span class="spinner"></span> Loading deck...
+    <span class="spinner"></span> Loading...
   </div>
 </div>
 
 <script src="/static/shared.js"></script>
-<script src="/static/shared-card-table.js"></script>
-<script src="/static/shared-card-modal.js"></script>
-<script src="/static/deck-detail.js"></script>
+<script src="/static/deck-builder.js"></script>
 </body>
 </html>

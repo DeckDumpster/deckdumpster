@@ -1,0 +1,15 @@
+start_page: /deck-builder
+involves:
+  - "create form: select commander, click Create Deck"
+  - "builder layout: .builder-layout with .card-preview and .deck-list"
+  - "card preview: img#preview-img showing commander image"
+  - "deck header: h2 with commander name, .card-count showing '0/100'"
+  - "commander section: .type-group with 'Commander' header"
+  - "add button: .add-btn with text '+ Add Card'"
+fixture_data:
+  commander: "Bonny Pall, Clearcutter (GU, oracle_id: fcb811a8-c6e6-4bc4-b64b-8963a7183669)"
+notes: >
+  1. Navigate to /deck-builder. 2. Type "Bonny" and select from autocomplete.
+  3. Click Create Deck. 4. Wait for builder layout to render.
+  5. Verify commander name in deck header. 6. Verify 0/100 count.
+  7. Verify Commander section. 8. Verify Add Card button.

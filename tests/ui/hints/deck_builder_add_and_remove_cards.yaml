@@ -1,0 +1,17 @@
+start_page: /deck-builder
+involves:
+  - "add button: .add-btn with text '+ Add Card'"
+  - "modal: .modal-overlay with .modal containing search input and results"
+  - "search input: placeholder 'Search cards...' inside modal"
+  - "search results: .search-result with .result-name and .result-add button"
+  - "card row: .card-row with .card-name and .remove-btn (x button)"
+  - "card count: .card-count showing '1/100' after add, '0/100' after remove"
+fixture_data:
+  commander: "Judith, Carnage Connoisseur (BR)"
+  searchable_card: "Hollow Marauder (B) - available unassigned in fixture"
+notes: >
+  1. Create a deck with Judith commander. 2. Click + Add Card.
+  3. Wait for modal. 4. Search for "Hollow". 5. Click Add on Hollow Marauder.
+  6. Verify card appears in deck list. 7. Close modal.
+  8. Verify count is 1/100. 9. Click remove (x) on the card.
+  10. Verify count returns to 0/100.

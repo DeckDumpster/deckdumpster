@@ -41,6 +41,7 @@
         <div class="deck-meta-grid" id="deck-meta"></div>
       </div>
       <div class="actions">
+        <a class="btn-builder-link" id="btn-builder-link" href="#">Builder</a>
         <button class="secondary" id="btn-edit">Edit</button>
         <button id="btn-add-cards">Add Cards</button>
         <button class="secondary" id="btn-remove-selected">Remove Selected</button>
@@ -247,6 +248,7 @@
   function renderDeckDetail() {
     document.getElementById('deck-name').textContent = deck.name;
     document.title = `${deck.name} — DeckDumpster`;
+    document.getElementById('btn-builder-link').href = `/deck-builder/${deck.id}`;
     const meta = [];
     if (deck.format) meta.push(`<span class="label">Format</span><span>${esc(deck.format)}</span>`);
     if (deck.is_precon) meta.push(`<span class="label">Type</span><span>Preconstructed</span>`);

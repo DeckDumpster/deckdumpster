@@ -117,6 +117,11 @@ class Deck:
     origin_set_code: Optional[str] = None
     origin_theme: Optional[str] = None
     origin_variation: Optional[int] = None
+    hypothetical: bool = False
+    commander_oracle_id: Optional[str] = None
+    commander_printing_id: Optional[str] = None
+    plan: Optional[str] = None
+    sub_plans: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -1828,12 +1833,14 @@ class DeckRepository:
             """INSERT INTO decks (name, description, format, is_precon,
                sleeve_color, deck_box, storage_location,
                origin_set_code, origin_theme, origin_variation,
-               created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               hypothetical, commander_oracle_id, commander_printing_id,
+               plan, sub_plans, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (deck.name, deck.description, deck.format, is_precon,
              deck.sleeve_color, deck.deck_box, deck.storage_location,
              deck.origin_set_code, deck.origin_theme, deck.origin_variation,
-             ts, ts),
+             1 if deck.hypothetical else 0, deck.commander_oracle_id,
+             deck.commander_printing_id, deck.plan, deck.sub_plans, ts, ts),
         )
         return cursor.lastrowid
 
@@ -1855,12 +1862,14 @@ class DeckRepository:
         params = []
         allowed = ("name", "description", "format", "is_precon",
                     "sleeve_color", "deck_box", "storage_location",
-                    "origin_set_code", "origin_theme", "origin_variation")
+                    "origin_set_code", "origin_theme", "origin_variation",
+                    "hypothetical", "commander_oracle_id", "commander_printing_id",
+                    "plan", "sub_plans")
         for key in allowed:
             if key in data:
                 fields.append(f"{key} = ?")
                 val = data[key]
-                if key == "is_precon":
+                if key in ("is_precon", "hypothetical"):
                     val = 1 if val else 0
                 params.append(val)
         # Auto-set is_precon when origin_set_code is provided
@@ -1897,7 +1906,13 @@ class DeckRepository:
         cursor = self.conn.execute(
             """SELECT d.*,
                       COUNT(c.id) as card_count,
-                      COALESCE(SUM(c.purchase_price), 0) as total_value
+                      COALESCE(SUM(c.purchase_price), 0) as total_value,
+                      (SELECT GROUP_CONCAT(DISTINCT je.value)
+                       FROM collection c2
+                       JOIN printings p ON c2.printing_id = p.printing_id
+                       JOIN cards card ON p.oracle_id = card.oracle_id,
+                            json_each(card.colors) je
+                       WHERE c2.deck_id = d.id) as deck_colors
                FROM decks d
                LEFT JOIN collection c ON c.deck_id = d.id
                GROUP BY d.id

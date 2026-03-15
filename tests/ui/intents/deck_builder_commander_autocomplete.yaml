@@ -1,0 +1,12 @@
+# Scenario: Commander autocomplete shows matching legendary creatures
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I type a legendary creature name like "Glarb" into the commander
+  search input on /deck-builder, an autocomplete dropdown appears showing
+  matching legendary creatures from my collection with mana cost icons.
+  Selecting a result populates the input field with the commander name
+  and enables the Create Deck button.

@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 36
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -77,6 +77,11 @@ CREATE TABLE IF NOT EXISTS decks (
     origin_set_code TEXT,
     origin_theme TEXT,
     origin_variation INTEGER,
+    hypothetical INTEGER NOT NULL DEFAULT 0,
+    commander_oracle_id TEXT REFERENCES cards(oracle_id),
+    commander_printing_id TEXT REFERENCES printings(printing_id),
+    plan TEXT,
+    sub_plans TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -91,6 +96,21 @@ CREATE TABLE IF NOT EXISTS deck_expected_cards (
     UNIQUE(deck_id, oracle_id, zone)
 );
 CREATE INDEX IF NOT EXISTS idx_deck_expected_deck ON deck_expected_cards(deck_id);
+
+-- EDHREC recommendations (popularity data per commander)
+CREATE TABLE IF NOT EXISTS edhrec_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commander_oracle_id TEXT NOT NULL,
+    card_oracle_id TEXT NOT NULL,
+    inclusion_rate REAL,
+    rank INTEGER,
+    synergy_score REAL,
+    fetched_at TEXT NOT NULL,
+    FOREIGN KEY (commander_oracle_id) REFERENCES cards(oracle_id),
+    FOREIGN KEY (card_oracle_id) REFERENCES cards(oracle_id),
+    UNIQUE(commander_oracle_id, card_oracle_id)
+);
+CREATE INDEX IF NOT EXISTS idx_edhrec_commander ON edhrec_recommendations(commander_oracle_id);
 
 -- Binders (physical binder groupings)
 CREATE TABLE IF NOT EXISTS binders (
@@ -638,6 +658,14 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v30_to_v31(conn)
         if current < 32:
             _migrate_v31_to_v32(conn)
+        if current < 33:
+            _migrate_v32_to_v33(conn)
+        if current < 34:
+            _migrate_v33_to_v34(conn)
+        if current < 35:
+            _migrate_v34_to_v35(conn)
+        if current < 36:
+            _migrate_v35_to_v36(conn)
 
     # Record schema version
     conn.execute(
@@ -1949,6 +1977,55 @@ def _migrate_v31_to_v32(conn: sqlite3.Connection):
     conn.execute("CREATE INDEX IF NOT EXISTS idx_spc_product ON sealed_product_cards(sealed_product_uuid)")
 
 
+def _migrate_v32_to_v33(conn: sqlite3.Connection):
+    """Add hypothetical, commander_oracle_id, and plan columns to decks table."""
+    cursor = conn.execute("PRAGMA table_info(decks)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "hypothetical" not in columns:
+        conn.execute("ALTER TABLE decks ADD COLUMN hypothetical INTEGER NOT NULL DEFAULT 0")
+    if "commander_oracle_id" not in columns:
+        conn.execute("ALTER TABLE decks ADD COLUMN commander_oracle_id TEXT REFERENCES cards(oracle_id)")
+    if "plan" not in columns:
+        conn.execute("ALTER TABLE decks ADD COLUMN plan TEXT")
+
+
+def _migrate_v33_to_v34(conn: sqlite3.Connection):
+    """Add edhrec_recommendations table."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS edhrec_recommendations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            commander_oracle_id TEXT NOT NULL,
+            card_oracle_id TEXT NOT NULL,
+            inclusion_rate REAL,
+            rank INTEGER,
+            synergy_score REAL,
+            fetched_at TEXT NOT NULL,
+            FOREIGN KEY (commander_oracle_id) REFERENCES cards(oracle_id),
+            FOREIGN KEY (card_oracle_id) REFERENCES cards(oracle_id),
+            UNIQUE(commander_oracle_id, card_oracle_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_edhrec_commander ON edhrec_recommendations(commander_oracle_id);
+    """)
+
+
+def _migrate_v34_to_v35(conn: sqlite3.Connection):
+    """Add sub_plans column to decks table for commander sub-plan tracking."""
+    cursor = conn.execute("PRAGMA table_info(decks)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "sub_plans" not in columns:
+        conn.execute("ALTER TABLE decks ADD COLUMN sub_plans TEXT")
+
+
+def _migrate_v35_to_v36(conn: sqlite3.Connection):
+    """Add commander_printing_id column to decks table."""
+    cursor = conn.execute("PRAGMA table_info(decks)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "commander_printing_id" not in columns:
+        conn.execute(
+            "ALTER TABLE decks ADD COLUMN commander_printing_id TEXT REFERENCES printings(printing_id)"
+        )
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -1967,6 +2044,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS mtgjson_booster_sheets;
         DROP TABLE IF EXISTS mtgjson_printings;
         DROP TABLE IF EXISTS mtgjson_uuid_map;
+        DROP TABLE IF EXISTS edhrec_recommendations;
         DROP TABLE IF EXISTS deck_expected_cards;
         DROP TABLE IF EXISTS movement_log;
         DROP TABLE IF EXISTS status_log;

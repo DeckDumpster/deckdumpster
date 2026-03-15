@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mana-font@latest/css/mana.min.css">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Decks</title>
 <style>
@@ -128,6 +129,27 @@ main { padding: 24px; }
 }
 
 .deck-card .stats span { color: #e0e0e0; }
+
+.deck-mana { display: flex; gap: 2px; align-items: center; }
+.deck-mana .ms { font-size: 0.9rem; }
+
+.deck-links {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #0f3460;
+  display: flex;
+  gap: 12px;
+}
+.deck-links a {
+  font-size: 0.8rem;
+  color: #e94560;
+  text-decoration: none;
+  padding: 3px 10px;
+  border: 1px solid #e94560;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+.deck-links a:hover { background: #e94560; color: #fff; }
 
 /* Detail view */
 .detail-view { display: none; }
@@ -535,9 +557,10 @@ function renderDeckList() {
   empty.style.display = 'none';
 
   grid.innerHTML = decks.map(d => `
-    <a class="deck-card" href="/decks/${d.id}" style="text-decoration:none;color:inherit;display:block;">
+    <div class="deck-card">
       <h3>${esc(d.name)}</h3>
       <div class="meta">
+        ${d.deck_colors ? `<span class="deck-mana">${renderDeckColors(d.deck_colors)}</span>` : ''}
         ${d.format ? `<span><span class="badge">${esc(d.format)}</span></span>` : ''}
         ${d.is_precon ? '<span><span class="badge precon">Precon</span></span>' : ''}
         ${d.storage_location ? `<span>${esc(d.storage_location)}</span>` : ''}
@@ -547,7 +570,11 @@ function renderDeckList() {
         <span>${d.card_count} cards</span>
         ${d.total_value ? `<span>$${Number(d.total_value).toFixed(2)}</span>` : ''}
       </div>
-    </a>
+      <div class="deck-links">
+        <a href="/deck-builder/${d.id}">Builder</a>
+        <a href="/decks/${d.id}">Detail</a>
+      </div>
+    </div>
   `).join('');
 }
 
@@ -716,7 +743,7 @@ async function saveDeck() {
     currentDeck = result;
     renderDeckDetail();
   } else {
-    window.location.href = '/decks/' + result.id;
+    window.location.href = '/deck-builder/' + result.id;
   }
 }
 
@@ -1002,6 +1029,16 @@ function esc(s) {
   const d = document.createElement('div');
   d.textContent = String(s);
   return d.innerHTML;
+}
+
+function renderDeckColors(colorsStr) {
+  if (!colorsStr) return '';
+  const order = ['W', 'U', 'B', 'R', 'G'];
+  const colors = colorsStr.split(',').filter(c => order.includes(c));
+  colors.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  return colors.map(c =>
+    `<i class="ms ms-${c.toLowerCase()} ms-cost ms-shadow"></i>`
+  ).join('');
 }
 
 // Close modals on backdrop click

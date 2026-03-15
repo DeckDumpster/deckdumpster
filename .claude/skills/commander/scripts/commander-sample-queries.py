@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Print sample SQL WHERE clauses for commander deck building categories.
+
+Usage:
+  commander-sample-queries.py --<category>
+  commander-sample-queries.py --list
+
+Categories match template roles (ramp, card-advantage, targeted-disruption,
+mass-disruption, lands) and common commander sub-plan themes (sacrifice,
+reanimation, tokens, counters, discard, etb, voltron, aristocrats, tribal).
+
+Examples:
+  commander-sample-queries.py --ramp
+  commander-sample-queries.py --sacrifice
+  commander-sample-queries.py --list
+"""
+import sys
+
+CATEGORIES = {
+    # --- Template roles ---
+    "ramp": {
+        "description": "Mana acceleration: rocks, dorks, land tutors, rituals",
+        "queries": [
+            # Mana rocks (Sol Ring, Fellwar Stone, signets, Thran Dynamo)
+            ("Mana rocks",
+             "c.type_line LIKE '%Artifact%' AND c.oracle_text LIKE '%{T}:%Add%' AND c.cmc <= 4"),
+            # Mana dorks (Llanowar Elves, Birds of Paradise, Fyndhorn Elves)
+            ("Mana dorks",
+             "c.type_line LIKE '%Creature%' AND c.oracle_text LIKE '%{T}:%Add%' AND c.cmc <= 2"),
+            # Land ramp spells (Cultivate, Kodama's Reach, Rampant Growth)
+            ("Land search to battlefield",
+             "c.oracle_text LIKE '%search your library for%land%onto the battlefield%' AND c.cmc <= 4"),
+            # Rituals and burst mana (Dark Ritual, Cabal Ritual, Burnt Offering)
+            ("Rituals / burst mana",
+             "c.oracle_text LIKE '%Add {%{%{%' AND c.type_line NOT LIKE '%Land%' AND c.cmc <= 2"),
+            # Cost reducers (Urza's Incubator, Herald's Horn)
+            ("Cost reducers",
+             "c.oracle_text LIKE '%cost%less to cast%' AND c.cmc <= 4"),
+            # Treasure / token ramp (Dockside Extortionist, Smothering Tithe)
+            ("Treasure generators",
+             "c.oracle_text LIKE '%create%Treasure%' AND c.cmc <= 4"),
+            # Sacrifice for mana (Ashnod's Altar, Phyrexian Altar)
+            ("Sacrifice for mana",
+             "c.oracle_text LIKE '%Sacrifice%:%Add%' AND c.cmc <= 4"),
+        ],
+    },
+    "card-advantage": {
+        "description": "Draw, selection, recursion, impulse draw",
+        "queries": [
+            # Pure draw (Sign in Blood, Painful Truths, Harmonize)
+            ("Draw spells",
+             "c.oracle_text LIKE '%draw%card%' AND c.type_line LIKE '%Sorcery%' AND c.cmc <= 4"),
+            # Repeatable draw (Phyrexian Arena, Rhystic Study, Sylvan Library)
+            ("Repeatable draw engines",
+             "c.oracle_text LIKE '%draw a card%' AND c.type_line LIKE '%Enchantment%'"),
+            # Draw on creatures (Beast Whisperer, Toski, Midnight Reaper)
+            ("Creatures that draw",
+             "c.type_line LIKE '%Creature%' AND c.oracle_text LIKE '%draw%card%' AND c.cmc <= 5"),
+            # Impulse draw (exile top, may play)
+            ("Impulse draw (exile and play)",
+             "c.oracle_text LIKE '%exile%top%' AND c.oracle_text LIKE '%you may play%'"),
+            # Cantrips / card selection (Preordain, Brainstorm, Opt)
+            ("Cantrips and selection",
+             "c.oracle_text LIKE '%draw a card%' AND c.cmc <= 1"),
+            # Looting / rummaging (Faithless Looting, Cathartic Reunion)
+            ("Looting / rummaging (draw + discard)",
+             "c.oracle_text LIKE '%draw%' AND c.oracle_text LIKE '%discard%' AND c.cmc <= 3"),
+            # Equipment / artifact draw (Skullclamp, Mask of Memory)
+            ("Equipment that draws",
+             "c.type_line LIKE '%Equipment%' AND c.oracle_text LIKE '%draw%'"),
+            # Surveil / scry
+            ("Surveil and scry",
+             "c.oracle_text LIKE '%surveil%' AND c.cmc <= 3"),
+        ],
+    },
+    "targeted-disruption": {
+        "description": "Single-target removal, exile, bounce, counters",
+        "queries": [
+            # Creature removal (Go for the Throat, Terminate, Murder)
+            ("Destroy creature",
+             "c.oracle_text LIKE '%destroy target%creature%' AND c.cmc <= 4"),
+            # Exile creature (Swords to Plowshares, Path to Exile)
+            ("Exile creature",
+             "c.oracle_text LIKE '%exile target%creature%' AND c.cmc <= 4"),
+            # Flexible removal (Chaos Warp, Beast Within, Generous Gift)
+            ("Destroy/exile target permanent",
+             "(c.oracle_text LIKE '%destroy target permanent%' OR c.oracle_text LIKE '%exile target%permanent%') AND c.cmc <= 4"),
+            # Artifact/enchantment removal
+            ("Artifact or enchantment removal",
+             "c.oracle_text LIKE '%destroy target%artifact%' OR c.oracle_text LIKE '%destroy target%enchantment%'"),
+            # Burn removal (Lightning Bolt, Chaos Bolt)
+            ("Burn (damage to target)",
+             "c.oracle_text LIKE '%deals%damage to%target%' AND c.cmc <= 3"),
+            # Counterspells
+            ("Counterspells",
+             "c.oracle_text LIKE '%counter target spell%' AND c.cmc <= 3"),
+            # Edict effects (Diabolic Edict, Fleshbag Marauder)
+            ("Edict (force sacrifice)",
+             "c.oracle_text LIKE '%player sacrifices a creature%' AND c.cmc <= 4"),
+            # Bounce (Cyclonic Rift single mode, Chain of Vapor)
+            ("Bounce to hand",
+             "c.oracle_text LIKE '%return target%to%owner%hand%' AND c.cmc <= 3"),
+        ],
+    },
+    "mass-disruption": {
+        "description": "Board wipes, mass bounce, mass exile",
+        "queries": [
+            # Creature board wipes (Wrath of God, Damnation)
+            ("Destroy all creatures",
+             "c.oracle_text LIKE '%destroy all creature%' AND c.cmc <= 6"),
+            # Damage-based wipes (Blasphemous Act, Earthquake)
+            ("Damage to each/all creatures",
+             "c.oracle_text LIKE '%damage to each creature%' OR c.oracle_text LIKE '%damage to each%' AND c.type_line LIKE '%Sorcery%'"),
+            # -X/-X wipes (Toxic Deluge, Black Sun's Zenith)
+            ("Mass -X/-X effects",
+             "c.oracle_text LIKE '%all creatures get -%' OR c.oracle_text LIKE '%each creature gets -%'"),
+            # Exile all (Merciless Eviction, Farewell)
+            ("Exile all",
+             "c.oracle_text LIKE '%exile all%'"),
+            # Sacrifice-based wipes (Dictate of Erebos, Grave Pact)
+            ("Opponents sacrifice when yours die",
+             "c.oracle_text LIKE '%creature you control dies%each opponent sacrifices%'"),
+            # Overload wipes (Cyclonic Rift, Vandalblast)
+            ("Overload wipes",
+             "c.oracle_text LIKE '%Overload%' AND (c.oracle_text LIKE '%destroy%' OR c.oracle_text LIKE '%return%')"),
+        ],
+    },
+    "lands": {
+        "description": "Mana base: duals, utility lands, fetches",
+        "queries": [
+            # Dual lands (both colors)
+            ("Dual lands (add two colors)",
+             "c.type_line LIKE '%Land%' AND c.oracle_text LIKE '%Add {%' AND c.oracle_text LIKE '%or%{%'"),
+            # Fetch lands
+            ("Fetch lands (sacrifice to search)",
+             "c.type_line LIKE '%Land%' AND c.oracle_text LIKE '%Sacrifice this land%Search%'"),
+            # Utility lands (non-mana abilities)
+            ("Utility lands",
+             "c.type_line LIKE '%Land%' AND c.oracle_text LIKE '%{T}%' AND LENGTH(c.oracle_text) > 50 AND c.cmc = 0"),
+            # Lands that enter untapped
+            ("Untapped duals",
+             "c.type_line LIKE '%Land%' AND c.oracle_text NOT LIKE '%enters tapped%' AND c.oracle_text LIKE '%Add {%' AND c.oracle_text LIKE '%or%{%'"),
+        ],
+    },
+
+    # --- Common sub-plan themes ---
+    "sacrifice": {
+        "description": "Sacrifice outlets, payoffs, and fodder",
+        "queries": [
+            # Free sacrifice outlets (Viscera Seer, Carrion Feeder)
+            ("Free sacrifice outlets",
+             "c.oracle_text LIKE '%Sacrifice a creature:%' AND c.cmc <= 3"),
+            # Death payoffs (Blood Artist, Zulaport Cutthroat)
+            ("Death triggers (when creature dies)",
+             "c.oracle_text LIKE '%creature%dies%' AND c.oracle_text LIKE '%each opponent%' AND c.cmc <= 4"),
+            # Opponents sacrifice (Grave Pact, Dictate of Erebos)
+            ("Force opponents to sacrifice",
+             "c.oracle_text LIKE '%each opponent sacrifices%'"),
+            # Sacrifice fodder that replaces itself
+            ("Dies → create token",
+             "c.oracle_text LIKE '%When%dies%create%token%' AND c.cmc <= 3"),
+            # Recursive creatures (Bloodghast, Reassembling Skeleton)
+            ("Recursive creatures (return from graveyard)",
+             "c.type_line LIKE '%Creature%' AND c.oracle_text LIKE '%return%from your graveyard to the battlefield%' AND c.cmc <= 3"),
+        ],
+    },
+    "reanimation": {
+        "description": "Return creatures from graveyard to battlefield or hand",
+        "queries": [
+            # Reanimate to battlefield (Animate Dead, Reanimate, Victimize)
+            ("Reanimate to battlefield",
+             "c.oracle_text LIKE '%return target creature%from%graveyard to the battlefield%'"),
+            # Reanimate to battlefield (put onto)
+            ("Put creature from graveyard onto battlefield",
+             "c.oracle_text LIKE '%creature card from%graveyard%onto the battlefield%'"),
+            # Mass reanimation (Living Death, Rise of the Dark Realms)
+            ("Mass reanimation",
+             "c.oracle_text LIKE '%return all creature%from%graveyard%' OR c.oracle_text LIKE '%each%creature card%graveyard%battlefield%'"),
+            # Return to hand (Disentomb, Cadaver Imp)
+            ("Return creature to hand",
+             "c.oracle_text LIKE '%return target creature card from your graveyard to your hand%'"),
+            # Self-recurring creatures
+            ("Self-recurring creatures",
+             "c.type_line LIKE '%Creature%' AND c.oracle_text LIKE '%Return%from your graveyard%' AND c.oracle_text LIKE '%to the battlefield%'"),
+            # Graveyard filling (Buried Alive, Entomb)
+            ("Graveyard fillers (tutor to graveyard)",
+             "c.oracle_text LIKE '%search your library%put%into%graveyard%'"),
+        ],
+    },
+    "tokens": {
+        "description": "Token generators, doublers, and anthem effects",
+        "queries": [
+            # Token generators (repeatable)
+            ("Repeatable token generation",
+             "c.oracle_text LIKE '%create%token%' AND c.oracle_text LIKE '%beginning of%' AND c.cmc <= 5"),
+            # Token doublers (Anointed Procession, Parallel Lives)
+            ("Token doublers",
+             "c.oracle_text LIKE '%create%twice that many%' OR c.oracle_text LIKE '%creates twice%'"),
+            # Mass token generation
+            ("Mass token generation",
+             "c.oracle_text LIKE '%create%token%' AND c.type_line LIKE '%Sorcery%' AND c.cmc <= 5"),
+            # Anthems (pump all your creatures)
+            ("Anthem effects (+X/+X to all)",
+             "c.oracle_text LIKE '%creatures you control get +%'"),
+            # Populate / copy tokens
+            ("Copy or populate tokens",
+             "c.oracle_text LIKE '%Populate%' OR c.oracle_text LIKE '%create a token that%s a copy%'"),
+        ],
+    },
+    "counters": {
+        "description": "+1/+1 counters, counter synergy, proliferate",
+        "queries": [
+            # +1/+1 counter placement
+            ("Put +1/+1 counters",
+             "c.oracle_text LIKE '%put%+1/+1 counter%' AND c.cmc <= 4"),
+            # Enters with counters
+            ("Enters with +1/+1 counters",
+             "c.oracle_text LIKE '%enters%with%+1/+1 counter%' AND c.cmc <= 4"),
+            # Counter doubling (Doubling Season, Hardened Scales)
+            ("Counter doublers / extra counters",
+             "c.oracle_text LIKE '%additional +1/+1 counter%' OR c.oracle_text LIKE '%twice that many%counter%'"),
+            # Proliferate
+            ("Proliferate",
+             "c.oracle_text LIKE '%proliferate%'"),
+            # Counter payoffs (when counters are placed)
+            ("Counter payoffs",
+             "c.oracle_text LIKE '%whenever%+1/+1 counter%' AND c.cmc <= 5"),
+        ],
+    },
+    "discard": {
+        "description": "Discard enablers, madness, graveyard value",
+        "queries": [
+            # Discard enablers (your own hand)
+            ("Discard enablers (you discard)",
+             "c.oracle_text LIKE '%discard a card%' AND c.oracle_text NOT LIKE '%opponent%discard%' AND c.cmc <= 3"),
+            # Madness cards (cast from discard)
+            ("Madness cards",
+             "c.oracle_text LIKE '%Madness%'"),
+            # Discard payoffs (when you discard)
+            ("Discard payoffs (whenever you discard)",
+             "c.oracle_text LIKE '%whenever you discard%' OR c.oracle_text LIKE '%whenever%player%discards%'"),
+            # Make opponents discard
+            ("Force opponent discard",
+             "c.oracle_text LIKE '%opponent%discard%' AND c.cmc <= 4"),
+            # Graveyard value (cards that want to be in graveyard)
+            ("Cards with graveyard value (flashback, unearth, escape)",
+             "c.oracle_text LIKE '%Flashback%' OR c.oracle_text LIKE '%Unearth%' OR c.oracle_text LIKE '%Escape%'"),
+        ],
+    },
+    "etb": {
+        "description": "Enter-the-battlefield triggers and blink/flicker",
+        "queries": [
+            # ETB creatures (when enters)
+            ("ETB creatures (MV 3 or less)",
+             "c.type_line LIKE '%Creature%' AND c.oracle_text LIKE '%When%enters%' AND c.cmc <= 3"),
+            # ETB creatures (higher CMC, bigger effects)
+            ("ETB creatures (MV 4-6)",
+             "c.type_line LIKE '%Creature%' AND c.oracle_text LIKE '%When%enters%' AND c.cmc BETWEEN 4 AND 6"),
+            # Blink / flicker (Conjurer's Closet, Thassa)
+            ("Blink / flicker effects",
+             "c.oracle_text LIKE '%exile%then return%to the battlefield%' OR c.oracle_text LIKE '%exile%return%under%control%'"),
+            # Panharmonicon effects
+            ("ETB doublers",
+             "c.oracle_text LIKE '%entering%causes a triggered ability%trigger%additional time%' OR c.oracle_text LIKE '%enter%trigger%additional%'"),
+        ],
+    },
+    "voltron": {
+        "description": "Equipment, auras, and commander damage support",
+        "queries": [
+            # Equipment
+            ("Equipment (CMC 3 or less)",
+             "c.type_line LIKE '%Equipment%' AND c.cmc <= 3"),
+            # Powerful equipment
+            ("Equipment (power boosting)",
+             "c.type_line LIKE '%Equipment%' AND c.oracle_text LIKE '%+%/+%'"),
+            # Auras that boost
+            ("Auras (power boosting)",
+             "c.type_line LIKE '%Aura%' AND c.oracle_text LIKE '%+%/+%' AND c.oracle_text LIKE '%Enchant creature%'"),
+            # Protection / evasion
+            ("Evasion (unblockable, trample, flying)",
+             "c.oracle_text LIKE '%can''t be blocked%' OR (c.oracle_text LIKE '%Enchant creature%' AND c.oracle_text LIKE '%flying%')"),
+            # Equipment tutors
+            ("Equipment/aura tutors",
+             "c.oracle_text LIKE '%search your library for%Equipment%' OR c.oracle_text LIKE '%search your library for%Aura%'"),
+        ],
+    },
+    "tribal": {
+        "description": "Tribal synergies (use with type filter)",
+        "queries": [
+            # Lord effects (other X get +1/+1)
+            ("Lords (+1/+1 to creature type)",
+             "c.oracle_text LIKE '%you control get +%' AND c.type_line LIKE '%Creature%'"),
+            # Tribal cost reduction
+            ("Tribal cost reduction",
+             "c.oracle_text LIKE '%cost%less to cast%' AND c.type_line LIKE '%Creature%'"),
+            # Tribal card draw
+            ("Tribal card draw",
+             "c.oracle_text LIKE '%Whenever%you control enters%draw%' OR c.oracle_text LIKE '%Whenever you cast a%spell%draw%'"),
+            # Changelings (all creature types)
+            ("Changelings",
+             "c.oracle_text LIKE '%Changeling%' AND c.type_line LIKE '%Creature%'"),
+        ],
+    },
+}
+
+# --- Main ---
+if len(sys.argv) < 2:
+    print(__doc__)
+    sys.exit(1)
+
+arg = sys.argv[1].lstrip("-").lower()
+
+if arg == "list":
+    print("Available categories:\n")
+    for name, info in CATEGORIES.items():
+        print(f"  --{name:<25} {info['description']}")
+    sys.exit(0)
+
+if arg not in CATEGORIES:
+    print(f"Unknown category: {arg}")
+    print(f"Run with --list to see available categories.")
+    sys.exit(1)
+
+cat = CATEGORIES[arg]
+print(f"=== {arg.replace('-', ' ').title()} ===")
+print(f"{cat['description']}\n")
+
+for label, query in cat["queries"]:
+    print(f"  {label}:")
+    print(f"    \"{query}\"\n")

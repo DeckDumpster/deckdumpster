@@ -1,0 +1,7 @@
+[Unit]
+Description=MTGC weekly EDHREC refresh ({{INSTANCE}})
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'podman exec systemd-mtgc-{{INSTANCE}} mtg data fetch-edhrec && podman exec systemd-mtgc-{{INSTANCE}} mtg data import-edhrec'
+TimeoutStartSec=1800

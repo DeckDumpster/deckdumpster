@@ -37,6 +37,11 @@ def register(subparsers):
         help="Skip MTGJSON price data download and import",
     )
     parser.add_argument(
+        "--skip-edhrec",
+        action="store_true",
+        help="Skip EDHREC recommendation data download",
+    )
+    parser.add_argument(
         "--from-fixture",
         metavar="PATH",
         help="Copy a pre-built fixture DB instead of downloading data",
@@ -97,6 +102,15 @@ def run(args):
         print("\n=== Step 3c: TCGCSV sealed products ===")
         from mtg_collector.cli.data_cmd import import_sealed_products
         import_sealed_products(db_path)
+
+    # Step 3d: EDHREC recommendations (optional)
+    if args.skip_data or getattr(args, "skip_edhrec", False):
+        print("\n=== Step 3d: EDHREC data (skipped) ===")
+    else:
+        print("\n=== Step 3d: EDHREC data ===")
+        from mtg_collector.cli.data_cmd import fetch_edhrec, import_edhrec
+        fetch_edhrec(db_path, force=False)
+        import_edhrec(db_path)
 
     # Step 4: Load demo data
     _maybe_load_demo(args)
