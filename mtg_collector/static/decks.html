@@ -558,7 +558,7 @@ function renderDeckList() {
 
   grid.innerHTML = decks.map(d => `
     <div class="deck-card">
-      <h3>${esc(d.name)}</h3>
+      <h3><a href="/decks/${d.id}">${esc(d.name)}</a></h3>
       <div class="meta">
         ${d.deck_colors ? `<span class="deck-mana">${renderDeckColors(d.deck_colors)}</span>` : ''}
         ${d.format ? `<span><span class="badge">${esc(d.format)}</span></span>` : ''}
@@ -743,7 +743,7 @@ async function saveDeck() {
     currentDeck = result;
     renderDeckDetail();
   } else {
-    window.location.href = '/deck-builder/' + result.id;
+    window.location.href = '/decks/' + result.id;
   }
 }
 
