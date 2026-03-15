@@ -84,7 +84,7 @@ main { padding: 24px; }
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 16px;
-  margin-top: 16px;
+  margin-top: 8px;
 }
 
 .deck-card {
@@ -120,6 +120,7 @@ main { padding: 24px; }
 }
 
 .deck-card .meta .badge.precon { background: #8e44ad; }
+.deck-card .meta .badge.hypothetical { background: #5c4d8a; }
 
 .deck-card .stats {
   margin-top: 12px;
@@ -287,6 +288,28 @@ main { padding: 24px; }
 .picker-card.selected { background: rgba(233, 69, 96, 0.2); }
 .picker-card .chk { width: 16px; height: 16px; }
 
+/* Format sections */
+.format-section { margin-bottom: 32px; }
+.format-header {
+  font-size: 1.2rem;
+  color: #e94560;
+  margin-bottom: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #0f3460;
+}
+.format-header .format-count {
+  font-size: 0.85rem;
+  color: #888;
+  font-weight: normal;
+}
+
+.deck-plan {
+  font-style: italic;
+  color: #aaa;
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+
 .empty-state {
   text-align: center;
   padding: 48px 24px;
@@ -371,7 +394,7 @@ main { padding: 24px; }
 <main>
   <!-- List View -->
   <div id="list-view" class="list-view active">
-    <div id="deck-grid" class="deck-grid"></div>
+    <div id="deck-grid"></div>
     <div id="empty-state" class="empty-state" style="display:none">
       No decks yet. Click "New Deck" to create one.
     </div>
@@ -434,6 +457,7 @@ main { padding: 24px; }
       <select id="f-format">
         <option value="">-- None --</option>
         <option value="commander">Commander / EDH</option>
+        <option value="jumpstart">Jumpstart</option>
         <option value="standard">Standard</option>
         <option value="modern">Modern</option>
         <option value="pioneer">Pioneer</option>
@@ -556,26 +580,64 @@ function renderDeckList() {
   }
   empty.style.display = 'none';
 
-  grid.innerHTML = decks.map(d => `
+  // Group decks by format
+  const groups = {};
+  const formatOrder = ['commander', 'jumpstart', null];
+  const formatLabels = {
+    'commander': 'Commander',
+    'jumpstart': 'Jumpstart',
+  };
+
+  for (const d of decks) {
+    const fmt = d.format || null;
+    if (!groups[fmt]) groups[fmt] = [];
+    groups[fmt].push(d);
+  }
+
+  // Sort: known formats first in order, then remaining alphabetically, then null last
+  const sortedKeys = Object.keys(groups).sort((a, b) => {
+    const ai = formatOrder.indexOf(a === 'null' ? null : a);
+    const bi = formatOrder.indexOf(b === 'null' ? null : b);
+    const aIdx = ai >= 0 ? ai : (a ? formatOrder.length - 0.5 : 999);
+    const bIdx = bi >= 0 ? bi : (b ? formatOrder.length - 0.5 : 999);
+    if (aIdx !== bIdx) return aIdx - bIdx;
+    return (a || '').localeCompare(b || '');
+  });
+
+  let html = '';
+  for (const key of sortedKeys) {
+    const groupDecks = groups[key];
+    const label = key && key !== 'null' ? (formatLabels[key] || key.charAt(0).toUpperCase() + key.slice(1)) : 'Other';
+    html += `<div class="format-section">
+      <h2 class="format-header">${esc(label)} <span class="format-count">(${groupDecks.length})</span></h2>
+      <div class="deck-grid">`;
+    html += groupDecks.map(d => renderDeckCard(d)).join('');
+    html += `</div></div>`;
+  }
+  grid.innerHTML = html;
+}
+
+function renderDeckCard(d) {
+  return `
     <div class="deck-card">
       <h3><a href="/decks/${d.id}">${esc(d.name)}</a></h3>
       <div class="meta">
         ${d.deck_colors ? `<span class="deck-mana">${renderDeckColors(d.deck_colors)}</span>` : ''}
-        ${d.format ? `<span><span class="badge">${esc(d.format)}</span></span>` : ''}
         ${d.is_precon ? '<span><span class="badge precon">Precon</span></span>' : ''}
+        ${d.hypothetical ? '<span><span class="badge hypothetical">Hypothetical</span></span>' : ''}
         ${d.storage_location ? `<span>${esc(d.storage_location)}</span>` : ''}
-        ${d.description ? `<span>${esc(d.description)}</span>` : ''}
+        ${d.plan ? `<span class="deck-plan">${esc(d.plan)}</span>` : ''}
+        ${!d.plan && d.description ? `<span>${esc(d.description)}</span>` : ''}
       </div>
       <div class="stats">
-        <span>${d.card_count} cards</span>
+        <span>${d.hypothetical && d.card_count === 0 && d.expected_card_count ? d.expected_card_count : d.card_count} cards</span>
         ${d.total_value ? `<span>$${Number(d.total_value).toFixed(2)}</span>` : ''}
       </div>
       <div class="deck-links">
-        <a href="/deck-builder/${d.id}">Builder</a>
+        ${d.format === 'commander' ? `<a href="/deck-builder/${d.id}">Builder</a>` : ''}
         <a href="/decks/${d.id}">Detail</a>
       </div>
-    </div>
-  `).join('');
+    </div>`;
 }
 
 function showList() {

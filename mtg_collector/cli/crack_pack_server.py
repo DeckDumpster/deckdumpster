@@ -4991,6 +4991,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         zone = params.get("zone", [None])[0]
         cards = repo.get_cards(deck_id, zone=zone)
 
+        # For hypothetical decks with no collection entries, return expected cards
+        if not cards:
+            deck = repo.get(deck_id)
+            if deck and deck.get("hypothetical"):
+                cards = repo.get_expected_cards_as_cards(deck_id)
+
         for card in cards:
             card["layout"] = card.get("layout") or "normal"
             card["tcg_price"] = None

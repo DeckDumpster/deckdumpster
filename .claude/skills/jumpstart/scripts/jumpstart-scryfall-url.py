@@ -2,14 +2,8 @@
 """Generate a Scryfall search URL showing all cards in a deck, using owned printings.
 
 Usage:
-    uv run python scripts/make_j25/scryfall_deck_url.py "Card Name 1" "Card Name 2" ...
-
-Example (the Zombies pack):
-    uv run python scripts/make_j25/scryfall_deck_url.py \
-        "Festering Mummy" "Tortured Existence" "Dregscape Zombie" \
-        "Shepherd of Rot" "Withered Wretch" "Skirk Ridge Exhumer" \
-        "Cadaver Imp" "Cadaverous Knight" "Phyrexian Arena" \
-        "Buried Alive" "Soulless One" "Cruel Revival"
+    uv run python .claude/skills/jumpstart/scripts/jumpstart-scryfall-url.py "Card Name 1" "Card Name 2" ...
+    uv run python .claude/skills/jumpstart/scripts/jumpstart-scryfall-url.py --open "Card 1" "Card 2" ...
 """
 
 import os
@@ -18,12 +12,8 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-
-def get_db_path():
-    env = os.environ.get("MTGC_DB")
-    if env:
-        return env
-    return str(Path.home() / ".mtgc" / "collection.sqlite")
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from mtg_collector.db.connection import get_db_path
 
 
 def main():
@@ -34,8 +24,7 @@ def main():
     args = parser.parse_args()
 
     card_names = args.cards
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(get_db_path(os.environ.get("MTGC_DB")))
 
     terms = []
     for name in card_names:

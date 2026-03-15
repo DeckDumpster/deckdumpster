@@ -2,8 +2,8 @@
 """Look up a card's oracle text by name.
 
 Usage:
-    uv run python scripts/card_oracle.py "Gravecrawler"
-    uv run python scripts/card_oracle.py "Doom Blade"
+    uv run python .claude/skills/jumpstart/scripts/jumpstart-card-oracle.py "Gravecrawler"
+    uv run python .claude/skills/jumpstart/scripts/jumpstart-card-oracle.py "Doom Blade"
 """
 
 import os
@@ -11,22 +11,17 @@ import sqlite3
 import sys
 from pathlib import Path
 
-
-def get_db_path():
-    env = os.environ.get("MTGC_DB")
-    if env:
-        return env
-    return str(Path.home() / ".mtgc" / "collection.sqlite")
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
+from mtg_collector.db.connection import get_db_path
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: card_oracle.py <card name>", file=sys.stderr)
+        print("Usage: jumpstart-card-oracle.py <card name>", file=sys.stderr)
         sys.exit(1)
 
     name = " ".join(sys.argv[1:])
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(get_db_path(os.environ.get("MTGC_DB")))
 
     # Exact match first, then LIKE
     row = conn.execute(

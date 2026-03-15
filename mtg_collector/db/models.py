@@ -1848,7 +1848,9 @@ class DeckRepository:
         row = self.conn.execute(
             """SELECT d.*,
                       COUNT(c.id) as card_count,
-                      COALESCE(SUM(c.purchase_price), 0) as total_value
+                      COALESCE(SUM(c.purchase_price), 0) as total_value,
+                      (SELECT COALESCE(SUM(e.quantity), 0)
+                       FROM deck_expected_cards e WHERE e.deck_id = d.id) as expected_card_count
                FROM decks d
                LEFT JOIN collection c ON c.deck_id = d.id
                WHERE d.id = ?
@@ -1912,7 +1914,9 @@ class DeckRepository:
                        JOIN printings p ON c2.printing_id = p.printing_id
                        JOIN cards card ON p.oracle_id = card.oracle_id,
                             json_each(card.colors) je
-                       WHERE c2.deck_id = d.id) as deck_colors
+                       WHERE c2.deck_id = d.id) as deck_colors,
+                      (SELECT COALESCE(SUM(e.quantity), 0)
+                       FROM deck_expected_cards e WHERE e.deck_id = d.id) as expected_card_count
                FROM decks d
                LEFT JOIN collection c ON c.deck_id = d.id
                GROUP BY d.id
@@ -2058,6 +2062,43 @@ class DeckRepository:
             (deck_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_expected_cards_as_cards(self, deck_id: int) -> List[Dict]:
+        """Return expected cards with full printing data, shaped like get_cards() output.
+
+        For each expected card, picks the most recent non-digital printing.
+        Cards with quantity > 1 produce one row with a quantity field.
+        """
+        rows = self.conn.execute(
+            """SELECT e.oracle_id, e.zone, e.quantity,
+                      card.name, card.type_line, card.mana_cost, card.cmc,
+                      card.colors, card.color_identity,
+                      p.printing_id, p.set_code, p.collector_number, p.rarity,
+                      p.artist, p.image_uri, p.frame_effects, p.border_color,
+                      p.full_art, p.promo, p.promo_types, p.finishes,
+                      json_extract(p.raw_json, '$.layout') as layout,
+                      s.set_name
+               FROM deck_expected_cards e
+               JOIN cards card ON e.oracle_id = card.oracle_id
+               JOIN printings p ON p.oracle_id = card.oracle_id
+               JOIN sets s ON p.set_code = s.set_code
+               WHERE e.deck_id = ? AND s.digital = 0
+               GROUP BY e.oracle_id
+               ORDER BY card.name""",
+            (deck_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["deck_zone"] = d.pop("zone")
+            d["id"] = None
+            d["finish"] = "nonfoil"
+            d["condition"] = None
+            d["language"] = None
+            d["purchase_price"] = None
+            d["acquired_at"] = None
+            result.append(d)
+        return result
 
     def get_deck_completeness(self, deck_id: int) -> Dict:
         """Compare expected cards against actual deck contents.

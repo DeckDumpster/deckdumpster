@@ -41,7 +41,7 @@
         <div class="deck-meta-grid" id="deck-meta"></div>
       </div>
       <div class="actions">
-        <a class="btn-builder-link" id="btn-builder-link" href="#">Builder</a>
+        <a class="btn-builder-link" id="btn-builder-link" href="#" style="display:none">Builder</a>
         <button class="secondary" id="btn-edit">Edit</button>
         <button id="btn-add-cards">Add Cards</button>
         <button class="secondary" id="btn-remove-selected">Remove Selected</button>
@@ -74,7 +74,7 @@
 
     <div class="completeness-section" id="completeness-section" style="display:none">
       <div class="completeness-header" id="completeness-header">
-        <h3>Expected Cards <span id="completeness-summary"></span></h3>
+        <h3 id="completeness-title">Expected Cards <span id="completeness-summary"></span></h3>
         <span id="completeness-toggle">&#9660;</span>
       </div>
       <div class="completeness-body" id="completeness-body"></div>
@@ -248,7 +248,9 @@
   function renderDeckDetail() {
     document.getElementById('deck-name').textContent = deck.name;
     document.title = `${deck.name} — DeckDumpster`;
-    document.getElementById('btn-builder-link').href = `/deck-builder/${deck.id}`;
+    const builderLink = document.getElementById('btn-builder-link');
+    builderLink.href = `/deck-builder/${deck.id}`;
+    builderLink.style.display = deck.format === 'commander' ? '' : 'none';
     const meta = [];
     if (deck.format) meta.push(`<span class="label">Format</span><span>${esc(deck.format)}</span>`);
     if (deck.is_precon) meta.push(`<span class="label">Type</span><span>Preconstructed</span>`);
@@ -259,7 +261,8 @@
     if (deck.deck_box) meta.push(`<span class="label">Deck Box</span><span>${esc(deck.deck_box)}</span>`);
     if (deck.storage_location) meta.push(`<span class="label">Location</span><span>${esc(deck.storage_location)}</span>`);
     if (deck.description) meta.push(`<span class="label">Notes</span><span>${esc(deck.description)}</span>`);
-    meta.push(`<span class="label">Cards</span><span>${deck.card_count}</span>`);
+    const displayCount = deck.hypothetical && deck.card_count === 0 && deck.expected_card_count ? deck.expected_card_count : deck.card_count;
+    meta.push(`<span class="label">Cards</span><span>${displayCount}</span>`);
     if (deck.total_value) meta.push(`<span class="label">Value</span><span>$${Number(deck.total_value).toFixed(2)}</span>`);
     document.getElementById('deck-meta').innerHTML = meta.join('');
     loadCompleteness();
@@ -282,7 +285,7 @@
     const allCards = await res.json();
 
     const counts = { mainboard: 0, sideboard: 0, commander: 0 };
-    allCards.forEach(c => { if (counts[c.deck_zone] !== undefined) counts[c.deck_zone]++; });
+    allCards.forEach(c => { if (counts[c.deck_zone] !== undefined) counts[c.deck_zone] += (c.quantity || 1); });
     document.getElementById('count-mainboard').textContent = `(${counts.mainboard})`;
     document.getElementById('count-sideboard').textContent = `(${counts.sideboard})`;
     document.getElementById('count-commander').textContent = `(${counts.commander})`;
@@ -299,15 +302,22 @@
       tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-secondary); padding:24px;">No cards in this zone</td></tr>';
       return;
     }
-    tbody.innerHTML = deckCards.map(c => {
+    tbody.innerHTML = deckCards.map((c, idx) => {
       const helpers = prepareCardHelpers(c);
+      // Prefix name with quantity for expected cards with qty > 1
+      if (c.quantity && c.quantity > 1) {
+        helpers.nameHtml = `<span class="card-qty">${c.quantity}x</span> ${helpers.nameHtml}`;
+      }
       const cells = DECK_COLUMNS.map(col => {
         const cls = col === 'price' ? ' class="price-cell"' : '';
         const content = renderCellContent(col, c, helpers);
         return `<td${cls}>${content}</td>`;
       }).join('');
-      return `<tr data-idx="${deckCards.indexOf(c)}">
-        <td><input type="checkbox" data-id="${c.id}" ${selectedCardIds.has(c.id) ? 'checked' : ''}></td>
+      const checkboxHtml = c.id != null
+        ? `<input type="checkbox" data-id="${c.id}" ${selectedCardIds.has(c.id) ? 'checked' : ''}>`
+        : '';
+      return `<tr data-idx="${idx}">
+        <td>${checkboxHtml}</td>
         ${cells}
       </tr>`;
     }).join('');
@@ -509,15 +519,41 @@
       return;
     }
 
+    // Scryfall link helper for nonland cards
+    const nonlandCards = expected.filter(c => {
+      const name = c.name.toLowerCase();
+      return name !== 'plains' && name !== 'island' && name !== 'swamp'
+          && name !== 'mountain' && name !== 'forest';
+    });
+
+    section.style.display = '';
+    let html = '';
+
+    // Scryfall link for small decks (nonland cards < 15)
+    if (nonlandCards.length > 0 && nonlandCards.length < 15) {
+      const q = nonlandCards.map(c => `!"${c.name}"`).join(' or ');
+      const sfUrl = `https://scryfall.com/search?unique=cards&q=${encodeURIComponent(q)}`;
+      html += `<div style="margin-bottom:12px"><a href="${sfUrl}" target="_blank" rel="noopener" class="btn-scryfall-link">View on Scryfall</a></div>`;
+    }
+
+    // Hypothetical decks: cards are in the mainboard table, just show Scryfall link
+    if (deck.hypothetical) {
+      if (!html) {
+        section.style.display = 'none';
+        return;
+      }
+      document.getElementById('completeness-title').innerHTML = '';
+      document.getElementById('completeness-body').innerHTML = html;
+      return;
+    }
+
+    // Non-hypothetical decks: show completeness (present/missing/extra)
     const res = await fetch(`/api/decks/${deck.id}/completeness`);
     const data = await res.json();
-    section.style.display = '';
 
     const total = data.present.length + data.missing.length;
     document.getElementById('completeness-summary').textContent =
       `(${data.present.length}/${total} present, ${data.missing.length} missing, ${data.extra.length} extra)`;
-
-    let html = '';
 
     if (data.present.length) {
       html += '<div class="completeness-group"><h4 class="present">Present (' + data.present.length + ')</h4>';

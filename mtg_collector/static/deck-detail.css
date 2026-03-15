@@ -41,6 +41,18 @@
 }
 .btn-builder-link:hover { background: #333; color: #fff; }
 
+.btn-scryfall-link {
+  display: inline-block;
+  padding: 6px 14px;
+  color: #c9a227;
+  border: 1px solid #c9a227;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-scryfall-link:hover { background: #c9a227; color: #000; }
+
 /* Zone tabs */
 .zone-tabs {
   display: flex;
