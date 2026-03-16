@@ -84,7 +84,7 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `ingest_images` — Persistent web UI ingest pipeline state (READY_FOR_OCR → PROCESSING → DONE/ERROR).
 - `ingest_lineage` — Maps collection entries back to source images.
 - `decks` — Named decks with format, sleeve color, deck box, storage location. Origin metadata: `origin_set_code`, `origin_theme`, `origin_variation` for Jumpstart/precon tracking.
-- `deck_expected_cards` — Expected card list for precon/Jumpstart decks (keyed on `oracle_id`, not `printing_id`). Used for completeness tracking and reassembly.
+- `deck_expected_cards` — Expected card list for precon/Jumpstart decks (keyed on `printing_id`). Used for completeness tracking and reassembly. Completeness comparison still uses `oracle_id` (via join through `printings`).
 - `binders` — Named binders with color, type, storage location.
 - `collection_views` — Saved filter/search configurations for the collection page.
 - `status_log` — Append-only audit of collection status changes.
@@ -92,7 +92,7 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `settings` — Key-value config (e.g. `price_sources`, `image_display`).
 - `batches` — Unified batch groupings for all ingestion flows (corner, OCR, CSV import, manual ID, orders, sealed_open) with optional deck assignment.
 - `sealed_product_cards` — Pre-resolved card contents for sealed products. Populated during MTGJSON import by resolving `contents_json` deck/card references. Used by the "Open Product" flow to add known cards to collection.
-- Schema v32 with auto-migrations in `schema.py`.
+- Schema v37 with auto-migrations in `schema.py`.
 - Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `BatchRepository`, `SealedProductCardRepository`.
 - **Deck/binder exclusivity**: A collection entry can be in one deck OR one binder, not both. `deck_id` and `binder_id` are mutually exclusive (enforced by repository logic, returns HTTP 409 on conflict). Use `move_cards()` to atomically reassign.
 

@@ -5120,7 +5120,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         if "decklist" in data:
-            # Parse text decklist and resolve to oracle_ids
+            # Parse text decklist and resolve to printing_ids
             from mtg_collector.db.models import CardRepository, PrintingRepository
             from mtg_collector.importers.decklist import parse_line
             card_repo = CardRepository(conn)
@@ -5150,15 +5150,26 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 if not printing_id:
                     card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
                     if card:
-                        printings = printing_repo.get_by_oracle_id(card.oracle_id)
-                        if printings:
-                            printing_id = printings[0].printing_id
+                        # Prefer owned printing, fallback to most recent non-digital
+                        owned = conn.execute(
+                            """SELECT p.printing_id FROM collection col
+                               JOIN printings p ON col.printing_id = p.printing_id
+                               JOIN sets s ON p.set_code = s.set_code
+                               WHERE p.oracle_id = ? AND col.status = 'owned'
+                               ORDER BY s.released_at DESC LIMIT 1""",
+                            (card.oracle_id,),
+                        ).fetchone()
+                        if owned:
+                            printing_id = owned[0]
+                        else:
+                            printings = printing_repo.get_by_oracle_id(card.oracle_id)
+                            if printings:
+                                printing_id = printings[0].printing_id
                 if not printing_id:
                     errors.append(f"Line {i}: card not found: {name}")
                     continue
-                printing = printing_repo.get(printing_id)
                 cards.append({
-                    "oracle_id": printing.oracle_id,
+                    "printing_id": printing_id,
                     "zone": "mainboard",
                     "quantity": qty,
                 })
