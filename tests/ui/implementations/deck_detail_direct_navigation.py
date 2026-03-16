@@ -29,7 +29,7 @@ def steps(harness):
 
     # Verify action buttons are present
     harness.assert_text_present("Edit")
-    harness.assert_text_present("Add Cards")
-    harness.assert_text_present("Delete Deck")
+    harness.assert_text_present("+ Add Card")
+    harness.assert_text_present("Delete")
 
     harness.screenshot("final_state")

@@ -10,11 +10,11 @@ def steps(harness):
     # Navigate to deck detail page
     harness.navigate("/decks/1")
 
-    # Wait for card table to load
+    # Wait for deck to load — default is grid view for small decks
     harness.wait_for_text("Beast-Kin Ranger")
 
-    # Click on the card row (click the card name text)
-    harness.click_by_text("Beast-Kin Ranger")
+    # Click on the grid card to open the modal
+    harness.click_by_selector(".grid-card")
 
     # Wait for the card modal to appear
     harness.wait_for_visible(".card-modal-overlay.active")

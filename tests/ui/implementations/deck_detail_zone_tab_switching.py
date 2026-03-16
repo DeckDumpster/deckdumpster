@@ -16,13 +16,13 @@ def steps(harness):
     # Verify mainboard tab shows count
     harness.assert_text_present("(8)")
 
-    # Verify mainboard has cards
+    # Verify mainboard has cards (grid view is default for small decks)
     harness.assert_text_present("Beast-Kin Ranger")
 
-    # Switch to Sideboard tab
+    # Switch to Sideboard tab (filters grid view)
     harness.click_by_text("Sideboard")
 
-    # Verify sideboard cards are shown
+    # Verify sideboard cards are shown in grid
     harness.wait_for_text("Condemn")
     harness.assert_text_present("(3)")
 

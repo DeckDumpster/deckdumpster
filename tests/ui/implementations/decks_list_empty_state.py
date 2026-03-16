@@ -12,16 +12,16 @@ def steps(harness):
 
     # Delete deck 1: click into it, then delete
     harness.click_by_text("Bolt Tribal")
-    harness.wait_for_visible("#deck-name")
-    harness.click_by_text("Delete Deck")
+    harness.wait_for_visible(".deck-header h2")
+    harness.click_by_selector(".delete-btn")
 
     # After deletion, we're redirected back to /decks
     harness.wait_for_text("Eldrazi Ramp")
 
     # Delete deck 2: click into it, then delete
     harness.click_by_text("Eldrazi Ramp")
-    harness.wait_for_visible("#deck-name")
-    harness.click_by_text("Delete Deck")
+    harness.wait_for_visible(".deck-header h2")
+    harness.click_by_selector(".delete-btn")
 
     # After deletion, we're back on /decks with no decks
     harness.wait_for_text("No decks yet")

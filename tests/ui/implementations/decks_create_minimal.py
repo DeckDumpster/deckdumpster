@@ -23,8 +23,8 @@ def steps(harness):
     # Click Save (all other fields left at defaults)
     harness.click_by_text("Save")
 
-    # Wait for redirect to the new deck's detail page
-    harness.wait_for_visible("#deck-name")
+    # Wait for redirect to the new deck's unified page
+    harness.wait_for_visible(".deck-header h2")
 
     # Verify the deck name is shown
     harness.assert_text_present("Minimal Deck")
