@@ -994,6 +994,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_collection(params)
         elif path == "/api/wishlist":
             self._api_wishlist_list(params)
+        elif path == "/api/cards/by-name":
+            self._api_card_by_name(params)
         elif path == "/api/card/by-set-cn":
             self._api_card_by_set_cn(params)
         elif path.startswith("/api/card/"):
@@ -1090,10 +1092,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Deck Builder API routes
         elif path == "/api/deck-builder/commanders":
             self._api_builder_commanders(params)
+        elif path == "/api/deck-builder/commanders/browse":
+            self._api_builder_browse_commanders(params)
         elif path.startswith("/api/deck-builder/") and path.endswith("/search"):
             did = path[len("/api/deck-builder/"):-len("/search")]
             if did.isdigit():
                 self._api_builder_search(int(did), params)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/deck-builder/") and path.endswith("/mana-analysis"):
+            did = path[len("/api/deck-builder/"):-len("/mana-analysis")]
+            if did.isdigit():
+                self._api_builder_mana_analysis(int(did))
             else:
                 self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/deck-builder/") and not path.endswith("/cards"):
@@ -1339,6 +1349,33 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_builder_add_card(int(did), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/deck-builder/") and path.endswith("/sql-search"):
+            did = path[len("/api/deck-builder/"):-len("/sql-search")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_builder_sql_search(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/deck-builder/") and path.endswith("/add-basics"):
+            did = path[len("/api/deck-builder/"):-len("/add-basics")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_builder_add_basics(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/deck-builder/") and path.endswith("/bling"):
+            did = path[len("/api/deck-builder/"):-len("/bling")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_builder_bling(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
         # Deck POST routes
         elif path == "/api/decks":
             data = self._read_json_body()
@@ -1416,6 +1453,22 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_set_value_data(data)
+        # Jumpstart API routes
+        elif path == "/api/jumpstart/find-card":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_jumpstart_find_card(data)
+        elif path == "/api/jumpstart/insert-deck":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_jumpstart_insert_deck(data)
+        elif path == "/api/jumpstart/printings-by-name":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_jumpstart_printings_by_name(data)
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -1425,6 +1478,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             self._api_put_settings()
+        elif path.startswith("/api/deck-builder/") and path.endswith("/plan"):
+            did = path[len("/api/deck-builder/"):-len("/plan")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_builder_save_plan(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/sealed/collection/"):
             entry_id = path[len("/api/sealed/collection/"):]
             data = self._read_json_body()
@@ -5280,20 +5342,35 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             conn.close()
             self._send_json({"error": "Commander not found"}, 404)
             return
-        from mtg_collector.db.models import Deck, DeckRepository
-        repo = DeckRepository(conn)
-        deck_name = data.get("name") or card["name"]
-        deck = Deck(
-            id=None, name=deck_name, format="commander",
-            hypothetical=bool(data.get("hypothetical", False)),
-            commander_oracle_id=commander_oracle_id,
-            commander_printing_id=data.get("commander_printing_id"),
-        )
-        deck_id = repo.add(deck)
-        conn.commit()
-        result = repo.get(deck_id)
-        conn.close()
-        self._send_json(result, 201)
+        hypothetical = bool(data.get("hypothetical", False))
+        if hypothetical:
+            # Use DeckBuilderService for hypothetical decks to pre-populate
+            # template role categories (Lands, Ramp, etc.)
+            from mtg_collector.services.deck_builder import DeckBuilderService
+            svc = DeckBuilderService(conn)
+            try:
+                result = svc.create_deck(commander_oracle_id)
+            except ValueError as e:
+                conn.close()
+                self._send_json({"error": str(e)}, 400)
+                return
+            conn.close()
+            self._send_json(result, 201)
+        else:
+            from mtg_collector.db.models import Deck, DeckRepository
+            repo = DeckRepository(conn)
+            deck_name = data.get("name") or card["name"]
+            deck = Deck(
+                id=None, name=deck_name, format="commander",
+                hypothetical=False,
+                commander_oracle_id=commander_oracle_id,
+                commander_printing_id=data.get("commander_printing_id"),
+            )
+            deck_id = repo.add(deck)
+            conn.commit()
+            result = repo.get(deck_id)
+            conn.close()
+            self._send_json(result, 201)
 
     def _categorize_card_type(self, type_line: str) -> str:
         """Categorize a card by its type line, priority order."""
@@ -5461,14 +5538,29 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(results)
 
     def _api_builder_add_card(self, deck_id: int, data: dict):
-        """Add a card to the deck."""
+        """Add a card to the deck. Supports optional categories and audit return."""
         collection_id = data.get("collection_id")
         zone = data.get("zone", "mainboard")
+        categories = data.get("categories")
         if not collection_id:
             self._send_json({"error": "collection_id is required"}, 400)
             return
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        # If categories provided, use DeckBuilderService for full add+audit
+        if categories:
+            from mtg_collector.services.deck_builder import DeckBuilderService
+            svc = DeckBuilderService(conn)
+            try:
+                result = svc.add_card(deck_id, collection_id, categories)
+            except ValueError as e:
+                conn.close()
+                self._send_json({"error": str(e)}, 409)
+                return
+            conn.close()
+            self._send_json(result)
+            return
+        # Legacy path: simple add without categories
         deck = conn.execute("SELECT id, hypothetical FROM decks WHERE id = ?",
                             (deck_id,)).fetchone()
         if not deck:
@@ -5478,7 +5570,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         if deck["hypothetical"]:
-            # Hypothetical decks skip the assignment conflict check
             conn.execute(
                 "UPDATE collection SET deck_id = ?, deck_zone = ? WHERE id = ?",
                 (deck_id, zone, collection_id),
@@ -5510,6 +5601,463 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
         self._send_json({"ok": True, "removed": count})
+
+    def _api_builder_browse_commanders(self, params: dict):
+        """Browse owned legendary creatures with filters."""
+        filters = {}
+        for key in ("colors", "colors_min", "colors_max", "cmc_max",
+                     "set_before", "set_after", "type", "text", "name",
+                     "sort", "limit"):
+            val = params.get(key, [""])[0]
+            if val:
+                filters[key] = val
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.services.deck_builder import DeckBuilderService
+        svc = DeckBuilderService(conn)
+        results = svc.browse_commanders(filters)
+        conn.close()
+        self._send_json(results)
+
+    def _api_builder_save_plan(self, deck_id: int, data: dict):
+        """Save deck plan and optional sub-plans."""
+        plan = data.get("plan")
+        sub_plans = data.get("sub_plans")
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.services.deck_builder import DeckBuilderService
+        svc = DeckBuilderService(conn)
+        if plan is not None:
+            svc.save_plan(deck_id, plan)
+        if sub_plans is not None:
+            svc.save_sub_plans(deck_id, sub_plans)
+        conn.close()
+        self._send_json({"ok": True})
+
+    def _api_builder_sql_search(self, deck_id: int, data: dict):
+        """Search owned cards using a SQL WHERE clause."""
+        where_clause = data.get("where_clause", "")
+        if not where_clause:
+            self._send_json({"error": "where_clause is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.services.deck_builder import DeckBuilderService
+        svc = DeckBuilderService(conn)
+        try:
+            results = svc.sql_search(deck_id, where_clause)
+        except ValueError as e:
+            conn.close()
+            self._send_json({"error": str(e)}, 400)
+            return
+        except Exception as e:
+            conn.close()
+            self._send_json({"error": f"SQL error: {e}"}, 400)
+            return
+        conn.close()
+        self._send_json(results)
+
+    def _api_builder_add_basics(self, deck_id: int, data: dict):
+        """Add basic lands to a deck."""
+        basic_map = {"plains": "Plains", "island": "Island", "swamp": "Swamp",
+                     "mountain": "Mountain", "forest": "Forest"}
+        counts = {}
+        for key, name in basic_map.items():
+            val = data.get(key)
+            if val and int(val) > 0:
+                counts[name] = int(val)
+        if not counts:
+            self._send_json({"error": "Specify at least one basic land count"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.services.deck_builder import DeckBuilderService
+        svc = DeckBuilderService(conn)
+        try:
+            result = svc.add_basics(deck_id, counts)
+        except ValueError as e:
+            conn.close()
+            self._send_json({"error": str(e)}, 400)
+            return
+        conn.close()
+        self._send_json(result)
+
+    def _api_builder_bling(self, deck_id: int, data: dict):
+        """Upgrade deck cards to blingiest printings."""
+        dry_run = bool(data.get("dry_run", False))
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.services.deck_builder import DeckBuilderService
+        svc = DeckBuilderService(conn)
+        result = svc.bling_upgrade(deck_id, dry_run=dry_run)
+        conn.close()
+        self._send_json(result)
+
+    def _api_builder_mana_analysis(self, deck_id: int):
+        """Analyze mana requirements for a deck."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.services.deck_builder import DeckBuilderService
+        svc = DeckBuilderService(conn)
+        try:
+            result = svc.mana_analysis(deck_id)
+        except ValueError as e:
+            conn.close()
+            self._send_json({"error": str(e)}, 404)
+            return
+        conn.close()
+        self._send_json(result)
+
+    # ===== Card lookup API handlers =====
+
+    def _api_card_by_name(self, params: dict):
+        """Look up card(s) by name. Exact match first, then LIKE."""
+        name = params.get("name", [""])[0].strip()
+        if not name:
+            self._send_json({"error": "name parameter is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        # Exact match
+        row = conn.execute(
+            """SELECT c.oracle_id, c.name, c.mana_cost, c.type_line, c.oracle_text,
+                      c.colors, c.color_identity, c.cmc
+               FROM cards c WHERE c.name = ?""",
+            (name,),
+        ).fetchone()
+        if row:
+            result = dict(row)
+            # Attach best owned printing info
+            printing = conn.execute(
+                """SELECT p.set_code, p.collector_number, p.printing_id
+                   FROM collection col
+                   JOIN printings p ON col.printing_id = p.printing_id
+                   WHERE p.oracle_id = ? AND col.status = 'owned'
+                   ORDER BY col.id DESC LIMIT 1""",
+                (row["oracle_id"],),
+            ).fetchone()
+            if not printing:
+                printing = conn.execute(
+                    """SELECT p.set_code, p.collector_number, p.printing_id
+                       FROM printings p
+                       JOIN sets s ON s.set_code = p.set_code
+                       WHERE p.oracle_id = ? AND s.digital = 0
+                       ORDER BY s.released_at DESC LIMIT 1""",
+                    (row["oracle_id"],),
+                ).fetchone()
+            if printing:
+                result["set_code"] = printing["set_code"]
+                result["collector_number"] = printing["collector_number"]
+                result["printing_id"] = printing["printing_id"]
+            conn.close()
+            self._send_json([result])
+            return
+        # LIKE fallback
+        rows = conn.execute(
+            """SELECT c.oracle_id, c.name, c.mana_cost, c.type_line, c.oracle_text,
+                      c.colors, c.color_identity, c.cmc
+               FROM cards c WHERE c.name LIKE ? LIMIT 50""",
+            (f"%{name}%",),
+        ).fetchall()
+        results = []
+        for r in rows:
+            card = dict(r)
+            printing = conn.execute(
+                """SELECT p.set_code, p.collector_number, p.printing_id
+                   FROM collection col
+                   JOIN printings p ON col.printing_id = p.printing_id
+                   WHERE p.oracle_id = ? AND col.status = 'owned'
+                   ORDER BY col.id DESC LIMIT 1""",
+                (r["oracle_id"],),
+            ).fetchone()
+            if not printing:
+                printing = conn.execute(
+                    """SELECT p.set_code, p.collector_number, p.printing_id
+                       FROM printings p
+                       JOIN sets s ON s.set_code = p.set_code
+                       WHERE p.oracle_id = ? AND s.digital = 0
+                       ORDER BY s.released_at DESC LIMIT 1""",
+                    (r["oracle_id"],),
+                ).fetchone()
+            if printing:
+                card["set_code"] = printing["set_code"]
+                card["collector_number"] = printing["collector_number"]
+                card["printing_id"] = printing["printing_id"]
+            results.append(card)
+        conn.close()
+        self._send_json(results)
+
+    # ===== Jumpstart API handlers =====
+
+    def _api_jumpstart_find_card(self, data: dict):
+        """Search cards with jumpstart-style filters."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conditions = ["s.digital = 0"]
+        params = []
+
+        if data.get("rarity"):
+            conditions.append("p.rarity = ?")
+            params.append(data["rarity"].lower())
+
+        if data.get("type"):
+            type_map = {
+                "creature": "Creature", "instant": "Instant",
+                "sorcery": "Sorcery", "enchantment": "Enchantment",
+                "artifact": "Artifact", "planeswalker": "Planeswalker",
+            }
+            card_type = type_map.get(data["type"].lower(), data["type"])
+            conditions.append(
+                "(c.type_line LIKE ? AND c.type_line NOT LIKE '%//%' || ? || '%')"
+            )
+            params.append(f"%{card_type}%")
+            params.append(card_type)
+
+        if data.get("cmc") is not None:
+            conditions.append("c.cmc = ?")
+            params.append(float(data["cmc"]))
+
+        if data.get("mv_min") is not None:
+            conditions.append("c.cmc >= ?")
+            params.append(float(data["mv_min"]))
+
+        if data.get("mv_max") is not None:
+            conditions.append("c.cmc <= ?")
+            params.append(float(data["mv_max"]))
+
+        if data.get("color"):
+            color = data["color"].upper()
+            if data.get("type") and data["type"].lower() == "artifact":
+                conditions.append(
+                    "(c.colors = ? OR c.colors = '[]' OR c.colors IS NULL)"
+                )
+                params.append(f'["{color}"]')
+            else:
+                conditions.append("c.colors = ?")
+                params.append(f'["{color}"]')
+
+        if data.get("theme"):
+            conditions.append(
+                "(c.oracle_text LIKE ? OR c.type_line LIKE ? OR c.name LIKE ?)"
+            )
+            params.extend([f"%{data['theme']}%"] * 3)
+
+        if data.get("owned"):
+            conditions.append(
+                "EXISTS (SELECT 1 FROM collection col WHERE col.printing_id = p.printing_id AND col.status = 'owned')"
+            )
+
+        where = " AND ".join(conditions)
+        limit = int(data.get("limit", 50))
+
+        query = f"""
+            SELECT DISTINCT c.name, c.mana_cost, c.type_line, c.cmc, p.rarity,
+                   c.oracle_text, c.oracle_id,
+                   lp.price as price
+            FROM cards c
+            JOIN printings p ON p.oracle_id = c.oracle_id
+            JOIN sets s ON s.set_code = p.set_code
+            LEFT JOIN latest_prices lp ON lp.set_code = p.set_code
+                AND lp.collector_number = p.collector_number
+                AND lp.price_type = 'normal'
+            WHERE {where}
+            GROUP BY c.oracle_id
+            ORDER BY c.name
+            LIMIT ?
+        """
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+        self._send_json([dict(r) for r in rows])
+
+    def _api_jumpstart_printings_by_name(self, data: dict):
+        """Resolve card names to owned printing set_code/collector_number."""
+        names = data.get("names", [])
+        if not names:
+            self._send_json({"error": "names array is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        results = {}
+        for name in names:
+            # Prefer owned printing
+            row = conn.execute("""
+                SELECT p.set_code, p.collector_number
+                FROM collection col
+                JOIN printings p ON p.printing_id = col.printing_id
+                JOIN cards c ON c.oracle_id = p.oracle_id
+                WHERE c.name = ? AND col.status = 'owned'
+                LIMIT 1
+            """, (name,)).fetchone()
+            if not row:
+                row = conn.execute("""
+                    SELECT p.set_code, p.collector_number
+                    FROM printings p
+                    JOIN cards c ON c.oracle_id = p.oracle_id
+                    JOIN sets s ON s.set_code = p.set_code
+                    WHERE c.name = ? AND s.digital = 0
+                    ORDER BY s.released_at DESC LIMIT 1
+                """, (name,)).fetchone()
+            if row:
+                results[name] = {"set_code": row["set_code"],
+                                 "collector_number": row["collector_number"]}
+        conn.close()
+        self._send_json(results)
+
+    def _api_jumpstart_insert_deck(self, data: dict):
+        """Create a Jumpstart hypothetical deck with expected cards."""
+        color = data.get("color")
+        theme = data.get("theme")
+        description = data.get("description", "")
+        card_names = data.get("cards", [])
+        basics_count = int(data.get("basics", 7))
+
+        if not color or not theme or not card_names:
+            self._send_json(
+                {"error": "color, theme, and cards are required"}, 400)
+            return
+
+        thriving_names = {"W": "Thriving Heath", "U": "Thriving Isle",
+                          "B": "Thriving Moor", "R": "Thriving Bluff",
+                          "G": "Thriving Grove"}
+        basic_names = {"W": "Plains", "U": "Island", "B": "Swamp",
+                       "R": "Mountain", "G": "Forest"}
+
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Check for duplicate deck name
+        deck_name = f"{theme} (Jumpstart)"
+        existing = conn.execute(
+            "SELECT id FROM decks WHERE name = ?", (deck_name,)
+        ).fetchone()
+        if existing:
+            conn.close()
+            self._send_json(
+                {"error": f"Deck '{deck_name}' already exists (id={existing[0]})"}, 409)
+            return
+
+        # Resolve all card names to printing_ids
+        def _resolve_printing(name):
+            oracle = conn.execute(
+                "SELECT oracle_id FROM cards WHERE name = ?", (name,)
+            ).fetchone()
+            if not oracle:
+                return None, f"Card not found: {name}"
+            oid = oracle[0]
+            row = conn.execute(
+                """SELECT p.printing_id FROM collection col
+                   JOIN printings p ON col.printing_id = p.printing_id
+                   JOIN sets s ON p.set_code = s.set_code
+                   WHERE p.oracle_id = ? AND col.status = 'owned'
+                   ORDER BY s.released_at DESC LIMIT 1""",
+                (oid,),
+            ).fetchone()
+            if row:
+                return row[0], None
+            row = conn.execute(
+                """SELECT p.printing_id FROM printings p
+                   JOIN sets s ON p.set_code = s.set_code
+                   WHERE p.oracle_id = ? AND s.digital = 0
+                   ORDER BY s.released_at DESC LIMIT 1""",
+                (oid,),
+            ).fetchone()
+            if row:
+                return row[0], None
+            return None, f"No non-digital printing for: {name}"
+
+        def _ensure_in_collection(name):
+            oracle = conn.execute(
+                "SELECT oracle_id FROM cards WHERE name = ?", (name,)
+            ).fetchone()
+            if not oracle:
+                return
+            oid = oracle[0]
+            existing = conn.execute(
+                """SELECT col.id FROM collection col
+                   JOIN printings p ON col.printing_id = p.printing_id
+                   WHERE p.oracle_id = ? AND col.status = 'owned' LIMIT 1""",
+                (oid,),
+            ).fetchone()
+            if existing:
+                return
+            printing = conn.execute(
+                """SELECT p.printing_id FROM printings p
+                   JOIN sets s ON s.set_code = p.set_code
+                   WHERE p.oracle_id = ? AND s.digital = 0
+                   ORDER BY s.released_at DESC LIMIT 1""",
+                (oid,),
+            ).fetchone()
+            if printing:
+                from mtg_collector.utils import now_iso
+                conn.execute(
+                    """INSERT INTO collection (printing_id, finish, status, source, acquired_at)
+                       VALUES (?, 'nonfoil', 'owned', 'manual', ?)""",
+                    (printing[0], now_iso()),
+                )
+
+        expected_cards = []
+        for name in card_names:
+            pid, err = _resolve_printing(name)
+            if err:
+                conn.close()
+                self._send_json({"error": err}, 400)
+                return
+            expected_cards.append({"printing_id": pid, "zone": "mainboard",
+                                   "quantity": 1, "name": name})
+
+        # Ensure thriving land in collection and resolve
+        thriving_name = thriving_names.get(color)
+        basic_name = basic_names.get(color)
+        if not thriving_name:
+            conn.close()
+            self._send_json({"error": f"Invalid color: {color}"}, 400)
+            return
+
+        _ensure_in_collection(thriving_name)
+        thriving_pid, err = _resolve_printing(thriving_name)
+        if err:
+            conn.close()
+            self._send_json({"error": err}, 400)
+            return
+        basic_pid, err = _resolve_printing(basic_name)
+        if err:
+            conn.close()
+            self._send_json({"error": err}, 400)
+            return
+
+        expected_cards.append({"printing_id": thriving_pid, "zone": "mainboard",
+                               "quantity": 1, "name": thriving_name})
+        expected_cards.append({"printing_id": basic_pid, "zone": "mainboard",
+                               "quantity": basics_count, "name": basic_name})
+
+        # Create deck
+        from mtg_collector.utils import now_iso
+        ts = now_iso()
+        conn.execute(
+            """INSERT INTO decks (name, description, format, hypothetical,
+               origin_set_code, origin_theme, is_precon, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (deck_name, description, "jumpstart", 1, "J25", theme, 0, ts, ts),
+        )
+        deck_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        for card in expected_cards:
+            conn.execute(
+                """INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity)
+                   VALUES (?, ?, ?, ?)""",
+                (deck_id, card["printing_id"], card["zone"], card["quantity"]),
+            )
+
+        conn.commit()
+        conn.close()
+
+        self._send_json({
+            "deck_id": deck_id,
+            "name": deck_name,
+            "cards": expected_cards,
+        }, 201)
 
     # ===== Binder API handlers =====
 

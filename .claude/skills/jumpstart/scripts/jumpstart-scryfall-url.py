@@ -6,59 +6,36 @@ Usage:
     uv run python .claude/skills/jumpstart/scripts/jumpstart-scryfall-url.py --open "Card 1" "Card 2" ...
 """
 
-import os
-import sqlite3
 import sys
 import urllib.parse
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-from mtg_collector.db.connection import get_db_path
+from api_client import DeckBuilderClient, parse_host_arg
 
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="Generate Scryfall URL for a deck")
-    parser.add_argument("cards", nargs="+", help="Card names")
-    parser.add_argument("--open", action="store_true", help="Open URL in browser")
-    args = parser.parse_args()
+    base_url, argv = parse_host_arg(sys.argv)
 
-    card_names = args.cards
-    conn = sqlite3.connect(get_db_path(os.environ.get("MTGC_DB")))
+    # Manual arg parsing since argparse doesn't play well with parse_host_arg
+    open_browser = "--open" in argv
+    card_names = [a for a in argv[1:] if a != "--open"]
+
+    if not card_names:
+        print("Usage: jumpstart-scryfall-url.py [--open] <card names...>", file=sys.stderr)
+        sys.exit(1)
+
+    client = DeckBuilderClient(base_url)
+    result = client.post("/api/jumpstart/printings-by-name", {"names": card_names})
 
     terms = []
     for name in card_names:
-        # Find the owned printing (prefer one in the collection)
-        row = conn.execute("""
-            SELECT p.set_code, p.collector_number
-            FROM collection col
-            JOIN printings p ON p.printing_id = col.printing_id
-            JOIN cards c ON c.oracle_id = p.oracle_id
-            WHERE c.name = ? AND col.status = 'owned'
-            LIMIT 1
-        """, (name,)).fetchone()
-
-        if not row:
-            # Fall back to any printing in the DB
-            row = conn.execute("""
-                SELECT p.set_code, p.collector_number
-                FROM printings p
-                JOIN cards c ON c.oracle_id = p.oracle_id
-                JOIN sets s ON s.set_code = p.set_code
-                WHERE c.name = ? AND s.digital = 0
-                ORDER BY s.released_at DESC
-                LIMIT 1
-            """, (name,)).fetchone()
-
-        if not row:
+        info = result.get(name)
+        if not info:
             print(f"WARNING: Card not found: {name}", file=sys.stderr)
             continue
-
-        set_code, cn = row
+        set_code = info["set_code"]
+        cn = info["collector_number"]
         terms.append(f"(s:{set_code.lower()} cn:{cn})")
         print(f"  {name:30s} -> {set_code}/{cn}")
-
-    conn.close()
 
     if not terms:
         print("No cards found.", file=sys.stderr)
@@ -73,7 +50,7 @@ def main():
 
     print(url)
 
-    if args.open:
+    if open_browser:
         import subprocess
         subprocess.run(["open", url])
 

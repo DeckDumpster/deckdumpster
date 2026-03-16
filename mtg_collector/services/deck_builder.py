@@ -585,3 +585,520 @@ class DeckBuilderService:
             "categories": assigned_categories,
             "audit": audit,
         }
+
+    def browse_commanders(self, filters: dict) -> list[dict]:
+        """Browse owned legendary creatures with rich filtering.
+
+        Filters: colors, colors_min, colors_max, cmc_max, set_before, set_after,
+                 type, text, name, sort (name|cmc|set-date|colors), limit.
+        """
+        conditions = [
+            "col.status = 'owned'",
+            "((c.type_line LIKE '%Legendary%' AND c.type_line LIKE '%Creature%')"
+            " OR c.oracle_text LIKE '%can be your commander%')",
+        ]
+        params = []
+
+        if filters.get("colors"):
+            color_order = "WUBRG"
+            target = sorted([c for c in filters["colors"].upper() if c in color_order],
+                            key=lambda c: color_order.index(c))
+            conditions.append("c.color_identity = ?")
+            params.append(json.dumps(target))
+
+        if filters.get("colors_min") is not None:
+            conditions.append("json_array_length(c.color_identity) >= ?")
+            params.append(int(filters["colors_min"]))
+
+        if filters.get("colors_max") is not None:
+            conditions.append("json_array_length(c.color_identity) <= ?")
+            params.append(int(filters["colors_max"]))
+
+        if filters.get("cmc_max") is not None:
+            conditions.append("c.cmc <= ?")
+            params.append(int(filters["cmc_max"]))
+
+        if filters.get("set_before"):
+            conditions.append("s.released_at < ?")
+            params.append(f"{filters['set_before']}-01-01")
+
+        if filters.get("set_after"):
+            conditions.append("s.released_at >= ?")
+            params.append(f"{filters['set_after']}-01-01")
+
+        if filters.get("type"):
+            conditions.append("c.type_line LIKE ?")
+            params.append(f"%{filters['type']}%")
+
+        if filters.get("text"):
+            conditions.append("c.oracle_text LIKE ?")
+            params.append(f"%{filters['text']}%")
+
+        if filters.get("name"):
+            conditions.append("c.name LIKE ?")
+            params.append(f"%{filters['name']}%")
+
+        sort_map = {
+            "name": "c.name",
+            "cmc": "c.cmc, c.name",
+            "set-date": "MIN(s.released_at), c.name",
+            "colors": "json_array_length(c.color_identity) DESC, c.name",
+        }
+        order_by = sort_map.get(filters.get("sort", "name"), "c.name")
+        limit = int(filters.get("limit", 25))
+
+        where = " AND ".join(conditions)
+        sql = f"""
+            SELECT c.oracle_id, c.name, c.mana_cost, c.color_identity,
+                   c.oracle_text, c.type_line, c.cmc,
+                   MIN(s.released_at) AS first_printed,
+                   MIN(s.set_name) AS first_set,
+                   GROUP_CONCAT(DISTINCT s.set_name) AS all_sets,
+                   COUNT(DISTINCT col.id) AS copies
+            FROM cards c
+            JOIN printings p ON p.oracle_id = c.oracle_id
+            JOIN collection col ON col.printing_id = p.printing_id
+            JOIN sets s ON s.set_code = p.set_code
+            WHERE {where}
+            GROUP BY c.oracle_id
+            ORDER BY {order_by}
+            LIMIT ?
+        """
+        params.append(limit)
+
+        rows = self.conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def sql_search(self, deck_id: int, where_clause: str) -> list[dict]:
+        """Search owned cards using a raw SQL WHERE clause.
+
+        Validates safety (no semicolons, no ATTACH/DETACH/PRAGMA).
+        Filters by commander color identity, excludes cards already in deck,
+        deduplicates by oracle_id (basics exempt), attaches role + EDHREC data.
+        """
+        if ";" in where_clause:
+            raise ValueError("Semicolons are not allowed in WHERE clauses.")
+        if re.search(r"\b(ATTACH|DETACH|PRAGMA)\b", where_clause, re.IGNORECASE):
+            raise ValueError("Only read-only WHERE clauses are allowed.")
+
+        deck = self.repo.get(deck_id)
+        if not deck:
+            raise ValueError(f"Deck not found: {deck_id}")
+
+        # Commander color identity
+        cmd_colors = []
+        if deck["commander_oracle_id"]:
+            row = self.conn.execute(
+                "SELECT color_identity FROM cards WHERE oracle_id = ?",
+                (deck["commander_oracle_id"],),
+            ).fetchone()
+            if row and row["color_identity"]:
+                ci_raw = row["color_identity"]
+                cmd_colors = json.loads(ci_raw) if isinstance(ci_raw, str) else ci_raw
+
+        # Cards already in deck
+        in_deck_oracle = {c["oracle_id"] for c in self.repo.get_cards(deck_id)
+                          if c.get("oracle_id")}
+
+        # EDHREC data
+        edhrec_map = {}
+        table_check = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='edhrec_recommendations'"
+        ).fetchone()
+        if table_check and deck["commander_oracle_id"]:
+            erecs = self.conn.execute(
+                "SELECT card_oracle_id, inclusion_rate, synergy_score FROM edhrec_recommendations WHERE commander_oracle_id = ?",
+                (deck["commander_oracle_id"],),
+            ).fetchall()
+            edhrec_map = {r["card_oracle_id"]: dict(r) for r in erecs}
+
+        sql = f"""SELECT col.id, col.printing_id, col.finish, col.condition,
+                         p.set_code, p.collector_number, p.rarity, p.image_uri,
+                         p.frame_effects, p.border_color, p.full_art, p.promo, p.promo_types,
+                         c.name, c.type_line, c.mana_cost, c.cmc,
+                         c.color_identity, c.oracle_id, c.oracle_text
+                  FROM collection col
+                  JOIN printings p ON col.printing_id = p.printing_id
+                  JOIN cards c ON p.oracle_id = c.oracle_id
+                  WHERE col.status = 'owned'
+                    AND ({where_clause})
+                  ORDER BY c.cmc, c.name
+                  LIMIT 200"""
+
+        rows = self.conn.execute(sql).fetchall()
+
+        results = []
+        seen_oracle = set()
+        for r in rows:
+            card = dict(r)
+            oid = card["oracle_id"]
+            is_basic = card.get("name", "") in self.BASIC_LAND_NAMES
+
+            if oid in in_deck_oracle and not is_basic:
+                continue
+            if oid in seen_oracle and not is_basic:
+                continue
+
+            card_ci = json.loads(card["color_identity"]) if isinstance(card["color_identity"], str) and card["color_identity"] else []
+            if card_ci and cmd_colors:
+                if not set(card_ci).issubset(set(cmd_colors)):
+                    continue
+
+            card["roles"] = self.classifier.classify(card)
+            erec = edhrec_map.get(oid)
+            if erec:
+                card["edhrec_rate"] = erec.get("inclusion_rate")
+                card["edhrec_synergy"] = erec.get("synergy_score")
+
+            seen_oracle.add(oid)
+            results.append(card)
+            if len(results) >= 50:
+                break
+
+        return results
+
+    def add_basics(self, deck_id: int, counts: dict[str, int]) -> dict:
+        """Add basic lands to a deck.
+
+        counts: {"Plains": N, "Island": N, ...}
+        Returns summary of what was added.
+        """
+        deck = self.repo.get(deck_id)
+        if not deck:
+            raise ValueError(f"Deck not found: {deck_id}")
+
+        preferred_set = deck.get("origin_set_code")
+        existing = {r["id"] for r in self.conn.execute(
+            "SELECT id FROM collection WHERE deck_id = ?", (deck_id,)).fetchall()}
+
+        results = {}
+        total_added = 0
+
+        for name, count in counts.items():
+            rows = self.conn.execute("""
+                SELECT col.id, p.set_code, p.full_art
+                FROM collection col
+                JOIN printings p ON col.printing_id = p.printing_id
+                JOIN cards c ON p.oracle_id = c.oracle_id
+                WHERE c.name = ? AND col.status = 'owned'
+                  AND col.id NOT IN (SELECT id FROM collection WHERE deck_id IS NOT NULL)
+                ORDER BY
+                  p.full_art DESC,
+                  CASE WHEN p.set_code = ? THEN 0 ELSE 1 END,
+                  col.id
+            """, (name, preferred_set)).fetchall()
+
+            if len(rows) < count:
+                rows = self.conn.execute("""
+                    SELECT col.id, p.set_code, p.full_art
+                    FROM collection col
+                    JOIN printings p ON col.printing_id = p.printing_id
+                    JOIN cards c ON p.oracle_id = c.oracle_id
+                    WHERE c.name = ? AND col.status = 'owned'
+                      AND col.id NOT IN (SELECT id FROM collection WHERE deck_id = ?)
+                    ORDER BY
+                      p.full_art DESC,
+                      CASE WHEN p.set_code = ? THEN 0 ELSE 1 END,
+                      col.id
+                """, (name, deck_id, preferred_set)).fetchall()
+
+            added = 0
+            full_art_count = 0
+            for row in rows:
+                if added >= count:
+                    break
+                if row["id"] in existing:
+                    continue
+                try:
+                    self.add_card(deck_id, row["id"], ["Lands"])
+                    existing.add(row["id"])
+                    added += 1
+                    if row["full_art"]:
+                        full_art_count += 1
+                except ValueError:
+                    continue
+
+            total_added += added
+            results[name] = {"requested": count, "added": added,
+                             "full_art": full_art_count}
+
+        card_count = self.conn.execute(
+            "SELECT COUNT(*) FROM collection WHERE deck_id = ?", (deck_id,)
+        ).fetchone()[0]
+
+        return {"basics": results, "total_added": total_added,
+                "deck_card_count": card_count}
+
+    def bling_upgrade(self, deck_id: int, dry_run: bool = False) -> dict:
+        """Upgrade deck cards to blingiest printings owned.
+
+        Returns list of swaps (applied unless dry_run=True).
+        """
+        deck_cards = self.conn.execute("""
+            SELECT col.id as collection_id, col.printing_id, col.finish,
+                   c.oracle_id, c.name,
+                   p.frame_effects, p.promo_types, p.border_color,
+                   p.full_art, p.promo, p.set_code, p.collector_number
+            FROM collection col
+            JOIN printings p ON col.printing_id = p.printing_id
+            JOIN cards c ON p.oracle_id = c.oracle_id
+            WHERE col.deck_id = ?
+        """, (deck_id,)).fetchall()
+
+        if not deck_cards:
+            return {"swaps": [], "applied": False}
+
+        deck = self.repo.get(deck_id)
+        sub_plans = json.loads(deck["sub_plans"]) if deck and deck.get("sub_plans") else []
+        hypothetical = deck and deck.get("hypothetical")
+
+        def _bling_score(row):
+            frame_effects = json.loads(row["frame_effects"]) if row["frame_effects"] else []
+            promo_types = json.loads(row["promo_types"]) if row["promo_types"] else []
+            score = 0
+            if row["border_color"] == "borderless":
+                score += 100
+            if row["full_art"]:
+                score += 80
+            if "showcase" in frame_effects:
+                score += 60
+            if "extendedart" in frame_effects:
+                score += 40
+            if "serialized" in promo_types:
+                score += 200
+            if "doublerainbow" in promo_types:
+                score += 150
+            if row["finish"] == "foil":
+                score += 20
+            if row["promo"]:
+                score += 10
+            return score
+
+        def _bling_tags(row):
+            tags = []
+            frame_effects = json.loads(row["frame_effects"]) if row["frame_effects"] else []
+            promo_types = json.loads(row["promo_types"]) if row["promo_types"] else []
+            if row["border_color"] == "borderless":
+                tags.append("Borderless")
+            if row["full_art"]:
+                tags.append("Full Art")
+            if "showcase" in frame_effects:
+                tags.append("Showcase")
+            if "extendedart" in frame_effects:
+                tags.append("Extended Art")
+            if "serialized" in promo_types:
+                tags.append("Serialized")
+            if "doublerainbow" in promo_types:
+                tags.append("Double Rainbow")
+            if row["finish"] == "foil":
+                tags.append("Foil")
+            if row["promo"]:
+                tags.append("Promo")
+            return tags
+
+        swaps = []
+        claimed_ids = {card["collection_id"] for card in deck_cards}
+
+        for card in deck_cards:
+            current_score = _bling_score(card)
+            oracle_id = card["oracle_id"]
+
+            if hypothetical:
+                candidates = self.conn.execute("""
+                    SELECT col.id as collection_id, col.printing_id, col.finish,
+                           p.frame_effects, p.promo_types, p.border_color,
+                           p.full_art, p.promo, p.set_code, p.collector_number
+                    FROM collection col
+                    JOIN printings p ON col.printing_id = p.printing_id
+                    WHERE p.oracle_id = ? AND col.status = 'owned'
+                      AND col.id != ?
+                      AND col.id NOT IN (
+                          SELECT id FROM collection WHERE deck_id = ?
+                      )
+                """, (oracle_id, card["collection_id"], deck_id)).fetchall()
+            else:
+                candidates = self.conn.execute("""
+                    SELECT col.id as collection_id, col.printing_id, col.finish,
+                           p.frame_effects, p.promo_types, p.border_color,
+                           p.full_art, p.promo, p.set_code, p.collector_number
+                    FROM collection col
+                    JOIN printings p ON col.printing_id = p.printing_id
+                    WHERE p.oracle_id = ? AND col.status = 'owned'
+                      AND col.id != ?
+                      AND col.deck_id IS NULL AND col.binder_id IS NULL
+                """, (oracle_id, card["collection_id"])).fetchall()
+
+            candidates = [c for c in candidates if c["collection_id"] not in claimed_ids]
+            if not candidates:
+                continue
+
+            best = max(candidates, key=lambda r: (_bling_score(r), r["collection_id"]))
+            best_score = _bling_score(best)
+
+            if best_score > current_score:
+                claimed_ids.add(best["collection_id"])
+                claimed_ids.discard(card["collection_id"])
+                swaps.append({
+                    "name": card["name"],
+                    "old_id": card["collection_id"],
+                    "new_id": best["collection_id"],
+                    "old_set": f"{card['set_code']}/{card['collector_number']}",
+                    "new_set": f"{best['set_code']}/{best['collector_number']}",
+                    "old_score": current_score,
+                    "new_score": best_score,
+                    "old_finish": card["finish"],
+                    "new_finish": best["finish"],
+                    "bling_tags": _bling_tags(best),
+                })
+
+        if not swaps or dry_run:
+            return {"swaps": swaps, "applied": False}
+
+        # Apply swaps
+        for s in swaps:
+            self.conn.execute(
+                "UPDATE collection SET deck_id = NULL, deck_zone = NULL WHERE id = ?",
+                (s["old_id"],))
+            self.conn.execute(
+                "UPDATE collection SET deck_id = ?, deck_zone = 'mainboard' WHERE id = ?",
+                (deck_id, s["new_id"]))
+            for sp in sub_plans:
+                cards = sp.get("cards", [])
+                if s["old_id"] in cards:
+                    cards[cards.index(s["old_id"])] = s["new_id"]
+
+        if sub_plans:
+            self.conn.execute(
+                "UPDATE decks SET sub_plans = ? WHERE id = ?",
+                (json.dumps(sub_plans), deck_id))
+
+        self.conn.commit()
+        return {"swaps": swaps, "applied": True}
+
+    def mana_analysis(self, deck_id: int) -> dict:
+        """Analyze mana requirements for a commander deck.
+
+        Returns pip counts, color weights, mana curve, and land recommendations.
+        """
+        deck = self.repo.get(deck_id)
+        if not deck:
+            raise ValueError(f"Deck not found: {deck_id}")
+
+        # Commander color identity
+        cmd_ci = []
+        cmd_cmc = 0
+        if deck["commander_oracle_id"]:
+            row = self.conn.execute(
+                "SELECT color_identity, cmc FROM cards WHERE oracle_id = ?",
+                (deck["commander_oracle_id"],),
+            ).fetchone()
+            if row:
+                cmd_ci = json.loads(row["color_identity"]) if isinstance(row["color_identity"], str) else row["color_identity"]
+                cmd_cmc = int(row["cmc"] or 0)
+
+        cards = self.conn.execute(
+            """SELECT c.name, c.mana_cost, c.cmc, c.type_line
+               FROM collection col
+               JOIN printings p ON col.printing_id = p.printing_id
+               JOIN cards c ON p.oracle_id = c.oracle_id
+               WHERE col.deck_id = ?
+               ORDER BY c.cmc, c.name""",
+            (deck_id,),
+        ).fetchall()
+
+        color_symbols = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+        pip_counts = {c: 0 for c in color_symbols}
+        generic_total = 0
+        spell_count = 0
+        land_count = 0
+        curve = {}
+
+        for card in cards:
+            type_line = (card["type_line"] or "").lower()
+            is_land = "land" in type_line and "creature" not in type_line
+
+            if is_land:
+                land_count += 1
+                continue
+
+            spell_count += 1
+            mana_cost = card["mana_cost"] or ""
+            cmc = int(card["cmc"] or 0)
+            bucket = min(cmc, 7)
+            curve[bucket] = curve.get(bucket, 0) + 1
+
+            symbols = re.findall(r"\{([^}]+)\}", mana_cost)
+            for sym in symbols:
+                if sym in color_symbols:
+                    pip_counts[sym] += 1
+                elif "/" in sym:
+                    for part in sym.split("/"):
+                        if part in color_symbols:
+                            pip_counts[part] += 1
+                elif sym == "X":
+                    pass
+                elif sym.isdigit():
+                    generic_total += int(sym)
+
+        total_colored_pips = sum(pip_counts.values())
+        active_colors = {c: n for c, n in pip_counts.items() if n > 0}
+
+        # Typical curve for comparison
+        typical_curve = {0: 2, 1: 8, 2: 16, 3: 15, 4: 10, 5: 6, 6: 3, 7: 2}
+        typical_total = sum(typical_curve.values())
+
+        scaled_typical = {}
+        for cmc_val in range(8):
+            scaled_typical[cmc_val] = round(
+                typical_curve.get(cmc_val, 0) * spell_count / typical_total
+            ) if spell_count else 0
+
+        avg_cmc = sum(cmc * count for cmc, count in curve.items()) / spell_count if spell_count else 0
+
+        # Warnings
+        warnings = []
+        if avg_cmc > 3.5:
+            warnings.append("HIGH avg CMC (>3.5) — deck may be too slow")
+        elif avg_cmc < 2.0:
+            warnings.append("VERY LOW avg CMC (<2.0) — may run out of gas")
+        low_drops = curve.get(1, 0) + curve.get(2, 0)
+        if spell_count and low_drops < spell_count * 0.3:
+            warnings.append(f"Few 1-2 drops ({low_drops}/{spell_count})")
+        high_drops = sum(curve.get(c, 0) for c in range(6, 8))
+        if spell_count and high_drops > spell_count * 0.15:
+            warnings.append(f"Heavy top end ({high_drops} cards at CMC 6+)")
+
+        # Land recommendations
+        recommended_lands = 38
+        basics_split = {}
+        if active_colors:
+            nonbasic_estimate = min(land_count, recommended_lands // 3)
+            basics_budget = recommended_lands - nonbasic_estimate
+            basic_name_map = {"W": "Plains", "U": "Island", "B": "Swamp",
+                              "R": "Mountain", "G": "Forest"}
+            for color, count in sorted(active_colors.items(), key=lambda x: -x[1]):
+                weight = count / total_colored_pips if total_colored_pips else 0
+                basics_split[basic_name_map[color]] = {
+                    "count": round(basics_budget * weight),
+                    "weight": weight,
+                }
+
+        return {
+            "deck_name": deck.get("name"),
+            "commander_cmc": cmd_cmc,
+            "commander_colors": cmd_ci,
+            "spell_count": spell_count,
+            "land_count": land_count,
+            "pip_counts": {c: {"count": n, "name": color_symbols[c],
+                               "pct": n / total_colored_pips if total_colored_pips else 0}
+                           for c, n in pip_counts.items() if n > 0 or c in cmd_ci},
+            "total_colored_pips": total_colored_pips,
+            "generic_total": generic_total,
+            "avg_cmc": avg_cmc,
+            "curve": curve,
+            "typical_curve": scaled_typical,
+            "warnings": warnings,
+            "recommended_lands": recommended_lands,
+            "lands_to_add": max(0, recommended_lands - land_count),
+            "basics_split": basics_split,
+        }
