@@ -48,6 +48,10 @@ When choosing between candidates for a slot, evaluate card quality using these s
 
 All tools are invoked via `uv run python .claude/skills/jumpstart/scripts/<tool>.py <args>`.
 
+**Host configuration:** Scripts read the server URL from `.claude/skills/jumpstart/host` (one URL per line). Override with `--host <url>` flag or `MTGC_HOST` env var. Priority: `--host` flag > `MTGC_HOST` env > `host` file > default (`https://localhost:8081`).
+
+**IMPORTANT — one command per tool call.** Do NOT chain multiple script invocations with `&&`, `;`, or subshells. Each script call should be a separate Bash tool invocation. Chaining causes permission prompts for every sub-command.
+
 ### jumpstart-generate-shape.py `[COLOR] [--rare-category bomb|engine|lord] [--seed N]`
 Generate a soft pack shape: curve distribution, creature/spell count, rarity budget. Color is W/U/B/R/G; random if omitted. Use `--seed` for reproducibility.
 
