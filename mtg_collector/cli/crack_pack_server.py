@@ -5343,7 +5343,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             ).fetchone()
             if row:
                 commander = dict(row)
-        # Get deck cards grouped by type, collapsed by oracle_id
+        # Get deck cards grouped by type, collapsed by printing_id
         cards = repo.get_cards(deck_id)
         if not cards and deck.get("hypothetical"):
             cards = repo.get_expected_cards_as_cards(deck_id)
@@ -5353,15 +5353,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         for c in cards:
             cat = self._categorize_card_type(c.get("type_line", ""))
             group = groups.setdefault(cat, {})
-            oid = c.get("oracle_id", c["id"])
-            if oid in group:
-                group[oid]["quantity"] += 1
-                group[oid]["collection_ids"].append(c["id"])
+            pid = c.get("printing_id", c["id"])
+            if pid in group:
+                group[pid]["quantity"] += 1
+                group[pid]["collection_ids"].append(c["id"])
             else:
                 entry = dict(c)
                 entry["quantity"] = c.get("quantity") or 1
                 entry["collection_ids"] = [c["id"]]
-                group[oid] = entry
+                group[pid] = entry
         ordered_groups = {}
         for t in type_order:
             if t in groups:
