@@ -2,7 +2,7 @@
 Hand-written implementation for deck_detail_add_cards_from_collection.
 
 Opens the add-cards modal on deck 2, searches for "Cathar", selects
-Cathar Commando, adds it, and verifies it appears in the card table.
+Cathar Commando, adds it, and verifies it appears in the deck grid.
 """
 
 
@@ -13,8 +13,8 @@ def steps(harness):
     # Wait for the deck to load
     harness.wait_for_text("Eldrazi Ramp")
 
-    # Click Add Cards button
-    harness.click_by_text("Add Cards")
+    # Click + Add Card button
+    harness.click_by_selector("#add-card-btn")
 
     # Wait for the add-cards modal to appear
     harness.wait_for_visible("#add-cards-modal.active")
@@ -31,11 +31,11 @@ def steps(harness):
     # Click Add Selected
     harness.click_by_text("Add Selected")
 
-    # Wait for modal to close and card to appear in table
+    # Wait for modal to close and deck to re-render with new card
     harness.wait_for_hidden("#add-cards-modal.active")
-    harness.wait_for_text("Cathar Commando")
 
-    # Verify the card is in the table
+    # Verify the card appears in the grid (grid is default for small decks)
+    harness.wait_for_visible(".grid-card-name")
     harness.assert_text_present("Cathar Commando")
 
     harness.screenshot("final_state")

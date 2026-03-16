@@ -1,7 +1,7 @@
 """
 Hand-written implementation for deck_detail_card_links_to_card_page.
 
-Navigates to a deck detail page, clicks a card row to open the modal,
+Navigates to a deck detail page, clicks a grid card to open the modal,
 then clicks the "Full page" link to navigate to the card detail page.
 """
 
@@ -10,11 +10,11 @@ def steps(harness):
     # Navigate to deck detail page
     harness.navigate("/decks/1")
 
-    # Wait for card table to load
-    harness.wait_for_text("Beast-Kin Ranger")
+    # Wait for grid to render (default view for small decks)
+    harness.wait_for_visible(".grid-card")
 
-    # Click the card row to open the modal
-    harness.click_by_text("Beast-Kin Ranger")
+    # Click on a grid card to open the modal
+    harness.click_by_selector(".grid-card")
 
     # Wait for the card modal to appear
     harness.wait_for_visible(".card-modal-overlay.active")

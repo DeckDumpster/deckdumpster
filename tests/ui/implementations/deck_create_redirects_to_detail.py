@@ -14,7 +14,7 @@ def steps(harness):
     harness.wait_for_text("New Deck")
 
     # Click "New Deck" button
-    harness.click_by_text("New Deck")
+    harness.click_by_selector("button[onclick='showCreateModal()']")
 
     # Wait for modal to appear
     harness.wait_for_visible("#deck-modal.active")
@@ -28,11 +28,8 @@ def steps(harness):
     # Click Save
     harness.click_by_text("Save")
 
-    # Wait for redirect to the new deck's detail page
-    harness.wait_for_visible("#deck-name")
-
-    # Verify we're on the standalone detail page with the new deck
-    harness.assert_text_present("Test Redirect Deck")
+    # Wait for redirect to the unified deck page (renders deck header h2)
+    harness.wait_for_text("Test Redirect Deck", timeout=5000)
 
     # Verify zone tabs are present (confirms standalone page, not list)
     harness.assert_text_present("Mainboard")
