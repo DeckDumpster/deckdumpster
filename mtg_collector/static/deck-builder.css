@@ -552,6 +552,7 @@
     max-width: 250px;
     margin: 0 auto;
   }
+  #type-groups { column-count: 1; }
   .zone-tabs { flex-wrap: wrap; }
   .zone-tabs .tab { padding: 8px 16px; font-size: 0.85rem; }
 }
