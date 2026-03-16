@@ -1,0 +1,12 @@
+# Scenario: Deck detail list view fits within viewport
+#
+# Related:
+#   issues: []
+#
+# Prerequisites:
+#   A deck with cards must exist (demo data provides "Bolt Tribal" deck)
+
+description: >
+  When I view a deck's detail page in list view, the type-grouped card
+  columns fit entirely within the viewport. No content overflows off the
+  right edge of the screen and no horizontal scrollbar appears.
