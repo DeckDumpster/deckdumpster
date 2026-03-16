@@ -634,8 +634,7 @@ function renderDeckCard(d) {
         ${d.total_value ? `<span>$${Number(d.total_value).toFixed(2)}</span>` : ''}
       </div>
       <div class="deck-links">
-        ${d.format === 'commander' ? `<a href="/deck-builder/${d.id}">Builder</a>` : ''}
-        <a href="/decks/${d.id}">Detail</a>
+        <a href="/decks/${d.id}">View</a>
       </div>
     </div>`;
 }

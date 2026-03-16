@@ -14,19 +14,17 @@ import argparse
 import random
 import sys
 
-# Observed distributions from J25 analysis (weights for random selection)
+# Fixed pack structure: 8 lands (7 basics + 1 thriving), 12 nonland spells
+LAND_COUNT = 8
+NONLAND_COUNT = 12
 
-# 8 lands: 112 decks, 9 lands: 9 decks (excluding Chaos)
-LAND_COUNT_WEIGHTS = {8: 112, 9: 9}
+# Creature count distribution (observed from J25 analysis, weights for random selection)
+CREATURE_COUNT_WEIGHTS = {8: 76, 7: 25, 6: 9, 5: 2}
 
-# Creature count distribution (for 12-nonland / 11-nonland decks)
-CREATURE_COUNT_12 = {8: 76, 7: 25, 6: 9, 5: 2}
-CREATURE_COUNT_11 = {7: 8, 8: 1}  # 9-land decks
+# Rarity: always 2 R/M (prefer 1 mythic + 1 rare, fall back to 2 rares)
+RM_COUNT = 2
 
-# Rare/mythic count among non-lands
-RM_COUNT_WEIGHTS = {1: 81, 2: 40}
-
-# Uncommon count among non-lands (for 12-nonland decks, most common combos)
+# Uncommon count among non-lands (most common combos from J25 analysis)
 U_COUNT_WEIGHTS = {4: 99, 5: 10, 3: 12}
 
 # MV distributions (observed counts across 121 decks, used as weights)
@@ -101,43 +99,32 @@ def generate_mana_curve(nonland_count):
 
 def generate_pack(color):
     """Generate a J25 soft pack shape: aggregate targets, not per-slot assignments."""
-    land_count = weighted_choice(LAND_COUNT_WEIGHTS)
-    nonland_count = 20 - land_count
+    creature_count = weighted_choice(CREATURE_COUNT_WEIGHTS)
+    spell_count = NONLAND_COUNT - creature_count
 
-    if nonland_count == 12:
-        creature_count = weighted_choice(CREATURE_COUNT_12)
-    else:
-        creature_count = weighted_choice(CREATURE_COUNT_11)
-    spell_count = nonland_count - creature_count
-
-    rm_count = weighted_choice(RM_COUNT_WEIGHTS)
     u_count = weighted_choice(U_COUNT_WEIGHTS)
-    c_count = nonland_count - rm_count - u_count
+    c_count = NONLAND_COUNT - RM_COUNT - u_count
 
     if c_count < 5:
-        u_count = nonland_count - rm_count - 5
+        u_count = NONLAND_COUNT - RM_COUNT - 5
         c_count = 5
     if c_count > 8:
-        u_count = nonland_count - rm_count - 8
+        u_count = NONLAND_COUNT - RM_COUNT - 8
         c_count = 8
 
-    curve = generate_mana_curve(nonland_count)
-
-    # Land breakdown
-    has_extra_nonbasic = random.random() < 0.25
-    basic_count = land_count - 1 - (1 if has_extra_nonbasic else 0)
+    curve = generate_mana_curve(NONLAND_COUNT)
 
     return {
-        "nonland_count": nonland_count,
+        "nonland_count": NONLAND_COUNT,
         "creature_count": creature_count,
         "spell_count": spell_count,
-        "rm_count": rm_count,
+        "mythic_count": 1,
+        "rare_count": 1,
         "u_count": u_count,
         "c_count": c_count,
         "curve": curve,
-        "land_count": land_count,
-        "basic_count": basic_count,
-        "has_extra_nonbasic": has_extra_nonbasic,
+        "land_count": LAND_COUNT,
+        "basic_count": 7,
         "color": color,
     }
 
@@ -164,7 +151,7 @@ def main():
         print(f"Rare category: {args.rare_category} ({RARE_CATEGORIES[args.rare_category]})")
     print()
 
-    print(f"Rarity budget: {pack['rm_count']} R/M, {pack['u_count']} U, {pack['c_count']} C")
+    print(f"Rarity budget: 1 M + 1 R (fall back to 2 R if no mythic), {pack['u_count']} U, {pack['c_count']} C")
     print(f"Creatures: {pack['creature_count']}    Non-creature spells: {pack['spell_count']}")
     print()
 
@@ -179,19 +166,18 @@ def main():
     print()
 
     print("Lands:")
-    if pack["has_extra_nonbasic"]:
-        print("  1 nonbasic land (your choice)")
     print(f"  1 {THRIVING_NAMES[color]}")
-    print(f"  {pack['basic_count']} {BASIC_NAMES[color]}")
+    print(f"  7 {BASIC_NAMES[color]}")
     print()
 
     print(f"Search: use -c {color} -r <rarity> -o --theme <keyword>")
+    print(f"Mythic identity card: search -c {color} -r mythic -o --theme <keyword>")
     if args.rare_category == "bomb":
-        print(f"Identity card: search -c {color} -r rare --mv-min 4 -o --theme <keyword>")
+        print(f"Rare slot: search -c {color} -r rare --mv-min 4 -o --theme <keyword>")
     elif args.rare_category == "lord":
-        print(f"Identity card: search -c {color} -r rare --mv-max 3 -o --theme <keyword>")
+        print(f"Rare slot: search -c {color} -r rare --mv-max 3 -o --theme <keyword>")
     else:
-        print(f"Identity card: search -c {color} -r rare -o --theme <keyword>")
+        print(f"Rare slot: search -c {color} -r rare -o --theme <keyword>")
 
     return 0
 

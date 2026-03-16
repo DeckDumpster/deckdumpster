@@ -1,7 +1,7 @@
 """
 Hand-written implementation for deck_detail_card_row_opens_modal.
 
-Clicks a card row in the deck detail table to open the card modal,
+Clicks a grid card in the deck detail to open the card modal,
 verifies modal content, then closes it.
 """
 
@@ -10,11 +10,11 @@ def steps(harness):
     # Navigate to deck detail page
     harness.navigate("/decks/1")
 
-    # Wait for card table to load
-    harness.wait_for_text("Beast-Kin Ranger")
+    # Wait for grid to render (default view for small decks)
+    harness.wait_for_visible(".grid-card")
 
-    # Click on the card row (click the card name text)
-    harness.click_by_text("Beast-Kin Ranger")
+    # Click on the grid card to open the modal
+    harness.click_by_selector(".grid-card")
 
     # Wait for the card modal to appear
     harness.wait_for_visible(".card-modal-overlay.active")

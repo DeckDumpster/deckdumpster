@@ -11,8 +11,8 @@ def steps(harness):
     harness.navigate("/decks/2")
     harness.wait_for_text("Eldrazi Ramp")
 
-    # Click Add Cards button
-    harness.click_by_text("Add Cards")
+    # Click + Add Card button
+    harness.click_by_selector("#add-card-btn")
     harness.wait_for_visible("#add-cards-modal.active")
 
     # Search for Scrawling Crawler
@@ -30,8 +30,8 @@ def steps(harness):
     harness.click_by_text("Add Selected")
     harness.wait_for_hidden("#add-cards-modal.active")
 
-    # Verify card appears in deck
-    harness.wait_for_text("Scrawling Crawler")
+    # Verify card appears in the deck grid
+    harness.wait_for_visible(".grid-card-name")
     harness.assert_text_present("Scrawling Crawler")
 
     harness.screenshot("final_state")

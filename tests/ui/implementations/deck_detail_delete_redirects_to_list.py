@@ -19,15 +19,15 @@ def steps(harness):
     harness.fill_by_selector("#f-name", "Deck To Delete")
     harness.click_by_text("Save")
 
-    # Wait for redirect to the new deck's detail page
-    harness.wait_for_visible("#deck-name")
+    # Wait for redirect to the new deck's unified page
+    harness.wait_for_visible(".deck-header h2")
     harness.assert_text_present("Deck To Delete")
 
     # Accept the upcoming confirmation dialog
     harness.page.on("dialog", lambda dialog: dialog.accept())
 
-    # Click Delete Deck
-    harness.click_by_text("Delete Deck")
+    # Click Delete
+    harness.click_by_selector(".delete-btn")
 
     # Wait for redirect back to deck list
     harness.wait_for_text("New Deck")

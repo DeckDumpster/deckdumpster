@@ -2,7 +2,7 @@
 Hand-written implementation for deck_list_links_to_standalone_detail.
 
 Navigates to the deck list page, clicks a deck card, and verifies
-it navigates to the standalone deck detail page.
+it navigates to the unified deck page.
 """
 
 
@@ -16,17 +16,18 @@ def steps(harness):
     # Click the Bolt Tribal deck card (it's an <a> tag)
     harness.click_by_text("Bolt Tribal")
 
-    # Wait for deck detail page to load
-    harness.wait_for_visible("#deck-name")
+    # Wait for unified deck page to load
+    harness.wait_for_visible(".deck-header h2")
 
-    # Verify we're on the standalone deck detail page
+    # Verify we're on the deck page
     harness.assert_text_present("Bolt Tribal")
 
-    # Verify zone tabs are visible (confirms it's the detail page, not list)
+    # Verify zone tabs are visible (confirms it's the unified page)
     harness.assert_text_present("Mainboard")
     harness.assert_text_present("Sideboard")
 
-    # Verify card table is present
-    harness.assert_visible("#card-table")
+    # Verify view toggle is present
+    harness.assert_visible("#view-list-btn")
+    harness.assert_visible("#view-grid-btn")
 
     harness.screenshot("final_state")

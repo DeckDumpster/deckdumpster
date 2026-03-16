@@ -2064,7 +2064,7 @@ class DeckRepository:
     def set_expected_cards(self, deck_id: int, cards: List[Dict]) -> int:
         """Replace the expected card list for a deck.
 
-        Each dict: {oracle_id, zone, quantity}.
+        Each dict: {printing_id, zone, quantity}.
         Returns number of cards inserted.
         """
         self.conn.execute(
@@ -2073,20 +2073,21 @@ class DeckRepository:
         count = 0
         for card in cards:
             self.conn.execute(
-                "INSERT INTO deck_expected_cards (deck_id, oracle_id, zone, quantity) "
+                "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
                 "VALUES (?, ?, ?, ?)",
-                (deck_id, card["oracle_id"], card.get("zone", "mainboard"),
+                (deck_id, card["printing_id"], card.get("zone", "mainboard"),
                  card.get("quantity", 1)),
             )
             count += 1
         return count
 
     def get_expected_cards(self, deck_id: int) -> List[Dict]:
-        """Return the expected card list with card names joined from cards table."""
+        """Return the expected card list with card names joined via printing."""
         rows = self.conn.execute(
-            "SELECT e.oracle_id, c.name, e.zone, e.quantity "
+            "SELECT e.printing_id, p.oracle_id, c.name, e.zone, e.quantity "
             "FROM deck_expected_cards e "
-            "JOIN cards c ON e.oracle_id = c.oracle_id "
+            "JOIN printings p ON e.printing_id = p.printing_id "
+            "JOIN cards c ON p.oracle_id = c.oracle_id "
             "WHERE e.deck_id = ? ORDER BY c.name",
             (deck_id,),
         ).fetchall()
@@ -2095,24 +2096,24 @@ class DeckRepository:
     def get_expected_cards_as_cards(self, deck_id: int) -> List[Dict]:
         """Return expected cards with full printing data, shaped like get_cards() output.
 
-        For each expected card, picks the most recent non-digital printing.
+        Since printing_id is stored directly, this is a simple join.
         Cards with quantity > 1 produce one row with a quantity field.
         """
         rows = self.conn.execute(
-            """SELECT e.oracle_id, e.zone, e.quantity,
+            """SELECT p.oracle_id, e.zone, e.quantity,
                       card.name, card.type_line, card.mana_cost, card.cmc,
                       card.colors, card.color_identity,
-                      p.printing_id, p.set_code, p.collector_number, p.rarity,
-                      p.artist, p.image_uri, p.frame_effects, p.border_color,
-                      p.full_art, p.promo, p.promo_types, p.finishes,
+                      p.printing_id, p.set_code, p.collector_number,
+                      p.rarity, p.artist, p.image_uri,
+                      p.frame_effects, p.border_color, p.full_art,
+                      p.promo, p.promo_types, p.finishes,
                       json_extract(p.raw_json, '$.layout') as layout,
                       s.set_name
                FROM deck_expected_cards e
-               JOIN cards card ON e.oracle_id = card.oracle_id
-               JOIN printings p ON p.oracle_id = card.oracle_id
+               JOIN printings p ON e.printing_id = p.printing_id
+               JOIN cards card ON p.oracle_id = card.oracle_id
                JOIN sets s ON p.set_code = s.set_code
-               WHERE e.deck_id = ? AND s.digital = 0
-               GROUP BY e.oracle_id
+               WHERE e.deck_id = ?
                ORDER BY card.name""",
             (deck_id,),
         ).fetchall()
@@ -2135,9 +2136,10 @@ class DeckRepository:
         Returns {present, missing, extra} with location info for missing cards.
         """
         expected = self.conn.execute(
-            "SELECT e.oracle_id, c.name, e.zone, e.quantity "
+            "SELECT p.oracle_id, c.name, e.zone, e.quantity "
             "FROM deck_expected_cards e "
-            "JOIN cards c ON e.oracle_id = c.oracle_id "
+            "JOIN printings p ON e.printing_id = p.printing_id "
+            "JOIN cards c ON p.oracle_id = c.oracle_id "
             "WHERE e.deck_id = ?",
             (deck_id,),
         ).fetchall()

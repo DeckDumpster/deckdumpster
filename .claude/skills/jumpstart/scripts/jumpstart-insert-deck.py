@@ -53,6 +53,34 @@ def resolve_card(conn, card_name):
     return row[0]
 
 
+def resolve_printing(conn, card_name):
+    """Resolve a card name to the best printing_id (prefer owned, fallback to most recent non-digital)."""
+    oracle_id = resolve_card(conn, card_name)
+    # Prefer owned printing
+    owned = conn.execute(
+        """SELECT p.printing_id FROM collection col
+           JOIN printings p ON col.printing_id = p.printing_id
+           JOIN sets s ON p.set_code = s.set_code
+           WHERE p.oracle_id = ? AND col.status = 'owned'
+           ORDER BY s.released_at DESC LIMIT 1""",
+        (oracle_id,),
+    ).fetchone()
+    if owned:
+        return owned[0]
+    # Fallback to most recent non-digital printing
+    printing = conn.execute(
+        """SELECT p.printing_id FROM printings p
+           JOIN sets s ON p.set_code = s.set_code
+           WHERE p.oracle_id = ? AND s.digital = 0
+           ORDER BY s.released_at DESC LIMIT 1""",
+        (oracle_id,),
+    ).fetchone()
+    if not printing:
+        print(f"ERROR: No non-digital printing found for {card_name}", file=sys.stderr)
+        sys.exit(1)
+    return printing[0]
+
+
 def ensure_in_collection(conn, card_name):
     """Add a card to the collection if no owned copy exists. Returns the printing_id used."""
     oracle_id = resolve_card(conn, card_name)
@@ -98,8 +126,8 @@ def main():
                         help="Pack color")
     parser.add_argument("--theme", required=True, help="Pack theme name")
     parser.add_argument("--description", required=True, help="Pack description/synergies")
-    parser.add_argument("--basics", type=int, default=None,
-                        help="Number of basic lands (default: 20 - spells - 1 thriving)")
+    parser.add_argument("--basics", type=int, default=7,
+                        help="Number of basic lands (default: 7)")
     args = parser.parse_args()
 
     # Check for duplicate card names
@@ -115,9 +143,9 @@ def main():
     # Resolve non-land spell cards
     expected_cards = []
     for card_name in args.cards:
-        oracle_id = resolve_card(conn, card_name)
+        printing_id = resolve_printing(conn, card_name)
         expected_cards.append({
-            "oracle_id": oracle_id,
+            "printing_id": printing_id,
             "zone": "mainboard",
             "quantity": 1,
             "name": card_name,
@@ -126,22 +154,22 @@ def main():
     # Resolve lands
     thriving_name = THRIVING_NAMES[args.color]
     basic_name = BASIC_NAMES[args.color]
-    basic_count = args.basics if args.basics is not None else (20 - len(args.cards) - 1)
-
-    thriving_oracle_id = resolve_card(conn, thriving_name)
-    basic_oracle_id = resolve_card(conn, basic_name)
+    basic_count = args.basics
 
     # Ensure thriving land is in collection
     ensure_in_collection(conn, thriving_name)
 
+    thriving_printing_id = resolve_printing(conn, thriving_name)
+    basic_printing_id = resolve_printing(conn, basic_name)
+
     expected_cards.append({
-        "oracle_id": thriving_oracle_id,
+        "printing_id": thriving_printing_id,
         "zone": "mainboard",
         "quantity": 1,
         "name": thriving_name,
     })
     expected_cards.append({
-        "oracle_id": basic_oracle_id,
+        "printing_id": basic_printing_id,
         "zone": "mainboard",
         "quantity": basic_count,
         "name": basic_name,
@@ -179,9 +207,9 @@ def main():
     # Insert expected cards
     for card in expected_cards:
         conn.execute(
-            """INSERT INTO deck_expected_cards (deck_id, oracle_id, zone, quantity)
+            """INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity)
                VALUES (?, ?, ?, ?)""",
-            (deck_id, card["oracle_id"], card["zone"], card["quantity"]),
+            (deck_id, card["printing_id"], card["zone"], card["quantity"]),
         )
 
     conn.commit()

@@ -14,7 +14,7 @@ def steps(harness):
     # Wait for the standalone deck detail page to load.
     harness.wait_for_visible("#btn-import-expected", timeout=10_000)
     # Import expected list with only Cathar Commando (unassigned in collection).
-    harness.click_by_text("Import Expected List")
+    harness.click_by_selector("#btn-import-expected")
     harness.wait_for_visible("#expected-modal.active", timeout=5_000)
     harness.fill_by_selector("#f-expected-list", "1 Cathar Commando (FDN) 139")
     harness.click_by_selector("#expected-modal button")

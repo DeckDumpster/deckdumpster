@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
@@ -90,10 +90,10 @@ CREATE TABLE IF NOT EXISTS decks (
 CREATE TABLE IF NOT EXISTS deck_expected_cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
-    oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+    printing_id TEXT NOT NULL REFERENCES printings(printing_id),
     zone TEXT NOT NULL DEFAULT 'mainboard',
     quantity INTEGER NOT NULL DEFAULT 1,
-    UNIQUE(deck_id, oracle_id, zone)
+    UNIQUE(deck_id, printing_id, zone)
 );
 CREATE INDEX IF NOT EXISTS idx_deck_expected_deck ON deck_expected_cards(deck_id);
 
@@ -666,6 +666,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v34_to_v35(conn)
         if current < 36:
             _migrate_v35_to_v36(conn)
+        if current < 37:
+            _migrate_v36_to_v37(conn)
 
     # Record schema version
     conn.execute(
@@ -2024,6 +2026,68 @@ def _migrate_v35_to_v36(conn: sqlite3.Connection):
         conn.execute(
             "ALTER TABLE decks ADD COLUMN commander_printing_id TEXT REFERENCES printings(printing_id)"
         )
+
+
+def _migrate_v36_to_v37(conn: sqlite3.Connection):
+    """Switch deck_expected_cards from oracle_id to printing_id."""
+    # Check if already migrated (has printing_id column)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(deck_expected_cards)").fetchall()]
+    if "printing_id" in cols:
+        return
+
+    # Read existing rows
+    existing = conn.execute(
+        "SELECT deck_id, oracle_id, zone, quantity FROM deck_expected_cards"
+    ).fetchall()
+
+    # Drop and recreate
+    conn.execute("DROP TABLE IF EXISTS deck_expected_cards")
+    conn.execute("""
+        CREATE TABLE deck_expected_cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+            printing_id TEXT NOT NULL REFERENCES printings(printing_id),
+            zone TEXT NOT NULL DEFAULT 'mainboard',
+            quantity INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(deck_id, printing_id, zone)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deck_expected_deck ON deck_expected_cards(deck_id)"
+    )
+
+    # Re-insert with resolved printing_id
+    for row in existing:
+        deck_id, oracle_id, zone, quantity = row
+        # Prefer owned printing, fallback to most recent non-digital
+        printing = conn.execute(
+            """SELECT p.printing_id FROM collection col
+               JOIN printings p ON col.printing_id = p.printing_id
+               JOIN sets s ON p.set_code = s.set_code
+               WHERE p.oracle_id = ? AND col.status = 'owned'
+               ORDER BY s.released_at DESC LIMIT 1""",
+            (oracle_id,),
+        ).fetchone()
+        if not printing:
+            printing = conn.execute(
+                """SELECT p.printing_id FROM printings p
+                   JOIN sets s ON p.set_code = s.set_code
+                   WHERE p.oracle_id = ? AND s.digital = 0
+                   ORDER BY s.released_at DESC LIMIT 1""",
+                (oracle_id,),
+            ).fetchone()
+        if not printing:
+            # Last resort: any printing
+            printing = conn.execute(
+                "SELECT printing_id FROM printings WHERE oracle_id = ? LIMIT 1",
+                (oracle_id,),
+            ).fetchone()
+        if printing:
+            conn.execute(
+                "INSERT OR IGNORE INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
+                "VALUES (?, ?, ?, ?)",
+                (deck_id, printing[0], zone, quantity),
+            )
 
 
 def drop_all_tables(conn: sqlite3.Connection):

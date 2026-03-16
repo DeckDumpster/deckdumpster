@@ -84,7 +84,7 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `ingest_images` — Persistent web UI ingest pipeline state (READY_FOR_OCR → PROCESSING → DONE/ERROR).
 - `ingest_lineage` — Maps collection entries back to source images.
 - `decks` — Named decks with format, sleeve color, deck box, storage location. Origin metadata: `origin_set_code`, `origin_theme`, `origin_variation` for Jumpstart/precon tracking.
-- `deck_expected_cards` — Expected card list for precon/Jumpstart decks (keyed on `oracle_id`, not `printing_id`). Used for completeness tracking and reassembly.
+- `deck_expected_cards` — Expected card list for precon/Jumpstart decks (keyed on `printing_id`). Used for completeness tracking and reassembly. Completeness comparison still uses `oracle_id` (via join through `printings`).
 - `binders` — Named binders with color, type, storage location.
 - `collection_views` — Saved filter/search configurations for the collection page.
 - `status_log` — Append-only audit of collection status changes.
@@ -92,7 +92,7 @@ MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `p
 - `settings` — Key-value config (e.g. `price_sources`, `image_display`).
 - `batches` — Unified batch groupings for all ingestion flows (corner, OCR, CSV import, manual ID, orders, sealed_open) with optional deck assignment.
 - `sealed_product_cards` — Pre-resolved card contents for sealed products. Populated during MTGJSON import by resolving `contents_json` deck/card references. Used by the "Open Product" flow to add known cards to collection.
-- Schema v32 with auto-migrations in `schema.py`.
+- Schema v37 with auto-migrations in `schema.py`.
 - Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `BatchRepository`, `SealedProductCardRepository`.
 - **Deck/binder exclusivity**: A collection entry can be in one deck OR one binder, not both. `deck_id` and `binder_id` are mutually exclusive (enforced by repository logic, returns HTTP 409 on conflict). Use `move_cards()` to atomically reassign.
 
@@ -114,9 +114,9 @@ Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` 
 
 Standalone page at `/card/:set/:cn` (e.g. `/card/lci/150`). Served by `card_detail.html`, with page-specific styles in `card-detail.css` and logic in `card-detail.js`. First consumer of the shared CSS/JS foundation. API endpoint: `GET /api/card/by-set-cn?set=X&cn=Y`. Linked from the collection modal via "Full page" badge.
 
-### Deck detail page
+### Unified deck page
 
-Standalone page at `/decks/:id` (e.g. `/decks/1`). Served by `deck_detail.html`, with page-specific styles in `deck-detail.css` and logic in `deck-detail.js`. Uses `shared.css` + `shared.js`. All deck detail logic (zone tabs, card table, edit/delete, add/remove cards, import expected list, completeness, reassemble) ported from `decks.html` inline view. Card names in the table link to `/card/:set/:cn`. Deck list page (`decks.html`) links to this standalone page. No new API endpoints — uses existing `/api/decks/` routes.
+Both `/decks/:id` and `/deck-builder/:id` serve `deck_builder.html` with `deck-builder.js` and `deck-builder.css`. The page combines the builder's type-grouped list view with the detail page's grid view, zone tabs, edit modal, expected list import, and completeness tracking. View toggle switches between list (type-grouped, multi-column) and grid (card images with rarity borders). Zone tabs filter the grid view; list view shows all zones combined. Card names link to `/card/:set/:cn`. Deck list page (`decks.html`) links via single "View" link to `/decks/:id`.
 
 ### Shared CSS/JS foundation
 

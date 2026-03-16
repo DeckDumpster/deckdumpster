@@ -12,8 +12,8 @@ def steps(harness):
     harness.navigate("/decks/2")
     harness.wait_for_text("Eldrazi Ramp")
 
-    # Open add-cards modal
-    harness.click_by_text("Add Cards")
+    # Open add-cards modal via button
+    harness.click_by_selector("#add-card-btn")
     harness.wait_for_visible("#add-cards-modal.active")
 
     # Search for Condemn — all copies are in deck 1

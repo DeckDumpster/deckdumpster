@@ -1,8 +1,8 @@
 """
 Hand-written implementation for deck_detail_rich_card_table.
 
-Navigates to a deck detail page and verifies the card table renders
-rich content: thumbnails, set icons, mana symbols, and proper columns.
+Navigates to a deck detail page, switches to list view, and verifies the
+type-grouped list renders card names with mana symbols.
 """
 
 
@@ -10,27 +10,22 @@ def steps(harness):
     # Navigate to deck detail page
     harness.navigate("/decks/1")
 
-    # Wait for card table to load
-    harness.wait_for_text("Beast-Kin Ranger")
+    # Wait for grid to render (default view for small decks)
+    harness.wait_for_visible(".grid-card")
 
-    # Verify table header columns
-    harness.assert_text_present("Name")
-    harness.assert_text_present("Type")
-    harness.assert_text_present("Mana")
-    harness.assert_text_present("Set")
-    harness.assert_text_present("Condition")
-    harness.assert_text_present("Price")
+    # Switch to list view
+    harness.click_by_selector("#view-list-btn")
 
-    # Verify thumbnails render (card-thumb img inside the table body)
-    harness.assert_visible("#card-tbody .card-thumb")
+    # Verify type group headers render
+    harness.assert_text_present("Creatures")
 
-    # Verify set icons render (keyrune ss icon)
-    harness.assert_visible("#card-tbody .set-cell .ss")
+    # Verify card names are visible in list view
+    harness.assert_visible("#type-groups .card-row")
 
     # Verify mana symbols render (mana-font ms icon)
-    harness.assert_visible("#card-tbody .mana-cost .ms")
+    harness.assert_visible("#type-groups .mana-icons .ms")
 
-    # Verify card-cell structure (name cell with thumbnail + name)
-    harness.assert_visible("#card-tbody .card-cell")
+    # Verify card links exist
+    harness.assert_visible("#type-groups .card-name a")
 
     harness.screenshot("final_state")

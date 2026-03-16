@@ -13,8 +13,8 @@ def steps(harness):
     harness.click_by_text("Bolt Tribal")
     # Wait for the standalone deck detail page to load.
     harness.wait_for_visible("#btn-import-expected", timeout=10_000)
-    # Click "Import Expected List" to open the modal.
-    harness.click_by_text("Import Expected List")
+    # Click "Import Expected" to open the modal.
+    harness.click_by_selector("#btn-import-expected")
     harness.wait_for_visible("#expected-modal.active", timeout=5_000)
     # Paste a decklist: Beast-Kin Ranger is in the deck, Cathar Commando is not.
     harness.fill_by_selector(
