@@ -14,99 +14,9 @@ At least one filter is required. Use -o to filter to owned cards.
 """
 
 import argparse
-import os
-import sqlite3
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-from mtg_collector.db.connection import get_db_path
-
-
-def build_query(args):
-    """Build SQL query and params from CLI args."""
-    conditions = []
-    params = []
-
-    # Only paper cards from non-digital sets
-    conditions.append("s.digital = 0")
-
-    if args.rarity:
-        conditions.append("p.rarity = ?")
-        params.append(args.rarity.lower())
-
-    if args.type:
-        type_map = {
-            "creature": "Creature",
-            "instant": "Instant",
-            "sorcery": "Sorcery",
-            "enchantment": "Enchantment",
-            "artifact": "Artifact",
-            "planeswalker": "Planeswalker",
-        }
-        card_type = type_map.get(args.type.lower(), args.type)
-        conditions.append(
-            "(c.type_line LIKE ? AND c.type_line NOT LIKE '%//%' || ? || '%')"
-        )
-        params.append(f"%{card_type}%")
-        params.append(card_type)
-
-    if args.cmc is not None:
-        conditions.append("c.cmc = ?")
-        params.append(float(args.cmc))
-
-    if args.mv_min is not None:
-        conditions.append("c.cmc >= ?")
-        params.append(float(args.mv_min))
-
-    if args.mv_max is not None:
-        conditions.append("c.cmc <= ?")
-        params.append(float(args.mv_max))
-
-    if args.color:
-        color = args.color.upper()
-        if args.type and args.type.lower() == "artifact":
-            conditions.append(
-                "(c.colors = ? OR c.colors = '[]' OR c.colors IS NULL)"
-            )
-            params.append(f'["{color}"]')
-        else:
-            conditions.append("c.colors = ?")
-            params.append(f'["{color}"]')
-
-    if args.theme:
-        theme = args.theme
-        conditions.append(
-            "(c.oracle_text LIKE ? OR c.type_line LIKE ? OR c.name LIKE ?)"
-        )
-        params.extend([f"%{theme}%", f"%{theme}%", f"%{theme}%"])
-
-    if args.owned:
-        conditions.append(
-            "EXISTS (SELECT 1 FROM collection col WHERE col.printing_id = p.printing_id AND col.status = 'owned')"
-        )
-
-    where = " AND ".join(conditions)
-
-    query = f"""
-        SELECT DISTINCT c.name, c.mana_cost, c.type_line, c.cmc, p.rarity,
-               c.oracle_text, c.oracle_id,
-               lp.price as price
-        FROM cards c
-        JOIN printings p ON p.oracle_id = c.oracle_id
-        JOIN sets s ON s.set_code = p.set_code
-        LEFT JOIN latest_prices lp ON lp.set_code = p.set_code
-            AND lp.collector_number = p.collector_number
-            AND lp.price_type = 'normal'
-        WHERE {where}
-        GROUP BY c.oracle_id
-        ORDER BY c.name
-    """
-
-    if args.limit:
-        query += f" LIMIT {int(args.limit)}"
-
-    return query, params
+from api_client import DeckBuilderClient, parse_host_arg
 
 
 def count_effects(oracle_text):
@@ -139,6 +49,8 @@ def count_effects(oracle_text):
 
 
 def main():
+    base_url, argv = parse_host_arg(sys.argv)
+
     parser = argparse.ArgumentParser(
         description="Find cards matching a card shape with quality signals"
     )
@@ -151,20 +63,33 @@ def main():
     parser.add_argument("-o", "--owned", action="store_true", help="Only show cards in your collection")
     parser.add_argument("--theme", help="Theme keyword to filter by (oracle text, type line, or name)")
     parser.add_argument("--limit", type=int, default=50, help="Max results (default 50)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv[1:])
 
     if not any([args.rarity, args.type, args.cmc is not None, args.color, args.mv_min is not None, args.mv_max is not None]):
         parser.error("Provide at least one filter (-m, -c, -r, or -t)")
 
-    db_path = get_db_path(os.environ.get("MTGC_DB"))
-    if not Path(db_path).exists():
-        print(f"ERROR: Database not found at {db_path}", file=sys.stderr)
-        sys.exit(1)
+    # Build request body
+    body = {}
+    if args.cmc is not None:
+        body["cmc"] = args.cmc
+    if args.mv_min is not None:
+        body["mv_min"] = args.mv_min
+    if args.mv_max is not None:
+        body["mv_max"] = args.mv_max
+    if args.color:
+        body["color"] = args.color
+    if args.rarity:
+        body["rarity"] = args.rarity
+    if args.type:
+        body["type"] = args.type
+    if args.owned:
+        body["owned"] = True
+    if args.theme:
+        body["theme"] = args.theme
+    body["limit"] = args.limit
 
-    query, params = build_query(args)
-    conn = sqlite3.connect(db_path)
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
+    client = DeckBuilderClient(base_url)
+    rows = client.post("/api/jumpstart/find-card", body)
 
     # Build filter description
     filters = []
@@ -189,11 +114,15 @@ def main():
     print(f"Found: {len(rows)} cards")
     print(f"{'=' * 70}")
 
-    for name, mana_cost, type_line, cmc, rarity, oracle_text, oracle_id, price in rows:
-        cost = mana_cost or ""
-        r = rarity[0].upper() if rarity else "?"
+    for row in rows:
+        name = row.get("name", "?")
+        cost = row.get("mana_cost") or ""
+        rarity = row.get("rarity") or "?"
+        r = rarity[0].upper()
+        oracle_text = row.get("oracle_text") or ""
+        price = row.get("price")
+        type_line = row.get("type_line") or ""
 
-        # Quality signals
         signals = []
         if price and price > 0:
             signals.append(f"${price:.2f}")

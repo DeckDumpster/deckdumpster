@@ -13,111 +13,26 @@ All positional arguments are card names for the non-land spell slots.
 """
 
 import argparse
-import os
-import sqlite3
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-from mtg_collector.db.connection import get_db_path
-from mtg_collector.utils import now_iso
-
+from api_client import DeckBuilderClient, parse_host_arg
 
 COLOR_NAMES = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
 
 THRIVING_NAMES = {
-    "W": "Thriving Heath",
-    "U": "Thriving Isle",
-    "B": "Thriving Moor",
-    "R": "Thriving Bluff",
-    "G": "Thriving Grove",
+    "W": "Thriving Heath", "U": "Thriving Isle", "B": "Thriving Moor",
+    "R": "Thriving Bluff", "G": "Thriving Grove",
 }
 
 BASIC_NAMES = {
-    "W": "Plains",
-    "U": "Island",
-    "B": "Swamp",
-    "R": "Mountain",
-    "G": "Forest",
+    "W": "Plains", "U": "Island", "B": "Swamp",
+    "R": "Mountain", "G": "Forest",
 }
 
 
-def resolve_card(conn, card_name):
-    """Resolve a card name to its oracle_id."""
-    row = conn.execute(
-        "SELECT oracle_id FROM cards WHERE name = ?", (card_name,)
-    ).fetchone()
-    if not row:
-        print(f"ERROR: Card not found in database: {card_name}", file=sys.stderr)
-        sys.exit(1)
-    return row[0]
-
-
-def resolve_printing(conn, card_name):
-    """Resolve a card name to the best printing_id (prefer owned, fallback to most recent non-digital)."""
-    oracle_id = resolve_card(conn, card_name)
-    # Prefer owned printing
-    owned = conn.execute(
-        """SELECT p.printing_id FROM collection col
-           JOIN printings p ON col.printing_id = p.printing_id
-           JOIN sets s ON p.set_code = s.set_code
-           WHERE p.oracle_id = ? AND col.status = 'owned'
-           ORDER BY s.released_at DESC LIMIT 1""",
-        (oracle_id,),
-    ).fetchone()
-    if owned:
-        return owned[0]
-    # Fallback to most recent non-digital printing
-    printing = conn.execute(
-        """SELECT p.printing_id FROM printings p
-           JOIN sets s ON p.set_code = s.set_code
-           WHERE p.oracle_id = ? AND s.digital = 0
-           ORDER BY s.released_at DESC LIMIT 1""",
-        (oracle_id,),
-    ).fetchone()
-    if not printing:
-        print(f"ERROR: No non-digital printing found for {card_name}", file=sys.stderr)
-        sys.exit(1)
-    return printing[0]
-
-
-def ensure_in_collection(conn, card_name):
-    """Add a card to the collection if no owned copy exists. Returns the printing_id used."""
-    oracle_id = resolve_card(conn, card_name)
-
-    # Check if already owned
-    existing = conn.execute(
-        """SELECT col.id FROM collection col
-           JOIN printings p ON col.printing_id = p.printing_id
-           WHERE p.oracle_id = ? AND col.status = 'owned'
-           LIMIT 1""",
-        (oracle_id,),
-    ).fetchone()
-    if existing:
-        return
-
-    # Find a printing to add (prefer non-digital, most recent)
-    printing = conn.execute(
-        """SELECT p.printing_id FROM printings p
-           JOIN sets s ON s.set_code = p.set_code
-           WHERE p.oracle_id = ? AND s.digital = 0
-           ORDER BY s.released_at DESC LIMIT 1""",
-        (oracle_id,),
-    ).fetchone()
-    if not printing:
-        print(f"WARNING: No non-digital printing found for {card_name}", file=sys.stderr)
-        return
-
-    ts = now_iso()
-    conn.execute(
-        """INSERT INTO collection (printing_id, finish, status, source, acquired_at)
-           VALUES (?, 'nonfoil', 'owned', 'manual', ?)""",
-        (printing[0], ts),
-    )
-    print(f"  Added to collection: {card_name}")
-
-
 def main():
+    base_url, argv = parse_host_arg(sys.argv)
+
     parser = argparse.ArgumentParser(
         description="Insert a Jumpstart pack as a hypothetical deck"
     )
@@ -128,7 +43,7 @@ def main():
     parser.add_argument("--description", required=True, help="Pack description/synergies")
     parser.add_argument("--basics", type=int, default=7,
                         help="Number of basic lands (default: 7)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv[1:])
 
     # Check for duplicate card names
     seen = set()
@@ -138,82 +53,19 @@ def main():
             sys.exit(1)
         seen.add(card_name)
 
-    conn = sqlite3.connect(get_db_path(os.environ.get("MTGC_DB")))
+    client = DeckBuilderClient(base_url)
+    result = client.post("/api/jumpstart/insert-deck", {
+        "color": args.color,
+        "theme": args.theme,
+        "description": args.description,
+        "cards": args.cards,
+        "basics": args.basics,
+    })
 
-    # Resolve non-land spell cards
-    expected_cards = []
-    for card_name in args.cards:
-        printing_id = resolve_printing(conn, card_name)
-        expected_cards.append({
-            "printing_id": printing_id,
-            "zone": "mainboard",
-            "quantity": 1,
-            "name": card_name,
-        })
-
-    # Resolve lands
+    deck_id = result["deck_id"]
+    deck_name = result["name"]
     thriving_name = THRIVING_NAMES[args.color]
     basic_name = BASIC_NAMES[args.color]
-    basic_count = args.basics
-
-    # Ensure thriving land is in collection
-    ensure_in_collection(conn, thriving_name)
-
-    thriving_printing_id = resolve_printing(conn, thriving_name)
-    basic_printing_id = resolve_printing(conn, basic_name)
-
-    expected_cards.append({
-        "printing_id": thriving_printing_id,
-        "zone": "mainboard",
-        "quantity": 1,
-        "name": thriving_name,
-    })
-    expected_cards.append({
-        "printing_id": basic_printing_id,
-        "zone": "mainboard",
-        "quantity": basic_count,
-        "name": basic_name,
-    })
-
-    deck_name = f"{args.theme} (Jumpstart)"
-
-    # Check for existing deck with same name
-    existing = conn.execute(
-        "SELECT id FROM decks WHERE name = ?", (deck_name,)
-    ).fetchone()
-    if existing:
-        print(f"ERROR: Deck '{deck_name}' already exists (id={existing[0]})", file=sys.stderr)
-        sys.exit(1)
-
-    ts = now_iso()
-    conn.execute(
-        """INSERT INTO decks (name, description, format, hypothetical,
-           origin_set_code, origin_theme, is_precon, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            deck_name,
-            args.description,
-            "jumpstart",
-            1,
-            "J25",
-            args.theme,
-            0,
-            ts,
-            ts,
-        ),
-    )
-    deck_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-    # Insert expected cards
-    for card in expected_cards:
-        conn.execute(
-            """INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity)
-               VALUES (?, ?, ?, ?)""",
-            (deck_id, card["printing_id"], card["zone"], card["quantity"]),
-        )
-
-    conn.commit()
-    conn.close()
 
     print(f"Created hypothetical deck: {deck_name} (id={deck_id})")
     print(f"Color: {COLOR_NAMES[args.color]}")
@@ -222,7 +74,7 @@ def main():
         print(f"  {card_name}")
     print(f"Lands:")
     print(f"  1 {thriving_name}")
-    print(f"  {basic_count} {basic_name}")
+    print(f"  {args.basics} {basic_name}")
 
 
 if __name__ == "__main__":

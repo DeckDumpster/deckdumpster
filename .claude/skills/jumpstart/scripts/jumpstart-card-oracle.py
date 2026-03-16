@@ -6,59 +6,44 @@ Usage:
     uv run python .claude/skills/jumpstart/scripts/jumpstart-card-oracle.py "Doom Blade"
 """
 
-import os
-import sqlite3
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-from mtg_collector.db.connection import get_db_path
+from api_client import DeckBuilderClient, parse_host_arg
 
 
 def main():
-    if len(sys.argv) < 2:
+    base_url, argv = parse_host_arg(sys.argv)
+
+    if len(argv) < 2:
         print("Usage: jumpstart-card-oracle.py <card name>", file=sys.stderr)
         sys.exit(1)
 
-    name = " ".join(sys.argv[1:])
-    conn = sqlite3.connect(get_db_path(os.environ.get("MTGC_DB")))
+    name = " ".join(argv[1:])
+    client = DeckBuilderClient(base_url)
+    results = client.get("/api/cards/by-name", {"name": name})
 
-    # Exact match first, then LIKE
-    row = conn.execute(
-        "SELECT name, mana_cost, type_line, oracle_text, colors, cmc FROM cards WHERE name = ?",
-        (name,),
-    ).fetchone()
+    if not results:
+        print(f"No card found matching '{name}'")
+        sys.exit(1)
 
-    if not row:
-        rows = conn.execute(
-            "SELECT name, mana_cost, type_line, oracle_text, colors, cmc FROM cards WHERE name LIKE ?",
-            (f"%{name}%",),
-        ).fetchall()
-        if not rows:
-            print(f"No card found matching '{name}'")
-            sys.exit(1)
-        if len(rows) > 10:
-            print(f"Too many matches ({len(rows)}). Be more specific.")
-            for r in rows[:15]:
-                print(f"  {r[0]}")
-            sys.exit(1)
-        for row in rows:
-            _print_card(row)
+    if len(results) > 10:
+        print(f"Too many matches ({len(results)}). Be more specific.")
+        for r in results[:15]:
+            print(f"  {r['name']}")
+        sys.exit(1)
+
+    for row in results:
+        _print_card(row)
+        if len(results) > 1:
             print()
-        conn.close()
-        return
-
-    _print_card(row)
-    conn.close()
 
 
 def _print_card(row):
-    name, mana_cost, type_line, oracle_text, colors, cmc = row
-    print(f"{name}  {mana_cost or ''}")
-    print(f"{type_line}")
-    if oracle_text:
-        print(f"---")
-        print(oracle_text)
+    print(f"{row['name']}  {row.get('mana_cost') or ''}")
+    print(f"{row.get('type_line', '')}")
+    if row.get("oracle_text"):
+        print("---")
+        print(row["oracle_text"])
 
 
 if __name__ == "__main__":

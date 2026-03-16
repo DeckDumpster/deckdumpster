@@ -48,6 +48,15 @@ CMC 6+: 10 (powerful effects: game-ending threats, board wipes, repeatable card 
 
 All tools are invoked via `uv run python .claude/skills/commander/scripts/<tool>.py <args>`.
 
+### Remote execution
+
+All scripts support `--host <url>` to run against a remote MTGC instance (e.g. a deployed container). The URL can also be set via the `MTGC_HOST` environment variable. Default: `https://localhost:8081`.
+
+```bash
+# Run against a remote instance
+uv run python .claude/skills/commander/scripts/commander-find.py --host https://localhost:9443 --colors RG
+```
+
 ### commander-find.py `[options]`
 Browse owned legendary creatures for commander selection. Run with `--help` for all filter flags (colors, CMC, set year, type, oracle text, sort).
 
