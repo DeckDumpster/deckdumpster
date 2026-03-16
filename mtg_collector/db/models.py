@@ -2095,40 +2095,57 @@ class DeckRepository:
     def get_expected_cards_as_cards(self, deck_id: int) -> List[Dict]:
         """Return expected cards with full printing data, shaped like get_cards() output.
 
-        For each expected card, picks the most recent non-digital printing.
+        For each expected card, uses the owned printing if one exists,
+        otherwise falls back to the most recent non-digital printing.
         Cards with quantity > 1 produce one row with a quantity field.
         """
-        # Use a subquery to pick the best printing per oracle_id:
-        # prefer owned printings, then most recent non-digital
         rows = self.conn.execute(
-            """SELECT sub.oracle_id, sub.zone, sub.quantity,
-                      sub.name, sub.type_line, sub.mana_cost, sub.cmc,
-                      sub.colors, sub.color_identity,
-                      sub.printing_id, sub.set_code, sub.collector_number, sub.rarity,
-                      sub.artist, sub.image_uri, sub.frame_effects, sub.border_color,
-                      sub.full_art, sub.promo, sub.promo_types, sub.finishes,
-                      sub.layout, sub.set_name
-               FROM (
-                   SELECT e.oracle_id, e.zone, e.quantity,
-                          card.name, card.type_line, card.mana_cost, card.cmc,
-                          card.colors, card.color_identity,
-                          p.printing_id, p.set_code, p.collector_number, p.rarity,
-                          p.artist, p.image_uri, p.frame_effects, p.border_color,
-                          p.full_art, p.promo, p.promo_types, p.finishes,
-                          json_extract(p.raw_json, '$.layout') as layout,
-                          s.set_name,
-                          (SELECT 1 FROM collection col
-                           WHERE col.printing_id = p.printing_id
-                             AND col.status = 'owned' LIMIT 1) as is_owned
-                   FROM deck_expected_cards e
-                   JOIN cards card ON e.oracle_id = card.oracle_id
-                   JOIN printings p ON p.oracle_id = card.oracle_id
+            """SELECT e.oracle_id, e.zone, e.quantity,
+                      card.name, card.type_line, card.mana_cost, card.cmc,
+                      card.colors, card.color_identity,
+                      COALESCE(op.printing_id, fp.printing_id) as printing_id,
+                      COALESCE(op.set_code, fp.set_code) as set_code,
+                      COALESCE(op.collector_number, fp.collector_number) as collector_number,
+                      COALESCE(op.rarity, fp.rarity) as rarity,
+                      COALESCE(op.artist, fp.artist) as artist,
+                      COALESCE(op.image_uri, fp.image_uri) as image_uri,
+                      COALESCE(op.frame_effects, fp.frame_effects) as frame_effects,
+                      COALESCE(op.border_color, fp.border_color) as border_color,
+                      COALESCE(op.full_art, fp.full_art) as full_art,
+                      COALESCE(op.promo, fp.promo) as promo,
+                      COALESCE(op.promo_types, fp.promo_types) as promo_types,
+                      COALESCE(op.finishes, fp.finishes) as finishes,
+                      json_extract(COALESCE(op.raw_json, fp.raw_json), '$.layout') as layout,
+                      COALESCE(os.set_name, fs.set_name) as set_name
+               FROM deck_expected_cards e
+               JOIN cards card ON e.oracle_id = card.oracle_id
+               -- Best owned printing: join collection → printing, pick one
+               LEFT JOIN (
+                   SELECT col.printing_id as col_pid, p.*,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY p.oracle_id
+                              ORDER BY s.released_at DESC
+                          ) as rn
+                   FROM collection col
+                   JOIN printings p ON col.printing_id = p.printing_id
                    JOIN sets s ON p.set_code = s.set_code
-                   WHERE e.deck_id = ? AND s.digital = 0
-                   ORDER BY is_owned DESC, s.released_at DESC
-               ) sub
-               GROUP BY sub.oracle_id
-               ORDER BY sub.name""",
+                   WHERE col.status = 'owned'
+               ) op ON op.oracle_id = e.oracle_id AND op.rn = 1
+               LEFT JOIN sets os ON op.set_code = os.set_code
+               -- Fallback: most recent non-digital printing
+               LEFT JOIN (
+                   SELECT p.*,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY p.oracle_id
+                              ORDER BY s.released_at DESC
+                          ) as rn
+                   FROM printings p
+                   JOIN sets s ON p.set_code = s.set_code
+                   WHERE s.digital = 0
+               ) fp ON fp.oracle_id = e.oracle_id AND fp.rn = 1
+               LEFT JOIN sets fs ON fp.set_code = fs.set_code
+               WHERE e.deck_id = ?
+               ORDER BY card.name""",
             (deck_id,),
         ).fetchall()
         result = []
