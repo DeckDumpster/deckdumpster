@@ -16,7 +16,7 @@ Every J25 pack follows this formula (derived from analyzing all 121 real J25 dec
 - **20 cards total**: 8 lands + 12 non-land spells
 - **Lands**: 1 Thriving land (color-matched) + 7 basics (always)
 - **Mono-colored** (all colored spells share one color; colorless artifacts OK)
-- **Rarity**: 1 mythic + 1 rare (prefer mythic as identity card; fall back to 2 rares if no mythic available), 3-5 uncommon, rest common
+- **Rarity**: 1 mythic + 1 rare (prefer mythic as identity card; fall back to 2 rares if no mythic available), 3-5 uncommon, rest common. **Rarity is determined by oracle_id, not by the specific printing owned** — if any printing of a card exists at a given rarity, the card counts as that rarity for budget purposes. (e.g., Savannah Lions is rare in Alpha but common in J25 — it counts as common.)
 - **Creatures**: 5-8 creature-typed cards (usually 7-8)
 - **Non-creature spells**: 3-7 (usually 4)
 - **Curve**: MV 0 always empty. MV 2 and MV 3 always have at least 1 card each. MV 2+3 combined is 4-10 (usually 6-7). MV 5+ combined is 0-4.
@@ -42,11 +42,17 @@ When choosing between candidates for a slot, evaluate card quality using these s
 
 4. **Standalone power**: In a 20-card deck shuffled with another random 20-card deck, cards need to be independently good. Avoid narrow combo pieces.
 
-5. **Price as quality proxy**: Higher-priced cards are generally more played and powerful. Use as a tiebreaker.
+5. **Set variety**: Prefer cards from a variety of sets over concentrating on one set. Part of the fun is seeing cards from different eras and worlds together. Some overlap is fine — don't sacrifice card quality for variety — but when candidates are close, pick the one from an underrepresented set.
+
+6. **Price as quality proxy**: Higher-priced cards are generally more played and powerful. Use as a tiebreaker.
 
 ## Tools
 
 All tools are invoked via `uv run python .claude/skills/jumpstart/scripts/<tool>.py <args>`.
+
+**Host configuration:** Scripts read the server URL from `.claude/skills/jumpstart/host` (one URL per line). Override with `--host <url>` flag or `MTGC_HOST` env var. Priority: `--host` flag > `MTGC_HOST` env > `host` file > default (`https://localhost:8081`).
+
+**IMPORTANT — one command per tool call.** Do NOT chain multiple script invocations with `&&`, `;`, or subshells. Each script call should be a separate Bash tool invocation. Chaining causes permission prompts for every sub-command.
 
 ### jumpstart-generate-shape.py `[COLOR] [--rare-category bomb|engine|lord] [--seed N]`
 Generate a soft pack shape: curve distribution, creature/spell count, rarity budget. Color is W/U/B/R/G; random if omitted. Use `--seed` for reproducibility.
@@ -79,6 +85,20 @@ jumpstart-find-card.py -m 2 -c G -o --theme elf
 #   -o / --owned     IMPORTANT: only show cards the user owns
 #   --theme          Keyword to match in oracle text, type line, or name
 #   --limit N        Max results (default 50)
+```
+
+### jumpstart-search.py `"<sql_where_clause>" [--color W]`
+Search owned cards using raw SQL WHERE clauses. More expressive than `jumpstart-find-card.py` — use when structured filters aren't enough. Optional `--color` restricts to mono-colored cards. Use `--schema` to see available columns.
+
+```bash
+# Find cheap removal:
+jumpstart-search.py "c.oracle_text LIKE '%destroy target%' AND c.cmc <= 3"
+
+# Find green creatures with ETB effects:
+jumpstart-search.py "c.type_line LIKE '%Creature%' AND c.oracle_text LIKE '%enters%'" --color G
+
+# See available columns:
+jumpstart-search.py --schema
 ```
 
 ### jumpstart-card-oracle.py `"<card name>"`
@@ -180,7 +200,7 @@ uv run python .claude/skills/jumpstart/scripts/jumpstart-insert-deck.py \
 ## Soft Shape Constraints
 
 The soft shape is a guide. These constraints are hard:
-- **Rarity budget**: 1 mythic + 1 rare (fall back to 2 rares if no mythic available), 3-5 U, rest C
+- **Rarity budget**: 1 mythic + 1 rare (fall back to 2 rares if no mythic available), 3-5 U, rest C. Rarity is by oracle_id (any printing's rarity counts)
 - **Total spells**: 12 (always)
 - **Lands**: 8 (always: 1 Thriving + 7 basics)
 - **Creature count**: 5-9 (need board presence)

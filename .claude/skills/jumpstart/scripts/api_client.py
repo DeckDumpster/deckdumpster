@@ -9,11 +9,28 @@ import urllib.parse
 import urllib.request
 
 DEFAULT_HOST = "https://localhost:8081"
+_HOST_CONFIG = os.path.join(os.path.dirname(__file__), "..", "host")
+
+
+def _read_host_config():
+    """Read host from .claude/skills/jumpstart/host file if it exists."""
+    try:
+        with open(_HOST_CONFIG) as f:
+            host = f.read().strip()
+            if host:
+                return host
+    except FileNotFoundError:
+        pass
+    return None
 
 
 def parse_host_arg(argv):
-    """Strip --host <url> from argv. Returns (base_url, remaining_argv)."""
-    base_url = os.environ.get("MTGC_HOST", DEFAULT_HOST)
+    """Strip --host <url> from argv. Returns (base_url, remaining_argv).
+
+    Priority: --host flag > MTGC_HOST env > jumpstart/host file > DEFAULT_HOST.
+    """
+    base_url = _read_host_config() or DEFAULT_HOST
+    base_url = os.environ.get("MTGC_HOST", base_url)
     remaining = [argv[0]]
     i = 1
     while i < len(argv):

@@ -35,3 +35,4 @@ plans/
 !.claude/settings.json
 !.claude/hooks/
 !.claude/skills/
+.claude/skills/jumpstart/host
