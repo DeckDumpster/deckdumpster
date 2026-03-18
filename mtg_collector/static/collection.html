@@ -97,6 +97,7 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 }
 
 #search-input { width: 220px; }
+#oracle-search-input { width: 220px; }
 
 /* Icon buttons in view toggle */
 .view-toggle-group button svg { display: block; }
@@ -1216,7 +1217,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 #sel-delete-btn:hover { background: #7a2a2a; color: #fff; }
 
 @media (max-width: 768px) {
-  #search-input { width: 100%; order: -1; }
+  #search-input, #oracle-search-input { width: 100%; order: -1; }
   .controls { flex-wrap: wrap; }
   .sidebar { width: 280px; left: -300px; }
   .wishlist-panel { width: 280px; right: -300px; }
@@ -1230,6 +1231,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
   <h1><a href="/" style="color:inherit;text-decoration:none">Collection</a></h1>
   <div class="controls">
     <input type="text" id="search-input" placeholder="Search cards...">
+    <input type="text" id="oracle-search-input" placeholder="Oracle text...">
     <div class="view-toggle-group" id="view-toggle-group">
       <button class="secondary" id="view-table-btn" title="Table view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2" width="14" height="2" rx=".5"/><rect x="1" y="7" width="14" height="2" rx=".5"/><rect x="1" y="12" width="14" height="2" rx=".5"/></svg></button>
       <button class="secondary" id="view-grid-btn" title="Grid view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
@@ -1473,6 +1475,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 <script src="/static/shared-card-table.js"></script>
 <script>
 const searchInput = document.getElementById('search-input');
+const oracleSearchInput = document.getElementById('oracle-search-input');
 const viewTableBtn = document.getElementById('view-table-btn');
 const viewGridBtn = document.getElementById('view-grid-btn');
 const viewOrdersBtn = document.getElementById('view-orders-btn');
@@ -2959,6 +2962,8 @@ function getFetchParams() {
   const params = new URLSearchParams();
   const q = searchInput.value.trim();
   if (q) params.set('q', q);
+  const oq = oracleSearchInput.value.trim();
+  if (oq) params.set('oracle_text', oq);
   if (includeUnowned && hasAnyFilter()) {
     params.set('include_unowned', includeUnowned);
     // Send selected sets for server-side caching (ensure_set_cached)
@@ -2980,6 +2985,7 @@ function getFetchParams() {
 
 function hasAnyFilter() {
   if (searchInput.value.trim()) return true;
+  if (oracleSearchInput.value.trim()) return true;
   if (selectedSets.size) return true;
   if (document.querySelectorAll('#color-filters input:checked').length) return true;
   if (document.querySelectorAll('#rarity-filters input:checked').length) return true;
@@ -3583,6 +3589,10 @@ function renderGrid() {
 // --- Event listeners ---
 // Search input is the only filter that triggers a backend fetch
 searchInput.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(fetchCollection, 300);
+});
+oracleSearchInput.addEventListener('input', () => {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(fetchCollection, 300);
 });

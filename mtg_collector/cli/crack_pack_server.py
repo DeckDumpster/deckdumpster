@@ -1469,6 +1469,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_jumpstart_printings_by_name(data)
+        elif path == "/api/jumpstart/sql-search":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_jumpstart_sql_search(data)
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -1772,6 +1777,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             sql_params.append(f"%{q}%")
             sql_params.append(f"%{q}%")
             sql_params.append(f"%{q}%")
+
+        oracle_text = params.get("oracle_text", [""])[0]
+        if oracle_text:
+            where_clauses.append("card.oracle_text LIKE ?")
+            sql_params.append(f"%{oracle_text}%")
 
         if filter_colors:
             color_conditions = []
@@ -5718,11 +5728,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        # Exact match
+        # Exact match — prefer cards with real printings over token-only
         row = conn.execute(
             """SELECT c.oracle_id, c.name, c.mana_cost, c.type_line, c.oracle_text,
                       c.colors, c.color_identity, c.cmc
-               FROM cards c WHERE c.name = ?""",
+               FROM cards c
+               WHERE c.name = ?
+               ORDER BY CASE WHEN EXISTS (
+                   SELECT 1 FROM printings p
+                   JOIN sets s ON s.set_code = p.set_code
+                   WHERE p.oracle_id = c.oracle_id AND s.digital = 0
+                     AND s.set_type NOT IN ('token', 'memorabilia')
+               ) THEN 0 ELSE 1 END
+               LIMIT 1""",
             (name,),
         ).fetchone()
         if row:
@@ -5752,11 +5770,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             conn.close()
             self._send_json([result])
             return
-        # LIKE fallback
+        # LIKE fallback — only cards with real printings
         rows = conn.execute(
             """SELECT c.oracle_id, c.name, c.mana_cost, c.type_line, c.oracle_text,
                       c.colors, c.color_identity, c.cmc
-               FROM cards c WHERE c.name LIKE ? LIMIT 50""",
+               FROM cards c
+               WHERE c.name LIKE ?
+                 AND EXISTS (
+                     SELECT 1 FROM printings p
+                     JOIN sets s ON s.set_code = p.set_code
+                     WHERE p.oracle_id = c.oracle_id AND s.digital = 0
+                       AND s.set_type NOT IN ('token', 'memorabilia')
+                 )
+               LIMIT 50""",
             (f"%{name}%",),
         ).fetchall()
         results = []
@@ -5793,7 +5819,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Search cards with jumpstart-style filters."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        conditions = ["s.digital = 0"]
+        conditions = ["s.digital = 0", "s.set_type NOT IN ('token', 'memorabilia')"]
         params = []
 
         if data.get("rarity"):
@@ -5905,6 +5931,64 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.close()
         self._send_json(results)
 
+    def _api_jumpstart_sql_search(self, data: dict):
+        """Search owned cards using a SQL WHERE clause for jumpstart building."""
+        where_clause = data.get("where_clause", "")
+        if not where_clause:
+            self._send_json({"error": "where_clause is required"}, 400)
+            return
+        if ";" in where_clause:
+            self._send_json({"error": "Semicolons are not allowed in WHERE clauses."}, 400)
+            return
+        if re.search(r"\b(ATTACH|DETACH|PRAGMA)\b", where_clause, re.IGNORECASE):
+            self._send_json({"error": "Only read-only WHERE clauses are allowed."}, 400)
+            return
+
+        color = data.get("color", "").upper()
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+
+        conditions = [f"({where_clause})"]
+        params = []
+        if color:
+            conditions.append("c.colors = ?")
+            params.append(f'["{color}"]')
+
+        where = " AND ".join(conditions)
+        sql = f"""SELECT col.id, col.printing_id, col.finish, col.condition,
+                         p.set_code, p.collector_number, p.rarity, p.image_uri,
+                         c.name, c.type_line, c.mana_cost, c.cmc,
+                         c.oracle_id, c.oracle_text
+                  FROM collection col
+                  JOIN printings p ON col.printing_id = p.printing_id
+                  JOIN cards c ON p.oracle_id = c.oracle_id
+                  WHERE col.status = 'owned'
+                    AND {where}
+                  ORDER BY c.cmc, c.name
+                  LIMIT 200"""
+
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except Exception as e:
+            conn.close()
+            self._send_json({"error": f"SQL error: {e}"}, 400)
+            return
+
+        # Dedup by oracle_id
+        seen = set()
+        results = []
+        for row in rows:
+            oid = row["oracle_id"]
+            if oid in seen:
+                continue
+            seen.add(oid)
+            results.append(dict(row))
+            if len(results) >= 50:
+                break
+
+        conn.close()
+        self._send_json(results)
+
     def _api_jumpstart_insert_deck(self, data: dict):
         """Create a Jumpstart hypothetical deck with expected cards."""
         color = data.get("color")
@@ -5940,28 +6024,28 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         # Resolve all card names to printing_ids
         def _resolve_printing(name):
-            oracle = conn.execute(
-                "SELECT oracle_id FROM cards WHERE name = ?", (name,)
-            ).fetchone()
-            if not oracle:
-                return None, f"Card not found: {name}"
-            oid = oracle[0]
+            # Go straight through printings — owned copy preferred
             row = conn.execute(
                 """SELECT p.printing_id FROM collection col
                    JOIN printings p ON col.printing_id = p.printing_id
+                   JOIN cards c ON p.oracle_id = c.oracle_id
                    JOIN sets s ON p.set_code = s.set_code
-                   WHERE p.oracle_id = ? AND col.status = 'owned'
+                   WHERE c.name = ? AND col.status = 'owned'
+                     AND s.set_type NOT IN ('token', 'memorabilia')
                    ORDER BY s.released_at DESC LIMIT 1""",
-                (oid,),
+                (name,),
             ).fetchone()
             if row:
                 return row[0], None
+            # Fall back to any real printing
             row = conn.execute(
                 """SELECT p.printing_id FROM printings p
+                   JOIN cards c ON p.oracle_id = c.oracle_id
                    JOIN sets s ON p.set_code = s.set_code
-                   WHERE p.oracle_id = ? AND s.digital = 0
+                   WHERE c.name = ? AND s.digital = 0
+                     AND s.set_type NOT IN ('token', 'memorabilia')
                    ORDER BY s.released_at DESC LIMIT 1""",
-                (oid,),
+                (name,),
             ).fetchone()
             if row:
                 return row[0], None
