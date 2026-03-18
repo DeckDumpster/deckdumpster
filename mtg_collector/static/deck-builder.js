@@ -176,7 +176,7 @@
             ${deck.hypothetical ? '<span class="hypothetical-badge">Hypothetical</span>' : ''}
             <div class="header-actions">
               <button class="edit-btn" id="edit-deck-btn">Edit</button>
-              ${!deck.hypothetical ? '<button class="add-btn" id="add-card-btn">+ Add Card</button>' : ''}
+              <button class="add-btn" id="add-card-btn">+ Add Card</button>
               <button class="edit-btn" id="btn-import-expected">Import Expected</button>
               <button class="delete-btn" id="delete-deck-btn">Delete</button>
             </div>
@@ -401,12 +401,21 @@
     typeGroupsEl.addEventListener('click', async (e) => {
       const btn = e.target.closest('.remove-btn');
       if (!btn) return;
-      const cid = parseInt(btn.dataset.collectionId, 10);
-      await fetch('/api/deck-builder/' + deck.id + '/cards', {
-        method: 'DELETE',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ collection_id: cid }),
-      });
+      if (btn.dataset.printingId) {
+        // Hypothetical deck: remove from expected cards
+        await fetch('/api/decks/' + deck.id + '/expected-cards/remove', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ printing_id: btn.dataset.printingId }),
+        });
+      } else {
+        const cid = parseInt(btn.dataset.collectionId, 10);
+        await fetch('/api/deck-builder/' + deck.id + '/cards', {
+          method: 'DELETE',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ collection_id: cid }),
+        });
+      }
       await loadBuilder(deck.id);
     });
 
@@ -556,9 +565,12 @@
         const qty = c.quantity || 1;
         const qtyStr = qty > 1 ? `<span class="card-qty">${qty}x</span> ` : '';
         const cids = c.collection_ids || [c.id];
-        const removeBtn = !hypo && cids[0] != null
-          ? `<button class="remove-btn" data-collection-id="${cids[0]}" title="Remove">&times;</button>`
-          : '';
+        let removeBtn = '';
+        if (hypo && c.printing_id) {
+          removeBtn = `<button class="remove-btn" data-printing-id="${c.printing_id}" title="Remove">&times;</button>`;
+        } else if (!hypo && cids[0] != null) {
+          removeBtn = `<button class="remove-btn" data-collection-id="${cids[0]}" title="Remove">&times;</button>`;
+        }
         html += `<div class="card-row" data-image-uri="${esc(c.image_uri || '')}" data-card-name="${esc(c.name)}">
           <span class="card-name">${qtyStr}<a href="/card/${esc(c.set_code)}/${esc(c.collector_number)}">${esc(c.name)}</a></span>
           <span class="mana-icons">${renderMana(c.mana_cost)}</span>
@@ -629,10 +641,23 @@
         '<div style="padding:12px;color:var(--text-secondary);">Type at least 2 characters...</div>';
       return;
     }
+    const hypo = window._builderData && window._builderData.deck.hypothetical;
     const res = await fetch('/api/collection?q=' + encodeURIComponent(q) + '&status=owned&expand=copies');
     const data = await res.json();
     const allCopies = Array.isArray(data) ? data : data.cards || [];
-    const cards = allCopies.filter(c => !c.deck_id && !c.binder_id);
+    // Hypothetical decks: dedup by printing_id (don't care about individual copies)
+    // Real decks: only show unassigned copies
+    let cards;
+    if (hypo) {
+      const seen = new Set();
+      cards = allCopies.filter(c => {
+        if (seen.has(c.printing_id)) return false;
+        seen.add(c.printing_id);
+        return true;
+      });
+    } else {
+      cards = allCopies.filter(c => !c.deck_id && !c.binder_id);
+    }
 
     const container = document.getElementById('picker-cards');
     if (cards.length === 0) {
@@ -640,7 +665,7 @@
       return;
     }
     container.innerHTML = cards.map(c => {
-      const key = String(c.collection_id);
+      const key = hypo ? String(c.printing_id) : String(c.collection_id);
       const cond = c.condition ? ` [${esc(c.condition)}]` : '';
       const price = c.purchase_price ? ` $${parseFloat(c.purchase_price).toFixed(2)}` : '';
       return `<div class="picker-card ${pickerSelected.has(key) ? 'selected' : ''}" data-key="${esc(key)}">
@@ -666,15 +691,28 @@
   async function addSelectedPickerCards(deckId) {
     if (pickerSelected.size === 0) { alert('No cards selected'); return; }
     const zone = document.getElementById('add-zone').value;
-    const allIds = Array.from(pickerSelected).map(Number);
+    const hypo = window._builderData && window._builderData.deck.hypothetical;
 
-    const res = await fetch('/api/decks/' + deckId + '/cards', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection_ids: allIds, zone }),
-    });
-    const result = await res.json();
-    if (result.error) { alert(result.error); return; }
+    if (hypo) {
+      // Hypothetical deck: add to expected cards by printing_id
+      const printingIds = Array.from(pickerSelected);
+      const res = await fetch('/api/decks/' + deckId + '/expected-cards/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ printing_ids: printingIds, zone }),
+      });
+      const result = await res.json();
+      if (result.error) { alert(result.error); return; }
+    } else {
+      const allIds = Array.from(pickerSelected).map(Number);
+      const res = await fetch('/api/decks/' + deckId + '/cards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection_ids: allIds, zone }),
+      });
+      const result = await res.json();
+      if (result.error) { alert(result.error); return; }
+    }
 
     closeModal('add-cards-modal');
     await loadBuilder(deckId);

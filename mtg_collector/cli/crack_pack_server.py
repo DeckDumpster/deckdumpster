@@ -1400,6 +1400,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_reassemble(int(did), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/expected-cards/add"):
+            did = path[len("/api/decks/"):-len("/expected-cards/add")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_expected_add(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/expected-cards/remove"):
+            did = path[len("/api/decks/"):-len("/expected-cards/remove")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_expected_remove(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/cards/move"):
             did = path[len("/api/decks/"):-len("/cards/move")]
             if did.isdigit():
@@ -5252,6 +5270,40 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         result = repo.get_expected_cards(deck_id)
         conn.close()
         self._send_json({"ok": True, "count": count, "cards": result})
+
+    def _api_deck_expected_add(self, deck_id: int, data: dict):
+        """Add cards to a hypothetical deck's expected list by printing_id."""
+        printing_ids = data.get("printing_ids", [])
+        zone = data.get("zone", "mainboard")
+        if not printing_ids:
+            self._send_json({"error": "printing_ids is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        for pid in printing_ids:
+            conn.execute(
+                "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
+                "VALUES (?, ?, ?, 1)",
+                (deck_id, pid, zone),
+            )
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True, "count": len(printing_ids)})
+
+    def _api_deck_expected_remove(self, deck_id: int, data: dict):
+        """Remove a card from a hypothetical deck's expected list by printing_id."""
+        printing_id = data.get("printing_id")
+        if not printing_id:
+            self._send_json({"error": "printing_id is required"}, 400)
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "DELETE FROM deck_expected_cards WHERE deck_id = ? AND printing_id = ?",
+            (deck_id, printing_id),
+        )
+        conn.commit()
+        conn.close()
+        self._send_json({"ok": True})
 
     def _api_deck_completeness(self, deck_id: int):
         conn = sqlite3.connect(self.db_path)
