@@ -116,12 +116,15 @@ def main():
 
     for row in rows:
         name = row.get("name", "?")
+        oracle_name = row.get("oracle_name")
         cost = row.get("mana_cost") or ""
         rarity = row.get("rarity") or "?"
         r = rarity[0].upper()
         oracle_text = row.get("oracle_text") or ""
         price = row.get("price")
         type_line = row.get("type_line") or ""
+        set_code = row.get("set_code") or ""
+        cn = row.get("collector_number") or ""
 
         signals = []
         if price and price > 0:
@@ -136,7 +139,13 @@ def main():
         toughness = row.get("toughness")
         pt_str = f"  ({power}/{toughness})" if power is not None and toughness is not None else ""
 
-        print(f"  [{r}] {cost:14s} {name:40s}{signal_str}")
+        # Show printing name; append oracle name when they differ
+        display_name = name
+        if oracle_name:
+            display_name = f"{name} (= {oracle_name})"
+
+        printing_tag = f" [{set_code}/{cn}]" if set_code else ""
+        print(f"  [{r}] {cost:14s} {display_name:40s}{signal_str}{printing_tag}")
         print(f"      {type_line}{pt_str}")
         if oracle_text:
             text = oracle_text.replace("\n", " | ")

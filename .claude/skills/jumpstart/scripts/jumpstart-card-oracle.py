@@ -29,7 +29,9 @@ def main():
     if len(results) > 10:
         print(f"Too many matches ({len(results)}). Be more specific.")
         for r in results[:15]:
-            print(f"  {r['name']}")
+            pname = r.get("printing_name")
+            display = f"{pname} (= {r['name']})" if pname else r["name"]
+            print(f"  {display}")
         sys.exit(1)
 
     for row in results:
@@ -39,7 +41,12 @@ def main():
 
 
 def _print_card(row):
-    print(f"{row['name']}  {row.get('mana_cost') or ''}")
+    name = row["name"]
+    printing_name = row.get("printing_name")
+    if printing_name:
+        print(f"{printing_name} (= {name})  {row.get('mana_cost') or ''}")
+    else:
+        print(f"{name}  {row.get('mana_cost') or ''}")
     print(f"{row.get('type_line', '')}")
     power = row.get("power")
     toughness = row.get("toughness")

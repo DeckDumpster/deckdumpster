@@ -5773,13 +5773,37 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     # ===== Card lookup API handlers =====
 
     def _api_card_by_name(self, params: dict):
-        """Look up card(s) by name. Exact match first, then LIKE."""
+        """Look up card(s) by name. Searches both oracle and printing names."""
         name = params.get("name", [""])[0].strip()
         if not name:
             self._send_json({"error": "name parameter is required"}, 400)
             return
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+
+        def _attach_printing(oracle_id):
+            """Find best printing (prefer owned) for an oracle_id."""
+            p = conn.execute(
+                """SELECT p.set_code, p.collector_number, p.printing_id,
+                          json_extract(p.raw_json, '$.flavor_name') as flavor_name
+                   FROM collection col
+                   JOIN printings p ON col.printing_id = p.printing_id
+                   WHERE p.oracle_id = ? AND col.status = 'owned'
+                   ORDER BY col.id DESC LIMIT 1""",
+                (oracle_id,),
+            ).fetchone()
+            if not p:
+                p = conn.execute(
+                    """SELECT p.set_code, p.collector_number, p.printing_id,
+                              json_extract(p.raw_json, '$.flavor_name') as flavor_name
+                       FROM printings p
+                       JOIN sets s ON s.set_code = p.set_code
+                       WHERE p.oracle_id = ? AND s.digital = 0
+                       ORDER BY s.released_at DESC LIMIT 1""",
+                    (oracle_id,),
+                ).fetchone()
+            return p
+
         # Exact match — prefer cards with real printings over token-only
         row = conn.execute(
             """SELECT c.*,
@@ -5800,34 +5824,30 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                LIMIT 1""",
             (name,),
         ).fetchone()
+        # Fallback: exact match on printing name (flavor_name)
+        if not row:
+            row = conn.execute(
+                """SELECT c.oracle_id, c.name, c.mana_cost, c.type_line,
+                          c.oracle_text, c.colors, c.color_identity, c.cmc
+                   FROM printings p
+                   JOIN cards c ON c.oracle_id = p.oracle_id
+                   WHERE json_extract(p.raw_json, '$.flavor_name') = ?
+                   LIMIT 1""",
+                (name,),
+            ).fetchone()
         if row:
             result = dict(row)
-            # Attach best owned printing info
-            printing = conn.execute(
-                """SELECT p.set_code, p.collector_number, p.printing_id
-                   FROM collection col
-                   JOIN printings p ON col.printing_id = p.printing_id
-                   WHERE p.oracle_id = ? AND col.status = 'owned'
-                   ORDER BY col.id DESC LIMIT 1""",
-                (row["oracle_id"],),
-            ).fetchone()
-            if not printing:
-                printing = conn.execute(
-                    """SELECT p.set_code, p.collector_number, p.printing_id
-                       FROM printings p
-                       JOIN sets s ON s.set_code = p.set_code
-                       WHERE p.oracle_id = ? AND s.digital = 0
-                       ORDER BY s.released_at DESC LIMIT 1""",
-                    (row["oracle_id"],),
-                ).fetchone()
+            printing = _attach_printing(row["oracle_id"])
             if printing:
                 result["set_code"] = printing["set_code"]
                 result["collector_number"] = printing["collector_number"]
                 result["printing_id"] = printing["printing_id"]
+                if printing["flavor_name"] and printing["flavor_name"] != result["name"]:
+                    result["printing_name"] = printing["flavor_name"]
             conn.close()
             self._send_json([result])
             return
-        # LIKE fallback — only cards with real printings
+        # LIKE fallback — search both oracle and printing names
         rows = conn.execute(
             """SELECT c.*,
                       (SELECT json_extract(p2.raw_json, '$.power')
@@ -5837,40 +5857,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                        FROM printings p2 WHERE p2.oracle_id = c.oracle_id
                        AND p2.raw_json IS NOT NULL LIMIT 1) as toughness
                FROM cards c
-               WHERE c.name LIKE ?
-                 AND EXISTS (
-                     SELECT 1 FROM printings p
-                     JOIN sets s ON s.set_code = p.set_code
-                     WHERE p.oracle_id = c.oracle_id AND s.digital = 0
-                       AND s.set_type NOT IN ('token', 'memorabilia')
-                 )
+               LEFT JOIN printings p ON p.oracle_id = c.oracle_id
+               LEFT JOIN sets s ON s.set_code = p.set_code
+               WHERE (c.name LIKE ? OR json_extract(p.raw_json, '$.flavor_name') LIKE ?)
+                 AND (s.digital = 0 AND s.set_type NOT IN ('token', 'memorabilia'))
+               GROUP BY c.oracle_id
                LIMIT 50""",
-            (f"%{name}%",),
+            (f"%{name}%", f"%{name}%"),
         ).fetchall()
         results = []
         for r in rows:
             card = dict(r)
-            printing = conn.execute(
-                """SELECT p.set_code, p.collector_number, p.printing_id
-                   FROM collection col
-                   JOIN printings p ON col.printing_id = p.printing_id
-                   WHERE p.oracle_id = ? AND col.status = 'owned'
-                   ORDER BY col.id DESC LIMIT 1""",
-                (r["oracle_id"],),
-            ).fetchone()
-            if not printing:
-                printing = conn.execute(
-                    """SELECT p.set_code, p.collector_number, p.printing_id
-                       FROM printings p
-                       JOIN sets s ON s.set_code = p.set_code
-                       WHERE p.oracle_id = ? AND s.digital = 0
-                       ORDER BY s.released_at DESC LIMIT 1""",
-                    (r["oracle_id"],),
-                ).fetchone()
+            printing = _attach_printing(r["oracle_id"])
             if printing:
                 card["set_code"] = printing["set_code"]
                 card["collector_number"] = printing["collector_number"]
                 card["printing_id"] = printing["printing_id"]
+                if printing["flavor_name"] and printing["flavor_name"] != card["name"]:
+                    card["printing_name"] = printing["flavor_name"]
             results.append(card)
         conn.close()
         self._send_json(results)
@@ -5883,6 +5887,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.row_factory = sqlite3.Row
         conditions = ["s.digital = 0", "s.set_type NOT IN ('token', 'memorabilia')"]
         params = []
+        owned = data.get("owned", False)
 
         if data.get("rarity"):
             conditions.append("p.rarity = ?")
@@ -5925,41 +5930,56 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 params.append(f'["{color}"]')
 
         if data.get("theme"):
+            theme_pat = f"%{data['theme']}%"
             conditions.append(
-                "(c.oracle_text LIKE ? OR c.type_line LIKE ? OR c.name LIKE ?)"
+                "(c.oracle_text LIKE ? OR c.type_line LIKE ? OR c.name LIKE ?"
+                " OR json_extract(p.raw_json, '$.flavor_name') LIKE ?)"
             )
-            params.extend([f"%{data['theme']}%"] * 3)
+            params.extend([theme_pat] * 4)
 
-        if data.get("owned"):
-            conditions.append(
-                "EXISTS (SELECT 1 FROM collection col WHERE col.printing_id = p.printing_id AND col.status = 'owned')"
+        # When owned, join through collection to ensure printing info
+        # comes from an owned printing (not an arbitrary one)
+        collection_join = ""
+        if owned:
+            collection_join = (
+                "JOIN collection col ON col.printing_id = p.printing_id"
+                " AND col.status = 'owned'"
             )
 
         where = " AND ".join(conditions)
         limit = int(data.get("limit", 50))
 
         query = f"""
-            SELECT DISTINCT c.*,
-                   p.rarity,
+            SELECT c.name as oracle_name, c.mana_cost, c.type_line, c.cmc,
+                   p.rarity, c.oracle_text, c.oracle_id, c.colors, c.color_identity,
+                   COALESCE(json_extract(p.raw_json, '$.flavor_name'), c.name) as name,
+                   p.set_code, p.collector_number,
                    json_extract(p.raw_json, '$.power') as power,
                    json_extract(p.raw_json, '$.toughness') as toughness,
                    lp.price as price
             FROM cards c
             JOIN printings p ON p.oracle_id = c.oracle_id
             JOIN sets s ON s.set_code = p.set_code
+            {collection_join}
             LEFT JOIN latest_prices lp ON lp.set_code = p.set_code
                 AND lp.collector_number = p.collector_number
                 AND lp.price_type = 'normal'
             WHERE {where}
             GROUP BY c.oracle_id
-            ORDER BY c.name
+            ORDER BY name
             LIMIT ?
         """
         params.append(limit)
 
         rows = conn.execute(query, params).fetchall()
         conn.close()
-        self._send_json([dict(r) for r in rows])
+        results = []
+        for r in rows:
+            row = dict(r)
+            if row["oracle_name"] == row["name"]:
+                row.pop("oracle_name")
+            results.append(row)
+        self._send_json(results)
 
     def _api_jumpstart_printings_by_name(self, data: dict):
         """Resolve card names to owned printing set_code/collector_number."""
@@ -5971,24 +5991,26 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.row_factory = sqlite3.Row
         results = {}
         for name in names:
-            # Prefer owned printing
+            # Prefer owned printing — try oracle name then printing name
             row = conn.execute("""
                 SELECT p.set_code, p.collector_number
                 FROM collection col
                 JOIN printings p ON p.printing_id = col.printing_id
                 JOIN cards c ON c.oracle_id = p.oracle_id
-                WHERE c.name = ? AND col.status = 'owned'
+                WHERE (c.name = ? OR json_extract(p.raw_json, '$.flavor_name') = ?)
+                    AND col.status = 'owned'
                 LIMIT 1
-            """, (name,)).fetchone()
+            """, (name, name)).fetchone()
             if not row:
                 row = conn.execute("""
                     SELECT p.set_code, p.collector_number
                     FROM printings p
                     JOIN cards c ON c.oracle_id = p.oracle_id
                     JOIN sets s ON s.set_code = p.set_code
-                    WHERE c.name = ? AND s.digital = 0
+                    WHERE (c.name = ? OR json_extract(p.raw_json, '$.flavor_name') = ?)
+                        AND s.digital = 0
                     ORDER BY s.released_at DESC LIMIT 1
-                """, (name,)).fetchone()
+                """, (name, name)).fetchone()
             if row:
                 results[name] = {"set_code": row["set_code"],
                                  "collector_number": row["collector_number"]}
@@ -6088,15 +6110,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # Resolve all card names to printing_ids
             def _resolve_printing(name):
                 # Go straight through printings — owned copy preferred
+                # Match by oracle name OR printing name (flavor_name)
                 row = conn.execute(
                     """SELECT p.printing_id FROM collection col
                        JOIN printings p ON col.printing_id = p.printing_id
                        JOIN cards c ON p.oracle_id = c.oracle_id
                        JOIN sets s ON p.set_code = s.set_code
-                       WHERE c.name = ? AND col.status = 'owned'
+                       WHERE (c.name = ?
+                              OR json_extract(p.raw_json, '$.flavor_name') = ?)
+                         AND col.status = 'owned'
                          AND s.set_type NOT IN ('token', 'memorabilia')
                        ORDER BY s.released_at DESC LIMIT 1""",
-                    (name,),
+                    (name, name),
                 ).fetchone()
                 if row:
                     return row[0], None
@@ -6105,10 +6130,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     """SELECT p.printing_id FROM printings p
                        JOIN cards c ON p.oracle_id = c.oracle_id
                        JOIN sets s ON p.set_code = s.set_code
-                       WHERE c.name = ? AND s.digital = 0
+                       WHERE (c.name = ?
+                              OR json_extract(p.raw_json, '$.flavor_name') = ?)
+                         AND s.digital = 0
                          AND s.set_type NOT IN ('token', 'memorabilia')
                        ORDER BY s.released_at DESC LIMIT 1""",
-                    (name,),
+                    (name, name),
                 ).fetchone()
                 if row:
                     return row[0], None
@@ -6118,6 +6145,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 oracle = conn.execute(
                     "SELECT oracle_id FROM cards WHERE name = ?", (name,)
                 ).fetchone()
+                if not oracle:
+                    oracle = conn.execute(
+                        """SELECT c.oracle_id FROM printings p
+                           JOIN cards c ON c.oracle_id = p.oracle_id
+                           WHERE json_extract(p.raw_json, '$.flavor_name') = ?
+                           LIMIT 1""",
+                        (name,),
+                    ).fetchone()
                 if not oracle:
                     return
                 oid = oracle[0]
