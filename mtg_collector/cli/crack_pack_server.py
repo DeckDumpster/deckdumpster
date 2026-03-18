@@ -7165,9 +7165,45 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     sealed_repo.add(sub_entry)
                     sealed_added += 1
 
-        # Optionally track the parent product in sealed collection
-        if track_in_sealed:
-            sealed_repo = SealedCollectionRepository(conn)
+        # Update existing sealed collection entry or create a new one
+        sealed_collection_id = data.get("sealed_collection_id")
+        sealed_repo = SealedCollectionRepository(conn)
+
+        # Find the entry to mark as opened
+        existing_entry = None
+        if sealed_collection_id:
+            existing_entry = sealed_repo.get(int(sealed_collection_id))
+        else:
+            # Find first owned entry matching this product
+            owned = [
+                e for e in sealed_repo.list_all(status="owned")
+                if e["sealed_product_uuid"] == sealed_product_uuid
+            ]
+            if owned:
+                existing_entry = sealed_repo.get(owned[0]["id"])
+
+        if existing_entry and existing_entry.status == "owned":
+            if existing_entry.quantity > 1:
+                # Split: decrement qty on existing, create new opened entry
+                existing_entry.quantity -= 1
+                sealed_repo.update(existing_entry)
+                opened_entry = SealedCollectionEntry(
+                    id=None,
+                    sealed_product_uuid=sealed_product_uuid,
+                    quantity=1,
+                    condition=existing_entry.condition,
+                    purchase_price=existing_entry.purchase_price,
+                    purchase_date=existing_entry.purchase_date,
+                    source=existing_entry.source,
+                    seller_name=existing_entry.seller_name,
+                    notes=existing_entry.notes,
+                    status="opened",
+                )
+                sealed_repo.add(opened_entry)
+            else:
+                sealed_repo.dispose(existing_entry.id, "opened")
+        elif track_in_sealed:
+            # No existing entry to update — create a new one
             parent_entry = SealedCollectionEntry(
                 id=None,
                 sealed_product_uuid=sealed_product_uuid,

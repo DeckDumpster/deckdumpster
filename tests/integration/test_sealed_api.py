@@ -527,3 +527,145 @@ class TestSealedStatsMarketValue:
         assert "gain_loss" in stats
         assert isinstance(stats["market_value"], (int, float))
         assert isinstance(stats["gain_loss"], (int, float))
+
+
+# =============================================================================
+# Open pack updates existing sealed collection entry
+# =============================================================================
+
+
+class TestSealedOpenUpdatesCollection:
+    """Opening a pack should mark the existing sealed collection entry as opened."""
+
+    @pytest.fixture
+    def openable_product(self, api):
+        """Find a sealed product that has resolvable cards (can be opened)."""
+        _, products = api.get("/api/sealed/products?q=play+booster+box&limit=10")
+        for p in products:
+            status, contents = api.get(f"/api/sealed/products/{p['uuid']}/contents")
+            if status == 200 and contents.get("openable"):
+                return p
+        pytest.skip("No openable sealed product found in test data")
+
+    def test_open_marks_existing_entry_opened(self, api, openable_product):
+        """Bug: opening a pack left the original sealed entry as 'owned'."""
+        uuid = openable_product["uuid"]
+
+        # Add pack to sealed collection
+        status, added = api.post("/api/sealed/collection", {
+            "sealed_product_uuid": uuid,
+            "quantity": 1,
+            "source": "integration_test",
+        })
+        assert status == 200
+        entry_id = added["id"]
+
+        try:
+            # Open the pack
+            status, result = api.post("/api/sealed/open", {
+                "sealed_product_uuid": uuid,
+            })
+            assert status == 200
+            assert result["cards_added"] > 0
+
+            # The existing entry should now be "opened", not "owned"
+            status, entries = api.get("/api/sealed/collection")
+            assert status == 200
+            entry = next((e for e in entries if e["id"] == entry_id), None)
+            assert entry is not None, f"Entry {entry_id} disappeared from collection"
+            assert entry["status"] == "opened", (
+                f"Entry should be 'opened' after pack was opened, got '{entry['status']}'"
+            )
+
+            # There should NOT be a duplicate "opened" entry for the same product
+            opened_for_product = [
+                e for e in entries
+                if e["sealed_product_uuid"] == uuid and e["status"] == "opened"
+            ]
+            assert len(opened_for_product) == 1, (
+                f"Expected exactly 1 opened entry, got {len(opened_for_product)}"
+            )
+        finally:
+            api.delete(f"/api/sealed/collection/{entry_id}?confirm=true")
+
+    def test_open_splits_quantity(self, api, openable_product):
+        """Opening one pack from a qty>1 entry should split it."""
+        uuid = openable_product["uuid"]
+
+        # Add 3 of the same pack
+        status, added = api.post("/api/sealed/collection", {
+            "sealed_product_uuid": uuid,
+            "quantity": 3,
+            "source": "integration_test",
+        })
+        assert status == 200
+        entry_id = added["id"]
+        new_entry_id = None
+
+        try:
+            # Open one pack
+            status, result = api.post("/api/sealed/open", {
+                "sealed_product_uuid": uuid,
+            })
+            assert status == 200
+
+            # Original entry should have qty=2, still owned
+            status, entries = api.get("/api/sealed/collection")
+            assert status == 200
+            original = next((e for e in entries if e["id"] == entry_id), None)
+            assert original is not None
+            assert original["quantity"] == 2
+            assert original["status"] == "owned"
+
+            # There should be a new entry with qty=1, status=opened
+            opened = [
+                e for e in entries
+                if e["sealed_product_uuid"] == uuid
+                and e["status"] == "opened"
+                and e["id"] != entry_id
+            ]
+            assert len(opened) == 1
+            assert opened[0]["quantity"] == 1
+            new_entry_id = opened[0]["id"]
+        finally:
+            api.delete(f"/api/sealed/collection/{entry_id}?confirm=true")
+            if new_entry_id:
+                api.delete(f"/api/sealed/collection/{new_entry_id}?confirm=true")
+
+    def test_open_with_explicit_collection_id(self, api, openable_product):
+        """Passing sealed_collection_id targets a specific entry."""
+        uuid = openable_product["uuid"]
+
+        # Add two separate entries
+        _, added1 = api.post("/api/sealed/collection", {
+            "sealed_product_uuid": uuid,
+            "quantity": 1,
+            "source": "integration_test",
+            "notes": "first",
+        })
+        _, added2 = api.post("/api/sealed/collection", {
+            "sealed_product_uuid": uuid,
+            "quantity": 1,
+            "source": "integration_test",
+            "notes": "second",
+        })
+        id1, id2 = added1["id"], added2["id"]
+
+        try:
+            # Open specifically the second entry
+            status, result = api.post("/api/sealed/open", {
+                "sealed_product_uuid": uuid,
+                "sealed_collection_id": id2,
+            })
+            assert status == 200
+
+            # Second entry should be opened, first still owned
+            status, entries = api.get("/api/sealed/collection")
+            assert status == 200
+            e1 = next(e for e in entries if e["id"] == id1)
+            e2 = next(e for e in entries if e["id"] == id2)
+            assert e1["status"] == "owned"
+            assert e2["status"] == "opened"
+        finally:
+            api.delete(f"/api/sealed/collection/{id1}?confirm=true")
+            api.delete(f"/api/sealed/collection/{id2}?confirm=true")
