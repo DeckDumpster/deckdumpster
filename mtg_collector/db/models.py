@@ -2084,7 +2084,7 @@ class DeckRepository:
     def get_expected_cards(self, deck_id: int) -> List[Dict]:
         """Return the expected card list with card names joined via printing."""
         rows = self.conn.execute(
-            "SELECT e.printing_id, p.oracle_id, c.name, e.zone, e.quantity "
+            "SELECT e.printing_id, p.oracle_id, c.name, p.set_code, p.collector_number, e.zone, e.quantity "
             "FROM deck_expected_cards e "
             "JOIN printings p ON e.printing_id = p.printing_id "
             "JOIN cards c ON p.oracle_id = c.oracle_id "

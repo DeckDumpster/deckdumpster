@@ -22,7 +22,7 @@ from mtg_collector.db import (
     get_connection,
     init_db,
 )
-from mtg_collector.services.bulk_import import ScryfallBulkClient, ensure_set_populated
+from mtg_collector.services.bulk_import import ScryfallBulkClient, ensure_set_populated, resolve_reversible_oracle_id
 
 
 # -- Fixtures: synthetic reversible_card data matching Scryfall's shape --
@@ -87,6 +87,76 @@ NORMAL_CARD_DATA = {
     "image_uris": {
         "small": "https://cards.scryfall.io/small/front/bolt.jpg",
         "normal": "https://cards.scryfall.io/normal/front/bolt.jpg",
+    },
+}
+
+
+# Reversible card with NULL top-level metadata (matches real SLD 1458 structure)
+REVERSIBLE_NULL_METADATA = {
+    "id": "sld-death-baron-reversible",
+    "name": "Death Baron // Death Baron",
+    "layout": "reversible_card",
+    "set": "sld",
+    "collector_number": "1458",
+    "lang": "en",
+    "cmc": None,
+    "type_line": None,
+    "oracle_text": None,
+    "mana_cost": None,
+    "colors": None,
+    "color_identity": ["B"],
+    "rarity": "rare",
+    "finishes": ["nonfoil", "foil"],
+    "card_faces": [
+        {
+            "oracle_id": "99024aa8-5687-4d38-8a4b-feef42d6c1ff",
+            "name": "Death Baron",
+            "mana_cost": "{1}{B}{B}",
+            "type_line": "Creature \u2014 Zombie Wizard",
+            "oracle_text": "Skeletons you control and other Zombies you control get +1/+1 and have deathtouch.",
+            "colors": ["B"],
+            "cmc": 3.0,
+            "image_uris": {
+                "small": "https://cards.scryfall.io/small/front/sld/1458.jpg",
+                "normal": "https://cards.scryfall.io/normal/front/sld/1458.jpg",
+            },
+        },
+        {
+            "oracle_id": "99024aa8-5687-4d38-8a4b-feef42d6c1ff",
+            "name": "Death Baron",
+            "mana_cost": "{1}{B}{B}",
+            "type_line": "Creature \u2014 Zombie Wizard",
+            "oracle_text": "Skeletons you control and other Zombies you control get +1/+1 and have deathtouch.",
+            "colors": ["B"],
+            "cmc": 3.0,
+            "image_uris": {
+                "small": "https://cards.scryfall.io/small/back/sld/1458.jpg",
+                "normal": "https://cards.scryfall.io/normal/back/sld/1458.jpg",
+            },
+        },
+    ],
+}
+
+# The normal printing of the same card
+NORMAL_DEATH_BARON = {
+    "oracle_id": "99024aa8-5687-4d38-8a4b-feef42d6c1ff",
+    "id": "m19-death-baron",
+    "name": "Death Baron",
+    "layout": "normal",
+    "set": "m19",
+    "collector_number": "90",
+    "lang": "en",
+    "cmc": 3.0,
+    "type_line": "Creature \u2014 Zombie Wizard",
+    "mana_cost": "{1}{B}{B}",
+    "oracle_text": "Skeletons you control and other Zombies you control get +1/+1 and have deathtouch.",
+    "colors": ["B"],
+    "color_identity": ["B"],
+    "rarity": "rare",
+    "finishes": ["nonfoil", "foil"],
+    "image_uris": {
+        "small": "https://cards.scryfall.io/small/front/m19/90.jpg",
+        "normal": "https://cards.scryfall.io/normal/front/m19/90.jpg",
     },
 }
 
@@ -173,6 +243,68 @@ class TestReversibleCardBulkImport:
 
         printing = api.to_printing_model(NORMAL_CARD_DATA)
         assert printing.oracle_id == "aaaa-bbbb-cccc-dddd"
+
+
+class TestReversibleNullMetadata:
+    """Test that reversible cards with NULL top-level metadata extract fields from faces."""
+
+    def test_reversible_card_extracts_name_from_face(self):
+        """Reversible card with '// ' in name should use face[0] name."""
+        api = ScryfallBulkClient()
+        card_data = dict(REVERSIBLE_NULL_METADATA)
+        resolve_reversible_oracle_id(card_data)
+        card = api.to_card_model(card_data)
+        assert card.name == "Death Baron"
+
+    def test_reversible_card_extracts_all_metadata_from_face(self):
+        """All NULL top-level fields should fall back to face[0]."""
+        api = ScryfallBulkClient()
+        card_data = dict(REVERSIBLE_NULL_METADATA)
+        resolve_reversible_oracle_id(card_data)
+        card = api.to_card_model(card_data)
+        assert card.type_line == "Creature \u2014 Zombie Wizard"
+        assert card.cmc == 3.0
+        assert card.colors == ["B"]
+        assert "deathtouch" in card.oracle_text
+
+    def test_reversible_upsert_does_not_corrupt_existing_card(self, db):
+        """Upserting a reversible printing after a normal one must not corrupt the card row."""
+        api = ScryfallBulkClient()
+        card_repo = CardRepository(db)
+
+        # First: insert from normal printing
+        normal_card = api.to_card_model(NORMAL_DEATH_BARON)
+        card_repo.upsert(normal_card)
+        card = card_repo.get(normal_card.oracle_id)
+        assert card.name == "Death Baron"
+
+        # Second: upsert from reversible printing (would corrupt before fix)
+        rev_data = dict(REVERSIBLE_NULL_METADATA)
+        resolve_reversible_oracle_id(rev_data)
+        rev_card = api.to_card_model(rev_data)
+        card_repo.upsert(rev_card)
+
+        card = card_repo.get(rev_card.oracle_id)
+        assert card.name == "Death Baron"
+        assert card.type_line == "Creature \u2014 Zombie Wizard"
+        assert card.cmc == 3.0
+
+    def test_reversible_first_then_normal_also_correct(self, db):
+        """Order shouldn't matter — reversible first, normal second, still correct."""
+        api = ScryfallBulkClient()
+        card_repo = CardRepository(db)
+
+        # Reversible first
+        rev_data = dict(REVERSIBLE_NULL_METADATA)
+        resolve_reversible_oracle_id(rev_data)
+        card_repo.upsert(api.to_card_model(rev_data))
+
+        # Normal second
+        card_repo.upsert(api.to_card_model(NORMAL_DEATH_BARON))
+
+        card = card_repo.get("99024aa8-5687-4d38-8a4b-feef42d6c1ff")
+        assert card.name == "Death Baron"
+        assert card.type_line == "Creature \u2014 Zombie Wizard"
 
 
 class TestReversibleCardEnsureSetPopulated:

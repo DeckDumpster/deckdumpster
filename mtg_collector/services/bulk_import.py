@@ -182,20 +182,43 @@ class ScryfallBulkClient:
     # Conversion methods for database storage
 
     def to_card_model(self, data: Dict) -> Card:
-        """Convert Scryfall API response to Card model."""
+        """Convert Scryfall API response to Card model.
+
+        For DFC/reversible cards, top-level fields (name, type_line, etc.)
+        may be null or combined ("Front // Back").  Fall back to
+        card_faces[0] for any missing field so every printing of a card
+        produces the same correct Card row.
+        """
+        faces = data.get("card_faces", [])
+        face0 = faces[0] if faces else {}
+
+        def _field(key, default=None):
+            """Top-level first, then face[0]."""
+            val = data.get(key)
+            if val is not None:
+                return val
+            return face0.get(key, default)
+
+        # Name: use face[0] if top-level contains "//" (DFC combined name)
+        name = data.get("name", "")
+        if "//" in name and face0.get("name"):
+            name = face0["name"]
+
+        # Mana cost: combine faces with " // " (existing behavior)
         mana_cost = data.get("mana_cost")
-        if not mana_cost and "card_faces" in data:
-            face_manas = [f.get("mana_cost", "") for f in data["card_faces"]]
+        if not mana_cost and faces:
+            face_manas = [f.get("mana_cost", "") for f in faces]
             mana_cost = " // ".join(m for m in face_manas if m) or None
+
         return Card(
             oracle_id=data["oracle_id"],
-            name=data["name"],
-            type_line=data.get("type_line"),
+            name=name,
+            type_line=_field("type_line"),
             mana_cost=mana_cost,
-            cmc=data.get("cmc"),
-            oracle_text=data.get("oracle_text"),
-            colors=data.get("colors", []),
-            color_identity=data.get("color_identity", []),
+            cmc=_field("cmc"),
+            oracle_text=_field("oracle_text"),
+            colors=_field("colors", []),
+            color_identity=_field("color_identity", []),
         )
 
     def to_set_model(self, data: Dict) -> Set:

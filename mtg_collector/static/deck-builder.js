@@ -778,7 +778,7 @@
 
     // Scryfall link for small decks
     if (nonlandCards.length > 0 && nonlandCards.length < 15) {
-      const q = nonlandCards.map(c => `!"${c.name}"`).join(' or ');
+      const q = nonlandCards.map(c => c.set_code ? `(!"${c.name}" set:${c.set_code})` : `!"${c.name}"`).join(' or ');
       const sfUrl = `https://scryfall.com/search?unique=cards&q=${encodeURIComponent(q)}`;
       html += `<div style="margin-bottom:12px"><a href="${sfUrl}" target="_blank" rel="noopener" class="btn-scryfall-link">View on Scryfall</a></div>`;
     }
