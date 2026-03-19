@@ -41,6 +41,10 @@ def main():
 def _print_card(row):
     print(f"{row['name']}  {row.get('mana_cost') or ''}")
     print(f"{row.get('type_line', '')}")
+    power = row.get("power")
+    toughness = row.get("toughness")
+    if power is not None and toughness is not None:
+        print(f"{power}/{toughness}")
     if row.get("oracle_text"):
         print("---")
         print(row["oracle_text"])

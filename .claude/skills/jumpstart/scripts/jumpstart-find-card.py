@@ -132,8 +132,12 @@ def main():
 
         signal_str = f"  [{', '.join(signals)}]" if signals else ""
 
+        power = row.get("power")
+        toughness = row.get("toughness")
+        pt_str = f"  ({power}/{toughness})" if power is not None and toughness is not None else ""
+
         print(f"  [{r}] {cost:14s} {name:40s}{signal_str}")
-        print(f"      {type_line}")
+        print(f"      {type_line}{pt_str}")
         if oracle_text:
             text = oracle_text.replace("\n", " | ")
             if len(text) > 120:
