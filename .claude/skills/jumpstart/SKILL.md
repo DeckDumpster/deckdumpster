@@ -2,7 +2,7 @@
 name: jumpstart
 description: Build a custom Jumpstart 2025-style 20-card pack from owned cards.
 user-invocable: true
-disable-model-invocation: true
+disable-model-invocation: false
 ---
 
 # Jumpstart Pack Builder

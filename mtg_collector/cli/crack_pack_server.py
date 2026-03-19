@@ -5782,8 +5782,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.row_factory = sqlite3.Row
         # Exact match — prefer cards with real printings over token-only
         row = conn.execute(
-            """SELECT c.oracle_id, c.name, c.mana_cost, c.type_line, c.oracle_text,
-                      c.colors, c.color_identity, c.cmc
+            """SELECT c.*,
+                      (SELECT json_extract(p2.raw_json, '$.power')
+                       FROM printings p2 WHERE p2.oracle_id = c.oracle_id
+                       AND p2.raw_json IS NOT NULL LIMIT 1) as power,
+                      (SELECT json_extract(p2.raw_json, '$.toughness')
+                       FROM printings p2 WHERE p2.oracle_id = c.oracle_id
+                       AND p2.raw_json IS NOT NULL LIMIT 1) as toughness
                FROM cards c
                WHERE c.name = ?
                ORDER BY CASE WHEN EXISTS (
@@ -5824,8 +5829,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         # LIKE fallback — only cards with real printings
         rows = conn.execute(
-            """SELECT c.oracle_id, c.name, c.mana_cost, c.type_line, c.oracle_text,
-                      c.colors, c.color_identity, c.cmc
+            """SELECT c.*,
+                      (SELECT json_extract(p2.raw_json, '$.power')
+                       FROM printings p2 WHERE p2.oracle_id = c.oracle_id
+                       AND p2.raw_json IS NOT NULL LIMIT 1) as power,
+                      (SELECT json_extract(p2.raw_json, '$.toughness')
+                       FROM printings p2 WHERE p2.oracle_id = c.oracle_id
+                       AND p2.raw_json IS NOT NULL LIMIT 1) as toughness
                FROM cards c
                WHERE c.name LIKE ?
                  AND EXISTS (
@@ -5929,8 +5939,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         limit = int(data.get("limit", 50))
 
         query = f"""
-            SELECT DISTINCT c.name, c.mana_cost, c.type_line, c.cmc, p.rarity,
-                   c.oracle_text, c.oracle_id,
+            SELECT DISTINCT c.*,
+                   p.rarity,
+                   json_extract(p.raw_json, '$.power') as power,
+                   json_extract(p.raw_json, '$.toughness') as toughness,
                    lp.price as price
             FROM cards c
             JOIN printings p ON p.oracle_id = c.oracle_id

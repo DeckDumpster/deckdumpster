@@ -8,6 +8,7 @@ Usage:
 
 import sys
 import urllib.parse
+import urllib.request
 
 from api_client import DeckBuilderClient, parse_host_arg
 
@@ -34,7 +35,7 @@ def main():
             continue
         set_code = info["set_code"]
         cn = info["collector_number"]
-        terms.append(f"(s:{set_code.lower()} cn:{cn})")
+        terms.append(f'(!"{name}" set:{set_code.lower()})')
         print(f"  {name:30s} -> {set_code}/{cn}")
 
     if not terms:
@@ -48,11 +49,21 @@ def main():
     if len(url) > 8000:
         print(f"WARNING: URL is {len(url)} chars (Scryfall limit ~8000)", file=sys.stderr)
 
-    print(url)
+    # Shorten via TinyURL (no auth needed)
+    short_url = None
+    try:
+        req = urllib.request.Request(
+            "https://tinyurl.com/api-create.php?" + urllib.parse.urlencode({"url": url}),
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            short_url = resp.read().decode().strip()
+        print(short_url)
+    except Exception:
+        print(url)
 
     if open_browser:
         import subprocess
-        subprocess.run(["open", url])
+        subprocess.run(["open", short_url or url])
 
 
 if __name__ == "__main__":
