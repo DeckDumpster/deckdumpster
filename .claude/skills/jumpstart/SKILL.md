@@ -16,7 +16,7 @@ Every J25 pack follows this formula (derived from analyzing all 121 real J25 dec
 - **20 cards total**: 8 lands + 12 non-land spells
 - **Lands**: 1 Thriving land (color-matched) + 7 basics (always)
 - **Mono-colored** (all colored spells share one color; colorless artifacts OK)
-- **Rarity**: 1 mythic + 1 rare (prefer mythic as identity card; fall back to 2 rares if no mythic available), 3-5 uncommon, rest common. **Rarity is determined by oracle_id, not by the specific printing owned** — if any printing of a card exists at a given rarity, the card counts as that rarity for budget purposes. (e.g., Savannah Lions is rare in Alpha but common in J25 — it counts as common.)
+- **Rarity**: 1 mythic + 1 rare (prefer mythic as identity card; fall back to 2 rares if no mythic available), 3-5 uncommon, rest common. **Rarity is determined by oracle_id, not by the specific printing owned** — if any printing of a card exists at a given rarity, the card counts as that rarity for budget purposes. **Always use the lowest rarity printing** — a card that exists at both rare and uncommon counts as uncommon. This frees up rare/mythic slots for cards that are only available at higher rarities. (e.g., Serra Angel is rare in Alpha but uncommon in Dominaria — it counts as uncommon.)
 - **Creatures**: 5-8 creature-typed cards (usually 7-8)
 - **Non-creature spells**: 3-7 (usually 4)
 - **Curve**: MV 0 always empty. MV 2 and MV 3 always have at least 1 card each. MV 2+3 combined is 4-10 (usually 6-7). MV 5+ combined is 0-4.

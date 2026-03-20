@@ -1938,12 +1938,20 @@ class DeckRepository:
             """SELECT d.*,
                       COUNT(c.id) as card_count,
                       COALESCE(SUM(c.purchase_price), 0) as total_value,
-                      (SELECT GROUP_CONCAT(DISTINCT je.value)
-                       FROM collection c2
-                       JOIN printings p ON c2.printing_id = p.printing_id
-                       JOIN cards card ON p.oracle_id = card.oracle_id,
-                            json_each(card.colors) je
-                       WHERE c2.deck_id = d.id) as deck_colors,
+                      COALESCE(
+                        (SELECT GROUP_CONCAT(DISTINCT je.value)
+                         FROM collection c2
+                         JOIN printings p ON c2.printing_id = p.printing_id
+                         JOIN cards card ON p.oracle_id = card.oracle_id,
+                              json_each(card.colors) je
+                         WHERE c2.deck_id = d.id),
+                        (SELECT GROUP_CONCAT(DISTINCT je.value)
+                         FROM deck_expected_cards ec
+                         JOIN printings p ON ec.printing_id = p.printing_id
+                         JOIN cards card ON p.oracle_id = card.oracle_id,
+                              json_each(card.colors) je
+                         WHERE ec.deck_id = d.id)
+                      ) as deck_colors,
                       (SELECT COALESCE(SUM(e.quantity), 0)
                        FROM deck_expected_cards e WHERE e.deck_id = d.id) as expected_card_count
                FROM decks d
@@ -2202,6 +2210,66 @@ class DeckRepository:
                 })
 
         return {"present": present, "missing": missing, "extra": extra}
+
+    def materialize_deck(self, deck_id: int) -> Dict:
+        """Convert a hypothetical deck to physical by assigning owned, unassigned collection entries.
+
+        For each expected card, prefers the same printing, then FIFO.
+        Returns {matched: [...], missing: [...], total_matched, total_missing}.
+        """
+        expected = self.get_expected_cards(deck_id)
+        matched = []
+        missing = []
+        # Group collection_ids by zone for batch add_cards calls
+        zone_ids: Dict[str, List[int]] = {}
+
+        for exp in expected:
+            rows = self.conn.execute(
+                "SELECT col.id, col.printing_id FROM collection col "
+                "JOIN printings p ON col.printing_id = p.printing_id "
+                "WHERE p.oracle_id = ? AND col.status = 'owned' "
+                "AND col.deck_id IS NULL AND col.binder_id IS NULL "
+                "ORDER BY CASE WHEN col.printing_id = ? THEN 0 ELSE 1 END, col.id "
+                "LIMIT ?",
+                (exp["oracle_id"], exp["printing_id"], exp["quantity"]),
+            ).fetchall()
+
+            found_ids = [r["id"] for r in rows]
+            zone = exp["zone"]
+            entry = {
+                "name": exp["name"],
+                "oracle_id": exp["oracle_id"],
+                "printing_id": exp["printing_id"],
+                "zone": zone,
+                "expected": exp["quantity"],
+                "found": len(found_ids),
+            }
+
+            if found_ids:
+                zone_ids.setdefault(zone, []).extend(found_ids)
+                matched.append(entry)
+            if len(found_ids) < exp["quantity"]:
+                entry_missing = dict(entry)
+                entry_missing["short"] = exp["quantity"] - len(found_ids)
+                missing.append(entry_missing)
+            elif not found_ids:
+                missing.append(entry)
+
+        for zone, ids in zone_ids.items():
+            self.add_cards(deck_id, ids, zone=zone)
+
+        self.update(deck_id, {"hypothetical": False})
+
+        total_matched = sum(len(ids) for ids in zone_ids.values())
+        total_missing = sum(
+            e["expected"] - e["found"] for e in missing
+        )
+        return {
+            "matched": matched,
+            "missing": missing,
+            "total_matched": total_matched,
+            "total_missing": total_missing,
+        }
 
 
 class BinderRepository:
