@@ -6074,138 +6074,145 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-
-        # Check for duplicate deck name
-        deck_name = f"{theme} (Jumpstart)"
-        existing = conn.execute(
-            "SELECT id FROM decks WHERE name = ?", (deck_name,)
-        ).fetchone()
-        if existing:
-            conn.close()
-            self._send_json(
-                {"error": f"Deck '{deck_name}' already exists (id={existing[0]})"}, 409)
-            return
-
-        # Resolve all card names to printing_ids
-        def _resolve_printing(name):
-            # Go straight through printings — owned copy preferred
-            row = conn.execute(
-                """SELECT p.printing_id FROM collection col
-                   JOIN printings p ON col.printing_id = p.printing_id
-                   JOIN cards c ON p.oracle_id = c.oracle_id
-                   JOIN sets s ON p.set_code = s.set_code
-                   WHERE c.name = ? AND col.status = 'owned'
-                     AND s.set_type NOT IN ('token', 'memorabilia')
-                   ORDER BY s.released_at DESC LIMIT 1""",
-                (name,),
-            ).fetchone()
-            if row:
-                return row[0], None
-            # Fall back to any real printing
-            row = conn.execute(
-                """SELECT p.printing_id FROM printings p
-                   JOIN cards c ON p.oracle_id = c.oracle_id
-                   JOIN sets s ON p.set_code = s.set_code
-                   WHERE c.name = ? AND s.digital = 0
-                     AND s.set_type NOT IN ('token', 'memorabilia')
-                   ORDER BY s.released_at DESC LIMIT 1""",
-                (name,),
-            ).fetchone()
-            if row:
-                return row[0], None
-            return None, f"No non-digital printing for: {name}"
-
-        def _ensure_in_collection(name):
-            oracle = conn.execute(
-                "SELECT oracle_id FROM cards WHERE name = ?", (name,)
-            ).fetchone()
-            if not oracle:
-                return
-            oid = oracle[0]
+        try:
+            # Check for duplicate deck name
+            deck_name = f"{theme} (Jumpstart)"
             existing = conn.execute(
-                """SELECT col.id FROM collection col
-                   JOIN printings p ON col.printing_id = p.printing_id
-                   WHERE p.oracle_id = ? AND col.status = 'owned' LIMIT 1""",
-                (oid,),
+                "SELECT id FROM decks WHERE name = ?", (deck_name,)
             ).fetchone()
             if existing:
+                self._send_json(
+                    {"error": f"Deck '{deck_name}' already exists (id={existing[0]})"}, 409)
                 return
-            printing = conn.execute(
-                """SELECT p.printing_id FROM printings p
-                   JOIN sets s ON s.set_code = p.set_code
-                   WHERE p.oracle_id = ? AND s.digital = 0
-                   ORDER BY s.released_at DESC LIMIT 1""",
-                (oid,),
-            ).fetchone()
-            if printing:
-                from mtg_collector.utils import now_iso
-                conn.execute(
-                    """INSERT INTO collection (printing_id, finish, status, source, acquired_at)
-                       VALUES (?, 'nonfoil', 'owned', 'manual', ?)""",
-                    (printing[0], now_iso()),
-                )
 
-        expected_cards = []
-        for name in card_names:
-            pid, err = _resolve_printing(name)
+            # Resolve all card names to printing_ids
+            def _resolve_printing(name):
+                # Go straight through printings — owned copy preferred
+                row = conn.execute(
+                    """SELECT p.printing_id FROM collection col
+                       JOIN printings p ON col.printing_id = p.printing_id
+                       JOIN cards c ON p.oracle_id = c.oracle_id
+                       JOIN sets s ON p.set_code = s.set_code
+                       WHERE c.name = ? AND col.status = 'owned'
+                         AND s.set_type NOT IN ('token', 'memorabilia')
+                       ORDER BY s.released_at DESC LIMIT 1""",
+                    (name,),
+                ).fetchone()
+                if row:
+                    return row[0], None
+                # Fall back to any real printing
+                row = conn.execute(
+                    """SELECT p.printing_id FROM printings p
+                       JOIN cards c ON p.oracle_id = c.oracle_id
+                       JOIN sets s ON p.set_code = s.set_code
+                       WHERE c.name = ? AND s.digital = 0
+                         AND s.set_type NOT IN ('token', 'memorabilia')
+                       ORDER BY s.released_at DESC LIMIT 1""",
+                    (name,),
+                ).fetchone()
+                if row:
+                    return row[0], None
+                return None, f"No non-digital printing for: {name}"
+
+            def _ensure_in_collection(name):
+                oracle = conn.execute(
+                    "SELECT oracle_id FROM cards WHERE name = ?", (name,)
+                ).fetchone()
+                if not oracle:
+                    return
+                oid = oracle[0]
+                existing = conn.execute(
+                    """SELECT col.id FROM collection col
+                       JOIN printings p ON col.printing_id = p.printing_id
+                       WHERE p.oracle_id = ? AND col.status = 'owned' LIMIT 1""",
+                    (oid,),
+                ).fetchone()
+                if existing:
+                    return
+                printing = conn.execute(
+                    """SELECT p.printing_id FROM printings p
+                       JOIN sets s ON s.set_code = p.set_code
+                       WHERE p.oracle_id = ? AND s.digital = 0
+                       ORDER BY s.released_at DESC LIMIT 1""",
+                    (oid,),
+                ).fetchone()
+                if printing:
+                    from mtg_collector.utils import now_iso
+                    conn.execute(
+                        """INSERT INTO collection (printing_id, finish, status, source, acquired_at)
+                           VALUES (?, 'nonfoil', 'owned', 'manual', ?)""",
+                        (printing[0], now_iso()),
+                    )
+
+            expected_cards = []
+            for name in card_names:
+                pid, err = _resolve_printing(name)
+                if err:
+                    self._send_json({"error": err}, 400)
+                    return
+                expected_cards.append({"printing_id": pid, "zone": "mainboard",
+                                       "quantity": 1, "name": name})
+
+            # Ensure thriving land in collection and resolve
+            thriving_name = thriving_names.get(color)
+            basic_name = basic_names.get(color)
+            if not thriving_name:
+                self._send_json({"error": f"Invalid color: {color}"}, 400)
+                return
+
+            _ensure_in_collection(thriving_name)
+            thriving_pid, err = _resolve_printing(thriving_name)
             if err:
-                conn.close()
                 self._send_json({"error": err}, 400)
                 return
-            expected_cards.append({"printing_id": pid, "zone": "mainboard",
-                                   "quantity": 1, "name": name})
+            basic_pid, err = _resolve_printing(basic_name)
+            if err:
+                self._send_json({"error": err}, 400)
+                return
 
-        # Ensure thriving land in collection and resolve
-        thriving_name = thriving_names.get(color)
-        basic_name = basic_names.get(color)
-        if not thriving_name:
-            conn.close()
-            self._send_json({"error": f"Invalid color: {color}"}, 400)
-            return
+            expected_cards.append({"printing_id": thriving_pid, "zone": "mainboard",
+                                   "quantity": 1, "name": thriving_name})
+            expected_cards.append({"printing_id": basic_pid, "zone": "mainboard",
+                                   "quantity": basics_count, "name": basic_name})
 
-        _ensure_in_collection(thriving_name)
-        thriving_pid, err = _resolve_printing(thriving_name)
-        if err:
-            conn.close()
-            self._send_json({"error": err}, 400)
-            return
-        basic_pid, err = _resolve_printing(basic_name)
-        if err:
-            conn.close()
-            self._send_json({"error": err}, 400)
-            return
+            # Dedup by (printing_id, zone) — card list may already contain
+            # a land that was also auto-appended above
+            deduped = {}
+            for card in expected_cards:
+                key = (card["printing_id"], card["zone"])
+                if key in deduped:
+                    deduped[key]["quantity"] += card["quantity"]
+                else:
+                    deduped[key] = dict(card)
+            expected_cards = list(deduped.values())
 
-        expected_cards.append({"printing_id": thriving_pid, "zone": "mainboard",
-                               "quantity": 1, "name": thriving_name})
-        expected_cards.append({"printing_id": basic_pid, "zone": "mainboard",
-                               "quantity": basics_count, "name": basic_name})
-
-        # Create deck
-        from mtg_collector.utils import now_iso
-        ts = now_iso()
-        conn.execute(
-            """INSERT INTO decks (name, description, format, hypothetical,
-               origin_set_code, origin_theme, is_precon, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (deck_name, description, "jumpstart", 1, "J25", theme, 0, ts, ts),
-        )
-        deck_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        for card in expected_cards:
+            # Create deck
+            from mtg_collector.utils import now_iso
+            ts = now_iso()
             conn.execute(
-                """INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity)
-                   VALUES (?, ?, ?, ?)""",
-                (deck_id, card["printing_id"], card["zone"], card["quantity"]),
+                """INSERT INTO decks (name, description, format, hypothetical,
+                   origin_set_code, origin_theme, is_precon, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (deck_name, description, "jumpstart", 1, "J25", theme, 0, ts, ts),
             )
+            deck_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        conn.commit()
-        conn.close()
+            for card in expected_cards:
+                conn.execute(
+                    """INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity)
+                       VALUES (?, ?, ?, ?)""",
+                    (deck_id, card["printing_id"], card["zone"], card["quantity"]),
+                )
 
-        self._send_json({
-            "deck_id": deck_id,
-            "name": deck_name,
-            "cards": expected_cards,
-        }, 201)
+            conn.commit()
+
+            self._send_json({
+                "deck_id": deck_id,
+                "name": deck_name,
+                "cards": expected_cards,
+            }, 201)
+        finally:
+            conn.close()
 
     # ===== Binder API handlers =====
 
