@@ -796,7 +796,6 @@ def _make_bg_conn(db_path):
     from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS, init_db, init_user_db
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
 
     # If this is a user DB (inside users/ dir), ATTACH the shared DB
     if _shared_db_path_global and os.path.exists(_shared_db_path_global) and "/users/" in db_path:
@@ -986,18 +985,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _get_conn(self):
         """Get a DB connection with ATTACH + temp views for multi-user mode."""
-        from mtg_collector.db.schema import SHARED_TABLES, init_user_db
+        from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS, init_user_db
         user = self._get_current_user()
         if user and os.path.isdir(self._users_dir):
             user_db = os.path.join(self._users_dir, f"{user}.sqlite")
             conn = sqlite3.connect(user_db)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("ATTACH DATABASE ? AS shared", (self._shared_db_path,))
             for table in SHARED_TABLES:
                 conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{table}] AS SELECT * FROM shared.[{table}]")
-            # Also create temp views for shared views
-            from mtg_collector.db.schema import SHARED_VIEWS
             for view in SHARED_VIEWS:
                 conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{view}] AS SELECT * FROM shared.[{view}]")
             init_user_db(conn)
@@ -1005,7 +1001,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Single-DB mode (no users dir)
         conn = sqlite3.connect(self._base_db_path)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def do_GET(self):
@@ -7529,7 +7524,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         conn = sqlite3.connect(user_db)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("ATTACH DATABASE ? AS shared", (self._shared_db_path,))
         for table in SHARED_TABLES:
             conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{table}] AS SELECT * FROM shared.[{table}]")
