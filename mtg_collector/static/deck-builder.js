@@ -178,6 +178,7 @@
               <button class="edit-btn" id="edit-deck-btn">Edit</button>
               <button class="add-btn" id="add-card-btn">+ Add Card</button>
               <button class="edit-btn" id="btn-import-expected">Import Expected</button>
+              ${deck.hypothetical ? '<button class="add-btn" id="btn-materialize">Materialize</button>' : ''}
               <button class="delete-btn" id="delete-deck-btn">Delete</button>
             </div>
           </div>
@@ -446,6 +447,31 @@
       await fetch('/api/decks/' + deck.id, { method: 'DELETE' });
       window.location.href = '/decks';
     });
+
+    // Materialize hypothetical deck
+    const materializeBtn = document.getElementById('btn-materialize');
+    if (materializeBtn) {
+      materializeBtn.addEventListener('click', async () => {
+        if (!confirm('Materialize this deck? This will assign owned cards from your collection and convert it to a physical deck.')) return;
+        materializeBtn.disabled = true;
+        materializeBtn.textContent = 'Materializing...';
+        const res = await fetch('/api/decks/' + deck.id + '/materialize', { method: 'POST' });
+        const result = await res.json();
+        if (result.error) {
+          alert(result.error);
+          materializeBtn.disabled = false;
+          materializeBtn.textContent = 'Materialize';
+          return;
+        }
+        let msg = `Matched ${result.total_matched} card(s).`;
+        if (result.total_missing > 0) {
+          const names = result.missing.map(m => `${m.name} (${m.short || m.expected} short)`).join('\n');
+          msg += `\n\n${result.total_missing} card(s) missing:\n${names}`;
+        }
+        alert(msg);
+        window.location.reload();
+      });
+    }
 
     // Modal buttons
     document.getElementById('btn-save-deck').addEventListener('click', () => saveDeck(deck.id));

@@ -1391,6 +1391,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_expected_set(int(did), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/materialize"):
+            did = path[len("/api/decks/"):-len("/materialize")]
+            if did.isdigit():
+                self._api_deck_materialize(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/reassemble"):
             did = path[len("/api/decks/"):-len("/reassemble")]
             if did.isdigit():
@@ -5325,6 +5331,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Deck not found"}, 404)
             return
         result = repo.get_deck_completeness(deck_id)
+        conn.close()
+        self._send_json(result)
+
+    def _api_deck_materialize(self, deck_id: int):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        deck = repo.get(deck_id)
+        if not deck:
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        if not deck["hypothetical"]:
+            conn.close()
+            self._send_json({"error": "Deck is not hypothetical"}, 400)
+            return
+        result = repo.materialize_deck(deck_id)
+        conn.commit()
         conn.close()
         self._send_json(result)
 

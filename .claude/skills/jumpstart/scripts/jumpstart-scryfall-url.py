@@ -35,7 +35,7 @@ def main():
             continue
         set_code = info["set_code"]
         cn = info["collector_number"]
-        terms.append(f'(!"{name}" set:{set_code.lower()})')
+        terms.append(f'(set:{set_code.lower()} cn:{cn})')
         print(f"  {name:30s} -> {set_code}/{cn}")
 
     if not terms:
