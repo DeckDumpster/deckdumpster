@@ -17,7 +17,8 @@ import sys
 
 from api_client import DeckBuilderClient, parse_host_arg
 
-COLOR_NAMES = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+COLOR_NAMES = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green",
+               "C": "Colorless"}
 
 THRIVING_NAMES = {
     "W": "Thriving Heath", "U": "Thriving Isle", "B": "Thriving Moor",
@@ -37,7 +38,7 @@ def main():
         description="Insert a Jumpstart pack as a hypothetical deck"
     )
     parser.add_argument("cards", nargs="+", help="Card names (non-land spells)")
-    parser.add_argument("--color", required=True, choices=["W", "U", "B", "R", "G"],
+    parser.add_argument("--color", required=True, choices=["W", "U", "B", "R", "G", "C"],
                         help="Pack color")
     parser.add_argument("--theme", required=True, help="Pack theme name")
     parser.add_argument("--description", required=True, help="Pack description/synergies")
@@ -64,17 +65,20 @@ def main():
 
     deck_id = result["deck_id"]
     deck_name = result["name"]
-    thriving_name = THRIVING_NAMES[args.color]
-    basic_name = BASIC_NAMES[args.color]
 
     print(f"Created hypothetical deck: {deck_name} (id={deck_id})")
     print(f"Color: {COLOR_NAMES[args.color]}")
     print(f"Spells ({len(args.cards)}):")
     for card_name in args.cards:
         print(f"  {card_name}")
-    print(f"Lands:")
-    print(f"  1 {thriving_name}")
-    print(f"  {args.basics} {basic_name}")
+    if args.color == "C":
+        print(f"Lands: (no lands — colorless deck, partner provides lands)")
+    else:
+        thriving_name = THRIVING_NAMES[args.color]
+        basic_name = BASIC_NAMES[args.color]
+        print(f"Lands:")
+        print(f"  1 {thriving_name}")
+        print(f"  {args.basics} {basic_name}")
 
 
 if __name__ == "__main__":

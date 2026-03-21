@@ -1,0 +1,12 @@
+# Scenario: Creating a new user gives an empty collection
+#
+# Related:
+#   pull_requests: []
+#
+# Prerequisites:
+#   None — test creates a new user via the API.
+
+description: >
+  When I create a new user via the user switcher's "+ New User" option,
+  I am switched to that user and see an empty collection page with zero
+  cards. The user switcher dropdown shows my new user name as selected.

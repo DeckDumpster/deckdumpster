@@ -40,6 +40,7 @@ _ingest_executor: ThreadPoolExecutor | None = None
 _scryfall_rate_lock = threading.Lock()
 _scryfall_last_request: float = 0.0
 _background_db_path: str | None = None
+_shared_db_path_global: str | None = None
 
 
 def _batch_ingest_query(image_id=None):
@@ -790,17 +791,33 @@ def _refinish_ingest_image(conn, image_id, md5):
     )
 
 
+def _make_bg_conn(db_path):
+    """Create a connection for background workers, with ATTACH + temp views if multi-user."""
+    from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS, init_db, init_user_db
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+
+    # If this is a user DB (inside users/ dir), ATTACH the shared DB
+    if _shared_db_path_global and os.path.exists(_shared_db_path_global) and "/users/" in db_path:
+        conn.execute("ATTACH DATABASE ? AS shared", (_shared_db_path_global,))
+        for table in SHARED_TABLES:
+            conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{table}] AS SELECT * FROM shared.[{table}]")
+        for view in SHARED_VIEWS:
+            conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{view}] AS SELECT * FROM shared.[{view}]")
+        init_user_db(conn)
+    else:
+        init_db(conn)
+    return conn
+
+
 def _process_image_background(db_path, image_id):
     """Background worker: process one image end-to-end in its own thread."""
-    from mtg_collector.db.schema import init_db
     from mtg_collector.utils import now_iso
 
     _log_ingest(f"[bg:{image_id}] Background worker started")
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    init_db(conn)
+    conn = _make_bg_conn(db_path)
 
     # Atomic claim
     cursor = conn.execute(
@@ -888,14 +905,19 @@ def _process_image_background(db_path, image_id):
 
 def _recover_pending_images(db_path):
     """On startup, re-queue any READY_FOR_OCR or stale PROCESSING images."""
-    from mtg_collector.db.schema import init_db
     from mtg_collector.utils import now_iso
 
-    print("[startup] Running database migrations ...", flush=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
-    print("[startup] Database ready", flush=True)
+    print(f"[startup] Running database migrations for {os.path.basename(db_path)} ...", flush=True)
+    conn = _make_bg_conn(db_path)
+    print(f"[startup] {os.path.basename(db_path)} ready", flush=True)
+
+    # Check if ingest_images table exists (shared DB won't have it)
+    has_ingest = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ingest_images'"
+    ).fetchone()
+    if not has_ingest:
+        conn.close()
+        return
 
     # Reset stale PROCESSING (>10 min old) back to READY_FOR_OCR
     cutoff = datetime.now(timezone.utc).isoformat()
@@ -930,8 +952,61 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def __init__(self, generator: PackGenerator, static_dir: Path, db_path: str, *args, **kwargs):
         self.generator = generator
         self.static_dir = static_dir
-        self.db_path = db_path
+        self._base_db_path = db_path
+        self._shared_db_path = os.path.join(os.path.dirname(db_path), "shared.sqlite")
+        self._users_dir = os.path.join(os.path.dirname(db_path), "users")
         super().__init__(*args, **kwargs)
+
+    def _get_current_user(self):
+        """Parse mtgc_user from Cookie header. Returns sanitized name or None."""
+        cookie_header = self.headers.get("Cookie", "")
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith("mtgc_user="):
+                name = part[len("mtgc_user="):].strip()
+                # Sanitize: alphanumeric + hyphens + underscores only
+                if re.match(r'^[a-zA-Z0-9_-]+$', name):
+                    return name.lower()
+        return None
+
+    @property
+    def db_path(self):
+        """Return the effective DB path for the current user."""
+        user = self._get_current_user()
+        if user and os.path.isdir(self._users_dir):
+            return os.path.join(self._users_dir, f"{user}.sqlite")
+        return self._base_db_path
+
+    @property
+    def _price_db_path(self):
+        """Return the DB path for price lookups (shared DB if available)."""
+        if os.path.exists(self._shared_db_path):
+            return self._shared_db_path
+        return self._base_db_path
+
+    def _get_conn(self):
+        """Get a DB connection with ATTACH + temp views for multi-user mode."""
+        from mtg_collector.db.schema import SHARED_TABLES, init_user_db
+        user = self._get_current_user()
+        if user and os.path.isdir(self._users_dir):
+            user_db = os.path.join(self._users_dir, f"{user}.sqlite")
+            conn = sqlite3.connect(user_db)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("ATTACH DATABASE ? AS shared", (self._shared_db_path,))
+            for table in SHARED_TABLES:
+                conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{table}] AS SELECT * FROM shared.[{table}]")
+            # Also create temp views for shared views
+            from mtg_collector.db.schema import SHARED_VIEWS
+            for view in SHARED_VIEWS:
+                conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{view}] AS SELECT * FROM shared.[{view}]")
+            init_user_db(conn)
+            return conn
+        # Single-DB mode (no users dir)
+        conn = sqlite3.connect(self._base_db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -1165,6 +1240,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_view_get(int(vid))
             else:
                 self._send_json({"error": "Not found"}, 404)
+        # User management API routes
+        elif path == "/api/users":
+            self._api_users_list()
+        elif path == "/api/current-user":
+            self._api_current_user()
         elif path.startswith("/static/"):
             self._serve_static(path[len("/static/"):])
         else:
@@ -1498,6 +1578,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_jumpstart_sql_search(data)
+        # User management POST routes
+        elif path == "/api/users":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_users_create(data)
+        elif path == "/api/user/select":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_user_select(data)
         else:
             self._send_json({"error": "Not found"}, 404)
 
@@ -1679,8 +1770,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_cached_sets(self):
         """Return all sets whose card list has been fully cached."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         cursor = conn.execute(
             "SELECT set_code, set_name FROM sets WHERE cards_fetched_at IS NOT NULL ORDER BY set_name"
         )
@@ -1714,8 +1804,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 price_type = "foil" if foil else "normal"
                 sc = card.get("set_code", "").lower()
                 cn = card.get("collector_number", "")
-                card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
-                card["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
+                card["ck_price"] = _get_sqlite_price(self._price_db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self._price_db_path, sc, cn, "cardkingdom", price_type)
+                card["tcg_price"] = _get_sqlite_price(self._price_db_path, sc, cn, "tcgplayer", price_type)
 
         self._send_json(result)
 
@@ -1739,8 +1829,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             price_type = "foil" if foil else "normal"
             sc = card.get("set_code", "").lower()
             cn = card.get("collector_number", "")
-            card["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
-            card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
+            card["tcg_price"] = _get_sqlite_price(self._price_db_path, sc, cn, "tcgplayer", price_type)
+            card["ck_price"] = _get_sqlite_price(self._price_db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self._price_db_path, sc, cn, "cardkingdom", price_type)
 
         self._send_json(result)
 
@@ -1769,8 +1859,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         filter_unassigned = params.get("unassigned", [""])[0] == "1"
         expand_copies = params.get("expand", [""])[0] == "copies"
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
 
         # When including unowned cards, sets must already be cached via `mtg cache all`
 
@@ -2205,8 +2294,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_card(self, printing_id: str):
         """Return full card data for a single printing by printing_id."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
 
         row = conn.execute(
             """
@@ -2272,8 +2360,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         finishes = json.loads(row["finishes"]) if row["finishes"] else []
         foil_only = "nonfoil" not in finishes
         price_type = "foil" if foil_only else "normal"
-        result["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
-        result["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
+        result["ck_price"] = _get_sqlite_price(self._price_db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self._price_db_path, sc, cn, "cardkingdom", price_type)
+        result["tcg_price"] = _get_sqlite_price(self._price_db_path, sc, cn, "tcgplayer", price_type)
         result["ck_url"] = self.generator.get_ck_url(printing_id, foil_only) if self.generator else ""
 
         conn.close()
@@ -2287,8 +2375,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Missing set or cn parameter"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
 
         row = conn.execute(
             """
@@ -2352,16 +2439,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         finishes = json.loads(row["finishes"]) if row["finishes"] else []
         foil_only = "nonfoil" not in finishes
         price_type = "foil" if foil_only else "normal"
-        result["ck_price"] = _get_sqlite_price(self.db_path, set_code, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self.db_path, set_code, cn, "cardkingdom", price_type)
-        result["tcg_price"] = _get_sqlite_price(self.db_path, set_code, cn, "tcgplayer", price_type)
+        result["ck_price"] = _get_sqlite_price(self._price_db_path, set_code, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self._price_db_path, set_code, cn, "cardkingdom", price_type)
+        result["tcg_price"] = _get_sqlite_price(self._price_db_path, set_code, cn, "tcgplayer", price_type)
         result["ck_url"] = self.generator.get_ck_url(printing_id, foil_only) if self.generator else ""
 
         conn.close()
         self._send_json(result)
 
     def _api_prices_status(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         log = conn.execute(
             "SELECT fetched_at FROM price_fetch_log ORDER BY id DESC LIMIT 1"
         ).fetchone()
@@ -2374,8 +2460,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_price_history(self, set_code: str, collector_number: str):
         """Return full price time series for a card."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         rows = conn.execute(
             "SELECT source, price_type, price, observed_at FROM prices "
             "WHERE set_code = ? AND collector_number = ? ORDER BY observed_at",
@@ -2393,22 +2478,16 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _api_get_settings(self):
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
         conn.close()
         self._send_json({row["key"]: row["value"] for row in rows})
 
     def _api_put_settings(self):
-        from mtg_collector.db.schema import init_db
         data = self._read_json_body()
         if data is None:
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         for key, value in data.items():
             conn.execute(
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
@@ -2424,8 +2503,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             from mtg_collector.cli.data_cmd import _fetch_prices as fetch_prices_cmd
             fetch_prices_cmd(force=True)
             # Return updated status
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
+            conn = self._get_conn()
             log = conn.execute(
                 "SELECT fetched_at FROM price_fetch_log ORDER BY id DESC LIMIT 1"
             ).fetchone()
@@ -2439,12 +2517,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _ingest2_db(self):
         """Get a DB connection with schema init."""
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        init_db(conn)
-        return conn
+        return self._get_conn()
 
     def _ingest2_load_image(self, conn, image_id):
         """Load an ingest_images row as dict."""
@@ -3709,10 +3782,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_orders_list(self):
         """List all orders with card counts."""
         from mtg_collector.db.models import OrderRepository
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = OrderRepository(conn)
         orders = repo.list_all()
         conn.close()
@@ -3721,10 +3791,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_order_cards(self, order_id: int):
         """Get cards in an order."""
         from mtg_collector.db.models import OrderRepository
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = OrderRepository(conn)
         cards = repo.get_order_cards(order_id)
         conn.close()
@@ -3733,10 +3800,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_order_get(self, order_id: int):
         """Get a single order by ID."""
         from mtg_collector.db.models import OrderRepository
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = OrderRepository(conn)
         order = repo.get(order_id)
         conn.close()
@@ -3749,10 +3813,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_order_update(self, order_id: int, data: dict):
         """Update order metadata (partial update)."""
         from mtg_collector.db.models import OrderRepository
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = OrderRepository(conn)
         order = repo.get(order_id)
         if order is None:
@@ -3772,10 +3833,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_collection_update(self, entry_id: int, data: dict):
         """Update a collection entry (partial update)."""
         from mtg_collector.db.models import CollectionRepository
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = CollectionRepository(conn)
         entry = repo.get(entry_id)
         if entry is None:
@@ -3798,7 +3856,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_order_add_card(self, order_id: int):
         """Add a new card to an existing order."""
         from mtg_collector.db.models import CollectionEntry, CollectionRepository
-        from mtg_collector.db.schema import init_db
         from mtg_collector.utils import now_iso
         data = self._read_json_body()
         if data is None:
@@ -3807,9 +3864,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not printing_id:
             self._send_json({"error": "printing_id is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         entry = CollectionEntry(
             id=None,
             printing_id=printing_id,
@@ -3872,7 +3927,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_order_resolve(self):
         """Resolve parsed orders against local card database."""
         from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
-        from mtg_collector.db.schema import init_db
         from mtg_collector.services.order_parser import ParsedOrder, ParsedOrderItem
         from mtg_collector.services.order_resolver import resolve_orders
 
@@ -3909,9 +3963,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 ))
             orders.append(order)
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         card_repo = CardRepository(conn)
         set_repo = SetRepository(conn)
@@ -3964,7 +4016,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             CollectionRepository,
             OrderRepository,
         )
-        from mtg_collector.db.schema import init_db
         from mtg_collector.services.order_parser import ParsedOrder, ParsedOrderItem
         from mtg_collector.services.order_resolver import (
             ResolvedItem,
@@ -4019,9 +4070,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 ro.items.append(ri)
             resolved_orders.append(ro)
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         collection_repo = CollectionRepository(conn)
         order_repo = OrderRepository(conn)
 
@@ -4053,10 +4102,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_collection_history(self, collection_id: int):
         """Return combined status + movement history for a collection entry."""
         from mtg_collector.db.models import CollectionRepository
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = CollectionRepository(conn)
 
         # Status history
@@ -4093,7 +4139,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_collection_copies(self, params: dict):
         """Return individual collection rows for a printing, with order data."""
         from mtg_collector.db.models import CollectionRepository
-        from mtg_collector.db.schema import init_db
         printing_id = params.get("printing_id", [""])[0]
         if not printing_id:
             self._send_json({"error": "printing_id required"}, 400)
@@ -4101,9 +4146,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         finish = params.get("finish", [""])[0] or None
         condition = params.get("condition", [""])[0] or None
         status = params.get("status", [""])[0] or None
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = CollectionRepository(conn)
         copies = repo.get_copies(printing_id, finish=finish, condition=condition, status=status)
         conn.close()
@@ -4112,10 +4155,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_collection_receive(self, collection_id: int):
         """Receive a single ordered card (flip ordered -> owned)."""
         from mtg_collector.db.models import CollectionRepository
-        from mtg_collector.db.schema import init_db
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = CollectionRepository(conn)
         ok = repo.receive_card(collection_id)
         conn.commit()
@@ -4125,12 +4165,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_order_receive(self, order_id: int):
         """Mark ordered cards in an order as owned. Accepts optional card_ids in JSON body."""
         from mtg_collector.db.models import OrderRepository
-        from mtg_collector.db.schema import init_db
         data = self._read_json_body()  # None when no body — backward-compatible
         card_ids = data.get("card_ids") if data else None
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = OrderRepository(conn)
         count = repo.receive_order(order_id, card_ids=card_ids)
         conn.commit()
@@ -4146,7 +4183,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         from mtg_collector.cli.ingest_ids import RARITY_MAP, lookup_card
         from mtg_collector.db.models import PrintingRepository, SetRepository
-        from mtg_collector.db.schema import init_db
         from mtg_collector.services.claude import ClaudeVision
 
         content_type = self.headers.get("Content-Type", "")
@@ -4210,9 +4246,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         # Resolve each detection using local DB
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         set_repo = SetRepository(conn)
         printing_repo = PrintingRepository(conn)
@@ -4326,7 +4360,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             DeckRepository,
             PrintingRepository,
         )
-        from mtg_collector.db.schema import init_db
         from mtg_collector.utils import (
             normalize_condition,
             normalize_finish,
@@ -4348,9 +4381,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "No cards to commit"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         collection_repo = CollectionRepository(conn)
         printing_repo = PrintingRepository(conn)
@@ -4450,11 +4481,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_batches_list(self, params=None):
         """List all batches with optional type filter."""
         from mtg_collector.db.models import BatchRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = BatchRepository(conn)
         batch_type = None
         if params and "type" in params:
@@ -4465,11 +4493,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_batch_cards(self, batch_id: int):
         """Get cards in a batch."""
         from mtg_collector.db.models import BatchRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = BatchRepository(conn)
         batch = repo.get(batch_id)
         if not batch:
@@ -4486,7 +4511,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             BatchRepository,
             DeckRepository,
         )
-        from mtg_collector.db.schema import init_db
 
         deck_id = data.get("deck_id")
         deck_zone = data.get("deck_zone", "mainboard")
@@ -4494,9 +4518,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "deck_id required"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         batch_repo = BatchRepository(conn)
         deck_repo = DeckRepository(conn)
 
@@ -4530,11 +4552,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_batch_update(self, batch_id: int, data: dict):
         """Update batch metadata (name, product_type, set_code, notes)."""
         from mtg_collector.db.models import BatchRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = BatchRepository(conn)
 
         batch = repo.get(batch_id)
@@ -4559,7 +4578,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_ingest_ids_resolve(self):
         from mtg_collector.cli.ingest_ids import RARITY_MAP, lookup_card
         from mtg_collector.db.models import PrintingRepository, SetRepository
-        from mtg_collector.db.schema import init_db
 
         data = self._read_json_body()
         if data is None:
@@ -4569,9 +4587,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "No entries provided"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         set_repo = SetRepository(conn)
         printing_repo = PrintingRepository(conn)
 
@@ -4646,7 +4662,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             CollectionRepository,
             PrintingRepository,
         )
-        from mtg_collector.db.schema import init_db
         from mtg_collector.utils import normalize_condition, normalize_finish
 
         data = self._read_json_body()
@@ -4656,9 +4671,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         condition = normalize_condition(data.get("condition", "Near Mint"))
         source = data.get("source", "manual_id")
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         collection_repo = CollectionRepository(conn)
         printing_repo = PrintingRepository(conn)
 
@@ -4772,7 +4785,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_import_resolve(self):
         """Resolve parsed CSV rows using local DB."""
         from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
-        from mtg_collector.db.schema import init_db
         from mtg_collector.importers import get_importer
 
         data = self._read_json_body()
@@ -4786,9 +4798,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         importer = get_importer(fmt)
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         card_repo = CardRepository(conn)
         set_repo = SetRepository(conn)
         printing_repo = PrintingRepository(conn)
@@ -4852,7 +4862,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         import uuid as _uuid
 
         from mtg_collector.db.models import Batch, BatchRepository, CollectionRepository
-        from mtg_collector.db.schema import init_db
         from mtg_collector.importers import get_importer
 
         data = self._read_json_body()
@@ -4866,9 +4875,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         importer = get_importer(fmt)
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         collection_repo = CollectionRepository(conn)
 
         # Optional batch support
@@ -4937,8 +4944,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         db_price_type = f"buylist_{price_type}" if source == "cardkingdom" else price_type
         placeholders = ",".join("?" for _ in sets)
         params = [source, db_price_type] + [s.lower() for s in sets]
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         rows = conn.execute(
             f"""SELECT c.name, p.set_code, s.set_name, p.collector_number,
                        p.rarity, c.colors, lp.price,
@@ -4993,8 +4999,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     # ===== Deck API handlers =====
 
     def _api_decks_list(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         self._send_json(repo.list_all())
@@ -5009,8 +5014,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         variation = params.get("variation", [None])[0]
         if variation is not None:
             variation = int(variation)
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         deck = repo.find_by_origin(set_code, theme, variation)
@@ -5018,8 +5022,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(deck)
 
     def _api_deck_get(self, deck_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         deck = repo.get(deck_id)
@@ -5034,8 +5037,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not name:
             self._send_json({"error": "name is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import Deck, DeckRepository
         repo = DeckRepository(conn)
         origin_var = data.get("origin_variation")
@@ -5057,8 +5059,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result, 201)
 
     def _api_deck_update(self, deck_id: int, data: dict):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         if not repo.get(deck_id):
@@ -5072,8 +5073,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _api_deck_delete(self, deck_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         if not repo.delete(deck_id):
@@ -5085,8 +5085,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True})
 
     def _api_deck_cards(self, deck_id: int, params: dict):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         zone = params.get("zone", [None])[0]
@@ -5153,8 +5152,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         try:
@@ -5172,8 +5170,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         count = repo.remove_cards(deck_id, collection_ids)
@@ -5187,8 +5184,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         count = repo.move_cards(collection_ids, deck_id, zone=zone)
@@ -5197,8 +5193,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True, "count": count})
 
     def _api_deck_expected_get(self, deck_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         cards = repo.get_expected_cards(deck_id)
@@ -5206,8 +5201,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(cards)
 
     def _api_deck_expected_set(self, deck_id: int, data: dict):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         if not repo.get(deck_id):
@@ -5294,8 +5288,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not printing_ids:
             self._send_json({"error": "printing_ids is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         for pid in printing_ids:
             conn.execute(
                 "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
@@ -5312,7 +5305,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not printing_id:
             self._send_json({"error": "printing_id is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         conn.execute(
             "DELETE FROM deck_expected_cards WHERE deck_id = ? AND printing_id = ?",
             (deck_id, printing_id),
@@ -5322,8 +5315,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True})
 
     def _api_deck_completeness(self, deck_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         if not repo.get(deck_id):
@@ -5335,8 +5327,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _api_deck_materialize(self, deck_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         deck = repo.get(deck_id)
@@ -5358,8 +5349,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         if not repo.get(deck_id):
@@ -5380,8 +5370,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if len(q) < 2:
             self._send_json([])
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         rows = conn.execute(
             """SELECT DISTINCT c.oracle_id, c.name, c.mana_cost, c.color_identity,
                       p.printing_id, p.image_uri, p.set_code, p.collector_number
@@ -5421,8 +5410,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not commander_oracle_id:
             self._send_json({"error": "commander_oracle_id is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         card = conn.execute("SELECT name FROM cards WHERE oracle_id = ?",
                             (commander_oracle_id,)).fetchone()
         if not card:
@@ -5482,8 +5470,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_builder_get(self, deck_id: int):
         """Get deck data with commander info and type-grouped cards."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         deck = repo.get(deck_id)
@@ -5554,8 +5541,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if len(q) < 2:
             self._send_json([])
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         deck = conn.execute("SELECT commander_oracle_id, hypothetical FROM decks WHERE id = ?",
                             (deck_id,)).fetchone()
         if not deck:
@@ -5632,8 +5618,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_id:
             self._send_json({"error": "collection_id is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         # If categories provided, use DeckBuilderService for full add+audit
         if categories:
             from mtg_collector.services.deck_builder import DeckBuilderService
@@ -5680,8 +5665,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_id:
             self._send_json({"error": "collection_id is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         count = repo.remove_cards(deck_id, [collection_id])
@@ -5698,8 +5682,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             val = params.get(key, [""])[0]
             if val:
                 filters[key] = val
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.services.deck_builder import DeckBuilderService
         svc = DeckBuilderService(conn)
         results = svc.browse_commanders(filters)
@@ -5710,8 +5693,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Save deck plan and optional sub-plans."""
         plan = data.get("plan")
         sub_plans = data.get("sub_plans")
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.services.deck_builder import DeckBuilderService
         svc = DeckBuilderService(conn)
         if plan is not None:
@@ -5727,8 +5709,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not where_clause:
             self._send_json({"error": "where_clause is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.services.deck_builder import DeckBuilderService
         svc = DeckBuilderService(conn)
         try:
@@ -5756,8 +5737,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not counts:
             self._send_json({"error": "Specify at least one basic land count"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.services.deck_builder import DeckBuilderService
         svc = DeckBuilderService(conn)
         try:
@@ -5772,8 +5752,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_builder_bling(self, deck_id: int, data: dict):
         """Upgrade deck cards to blingiest printings."""
         dry_run = bool(data.get("dry_run", False))
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.services.deck_builder import DeckBuilderService
         svc = DeckBuilderService(conn)
         result = svc.bling_upgrade(deck_id, dry_run=dry_run)
@@ -5782,8 +5761,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_builder_mana_analysis(self, deck_id: int):
         """Analyze mana requirements for a deck."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.services.deck_builder import DeckBuilderService
         svc = DeckBuilderService(conn)
         try:
@@ -5803,8 +5781,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not name:
             self._send_json({"error": "name parameter is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
 
         def _attach_printing(oracle_id):
             """Find best printing (prefer owned) for an oracle_id."""
@@ -5828,7 +5805,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     (oracle_id,),
                 ).fetchone()
             return p
-
         # Exact match — prefer cards with real printings over token-only
         row = conn.execute(
             """SELECT c.*,
@@ -5908,8 +5884,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_jumpstart_find_card(self, data: dict):
         """Search cards with jumpstart-style filters."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         conditions = ["s.digital = 0", "s.set_type NOT IN ('token', 'memorabilia')"]
         params = []
         owned = data.get("owned", False)
@@ -6012,8 +5987,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not names:
             self._send_json({"error": "names array is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         results = {}
         for name in names:
             # Prefer owned printing — try oracle name then printing name
@@ -6056,8 +6030,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         color = data.get("color", "").upper()
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
 
         conditions = [f"({where_clause})"]
         params = []
@@ -6119,8 +6092,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         basic_names = {"W": "Plains", "U": "Island", "B": "Swamp",
                        "R": "Mountain", "G": "Forest"}
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         try:
             # Check for duplicate deck name
             deck_name = f"{theme} (Jumpstart)"
@@ -6213,27 +6185,28 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 expected_cards.append({"printing_id": pid, "zone": "mainboard",
                                        "quantity": 1, "name": name})
 
-            # Ensure thriving land in collection and resolve
-            thriving_name = thriving_names.get(color)
-            basic_name = basic_names.get(color)
-            if not thriving_name:
-                self._send_json({"error": f"Invalid color: {color}"}, 400)
-                return
+            # Add lands (skip for colorless decks — partner provides lands)
+            if color != "C":
+                thriving_name = thriving_names.get(color)
+                basic_name = basic_names.get(color)
+                if not thriving_name:
+                    self._send_json({"error": f"Invalid color: {color}"}, 400)
+                    return
 
-            _ensure_in_collection(thriving_name)
-            thriving_pid, err = _resolve_printing(thriving_name)
-            if err:
-                self._send_json({"error": err}, 400)
-                return
-            basic_pid, err = _resolve_printing(basic_name)
-            if err:
-                self._send_json({"error": err}, 400)
-                return
+                _ensure_in_collection(thriving_name)
+                thriving_pid, err = _resolve_printing(thriving_name)
+                if err:
+                    self._send_json({"error": err}, 400)
+                    return
+                basic_pid, err = _resolve_printing(basic_name)
+                if err:
+                    self._send_json({"error": err}, 400)
+                    return
 
-            expected_cards.append({"printing_id": thriving_pid, "zone": "mainboard",
-                                   "quantity": 1, "name": thriving_name})
-            expected_cards.append({"printing_id": basic_pid, "zone": "mainboard",
-                                   "quantity": basics_count, "name": basic_name})
+                expected_cards.append({"printing_id": thriving_pid, "zone": "mainboard",
+                                       "quantity": 1, "name": thriving_name})
+                expected_cards.append({"printing_id": basic_pid, "zone": "mainboard",
+                                       "quantity": basics_count, "name": basic_name})
 
             # Dedup by (printing_id, zone) — card list may already contain
             # a land that was also auto-appended above
@@ -6277,16 +6250,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     # ===== Binder API handlers =====
 
     def _api_binders_list(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
         self._send_json(repo.list_all())
         conn.close()
 
     def _api_binder_get(self, binder_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
         binder = repo.get(binder_id)
@@ -6301,8 +6272,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not name:
             self._send_json({"error": "name is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import Binder, BinderRepository
         repo = BinderRepository(conn)
         binder = Binder(
@@ -6317,8 +6287,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result, 201)
 
     def _api_binder_update(self, binder_id: int, data: dict):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
         if not repo.get(binder_id):
@@ -6332,8 +6301,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _api_binder_delete(self, binder_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
         if not repo.delete(binder_id):
@@ -6345,8 +6313,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True})
 
     def _api_binder_cards(self, binder_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
         cards = repo.get_cards(binder_id)
@@ -6358,8 +6325,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
         try:
@@ -6377,8 +6343,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
         count = repo.remove_cards(binder_id, collection_ids)
@@ -6391,8 +6356,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if not collection_ids:
             self._send_json({"error": "collection_ids is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
         count = repo.move_cards(collection_ids, binder_id)
@@ -6403,16 +6367,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     # ===== Collection View API handlers =====
 
     def _api_views_list(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import CollectionViewRepository
         repo = CollectionViewRepository(conn)
         self._send_json(repo.list_all())
         conn.close()
 
     def _api_view_get(self, view_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import CollectionViewRepository
         repo = CollectionViewRepository(conn)
         view = repo.get(view_id)
@@ -6431,8 +6393,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if filters_json is None:
             self._send_json({"error": "filters_json is required"}, 400)
             return
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import CollectionView, CollectionViewRepository
         repo = CollectionViewRepository(conn)
         if isinstance(filters_json, dict):
@@ -6448,8 +6409,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result, 201)
 
     def _api_view_update(self, view_id: int, data: dict):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import CollectionViewRepository
         repo = CollectionViewRepository(conn)
         if not repo.get(view_id):
@@ -6465,8 +6425,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _api_view_delete(self, view_id: int):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         from mtg_collector.db.models import CollectionViewRepository
         repo = CollectionViewRepository(conn)
         if not repo.delete(view_id):
@@ -6499,11 +6458,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_wishlist_list(self, params: dict):
         """List wishlist entries."""
         from mtg_collector.db.models import WishlistRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         repo = WishlistRepository(conn)
         fulfilled_param = params.get("fulfilled", [""])[0]
@@ -6529,7 +6485,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             WishlistEntry,
             WishlistRepository,
         )
-        from mtg_collector.db.schema import init_db
         from mtg_collector.utils import now_iso
 
         name = data.get("name", "").strip()
@@ -6537,9 +6492,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "name is required"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         card_repo = CardRepository(conn)
         printing_repo = PrintingRepository(conn)
@@ -6589,7 +6542,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             WishlistEntry,
             WishlistRepository,
         )
-        from mtg_collector.db.schema import init_db
         from mtg_collector.utils import now_iso
 
         cards = data.get("cards", [])
@@ -6597,9 +6549,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"added": [], "errors": []})
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         card_repo = CardRepository(conn)
         printing_repo = PrintingRepository(conn)
@@ -6650,11 +6600,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_wishlist_delete(self, wid: int):
         """Delete a wishlist entry."""
         from mtg_collector.db.models import WishlistRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         repo = WishlistRepository(conn)
         deleted = repo.delete(wid)
@@ -6669,11 +6616,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_wishlist_fulfill(self, wid: int):
         """Mark a wishlist entry as fulfilled."""
         from mtg_collector.db.models import WishlistRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         repo = WishlistRepository(conn)
         fulfilled = repo.fulfill(wid)
@@ -6688,13 +6632,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_set_browse(self, set_code: str, params: dict):
         """Browse all printings in a set with owned/wanted annotations."""
         from mtg_collector.db.models import SetRepository
-        from mtg_collector.db.schema import init_db
 
         set_code = set_code.lower()
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         set_repo = SetRepository(conn)
 
@@ -6760,7 +6701,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             CollectionRepository,
             WishlistRepository,
         )
-        from mtg_collector.db.schema import init_db
 
         printing_id = data.get("printing_id", "").strip()
         if not printing_id:
@@ -6775,9 +6715,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if purchase_price is not None:
             purchase_price = float(purchase_price)
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         collection_repo = CollectionRepository(conn)
         entry = CollectionEntry(
@@ -6825,7 +6763,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_collection_copies(self, params: dict):
         """Return per-copy data for a card (by printing_id + optional filters)."""
         from mtg_collector.db.models import CollectionRepository
-        from mtg_collector.db.schema import init_db
 
         printing_id = params.get("printing_id", [""])[0]
         if not printing_id:
@@ -6836,9 +6773,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         condition = params.get("condition", [""])[0] or None
         status = params.get("status", [""])[0] or None
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         repo = CollectionRepository(conn)
         copies = repo.get_copies(printing_id, finish=finish, condition=condition, status=status)
@@ -6848,16 +6783,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_collection_dispose(self, entry_id: int, data: dict):
         """Transition a collection entry to a disposition status."""
         from mtg_collector.db.models import CollectionRepository
-        from mtg_collector.db.schema import init_db
 
         new_status = data.get("new_status")
         if not new_status:
             self._send_json({"error": "new_status required"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         repo = CollectionRepository(conn)
         try:
@@ -6877,11 +6809,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_collection_delete(self, entry_id: int):
         """Hard-delete a collection entry with lineage cleanup."""
         from mtg_collector.db.models import CollectionRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         repo = CollectionRepository(conn)
         try:
@@ -6899,16 +6828,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_collection_bulk_delete(self, data: dict):
         """Bulk-delete collection entries with lineage cleanup."""
         from mtg_collector.db.models import CollectionRepository
-        from mtg_collector.db.schema import init_db
 
         ids = data.get("ids", [])
         if not ids:
             self._send_json({"error": "ids array required"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         repo = CollectionRepository(conn)
         result = repo.bulk_delete(ids)
@@ -6926,16 +6852,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_products(self, params: dict):
         """Search/list sealed products (reference data)."""
         from mtg_collector.db.models import SealedProductCardRepository, SealedProductRepository
-        from mtg_collector.db.schema import init_db
 
         q = params.get("q", [""])[0]
         set_code = params.get("set_code", [""])[0]
         category = params.get("category", [""])[0]
         limit = int(params.get("limit", ["50"])[0])
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedProductRepository(conn)
 
         if q:
@@ -6985,11 +6908,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_products_sets(self):
         """List sets that have sealed products."""
         from mtg_collector.db.models import SealedProductRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedProductRepository(conn)
         sets = repo.list_sets_with_products()
         conn.close()
@@ -6998,11 +6918,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_product_detail(self, uuid: str):
         """Get a single sealed product by UUID."""
         from mtg_collector.db.models import SealedProductRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedProductRepository(conn)
         product = repo.get(uuid)
         if not product:
@@ -7041,11 +6958,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         import json as _json
 
         from mtg_collector.db.models import SealedProductCardRepository, SealedProductRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         product_repo = SealedProductRepository(conn)
         product = product_repo.get(uuid)
@@ -7138,16 +7052,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             SealedProductCardRepository,
             SealedProductRepository,
         )
-        from mtg_collector.db.schema import init_db
 
         sealed_product_uuid = data.get("sealed_product_uuid")
         if not sealed_product_uuid:
             self._send_json({"error": "sealed_product_uuid required"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         product_repo = SealedProductRepository(conn)
         product = product_repo.get(sealed_product_uuid)
@@ -7307,8 +7218,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_sealed_price_history(self, tcgplayer_product_id: str):
         """Return price time series for a sealed product."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         rows = conn.execute(
             "SELECT low_price, mid_price, high_price, market_price, direct_low_price, observed_at "
             "FROM sealed_prices WHERE tcgplayer_product_id = ? ORDER BY observed_at",
@@ -7319,8 +7229,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_sealed_prices_status(self):
         """Return info about cached sealed prices."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         row = conn.execute(
             "SELECT MAX(observed_at) as last_date, COUNT(DISTINCT tcgplayer_product_id) as product_count "
             "FROM sealed_prices"
@@ -7335,16 +7244,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_collection_list(self, params: dict):
         """List user's sealed collection with filters."""
         from mtg_collector.db.models import SealedCollectionRepository
-        from mtg_collector.db.schema import init_db
 
         set_code = params.get("set_code", [""])[0] or None
         category = params.get("category", [""])[0] or None
         subtype = params.get("subtype", [""])[0] or None
         status = params.get("status", [""])[0] or None
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedCollectionRepository(conn)
         entries = repo.list_all(set_code=set_code, category=category, subtype=subtype, status=status)
 
@@ -7362,11 +7268,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_collection_stats(self):
         """Get sealed collection statistics."""
         from mtg_collector.db.models import SealedCollectionRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedCollectionRepository(conn)
         stats = repo.stats()
         conn.close()
@@ -7379,16 +7282,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             SealedCollectionRepository,
             SealedProductRepository,
         )
-        from mtg_collector.db.schema import init_db
 
         uuid = data.get("sealed_product_uuid")
         if not uuid:
             self._send_json({"error": "sealed_product_uuid required"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
 
         # Verify the product exists
         product_repo = SealedProductRepository(conn)
@@ -7444,11 +7344,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_collection_update(self, entry_id: int, data: dict):
         """Update a sealed collection entry."""
         from mtg_collector.db.models import SealedCollectionRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedCollectionRepository(conn)
 
         entry = repo.get(entry_id)
@@ -7481,16 +7378,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_collection_dispose(self, entry_id: int, data: dict):
         """Transition a sealed collection entry's status."""
         from mtg_collector.db.models import SealedCollectionRepository
-        from mtg_collector.db.schema import init_db
 
         new_status = data.get("new_status")
         if not new_status:
             self._send_json({"error": "new_status required"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedCollectionRepository(conn)
 
         try:
@@ -7505,7 +7399,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_collection_bulk_dispose(self, data: dict):
         """Bulk-transition sealed collection entries' status."""
         from mtg_collector.db.models import SealedCollectionRepository
-        from mtg_collector.db.schema import init_db
 
         ids = data.get("ids", [])
         if not ids:
@@ -7516,9 +7409,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "new_status required"}, 400)
             return
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedCollectionRepository(conn)
         result = repo.bulk_dispose(ids, new_status, sale_price=data.get("sale_price"))
         conn.commit()
@@ -7533,11 +7424,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_collection_delete(self, entry_id: int):
         """Delete a sealed collection entry."""
         from mtg_collector.db.models import SealedCollectionRepository
-        from mtg_collector.db.schema import init_db
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedCollectionRepository(conn)
 
         deleted = repo.delete(entry_id)
@@ -7552,10 +7440,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Trigger TCGCSV sealed price fetch."""
         from mtg_collector.cli.data_cmd import fetch_sealed_prices
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
+        conn = self._get_conn()
         try:
-            result = fetch_sealed_prices(self.db_path, conn=conn)
+            result = fetch_sealed_prices(self._price_db_path, conn=conn)
         finally:
             conn.close()
         self._send_json({"ok": True, **(result or {})})
@@ -7563,7 +7450,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _api_sealed_from_tcgplayer(self, data: dict):
         """Look up a sealed product by TCGPlayer product ID or URL."""
         from mtg_collector.db.models import SealedProductRepository
-        from mtg_collector.db.schema import init_db
 
         raw = data.get("product_id") or data.get("url") or ""
         # Extract numeric product ID from URL or raw input
@@ -7576,9 +7462,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         tcg_id = match.group(1)
 
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        init_db(conn)
+        conn = self._get_conn()
         repo = SealedProductRepository(conn)
         product = repo.get_by_tcgplayer_id(tcg_id)
 
@@ -7612,7 +7496,63 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "purchase_url_cardkingdom": product.purchase_url_cardkingdom,
         })
 
-    def _send_json(self, obj, status=200):
+    # ── User management API ──
+
+    def _api_users_list(self):
+        """GET /api/users — list available users."""
+        users = []
+        if os.path.isdir(self._users_dir):
+            for f in sorted(os.listdir(self._users_dir)):
+                if f.endswith(".sqlite"):
+                    users.append(f[:-len(".sqlite")])
+        self._send_json({"users": users})
+
+    def _api_current_user(self):
+        """GET /api/current-user — return current user from cookie."""
+        user = self._get_current_user()
+        self._send_json({"user": user})
+
+    def _api_users_create(self, data):
+        """POST /api/users — create a new user DB."""
+        from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS, init_user_db
+        name = (data.get("name") or "").strip().lower()
+        if not name or not re.match(r'^[a-zA-Z0-9_-]+$', name):
+            self._send_json({"error": "Invalid name. Use alphanumeric, hyphens, underscores."}, 400)
+            return
+        # Trigger migration on first user creation
+        _ensure_multi_user(self._base_db_path)
+        if not os.path.isdir(self._users_dir):
+            os.makedirs(self._users_dir, exist_ok=True)
+        user_db = os.path.join(self._users_dir, f"{name}.sqlite")
+        if os.path.exists(user_db):
+            self._send_json({"error": "User already exists"}, 409)
+            return
+        conn = sqlite3.connect(user_db)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("ATTACH DATABASE ? AS shared", (self._shared_db_path,))
+        for table in SHARED_TABLES:
+            conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{table}] AS SELECT * FROM shared.[{table}]")
+        for view in SHARED_VIEWS:
+            conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{view}] AS SELECT * FROM shared.[{view}]")
+        init_user_db(conn)
+        conn.close()
+        self._send_json({"created": name})
+
+    def _api_user_select(self, data):
+        """POST /api/user/select — set user cookie."""
+        name = (data.get("user") or "").strip().lower()
+        if not name or not re.match(r'^[a-zA-Z0-9_-]+$', name):
+            self._send_json({"error": "Invalid user name"}, 400)
+            return
+        user_db = os.path.join(self._users_dir, f"{name}.sqlite")
+        if not os.path.exists(user_db):
+            self._send_json({"error": "User not found"}, 404)
+            return
+        cookie = f"mtgc_user={name}; Path=/; SameSite=Lax; Max-Age=31536000"
+        self._send_json({"selected": name}, extra_headers={"Set-Cookie": cookie})
+
+    def _send_json(self, obj, status=200, extra_headers=None):
         body = json.dumps(obj).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -7621,6 +7561,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             body = gzip.compress(body)
             self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(body)))
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -7655,18 +7598,69 @@ def register(subparsers):
     parser.set_defaults(func=run)
 
 
+def _ensure_multi_user(db_path):
+    """One-time migration: split single DB into shared + user DBs.
+
+    Called lazily when the first user is created via the API.
+    Copies the existing DB as shared.sqlite and as users/default.sqlite.
+    The original collection.sqlite is left in place for backward compatibility.
+    """
+    import shutil
+    db_dir = os.path.dirname(db_path)
+    users_dir = os.path.join(db_dir, "users")
+    shared_db = os.path.join(db_dir, "shared.sqlite")
+
+    if os.path.isdir(users_dir):
+        return  # Already migrated
+
+    if not os.path.exists(db_path):
+        return  # No existing DB to migrate from
+
+    print("[multi-user] Migrating to multi-user mode...", flush=True)
+
+    # Copy existing DB as shared (has all reference data)
+    if not os.path.exists(shared_db):
+        shutil.copy2(db_path, shared_db)
+        print(f"  Created shared.sqlite from {os.path.basename(db_path)}", flush=True)
+
+    # Copy existing DB as users/default.sqlite (preserves user data)
+    os.makedirs(users_dir, exist_ok=True)
+    default_user_db = os.path.join(users_dir, "default.sqlite")
+    if not os.path.exists(default_user_db):
+        shutil.copy2(db_path, default_user_db)
+        print("  Created users/default.sqlite from existing collection", flush=True)
+
+    print("  Migration complete! Your data is available under the 'default' user.", flush=True)
+
+
 def run(args):
     """Run the crack-pack-server command."""
     db_path = get_db_path(getattr(args, "db", None))
+    db_dir = os.path.dirname(db_path)
+    shared_db_path = os.path.join(db_dir, "shared.sqlite")
+    users_dir = os.path.join(db_dir, "users")
 
-    # Start background ingest worker pool
-    global _ingest_executor, _background_db_path
+    # Set module-level shared DB path for background workers
+    global _ingest_executor, _background_db_path, _shared_db_path_global
+    _shared_db_path_global = shared_db_path
     _background_db_path = db_path
     _ingest_executor = ThreadPoolExecutor(max_workers=4)
-    _recover_pending_images(db_path)
+
+    # Determine which DB to use for startup checks (shared if multi-user, else single)
+    startup_db = shared_db_path if os.path.exists(shared_db_path) else db_path
+
+    # Run migrations on the main/shared DB
+    _recover_pending_images(startup_db)
+
+    # If multi-user mode, recover pending images for all user DBs
+    if os.path.isdir(users_dir):
+        for f in os.listdir(users_dir):
+            if f.endswith(".sqlite"):
+                user_db = os.path.join(users_dir, f)
+                _recover_pending_images(user_db)
 
     # Auto-import MTGJSON data if tables are empty but AllPrintings.json exists
-    _conn = sqlite3.connect(db_path)
+    _conn = sqlite3.connect(startup_db)
     _has_data = _conn.execute("SELECT COUNT(*) FROM mtgjson_booster_configs").fetchone()[0]
     _conn.close()
     if not _has_data:
@@ -7675,12 +7669,13 @@ def run(args):
         ap = get_allprintings_path()
         if ap.exists():
             print("[startup] MTGJSON tables empty — auto-importing from AllPrintings.json ...", flush=True)
-            import_mtgjson(db_path)
+            import_mtgjson(startup_db)
         else:
             print("[startup] WARNING: MTGJSON tables empty and AllPrintings.json not found.", flush=True)
             print("[startup] Crack-a-Pack set search will not work. Run: mtg data fetch", flush=True)
 
-    gen = PackGenerator(db_path)
+    # PackGenerator only reads shared reference data
+    gen = PackGenerator(startup_db)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
     handler = partial(CrackPackHandler, gen, static_dir, db_path)

@@ -1,0 +1,14 @@
+# Scenario: User switching shows different collections
+#
+# Related:
+#   pull_requests: []
+#
+# Prerequisites:
+#   Multi-user mode must be activated by creating users via the API.
+#   Default user has demo data (43 cards), new users start empty.
+
+description: >
+  When I create two users via the user switcher and switch between them,
+  I see different collection data. The default user (migrated from the
+  original single-user DB) has cards, while a newly created user has
+  an empty collection. Switching users changes which collection is displayed.

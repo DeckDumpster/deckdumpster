@@ -210,6 +210,45 @@ DEMO_BINDERS = [
     },
 ]
 
+# Bob's demo cards — a different subset for multi-user testing
+# Each tuple: (set_code, collector_number, finish, condition, status)
+BOB_DEMO_CARDS = [
+    # --- Modern Horizons 3 (MH3) ---
+    ("mh3", "209", "nonfoil", "Near Mint", "owned"),           # 0: Disruptor Flute
+    ("mh3", "293", "foil", "Near Mint", "owned"),               # 1: Junk Diver (foil)
+    ("mh3", "197", "nonfoil", "Near Mint", "owned"),            # 2: Phlage
+    ("mh3", "174", "nonfoil", "Near Mint", "owned"),            # 3: Thief of Existence
+    ("mh3", "234", "nonfoil", "Near Mint", "owned"),            # 4: Urza's Cave
+
+    # --- Bloomburrow (BLB) ---
+    ("blb", "198", "foil", "Near Mint", "owned"),               # 5: Three Tree Rootweaver
+    ("blb", "124", "nonfoil", "Near Mint", "owned"),            # 6: Artist's Talent
+    ("blb", "188", "nonfoil", "Near Mint", "owned"),            # 7: Peerless Recycling
+
+    # --- Wilds of Eldraine (WOE) ---
+    ("woe", "56", "nonfoil", "Lightly Played", "owned"),        # 8: Ingenious Prodigy
+    ("woe", "171", "foil", "Near Mint", "owned"),               # 9: Graceful Takedown
+
+    # --- The Lost Caverns of Ixalan (LCI) ---
+    ("lci", "68", "nonfoil", "Near Mint", "owned"),             # 10: Orazca Puzzle-Door
+    ("lci", "113", "nonfoil", "Near Mint", "owned"),            # 11: Preacher of the Schism
+
+    # --- Outlaws of Thunder Junction (OTJ) ---
+    ("otj", "178", "foil", "Near Mint", "owned"),               # 12: Reach for the Sky
+    ("otj", "90", "nonfoil", "Near Mint", "owned"),             # 13: Hollow Marauder
+    ("otj", "196", "nonfoil", "Near Mint", "owned"),            # 14: Bonny Pall
+]
+
+BOB_DEMO_DECKS = [
+    {
+        "name": "MH3 Picks",
+        "format": "modern",
+        "description": "Modern Horizons 3 favorites",
+        "cards_slice": slice(0, 5),
+        "zone": "mainboard",
+    },
+]
+
 FIXTURES_DIR = Path(__file__).resolve().parent.parent.parent / "tests" / "fixtures"
 
 # Demo ingest samples — cards identified by the agent, shown on the Recents page.
@@ -723,4 +762,77 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
     print(f"  Created {views_created} demo views")
     print(f"  Added {ingest_added} demo ingest samples")
 
+    return True
+
+
+def load_demo_data_bob(conn: sqlite3.Connection) -> bool:
+    """Load Bob's demo fixture data — a smaller, different collection.
+
+    Returns True if data was loaded, False if already present.
+    """
+    cursor = conn.execute(
+        "SELECT value FROM settings WHERE key = 'demo_loaded'"
+    )
+    row = cursor.fetchone()
+    if row is not None:
+        return False
+
+    collection_repo = CollectionRepository(conn)
+    ts = now_iso()
+
+    resolved = []
+    for i, (set_code, cn, finish, condition, status) in enumerate(BOB_DEMO_CARDS):
+        cursor = conn.execute(
+            "SELECT printing_id FROM printings WHERE set_code = ? AND collector_number = ?",
+            (set_code, cn),
+        )
+        row = cursor.fetchone()
+        if row:
+            resolved.append((i, row["printing_id"], finish, condition, status))
+
+    if not resolved:
+        print("  No cards could be resolved for Bob. Aborting.")
+        return False
+
+    added = 0
+    collection_id_by_card_idx = {}
+    for card_idx, printing_id, finish, condition, status in resolved:
+        entry = CollectionEntry(
+            id=None,
+            printing_id=printing_id,
+            finish=finish,
+            condition=condition,
+            status=status,
+            source="demo",
+            acquired_at=ts,
+        )
+        entry_id = collection_repo.add(entry)
+        collection_id_by_card_idx[card_idx] = entry_id
+        added += 1
+
+    # Create Bob's decks
+    deck_repo = DeckRepository(conn)
+    for deck_def in BOB_DEMO_DECKS:
+        deck = Deck(
+            id=None,
+            name=deck_def["name"],
+            description=deck_def.get("description"),
+            format=deck_def.get("format"),
+        )
+        deck_id = deck_repo.add(deck)
+        s = deck_def["cards_slice"]
+        card_ids = [
+            collection_id_by_card_idx[ci]
+            for ci in range(s.start, s.stop)
+            if ci in collection_id_by_card_idx
+        ]
+        if card_ids:
+            deck_repo.add_cards(deck_id, card_ids, zone=deck_def.get("zone", "mainboard"))
+
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES ('demo_loaded', ?)",
+        (ts,),
+    )
+    conn.commit()
+    print(f"  Bob: Added {added} collection entries, {len(BOB_DEMO_DECKS)} decks")
     return True

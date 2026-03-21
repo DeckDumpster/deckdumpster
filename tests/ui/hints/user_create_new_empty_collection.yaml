@@ -1,0 +1,13 @@
+start_page: /
+involves:
+  - "User switcher dropdown button in page header (#user-switcher-btn)"
+  - "User switcher menu with '+ New User' option"
+  - "Collection card count element (#col-count)"
+  - "API endpoints: /api/users (POST), /api/user/select (POST)"
+fixture_data:
+  new_user_name: "newuser"
+notes: >
+  1. Create the initial user via API to activate multi-user mode.
+  2. Set cookie to the new user and navigate to /collection.
+  3. Wait for collection to load and verify #col-count shows "0".
+  4. The user switcher button should show the new user's name.

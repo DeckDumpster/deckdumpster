@@ -1,0 +1,17 @@
+start_page: /collection
+involves:
+  - "User switcher dropdown button in page header (#user-switcher-btn)"
+  - "User switcher menu (#user-switcher-menu)"
+  - "Collection card count element (#col-count)"
+  - "API endpoints: /api/users, /api/user/select, /api/current-user"
+fixture_data:
+  default_user_cards: "43"
+  new_user_cards: "0"
+notes: >
+  1. First, create two users via API (POST /api/users with names "testuser-a" and "testuser-b")
+     to trigger multi-user migration. This also creates a "default" user with existing demo data.
+  2. Set the mtgc_user cookie to "default" and navigate to /collection.
+  3. Wait for collection to load and note that #col-count shows "43".
+  4. Switch cookie to "testuser-a" and navigate to /collection.
+  5. Wait for collection to load and note that #col-count shows "0".
+  6. This confirms different users see different collection data.

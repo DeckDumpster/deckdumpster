@@ -146,7 +146,62 @@ def _maybe_load_demo(args):
     if not args.demo and not args.wipe:
         return
 
-    conn = get_connection(args.db_path)
+    import os
+
+    from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS, init_user_db
+
+    db_path = args.db_path
+    db_dir = os.path.dirname(db_path)
+    users_dir = os.path.join(db_dir, "users")
+    shared_db = os.path.join(db_dir, "shared.sqlite")
+
+    # If shared.sqlite exists, set up multi-user demo with Alice and Bob
+    if os.path.exists(shared_db):
+        os.makedirs(users_dir, exist_ok=True)
+
+        def _open_user_db(name):
+            import sqlite3
+            user_db = os.path.join(users_dir, f"{name}.sqlite")
+            conn = sqlite3.connect(user_db)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("ATTACH DATABASE ? AS shared", (shared_db,))
+            for table in SHARED_TABLES:
+                conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{table}] AS SELECT * FROM shared.[{table}]")
+            for view in SHARED_VIEWS:
+                conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{view}] AS SELECT * FROM shared.[{view}]")
+            init_user_db(conn)
+            return conn
+
+        if args.wipe:
+            from mtg_collector.cli.demo_data import wipe_user_data
+            print("\n=== Wipe: clearing user data ===")
+            for name in ("alice", "bob"):
+                user_db = os.path.join(users_dir, f"{name}.sqlite")
+                if os.path.exists(user_db):
+                    conn = _open_user_db(name)
+                    wipe_user_data(conn)
+                    conn.close()
+            print("  Done.")
+
+        if args.demo:
+            from mtg_collector.cli.demo_data import load_demo_data, load_demo_data_bob
+            print("\n=== Demo data (multi-user) ===")
+            print("  NOTE: Demo data is for testing/staging only.")
+
+            conn = _open_user_db("alice")
+            loaded = load_demo_data(conn)
+            conn.close()
+            print(f"  Alice: {'loaded' if loaded else 'already loaded'}")
+
+            conn = _open_user_db("bob")
+            loaded = load_demo_data_bob(conn)
+            conn.close()
+            print(f"  Bob: {'loaded' if loaded else 'already loaded'}")
+        return
+
+    # Single-DB mode (no shared.sqlite)
+    conn = get_connection(db_path)
     init_db(conn)
 
     if args.wipe:

@@ -68,10 +68,17 @@ def _make_handler(db_path):
     from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = object.__new__(CrackPackHandler)
-    handler.db_path = db_path
+    handler._base_db_path = db_path
+    handler._shared_db_path = db_path
+    handler._users_dir = os.path.join(os.path.dirname(db_path), "users")
+    # Minimal headers mock for _get_current_user()
+    class _FakeHeaders(dict):
+        def get(self, key, default=""):
+            return super().get(key, default)
+    handler.headers = _FakeHeaders()
     handler._responses = []
 
-    def fake_send_json(obj, status=200):
+    def fake_send_json(obj, status=200, extra_headers=None):
         handler._responses.append((status, obj))
 
     handler._send_json = fake_send_json

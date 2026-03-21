@@ -4,6 +4,573 @@ import sqlite3
 
 SCHEMA_VERSION = 37
 
+# Schema versions for split-DB mode (shared + user DBs)
+SHARED_SCHEMA_VERSION = 1
+USER_SCHEMA_VERSION = 1
+
+# Tables that live in the shared DB (reference data).
+# Used by _get_conn() to create temp views when ATTACH-ing.
+SHARED_TABLES = [
+    "cards",
+    "sets",
+    "printings",
+    "prices",
+    "latest_prices",
+    "price_fetch_log",
+    "mtgjson_uuid_map",
+    "mtgjson_printings",
+    "mtgjson_booster_sheets",
+    "mtgjson_booster_configs",
+    "sealed_products",
+    "sealed_product_cards",
+    "sealed_prices",
+    "tcgplayer_groups",
+    "edhrec_recommendations",
+]
+
+# Views that live in the shared DB
+SHARED_VIEWS = [
+    "latest_sealed_prices",
+]
+
+SHARED_SCHEMA_SQL = """
+-- Abstract cards (oracle-level, cached from Scryfall)
+CREATE TABLE IF NOT EXISTS cards (
+    oracle_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type_line TEXT,
+    mana_cost TEXT,
+    cmc REAL,
+    oracle_text TEXT,
+    colors TEXT,
+    color_identity TEXT
+);
+
+-- Sets (cached from Scryfall)
+CREATE TABLE IF NOT EXISTS sets (
+    set_code TEXT PRIMARY KEY,
+    set_name TEXT NOT NULL,
+    set_type TEXT,
+    released_at TEXT,
+    digital INTEGER NOT NULL DEFAULT 0,
+    cards_fetched_at TEXT
+);
+
+-- Specific printings
+CREATE TABLE IF NOT EXISTS printings (
+    printing_id TEXT PRIMARY KEY,
+    oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+    set_code TEXT NOT NULL REFERENCES sets(set_code),
+    collector_number TEXT NOT NULL,
+    rarity TEXT,
+    frame_effects TEXT,
+    border_color TEXT,
+    full_art INTEGER,
+    promo INTEGER,
+    promo_types TEXT,
+    finishes TEXT,
+    artist TEXT,
+    image_uri TEXT,
+    raw_json TEXT,
+    UNIQUE(set_code, collector_number)
+);
+
+-- EDHREC recommendations
+CREATE TABLE IF NOT EXISTS edhrec_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commander_oracle_id TEXT NOT NULL,
+    card_oracle_id TEXT NOT NULL,
+    inclusion_rate REAL,
+    rank INTEGER,
+    synergy_score REAL,
+    fetched_at TEXT NOT NULL,
+    FOREIGN KEY (commander_oracle_id) REFERENCES cards(oracle_id),
+    FOREIGN KEY (card_oracle_id) REFERENCES cards(oracle_id),
+    UNIQUE(commander_oracle_id, card_oracle_id)
+);
+CREATE INDEX IF NOT EXISTS idx_edhrec_commander ON edhrec_recommendations(commander_oracle_id);
+
+-- MTGJSON UUID mapping
+CREATE TABLE IF NOT EXISTS mtgjson_uuid_map (
+    uuid TEXT PRIMARY KEY,
+    set_code TEXT NOT NULL,
+    collector_number TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_uuid_map_card ON mtgjson_uuid_map(set_code, collector_number);
+
+-- Price time series
+CREATE TABLE IF NOT EXISTS prices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    set_code TEXT NOT NULL,
+    collector_number TEXT NOT NULL,
+    source TEXT NOT NULL,
+    price_type TEXT NOT NULL,
+    price REAL NOT NULL,
+    observed_at TEXT NOT NULL,
+    UNIQUE(set_code, collector_number, source, price_type, observed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(observed_at);
+CREATE INDEX IF NOT EXISTS idx_prices_card ON prices(set_code, collector_number, source, price_type);
+
+-- Price fetch audit log
+CREATE TABLE IF NOT EXISTS price_fetch_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fetched_at TEXT NOT NULL,
+    source_file TEXT,
+    dates_imported TEXT,
+    uuid_total INTEGER,
+    uuid_mapped INTEGER,
+    uuid_unmapped INTEGER,
+    rows_inserted INTEGER
+);
+
+-- Latest prices (materialized)
+CREATE TABLE IF NOT EXISTS latest_prices (
+    set_code TEXT NOT NULL,
+    collector_number TEXT NOT NULL,
+    source TEXT NOT NULL,
+    price_type TEXT NOT NULL,
+    price REAL NOT NULL,
+    observed_at TEXT NOT NULL,
+    PRIMARY KEY (set_code, collector_number, source, price_type)
+);
+CREATE INDEX IF NOT EXISTS idx_latest_prices_card ON latest_prices(set_code, collector_number);
+
+-- MTGJSON card printings
+CREATE TABLE IF NOT EXISTS mtgjson_printings (
+    uuid            TEXT PRIMARY KEY,
+    printing_id     TEXT,
+    name            TEXT NOT NULL,
+    set_code        TEXT NOT NULL,
+    number          TEXT NOT NULL,
+    rarity          TEXT,
+    border_color    TEXT,
+    is_full_art     INTEGER DEFAULT 0,
+    frame_effects   TEXT,
+    ck_url          TEXT,
+    ck_url_foil     TEXT,
+    imported_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mtgjson_printing ON mtgjson_printings(printing_id);
+CREATE INDEX IF NOT EXISTS idx_mtgjson_set ON mtgjson_printings(set_code);
+
+-- MTGJSON booster sheet entries
+CREATE TABLE IF NOT EXISTS mtgjson_booster_sheets (
+    id          INTEGER PRIMARY KEY,
+    set_code    TEXT NOT NULL,
+    product     TEXT NOT NULL,
+    sheet_name  TEXT NOT NULL,
+    is_foil     INTEGER DEFAULT 0,
+    uuid        TEXT NOT NULL,
+    weight      INTEGER NOT NULL,
+    FOREIGN KEY (uuid) REFERENCES mtgjson_printings(uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_booster_sheet_lookup ON mtgjson_booster_sheets(set_code, product, sheet_name);
+
+-- MTGJSON booster variant configurations
+CREATE TABLE IF NOT EXISTS mtgjson_booster_configs (
+    id              INTEGER PRIMARY KEY,
+    set_code        TEXT NOT NULL,
+    product         TEXT NOT NULL,
+    variant_index   INTEGER NOT NULL,
+    variant_weight  INTEGER NOT NULL,
+    sheet_name      TEXT NOT NULL,
+    card_count      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_config_set_product ON mtgjson_booster_configs(set_code, product);
+
+-- Indexes for shared tables
+CREATE INDEX IF NOT EXISTS idx_printings_oracle ON printings(oracle_id);
+CREATE INDEX IF NOT EXISTS idx_printings_set ON printings(set_code);
+CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name);
+
+-- Sealed product reference data
+CREATE TABLE IF NOT EXISTS sealed_products (
+    uuid TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    set_code TEXT NOT NULL,
+    category TEXT NOT NULL,
+    subtype TEXT,
+    tcgplayer_product_id TEXT,
+    card_count INTEGER,
+    product_size INTEGER,
+    release_date TEXT,
+    purchase_url_tcgplayer TEXT,
+    purchase_url_cardkingdom TEXT,
+    contents_json TEXT,
+    imported_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'mtgjson',
+    FOREIGN KEY (set_code) REFERENCES sets(set_code)
+);
+CREATE INDEX IF NOT EXISTS idx_sealed_products_set ON sealed_products(set_code);
+CREATE INDEX IF NOT EXISTS idx_sealed_products_tcg ON sealed_products(tcgplayer_product_id);
+CREATE INDEX IF NOT EXISTS idx_sealed_products_category ON sealed_products(category);
+
+-- Pre-resolved card contents for sealed products
+CREATE TABLE IF NOT EXISTS sealed_product_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sealed_product_uuid TEXT NOT NULL REFERENCES sealed_products(uuid),
+    mtgjson_uuid TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    is_foil INTEGER NOT NULL DEFAULT 0,
+    zone TEXT,
+    source_type TEXT NOT NULL,
+    source_name TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_spc_product ON sealed_product_cards(sealed_product_uuid);
+
+-- Sealed product prices
+CREATE TABLE IF NOT EXISTS sealed_prices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tcgplayer_product_id TEXT NOT NULL,
+    low_price REAL,
+    mid_price REAL,
+    high_price REAL,
+    market_price REAL,
+    direct_low_price REAL,
+    observed_at TEXT NOT NULL,
+    UNIQUE(tcgplayer_product_id, observed_at)
+);
+CREATE INDEX IF NOT EXISTS idx_sealed_prices_product ON sealed_prices(tcgplayer_product_id);
+CREATE INDEX IF NOT EXISTS idx_sealed_prices_date ON sealed_prices(observed_at);
+
+-- TCGCSV group mapping
+CREATE TABLE IF NOT EXISTS tcgplayer_groups (
+    group_id INTEGER PRIMARY KEY,
+    set_code TEXT,
+    name TEXT NOT NULL,
+    abbreviation TEXT,
+    published_on TEXT,
+    fetched_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tcgplayer_groups_abbr ON tcgplayer_groups(abbreviation);
+
+-- Latest sealed prices view
+CREATE VIEW IF NOT EXISTS latest_sealed_prices AS
+SELECT tcgplayer_product_id, low_price, mid_price, high_price,
+       market_price, direct_low_price, observed_at
+FROM sealed_prices
+WHERE observed_at = (SELECT MAX(observed_at) FROM sealed_prices);
+
+-- Schema version tracking (shared)
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+"""
+
+USER_SCHEMA_SQL = """
+-- Orders
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_number TEXT,
+    source TEXT,
+    seller_name TEXT,
+    order_date TEXT,
+    subtotal REAL,
+    shipping REAL,
+    tax REAL,
+    total REAL,
+    shipping_status TEXT,
+    estimated_delivery TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
+
+-- Decks
+CREATE TABLE IF NOT EXISTS decks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    format TEXT,
+    is_precon INTEGER NOT NULL DEFAULT 0,
+    sleeve_color TEXT,
+    deck_box TEXT,
+    storage_location TEXT,
+    origin_set_code TEXT,
+    origin_theme TEXT,
+    origin_variation INTEGER,
+    hypothetical INTEGER NOT NULL DEFAULT 0,
+    commander_oracle_id TEXT,
+    commander_printing_id TEXT,
+    plan TEXT,
+    sub_plans TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Expected card lists for precon/Jumpstart decks
+CREATE TABLE IF NOT EXISTS deck_expected_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+    printing_id TEXT NOT NULL,
+    zone TEXT NOT NULL DEFAULT 'mainboard',
+    quantity INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(deck_id, printing_id, zone)
+);
+CREATE INDEX IF NOT EXISTS idx_deck_expected_deck ON deck_expected_cards(deck_id);
+
+-- Binders
+CREATE TABLE IF NOT EXISTS binders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    color TEXT,
+    binder_type TEXT,
+    storage_location TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Collection views (saved filter criteria)
+CREATE TABLE IF NOT EXISTS collection_views (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    filters_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- User's collection
+CREATE TABLE IF NOT EXISTS collection (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    printing_id TEXT NOT NULL,
+    finish TEXT NOT NULL CHECK(finish IN ('nonfoil', 'foil', 'etched')),
+    condition TEXT NOT NULL DEFAULT 'Near Mint'
+        CHECK(condition IN ('Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged')),
+    language TEXT NOT NULL DEFAULT 'English',
+    purchase_price REAL,
+    acquired_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_image TEXT,
+    notes TEXT,
+    tags TEXT,
+    tradelist INTEGER DEFAULT 0,
+    is_alter INTEGER DEFAULT 0,
+    proxy INTEGER DEFAULT 0,
+    signed INTEGER DEFAULT 0,
+    misprint INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'owned'
+        CHECK(status IN ('owned', 'ordered', 'listed', 'sold', 'removed', 'traded', 'gifted', 'lost')),
+    sale_price REAL,
+    order_id INTEGER REFERENCES orders(id),
+    deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+    binder_id INTEGER REFERENCES binders(id) ON DELETE SET NULL,
+    deck_zone TEXT CHECK(deck_zone IN ('mainboard', 'sideboard', 'commander') OR deck_zone IS NULL),
+    batch_id INTEGER REFERENCES batches(id)
+);
+CREATE INDEX IF NOT EXISTS idx_collection_printing ON collection(printing_id);
+CREATE INDEX IF NOT EXISTS idx_collection_deck ON collection(deck_id);
+CREATE INDEX IF NOT EXISTS idx_collection_binder ON collection(binder_id);
+CREATE INDEX IF NOT EXISTS idx_collection_batch ON collection(batch_id);
+CREATE INDEX IF NOT EXISTS idx_collection_source ON collection(source);
+CREATE INDEX IF NOT EXISTS idx_collection_status ON collection(status);
+
+-- Status audit log
+CREATE TABLE IF NOT EXISTS status_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
+    from_status TEXT,
+    to_status TEXT NOT NULL,
+    changed_at TEXT NOT NULL,
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_status_log_collection ON status_log(collection_id);
+
+-- Movement audit log
+CREATE TABLE IF NOT EXISTS movement_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
+    from_deck_id INTEGER REFERENCES decks(id),
+    to_deck_id INTEGER REFERENCES decks(id),
+    from_binder_id INTEGER REFERENCES binders(id),
+    to_binder_id INTEGER REFERENCES binders(id),
+    from_zone TEXT,
+    to_zone TEXT,
+    changed_at TEXT NOT NULL,
+    note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_movement_log_collection ON movement_log(collection_id);
+
+-- Wishlist
+CREATE TABLE IF NOT EXISTS wishlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    oracle_id TEXT NOT NULL,
+    printing_id TEXT,
+    max_price REAL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    added_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    fulfilled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wishlist_oracle ON wishlist(oracle_id);
+CREATE INDEX IF NOT EXISTS idx_wishlist_printing ON wishlist(printing_id);
+
+-- Ingest cache
+CREATE TABLE IF NOT EXISTS ingest_cache (
+    image_md5 TEXT PRIMARY KEY,
+    image_path TEXT NOT NULL,
+    ocr_result TEXT NOT NULL,
+    claude_result TEXT,
+    agent_trace TEXT,
+    api_usage TEXT,
+    created_at TEXT NOT NULL
+);
+
+-- Batches
+CREATE TABLE IF NOT EXISTS batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_uuid TEXT NOT NULL UNIQUE,
+    name TEXT,
+    deck_id INTEGER REFERENCES decks(id),
+    deck_zone TEXT,
+    card_count INTEGER NOT NULL DEFAULT 0,
+    batch_type TEXT NOT NULL DEFAULT 'corner',
+    product_type TEXT,
+    set_code TEXT,
+    notes TEXT,
+    order_id INTEGER REFERENCES orders(id),
+    created_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_batches_type ON batches(batch_type);
+CREATE INDEX IF NOT EXISTS idx_batches_order ON batches(order_id);
+
+-- Ingest lineage
+CREATE TABLE IF NOT EXISTS ingest_lineage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL REFERENCES collection(id),
+    image_md5 TEXT NOT NULL,
+    image_path TEXT NOT NULL,
+    card_index INTEGER NOT NULL,
+    batch_id INTEGER REFERENCES batches(id),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lineage_md5 ON ingest_lineage(image_md5);
+CREATE INDEX IF NOT EXISTS idx_lineage_collection ON ingest_lineage(collection_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_batch ON ingest_lineage(batch_id);
+
+-- Ingest images
+CREATE TABLE IF NOT EXISTS ingest_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    md5 TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'READY_FOR_OCR'
+        CHECK(status IN ('READY_FOR_OCR','PROCESSING','READY_FOR_DISAMBIGUATION','DONE','ERROR','INGESTED')),
+    mode TEXT,
+    set_hint TEXT,
+    ocr_result TEXT,
+    claude_result TEXT,
+    agent_trace TEXT,
+    api_usage TEXT,
+    scryfall_matches TEXT,
+    crops TEXT,
+    disambiguated TEXT,
+    names_data TEXT,
+    names_disambiguated TEXT,
+    user_card_edits TEXT,
+    confirmed_finishes TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ingest_images_status ON ingest_images(status);
+
+-- Global settings
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- Sealed collection
+CREATE TABLE IF NOT EXISTS sealed_collection (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sealed_product_uuid TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    condition TEXT DEFAULT 'Near Mint',
+    purchase_price REAL,
+    purchase_date TEXT,
+    source TEXT,
+    seller_name TEXT,
+    notes TEXT,
+    status TEXT NOT NULL DEFAULT 'owned'
+        CHECK (status IN ('owned', 'listed', 'sold', 'traded', 'gifted', 'opened')),
+    sale_price REAL,
+    added_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sealed_collection_product ON sealed_collection(sealed_product_uuid);
+CREATE INDEX IF NOT EXISTS idx_sealed_collection_status ON sealed_collection(status);
+
+-- Schema version tracking (user)
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+
+-- Denormalized sealed collection view
+CREATE VIEW IF NOT EXISTS sealed_collection_view AS
+SELECT
+    sc.id, sc.quantity, sc.condition, sc.purchase_price, sc.purchase_date,
+    sc.source, sc.seller_name, sc.notes, sc.status, sc.sale_price, sc.added_at,
+    sp.uuid, sp.name, sp.set_code, sp.category, sp.subtype,
+    sp.tcgplayer_product_id, sp.card_count, sp.release_date,
+    sp.purchase_url_tcgplayer, sp.purchase_url_cardkingdom,
+    s.set_name, s.set_type, s.released_at AS set_released_at
+FROM sealed_collection sc
+JOIN sealed_products sp ON sc.sealed_product_uuid = sp.uuid
+LEFT JOIN sets s ON sp.set_code = s.set_code;
+
+-- Denormalized collection view
+CREATE VIEW IF NOT EXISTS collection_view AS
+SELECT
+    c.id,
+    card.name,
+    s.set_name,
+    p.set_code,
+    p.collector_number,
+    p.rarity,
+    p.promo,
+    c.finish,
+    c.condition,
+    c.language,
+    card.type_line,
+    card.mana_cost,
+    card.cmc,
+    card.colors,
+    card.color_identity,
+    p.artist,
+    c.purchase_price,
+    c.acquired_at,
+    c.source,
+    c.source_image,
+    c.notes,
+    c.tags,
+    c.tradelist,
+    c.status,
+    c.sale_price,
+    c.printing_id,
+    p.oracle_id,
+    c.order_id,
+    c.deck_id,
+    c.deck_zone,
+    c.binder_id,
+    c.batch_id,
+    d.name AS deck_name,
+    b.name AS binder_name,
+    bat.name AS batch_name
+FROM collection c
+JOIN printings p ON c.printing_id = p.printing_id
+JOIN cards card ON p.oracle_id = card.oracle_id
+JOIN sets s ON p.set_code = s.set_code
+LEFT JOIN decks d ON c.deck_id = d.id
+LEFT JOIN binders b ON c.binder_id = b.id
+LEFT JOIN batches bat ON c.batch_id = bat.id;
+"""
+
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
 CREATE TABLE IF NOT EXISTS cards (
@@ -676,6 +1243,65 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
     )
     conn.commit()
 
+    return True
+
+
+def init_shared_db(conn: sqlite3.Connection) -> bool:
+    """Initialize or migrate the shared (reference data) database schema.
+
+    For use in split-DB mode where shared.sqlite holds reference data.
+    """
+    from mtg_collector.utils import now_iso
+
+    current = get_current_version(conn)
+    if current >= SHARED_SCHEMA_VERSION:
+        return False
+
+    conn.executescript(SHARED_SCHEMA_SQL)
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
+        (SHARED_SCHEMA_VERSION, now_iso()),
+    )
+    conn.commit()
+    return True
+
+
+def _get_main_schema_version(conn: sqlite3.Connection) -> int:
+    """Get schema version from main DB only (not attached DBs).
+
+    When a shared DB is ATTACHed, unqualified 'schema_version' may resolve
+    to the shared DB's table. This explicitly checks main.schema_version.
+    """
+    try:
+        cursor = conn.execute(
+            "SELECT MAX(version) FROM main.schema_version"
+        )
+        row = cursor.fetchone()
+        return row[0] if row[0] is not None else 0
+    except sqlite3.OperationalError:
+        return 0
+
+
+def init_user_db(conn: sqlite3.Connection) -> bool:
+    """Initialize or migrate a per-user database schema.
+
+    For use in split-DB mode where each user gets their own DB.
+    The user DB is the main connection; shared tables are available
+    via temp views (set up by the caller).
+    """
+    from mtg_collector.utils import now_iso
+
+    current = _get_main_schema_version(conn)
+    if current >= USER_SCHEMA_VERSION:
+        return False
+
+    conn.executescript(USER_SCHEMA_SQL)
+    _seed_default_settings(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO main.schema_version (version, applied_at) VALUES (?, ?)",
+        (USER_SCHEMA_VERSION, now_iso()),
+    )
+    conn.commit()
     return True
 
 
