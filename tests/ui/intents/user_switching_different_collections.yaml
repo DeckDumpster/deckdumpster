@@ -1,14 +1,15 @@
-# Scenario: User switching shows different collections
+# Scenario: Multi-user collection isolation with write operations
 #
 # Related:
-#   pull_requests: []
+#   pull_requests: [229]
 #
 # Prerequisites:
-#   Multi-user mode must be activated by creating users via the API.
+#   Multi-user mode activated by creating users via the API.
 #   Default user has demo data (43 cards), new users start empty.
 
 description: >
-  When I create two users via the user switcher and switch between them,
-  I see different collection data. The default user (migrated from the
-  original single-user DB) has cards, while a newly created user has
-  an empty collection. Switching users changes which collection is displayed.
+  When I switch between users, each user's collection, decks, and other
+  data are fully isolated. Adding cards to one user doesn't affect another.
+  Deleting a card from one user doesn't remove it from others. Creating a
+  deck for one user doesn't leak to another. Switching back to the original
+  user shows the same data as before (minus any explicit changes).

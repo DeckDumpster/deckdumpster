@@ -1,17 +1,21 @@
 start_page: /collection
 involves:
-  - "User switcher dropdown button in page header (#user-switcher-btn)"
-  - "User switcher menu (#user-switcher-menu)"
-  - "Collection card count element (#col-count)"
-  - "API endpoints: /api/users, /api/user/select, /api/current-user"
+  - "User switcher dropdown (#user-switcher-btn)"
+  - "Collection status text (#status) showing entry/card counts"
+  - "POST /api/collection to add cards"
+  - "POST /api/collection/bulk-delete to remove cards"
+  - "POST /api/decks to create decks"
+  - "GET /api/collection, /api/decks to verify isolation"
 fixture_data:
   default_user_cards: "43"
-  new_user_cards: "0"
+  card_set: "fdn"
+  card_cn: "132"
 notes: >
-  1. First, create two users via API (POST /api/users with names "testuser-a" and "testuser-b")
-     to trigger multi-user migration. This also creates a "default" user with existing demo data.
-  2. Set the mtgc_user cookie to "default" and navigate to /collection.
-  3. Wait for collection to load and note that #col-count shows "43".
-  4. Switch cookie to "testuser-a" and navigate to /collection.
-  5. Wait for collection to load and note that #col-count shows "0".
-  6. This confirms different users see different collection data.
+  1. Create alice and bob users via API.
+  2. Verify default has demo data, alice/bob are empty.
+  3. Add 2 cards to alice via POST /api/collection.
+  4. Switch back to default, verify status text unchanged.
+  5. Delete a card from default, verify count decremented.
+  6. Switch to alice, verify her 2 cards untouched.
+  7. Verify bob still empty.
+  8. Create deck for alice, verify bob can't see it.
