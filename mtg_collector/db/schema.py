@@ -4,6 +4,15 @@ import sqlite3
 
 SCHEMA_VERSION = 37
 
+# Tables whose data can be served from an ATTACHed shared DB via temp views.
+SHARED_TABLES = [
+    "cards", "sets", "printings", "prices", "price_fetch_log",
+    "mtgjson_uuid_map", "mtgjson_printings", "mtgjson_booster_sheets",
+    "mtgjson_booster_configs", "sealed_products", "sealed_product_cards",
+    "sealed_prices", "tcgplayer_groups", "edhrec_recommendations",
+]
+SHARED_VIEWS = ["latest_prices", "latest_sealed_prices"]
+
 SCHEMA_SQL = """
 -- Abstract cards (oracle-level, cached from Scryfall)
 CREATE TABLE IF NOT EXISTS cards (
