@@ -110,6 +110,23 @@ Generate a Scryfall search URL showing all cards (using owned printings). Add `-
 ### jumpstart-insert-deck.py `--color C --theme "Theme" --description "..." "Card1" "Card2" ...`
 Insert a finished pack as a hypothetical deck.
 
+### jumpstart-odds.py `<group_size> [group_size ...] [--need N ...] [--by N] [--label L ...]`
+Calculate probability of drawing specific card combinations in a Jumpstart game. Pure math — no server needed. Uses simulation (200k trials).
+
+```bash
+# Combo check: need Dark Ritual + Gwenom + a land in opening hand
+jumpstart-odds.py 1 1 16 --by 8 --label "Dark Ritual" "Gwenom" "lands"
+
+# Density check: need 5 goblins in first 20 cards from pool of 9
+jumpstart-odds.py 9 --need 5 --by 20 --label "goblins"
+
+# Flags:
+#   --need N [N ...]   How many from each group (default: 1 each)
+#   --by N             Cards drawn (default: 8 = opening hand + first draw)
+#   --deck N           Deck size (default: 40)
+#   --label L [L ...]  Optional names for each group
+```
+
 ## Building a Pack (Step by Step)
 
 ### Step 1: User picks color + theme + rare category
@@ -181,6 +198,8 @@ After all slots are filled, present the complete deck list with:
 - The identity card highlighted
 - Overall theme coherence assessment
 - Mana curve summary
+
+**Synergy reality check:** If you've identified cards that are good together, evaluate whether they actually come together often enough to matter. Use `jumpstart-odds.py` to check: (1) combo probability — how often do you have all the pieces? and (2) tribal/threshold density — how often do you hit the critical mass? A combo that happens in <15% of games is a nice bonus, not a build-around. If a card was included primarily for its synergy with one other specific card, and the odds of having both are low, consider whether a card that's independently stronger would be better.
 
 Generate a Scryfall URL so the user can visually verify:
 ```bash
