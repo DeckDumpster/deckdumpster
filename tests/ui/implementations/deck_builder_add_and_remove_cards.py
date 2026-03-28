@@ -1,7 +1,7 @@
 """
 Hand-written implementation for deck_builder_add_and_remove_cards.
 
-Creates a non-hypothetical deck, adds a card via the add-cards picker,
+Creates a constructed deck, adds a card via the add-cards picker,
 verifies it appears in the deck, then removes it.
 """
 

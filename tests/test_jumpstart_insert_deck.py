@@ -165,7 +165,7 @@ def test_integrity_error_does_not_lock_db(db_path):
     # Pre-seed a deck_expected_cards row that will collide
     conn = sqlite3.connect(db_path)
     conn.execute(
-        """INSERT INTO decks (name, format, hypothetical, is_precon, created_at, updated_at)
+        """INSERT INTO decks (name, format, state_id, is_precon, created_at, updated_at)
            VALUES ('Collider (Jumpstart)', 'jumpstart', 1, 0, '2025-01-01', '2025-01-01')""")
     collider_deck_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     conn.execute(

@@ -7,6 +7,6 @@
 description: >
   When I navigate to /deck-builder, I see a centered create form with
   a "New Commander Deck" heading, a commander search input with placeholder
-  "Search your collection...", physical/hypothetical radio buttons with
-  physical selected by default, and a disabled Create Deck button. The
+  "Search your collection...", a deck state dropdown (Idea/Ready/Constructed)
+  defaulting to Idea, and a disabled Create Deck button. The
   site header includes a "Build" nav link.

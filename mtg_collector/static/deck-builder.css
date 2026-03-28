@@ -156,13 +156,14 @@
   color: var(--text-secondary);
 }
 
-.deck-header .hypothetical-badge {
-  background: #5c4d8a;
+.deck-header .state-badge {
   padding: 2px 8px;
   border-radius: 12px;
   font-size: 0.75rem;
-  color: #d4c8f0;
 }
+.deck-header .state-idea { background: #5c4d8a; color: #d4c8f0; }
+.deck-header .state-ready { background: #2980b9; color: #d4e6f1; }
+.deck-header .state-constructed { background: #27ae60; color: #d5f5e3; }
 
 .deck-header .header-actions {
   margin-left: auto;

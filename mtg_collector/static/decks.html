@@ -123,7 +123,9 @@ main { padding: 24px; }
 }
 
 .deck-card .meta .badge.precon { background: #8e44ad; }
-.deck-card .meta .badge.hypothetical { background: #5c4d8a; }
+.deck-card .meta .badge.state-idea { background: #5c4d8a; }
+.deck-card .meta .badge.state-ready { background: #2980b9; }
+.deck-card .meta .badge.state-constructed { background: #27ae60; }
 
 .deck-card .stats {
   margin-top: 12px;
@@ -383,6 +385,12 @@ main { padding: 24px; }
 <header>
   <h1><a href="/">MTG</a> / Decks</h1>
   <div class="controls" id="list-controls">
+    <select id="status-filter" onchange="renderDeckList()">
+      <option value="">All states</option>
+      <option value="idea">Idea</option>
+      <option value="ready">Ready</option>
+      <option value="constructed">Constructed</option>
+    </select>
     <button onclick="showCreateModal()">New Deck</button>
   </div>
   <div class="controls" id="detail-controls" style="display:none">
@@ -472,6 +480,14 @@ main { padding: 24px; }
     <div class="form-group">
       <label>Description</label>
       <textarea id="f-description" rows="2"></textarea>
+    </div>
+    <div class="form-group">
+      <label>State</label>
+      <select id="f-deck-state">
+        <option value="idea">Idea</option>
+        <option value="ready">Ready</option>
+        <option value="constructed">Constructed</option>
+      </select>
     </div>
     <div class="form-group">
       <label><input type="checkbox" id="f-precon" onchange="togglePreconFields()"> Preconstructed deck</label>
@@ -572,68 +588,105 @@ async function loadDecks() {
   renderDeckList();
 }
 
+const STATE_LABELS = {
+  'idea': 'Idea',
+  'ready': 'Ready',
+  'constructed': 'Constructed',
+};
+
+const STATE_ORDER = ['idea', 'ready', 'constructed'];
+
 function renderDeckList() {
   const grid = document.getElementById('deck-grid');
   const empty = document.getElementById('empty-state');
+  const statusFilter = document.getElementById('status-filter').value;
 
-  if (decks.length === 0) {
+  let filtered = decks;
+  if (statusFilter) {
+    filtered = decks.filter(d => (d.state || 'idea') === statusFilter);
+  }
+
+  if (filtered.length === 0) {
     grid.innerHTML = '';
     empty.style.display = '';
+    empty.textContent = statusFilter
+      ? `No ${STATE_LABELS[statusFilter].toLowerCase()} decks.`
+      : 'No decks yet. Click "New Deck" to create one.';
     return;
   }
   empty.style.display = 'none';
 
-  // Group decks by format
-  const groups = {};
-  const formatOrder = ['commander', 'jumpstart', null];
+  // Group by status, then by format within each status
   const formatLabels = {
     'commander': 'Commander',
     'jumpstart': 'Jumpstart',
   };
+  const formatOrder = ['commander', 'jumpstart', null];
 
-  for (const d of decks) {
-    const fmt = d.format || null;
-    if (!groups[fmt]) groups[fmt] = [];
-    groups[fmt].push(d);
+  function sortFormats(keys) {
+    return keys.sort((a, b) => {
+      const ai = formatOrder.indexOf(a === 'null' ? null : a);
+      const bi = formatOrder.indexOf(b === 'null' ? null : b);
+      const aIdx = ai >= 0 ? ai : (a ? formatOrder.length - 0.5 : 999);
+      const bIdx = bi >= 0 ? bi : (b ? formatOrder.length - 0.5 : 999);
+      if (aIdx !== bIdx) return aIdx - bIdx;
+      return (a || '').localeCompare(b || '');
+    });
   }
 
-  // Sort: known formats first in order, then remaining alphabetically, then null last
-  const sortedKeys = Object.keys(groups).sort((a, b) => {
-    const ai = formatOrder.indexOf(a === 'null' ? null : a);
-    const bi = formatOrder.indexOf(b === 'null' ? null : b);
-    const aIdx = ai >= 0 ? ai : (a ? formatOrder.length - 0.5 : 999);
-    const bIdx = bi >= 0 ? bi : (b ? formatOrder.length - 0.5 : 999);
-    if (aIdx !== bIdx) return aIdx - bIdx;
-    return (a || '').localeCompare(b || '');
-  });
+  // Group: state → format → decks
+  const byState = {};
+  for (const d of filtered) {
+    const st = d.state || 'idea';
+    if (!byState[st]) byState[st] = {};
+    const fmt = d.format || null;
+    if (!byState[st][fmt]) byState[st][fmt] = [];
+    byState[st][fmt].push(d);
+  }
 
   let html = '';
-  for (const key of sortedKeys) {
-    const groupDecks = groups[key];
-    const label = key && key !== 'null' ? (formatLabels[key] || key.charAt(0).toUpperCase() + key.slice(1)) : 'Other';
+  for (const state of STATE_ORDER) {
+    if (!byState[state]) continue;
+    const fmtGroups = byState[state];
+    const stateCount = Object.values(fmtGroups).reduce((s, arr) => s + arr.length, 0);
+
     html += `<div class="format-section">
-      <h2 class="format-header">${esc(label)} <span class="format-count">(${groupDecks.length})</span></h2>
-      <div class="deck-grid">`;
-    html += groupDecks.map(d => renderDeckCard(d)).join('');
-    html += `</div></div>`;
+      <h2 class="format-header">${esc(STATE_LABELS[state])} <span class="format-count">(${stateCount})</span></h2>`;
+
+    const fmtKeys = sortFormats(Object.keys(fmtGroups));
+    for (const fk of fmtKeys) {
+      const groupDecks = fmtGroups[fk];
+      const fmtLabel = fk && fk !== 'null' ? (formatLabels[fk] || fk.charAt(0).toUpperCase() + fk.slice(1)) : 'Other';
+      if (fmtKeys.length > 1 || (fk && fk !== 'null')) {
+        html += `<h3 style="color:#888;font-size:0.9rem;margin:12px 0 4px;padding-left:4px">${esc(fmtLabel)}</h3>`;
+      }
+      html += `<div class="deck-grid">`;
+      html += groupDecks.map(d => renderDeckCard(d)).join('');
+      html += `</div>`;
+    }
+    html += `</div>`;
   }
   grid.innerHTML = html;
 }
 
 function renderDeckCard(d) {
+  const st = d.state || 'idea';
+  const isVirtual = st !== 'constructed';
+  const cardCount = isVirtual && d.card_count === 0 && d.expected_card_count ? d.expected_card_count : d.card_count;
   return `
     <div class="deck-card">
       <h3><a href="/decks/${d.id}">${esc(d.name)}</a></h3>
       <div class="meta">
         ${d.deck_colors ? `<span class="deck-mana">${renderDeckColors(d.deck_colors)}</span>` : ''}
         ${d.is_precon ? '<span><span class="badge precon">Precon</span></span>' : ''}
-        ${d.hypothetical ? '<span><span class="badge hypothetical">Hypothetical</span></span>' : ''}
+        <span><span class="badge state-${st}">${esc(STATE_LABELS[st] || st)}</span></span>
+        ${d.format ? `<span><span class="badge">${esc(d.format)}</span></span>` : ''}
         ${d.storage_location ? `<span>${esc(d.storage_location)}</span>` : ''}
         ${d.plan ? `<span class="deck-plan">${esc(d.plan)}</span>` : ''}
         ${!d.plan && d.description ? `<span>${esc(d.description)}</span>` : ''}
       </div>
       <div class="stats">
-        <span>${d.hypothetical && d.card_count === 0 && d.expected_card_count ? d.expected_card_count : d.card_count} cards</span>
+        <span>${cardCount} cards</span>
         ${d.total_value ? `<span>$${Number(d.total_value).toFixed(2)}</span>` : ''}
       </div>
       <div class="deck-links">
@@ -672,6 +725,7 @@ function renderDeckDetail() {
   document.getElementById('deck-name').textContent = d.name;
   const meta = [];
   if (d.format) meta.push(`<span class="label">Format</span><span>${esc(d.format)}</span>`);
+  if (d.state) meta.push(`<span class="label">State</span><span>${esc(STATE_LABELS[d.state] || d.state)}</span>`);
   if (d.is_precon) meta.push(`<span class="label">Type</span><span>Preconstructed</span>`);
   if (d.origin_set_code) meta.push(`<span class="label">Set</span><span>${esc(d.origin_set_code.toUpperCase())}</span>`);
   if (d.origin_theme) meta.push(`<span class="label">Theme</span><span>${esc(d.origin_theme)}</span>`);
@@ -750,6 +804,7 @@ function showCreateModal() {
   document.getElementById('f-name').value = '';
   document.getElementById('f-format').value = '';
   document.getElementById('f-description').value = '';
+  document.getElementById('f-deck-status').value = 'under_construction';
   document.getElementById('f-precon').checked = false;
   document.getElementById('f-origin-set').value = '';
   document.getElementById('f-origin-theme').value = '';
@@ -768,6 +823,7 @@ function showEditModal() {
   document.getElementById('f-name').value = currentDeck.name || '';
   document.getElementById('f-format').value = currentDeck.format || '';
   document.getElementById('f-description').value = currentDeck.description || '';
+  document.getElementById('f-deck-state').value = currentDeck.state || 'idea';
   document.getElementById('f-precon').checked = !!currentDeck.is_precon;
   document.getElementById('f-origin-set').value = currentDeck.origin_set_code || '';
   document.getElementById('f-origin-theme').value = currentDeck.origin_theme || '';
@@ -784,6 +840,7 @@ async function saveDeck() {
     name: document.getElementById('f-name').value.trim(),
     format: document.getElementById('f-format').value || null,
     description: document.getElementById('f-description').value.trim() || null,
+    state: document.getElementById('f-deck-state').value,
     is_precon: document.getElementById('f-precon').checked,
     sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
     deck_box: document.getElementById('f-deckbox').value.trim() || null,

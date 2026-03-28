@@ -1905,13 +1905,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             sql_params.append(filter_date_max)
 
         if filter_deck_id and not include_unowned:
-            where_clauses.append("c.deck_id = ?")
+            where_clauses.append("dc.deck_id = ?")
             sql_params.append(int(filter_deck_id))
         if filter_binder_id and not include_unowned:
             where_clauses.append("c.binder_id = ?")
             sql_params.append(int(filter_binder_id))
         if filter_unassigned and not include_unowned:
-            where_clauses.append("c.deck_id IS NULL AND c.binder_id IS NULL")
+            where_clauses.append("dc.id IS NULL AND c.binder_id IS NULL")
 
         where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
 
@@ -2044,7 +2044,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     o.order_number as order_number,
                     o.order_date as order_date,
                     c.purchase_price,
-                    c.deck_id, c.deck_zone, c.binder_id,
+                    dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
                     b.name as binder_name,
                     ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at as ingest_lineage_raw
@@ -2053,7 +2053,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 LEFT JOIN orders o ON c.order_id = o.id
-                LEFT JOIN decks d ON c.deck_id = d.id
+                LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+                LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                 LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
@@ -2081,7 +2082,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     o.order_number as order_number,
                     o.order_date as order_date,
                     c.purchase_price,
-                    c.deck_id, c.deck_zone, c.binder_id,
+                    dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
                     b.name as binder_name,
                     GROUP_CONCAT(DISTINCT ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at) as ingest_lineage_raw
@@ -2090,7 +2091,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 LEFT JOIN orders o ON c.order_id = o.id
-                LEFT JOIN decks d ON c.deck_id = d.id
+                LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+                LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                 LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
@@ -5025,6 +5027,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         self._send_json(deck)
 
+    @staticmethod
+    def _resolve_state_id(state_name: str) -> int:
+        from mtg_collector.db.models import DECK_STATE_IDEA, STATE_NAME_TO_ID
+        return STATE_NAME_TO_ID.get(state_name, DECK_STATE_IDEA)
+
     def _api_deck_create(self, data: dict):
         name = data.get("name")
         if not name:
@@ -5044,6 +5051,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             origin_set_code=data.get("origin_set_code"),
             origin_theme=data.get("origin_theme"),
             origin_variation=origin_var,
+            state_id=self._resolve_state_id(data.get("state", "idea")),
         )
         deck_id = repo.add(deck)
         conn.commit()
@@ -5059,6 +5067,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             conn.close()
             self._send_json({"error": "Deck not found"}, 404)
             return
+        if "state" in data:
+            data["state_id"] = self._resolve_state_id(data.pop("state"))
         repo.update(deck_id, data)
         conn.commit()
         result = repo.get(deck_id)
@@ -5083,12 +5093,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         repo = DeckRepository(conn)
         zone = params.get("zone", [None])[0]
         cards = repo.get_cards(deck_id, zone=zone)
-
-        # For hypothetical decks with no collection entries, return expected cards
-        if not cards:
-            deck = repo.get(deck_id)
-            if deck and deck.get("hypothetical"):
-                cards = repo.get_expected_cards_as_cards(deck_id)
 
         for card in cards:
             card["layout"] = card.get("layout") or "normal"
@@ -5275,7 +5279,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True, "count": count, "cards": result})
 
     def _api_deck_expected_add(self, deck_id: int, data: dict):
-        """Add cards to a hypothetical deck's expected list by printing_id."""
+        """Add cards to an idea/ready deck's expected list by printing_id."""
         printing_ids = data.get("printing_ids", [])
         zone = data.get("zone", "mainboard")
         if not printing_ids:
@@ -5289,13 +5293,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     "VALUES (?, ?, ?, 1)",
                     (deck_id, pid, zone),
                 )
+                conn.execute(
+                    "INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity) "
+                    "VALUES (?, ?, NULL, ?, 1)",
+                    (deck_id, pid, zone),
+                )
             conn.commit()
         finally:
             conn.close()
         self._send_json({"ok": True, "count": len(printing_ids)})
 
     def _api_deck_expected_remove(self, deck_id: int, data: dict):
-        """Remove a card from a hypothetical deck's expected list by printing_id."""
+        """Remove a card from an idea/ready deck's expected list by printing_id."""
         printing_id = data.get("printing_id")
         if not printing_id:
             self._send_json({"error": "printing_id is required"}, 400)
@@ -5304,6 +5313,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         try:
             conn.execute(
                 "DELETE FROM deck_expected_cards WHERE deck_id = ? AND printing_id = ?",
+                (deck_id, printing_id),
+            )
+            conn.execute(
+                "DELETE FROM deck_cards WHERE deck_id = ? AND printing_id = ? AND collection_id IS NULL",
                 (deck_id, printing_id),
             )
             conn.commit()
@@ -5332,9 +5345,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             conn.close()
             self._send_json({"error": "Deck not found"}, 404)
             return
-        if not deck["hypothetical"]:
+        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
+        if deck["state_id"] == DECK_STATE_CONSTRUCTED:
             conn.close()
-            self._send_json({"error": "Deck is not hypothetical"}, 400)
+            self._send_json({"error": "Deck is already constructed"}, 400)
             return
         result = repo.materialize_deck(deck_id)
         conn.commit()
@@ -5414,9 +5428,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             conn.close()
             self._send_json({"error": "Commander not found"}, 404)
             return
-        hypothetical = bool(data.get("hypothetical", False))
-        if hypothetical:
-            # Use DeckBuilderService for hypothetical decks to pre-populate
+        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
+        state_id = self._resolve_state_id(data.get("state", "idea"))
+        if state_id != DECK_STATE_CONSTRUCTED:
+            # Use DeckBuilderService for idea/ready decks to pre-populate
             # template role categories (Lands, Ramp, etc.)
             from mtg_collector.services.deck_builder import DeckBuilderService
             svc = DeckBuilderService(conn)
@@ -5434,7 +5449,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             deck_name = data.get("name") or card["name"]
             deck = Deck(
                 id=None, name=deck_name, format="commander",
-                hypothetical=False,
+                state_id=DECK_STATE_CONSTRUCTED,
                 commander_oracle_id=commander_oracle_id,
                 commander_printing_id=data.get("commander_printing_id"),
             )
@@ -5504,8 +5519,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 commander = dict(row)
         # Get deck cards grouped by type, collapsed by printing_id
         cards = repo.get_cards(deck_id)
-        if not cards and deck.get("hypothetical"):
-            cards = repo.get_expected_cards_as_cards(deck_id)
         groups = {}
         type_order = ["Creatures", "Planeswalkers", "Instants", "Sorceries",
                       "Enchantments", "Artifacts", "Lands", "Other"]
@@ -5539,7 +5552,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json([])
             return
         conn = self._get_conn()
-        deck = conn.execute("SELECT commander_oracle_id, hypothetical FROM decks WHERE id = ?",
+        deck = conn.execute("SELECT commander_oracle_id, state_id FROM decks WHERE id = ?",
                             (deck_id,)).fetchone()
         if not deck:
             conn.close()
@@ -5554,12 +5567,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 cmd_colors = json.loads(row["color_identity"]) if isinstance(row["color_identity"], str) else row["color_identity"]
         # Get IDs already in this deck
         in_deck = {r["printing_id"] for r in conn.execute(
-            "SELECT printing_id FROM collection WHERE deck_id = ?", (deck_id,)
+            "SELECT printing_id FROM deck_cards WHERE deck_id = ?", (deck_id,)
         ).fetchall()}
         # Search owned cards matching color identity
         search = f"%{q}%"
-        if deck["hypothetical"]:
-            # Hypothetical: search all owned cards regardless of deck assignment
+        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
+        if deck["state_id"] != DECK_STATE_CONSTRUCTED:
+            # Idea/Ready: search all owned cards regardless of deck assignment
             rows = conn.execute(
                 """SELECT col.id, col.printing_id, col.finish, col.condition,
                           p.set_code, p.collector_number, p.rarity, p.image_uri,
@@ -5585,7 +5599,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                    JOIN printings p ON col.printing_id = p.printing_id
                    JOIN cards c ON p.oracle_id = c.oracle_id
                    WHERE col.status = 'owned'
-                     AND col.deck_id IS NULL AND col.binder_id IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM deck_cards dc WHERE dc.collection_id = col.id)
+                     AND col.binder_id IS NULL
                      AND (c.name LIKE ? OR c.type_line LIKE ? OR c.oracle_text LIKE ?)
                    ORDER BY c.name
                    LIMIT 50""",
@@ -5629,27 +5644,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json(result)
                 return
             # Legacy path: simple add without categories
-            deck = conn.execute("SELECT id, hypothetical FROM decks WHERE id = ?",
+            deck = conn.execute("SELECT id, state_id FROM decks WHERE id = ?",
                                 (deck_id,)).fetchone()
             if not deck:
                 self._send_json({"error": "Deck not found"}, 404)
                 return
             from mtg_collector.db.models import DeckRepository
             repo = DeckRepository(conn)
-            if deck["hypothetical"]:
-                conn.execute(
-                    "UPDATE collection SET deck_id = ?, deck_zone = ? WHERE id = ?",
-                    (deck_id, zone, collection_id),
-                )
+            try:
+                count = repo.add_cards(deck_id, [collection_id], zone)
                 conn.commit()
-                count = 1
-            else:
-                try:
-                    count = repo.add_cards(deck_id, [collection_id], zone)
-                    conn.commit()
-                except ValueError as e:
-                    self._send_json({"error": str(e)}, 409)
-                    return
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 409)
+                return
         finally:
             conn.close()
         self._send_json({"ok": True, "added": count})
@@ -6025,20 +6032,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Only read-only WHERE clauses are allowed."}, 400)
             return
 
-        color = data.get("color", "").upper()
         conn = self._get_conn()
 
-        conditions = [f"({where_clause})"]
+        where = f"({where_clause})"
         params = []
-        if color:
-            conditions.append("c.colors = ?")
-            params.append(f'["{color}"]')
-
-        where = " AND ".join(conditions)
         sql = f"""SELECT col.id, col.printing_id, col.finish, col.condition,
                          p.set_code, p.collector_number, p.rarity, p.image_uri,
                          c.name, c.type_line, c.mana_cost, c.cmc,
-                         c.oracle_id, c.oracle_text
+                         c.oracle_id, c.oracle_text,
+                         (SELECT MIN(CASE p2.rarity
+                            WHEN 'common' THEN 1 WHEN 'uncommon' THEN 2
+                            WHEN 'rare' THEN 3 WHEN 'mythic' THEN 4 ELSE 5 END)
+                          FROM printings p2 WHERE p2.oracle_id = c.oracle_id) AS min_rarity_rank
                   FROM collection col
                   JOIN printings p ON col.printing_id = p.printing_id
                   JOIN cards c ON p.oracle_id = c.oracle_id
@@ -6054,7 +6059,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": f"SQL error: {e}"}, 400)
             return
 
-        # Dedup by oracle_id
+        # Dedup by oracle_id; override rarity with lowest across all printings
+        rank_to_rarity = {1: "common", 2: "uncommon", 3: "rare", 4: "mythic"}
         seen = set()
         results = []
         for row in rows:
@@ -6062,7 +6068,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if oid in seen:
                 continue
             seen.add(oid)
-            results.append(dict(row))
+            d = dict(row)
+            rank = d.pop("min_rarity_rank", None)
+            if rank and rank in rank_to_rarity:
+                d["rarity"] = rank_to_rarity[rank]
+            results.append(d)
             if len(results) >= 50:
                 break
 
@@ -6070,7 +6080,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(results)
 
     def _api_jumpstart_insert_deck(self, data: dict):
-        """Create a Jumpstart hypothetical deck with expected cards."""
+        """Create a Jumpstart idea deck with expected cards."""
         color = data.get("color")
         theme = data.get("theme")
         description = data.get("description", "")
@@ -6182,26 +6192,60 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                                        "quantity": 1, "name": name})
 
             # Ensure thriving land in collection and resolve
-            thriving_name = thriving_names.get(color)
-            basic_name = basic_names.get(color)
-            if not thriving_name:
-                self._send_json({"error": f"Invalid color: {color}"}, 400)
-                return
+            if color == "C":
+                pass  # Colorless decks have no thriving/basic lands
+            elif len(color) == 1:
+                thriving_name = thriving_names.get(color)
+                basic_name = basic_names.get(color)
+                if not thriving_name:
+                    self._send_json({"error": f"Invalid color: {color}"}, 400)
+                    return
+                _ensure_in_collection(thriving_name)
+                thriving_pid, err = _resolve_printing(thriving_name)
+                if err:
+                    self._send_json({"error": err}, 400)
+                    return
+                basic_pid, err = _resolve_printing(basic_name)
+                if err:
+                    self._send_json({"error": err}, 400)
+                    return
 
-            _ensure_in_collection(thriving_name)
-            thriving_pid, err = _resolve_printing(thriving_name)
-            if err:
-                self._send_json({"error": err}, 400)
-                return
-            basic_pid, err = _resolve_printing(basic_name)
-            if err:
-                self._send_json({"error": err}, 400)
-                return
-
-            expected_cards.append({"printing_id": thriving_pid, "zone": "mainboard",
-                                   "quantity": 1, "name": thriving_name})
-            expected_cards.append({"printing_id": basic_pid, "zone": "mainboard",
-                                   "quantity": basics_count, "name": basic_name})
+                expected_cards.append({"printing_id": thriving_pid, "zone": "mainboard",
+                                       "quantity": 1, "name": thriving_name})
+                expected_cards.append({"printing_id": basic_pid, "zone": "mainboard",
+                                       "quantity": basics_count, "name": basic_name})
+            else:
+                # Multicolor: one thriving land for the first color,
+                # split basics evenly between colors
+                colors = list(color)
+                first_color = colors[0]
+                thriving_name = thriving_names.get(first_color)
+                if not thriving_name:
+                    self._send_json({"error": f"Invalid color: {color}"}, 400)
+                    return
+                _ensure_in_collection(thriving_name)
+                thriving_pid, err = _resolve_printing(thriving_name)
+                if err:
+                    self._send_json({"error": err}, 400)
+                    return
+                expected_cards.append({"printing_id": thriving_pid, "zone": "mainboard",
+                                       "quantity": 1, "name": thriving_name})
+                # Split basics: e.g. 7 basics across 2 colors → 4 + 3
+                per_color = basics_count // len(colors)
+                remainder = basics_count % len(colors)
+                for i, c in enumerate(colors):
+                    bname = basic_names.get(c)
+                    if not bname:
+                        self._send_json({"error": f"Invalid color in pair: {c}"}, 400)
+                        return
+                    qty = per_color + (1 if i < remainder else 0)
+                    if qty > 0:
+                        bpid, err = _resolve_printing(bname)
+                        if err:
+                            self._send_json({"error": err}, 400)
+                            return
+                        expected_cards.append({"printing_id": bpid, "zone": "mainboard",
+                                               "quantity": qty, "name": bname})
 
             # Dedup by (printing_id, zone) — card list may already contain
             # a land that was also auto-appended above
@@ -6218,7 +6262,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             from mtg_collector.utils import now_iso
             ts = now_iso()
             conn.execute(
-                """INSERT INTO decks (name, description, format, hypothetical,
+                """INSERT INTO decks (name, description, format, state_id,
                    origin_set_code, origin_theme, is_precon, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (deck_name, description, "jumpstart", 1, "J25", theme, 0, ts, ts),
@@ -6229,6 +6273,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 conn.execute(
                     """INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity)
                        VALUES (?, ?, ?, ?)""",
+                    (deck_id, card["printing_id"], card["zone"], card["quantity"]),
+                )
+                # Also insert into deck_cards for unified deck display
+                conn.execute(
+                    """INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity)
+                       VALUES (?, ?, NULL, ?, ?)""",
                     (deck_id, card["printing_id"], card["zone"], card["quantity"]),
                 )
 

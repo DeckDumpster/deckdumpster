@@ -21,8 +21,8 @@ NONLAND_COUNT = 12
 # Creature count distribution (observed from J25 analysis, weights for random selection)
 CREATURE_COUNT_WEIGHTS = {8: 76, 7: 25, 6: 9, 5: 2}
 
-# Rarity: always 2 R/M (prefer 1 mythic + 1 rare, fall back to 2 rares)
-RM_COUNT = 2
+# Rarity: 2-3 R/M slots, decided per-deck. Valid combos: (M+R), (R+R), (M+R+R), (R+R+R)
+RM_COUNT_WEIGHTS = {2: 80, 3: 20}
 
 # Uncommon count among non-lands (most common combos from J25 analysis)
 U_COUNT_WEIGHTS = {4: 99, 5: 10, 3: 12}
@@ -97,19 +97,22 @@ def generate_mana_curve(nonland_count):
     raise RuntimeError("Failed to generate valid mana curve after 1000 attempts")
 
 
-def generate_pack(color):
+def generate_pack(color, rm_count=None):
     """Generate a J25 soft pack shape: aggregate targets, not per-slot assignments."""
     creature_count = weighted_choice(CREATURE_COUNT_WEIGHTS)
     spell_count = NONLAND_COUNT - creature_count
 
-    u_count = weighted_choice(U_COUNT_WEIGHTS)
-    c_count = NONLAND_COUNT - RM_COUNT - u_count
+    if rm_count is None:
+        rm_count = weighted_choice(RM_COUNT_WEIGHTS)
 
-    if c_count < 5:
-        u_count = NONLAND_COUNT - RM_COUNT - 5
-        c_count = 5
+    u_count = weighted_choice(U_COUNT_WEIGHTS)
+    c_count = NONLAND_COUNT - rm_count - u_count
+
+    if c_count < 4:
+        u_count = NONLAND_COUNT - rm_count - 4
+        c_count = 4
     if c_count > 8:
-        u_count = NONLAND_COUNT - RM_COUNT - 8
+        u_count = NONLAND_COUNT - rm_count - 8
         c_count = 8
 
     curve = generate_mana_curve(NONLAND_COUNT)
@@ -118,8 +121,7 @@ def generate_pack(color):
         "nonland_count": NONLAND_COUNT,
         "creature_count": creature_count,
         "spell_count": spell_count,
-        "mythic_count": 1,
-        "rare_count": 1,
+        "rm_count": rm_count,
         "u_count": u_count,
         "c_count": c_count,
         "curve": curve,
@@ -136,13 +138,15 @@ def main():
     parser.add_argument("--seed", type=int, help="Random seed for reproducibility")
     parser.add_argument("--rare-category", choices=["bomb", "engine", "lord"],
                         help="Rare card category: bomb/engine/lord")
+    parser.add_argument("--rm-count", type=int, choices=[2, 3],
+                        help="Number of rare/mythic slots (2 or 3). Random if omitted.")
     args = parser.parse_args()
 
     if args.seed is not None:
         random.seed(args.seed)
 
     color = args.color or random.choice(["W", "U", "B", "R", "G"])
-    pack = generate_pack(color)
+    pack = generate_pack(color, rm_count=args.rm_count)
 
     print(f"J25 Soft Shape — {COLOR_NAMES[color]}")
     print(f"{'=' * 50}")
@@ -151,7 +155,12 @@ def main():
         print(f"Rare category: {args.rare_category} ({RARE_CATEGORIES[args.rare_category]})")
     print()
 
-    print(f"Rarity budget: 1 M + 1 R (fall back to 2 R if no mythic), {pack['u_count']} U, {pack['c_count']} C")
+    rm = pack['rm_count']
+    if rm == 2:
+        rm_str = "2 R/M — (M+R) or (R+R)"
+    else:
+        rm_str = "3 R/M — (M+R+R) or (R+R+R)"
+    print(f"Rarity budget: {rm_str}, {pack['u_count']} U, {pack['c_count']} C")
     print(f"Creatures: {pack['creature_count']}    Non-creature spells: {pack['spell_count']}")
     print()
 

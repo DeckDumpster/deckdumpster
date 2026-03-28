@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 40
 
 # Tables whose data can be served from an ATTACHed shared DB via temp views.
 SHARED_TABLES = [
@@ -73,6 +73,18 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
 
+-- Deck state lookup table
+CREATE TABLE IF NOT EXISTS deck_states (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO deck_states (id, name, description, sort_order) VALUES
+    (1, 'idea', 'Brainstorming space for deck ideas', 0),
+    (2, 'ready', 'Finished list, ready to collect', 1),
+    (3, 'constructed', 'Physically built deck', 2);
+
 -- Decks (physical deck groupings)
 CREATE TABLE IF NOT EXISTS decks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,7 +98,7 @@ CREATE TABLE IF NOT EXISTS decks (
     origin_set_code TEXT,
     origin_theme TEXT,
     origin_variation INTEGER,
-    hypothetical INTEGER NOT NULL DEFAULT 0,
+    state_id INTEGER NOT NULL DEFAULT 1 REFERENCES deck_states(id),
     commander_oracle_id TEXT REFERENCES cards(oracle_id),
     commander_printing_id TEXT REFERENCES printings(printing_id),
     plan TEXT,
@@ -105,6 +117,19 @@ CREATE TABLE IF NOT EXISTS deck_expected_cards (
     UNIQUE(deck_id, printing_id, zone)
 );
 CREATE INDEX IF NOT EXISTS idx_deck_expected_deck ON deck_expected_cards(deck_id);
+
+-- Deck card membership (join table — replaces collection.deck_id)
+CREATE TABLE IF NOT EXISTS deck_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+    printing_id TEXT NOT NULL REFERENCES printings(printing_id),
+    collection_id INTEGER REFERENCES collection(id) ON DELETE SET NULL,
+    zone TEXT NOT NULL DEFAULT 'mainboard'
+        CHECK(zone IN ('mainboard', 'sideboard', 'commander')),
+    quantity INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards(deck_id);
+CREATE INDEX IF NOT EXISTS idx_deck_cards_collection ON deck_cards(collection_id);
 
 -- EDHREC recommendations (popularity data per commander)
 CREATE TABLE IF NOT EXISTS edhrec_recommendations (
@@ -166,12 +191,9 @@ CREATE TABLE IF NOT EXISTS collection (
         CHECK(status IN ('owned', 'ordered', 'listed', 'sold', 'removed', 'traded', 'gifted', 'lost')),
     sale_price REAL,
     order_id INTEGER REFERENCES orders(id),
-    deck_id INTEGER REFERENCES decks(id) ON DELETE SET NULL,
     binder_id INTEGER REFERENCES binders(id) ON DELETE SET NULL,
-    deck_zone TEXT CHECK(deck_zone IN ('mainboard', 'sideboard', 'commander') OR deck_zone IS NULL),
     batch_id INTEGER REFERENCES batches(id)
 );
-CREATE INDEX IF NOT EXISTS idx_collection_deck ON collection(deck_id);
 CREATE INDEX IF NOT EXISTS idx_collection_binder ON collection(binder_id);
 CREATE INDEX IF NOT EXISTS idx_collection_batch ON collection(batch_id);
 
@@ -528,18 +550,21 @@ SELECT
     c.printing_id,
     p.oracle_id,
     c.order_id,
-    c.deck_id,
-    c.deck_zone,
+    dc.deck_id,
+    dc.zone AS deck_zone,
     c.binder_id,
     c.batch_id,
     d.name AS deck_name,
+    ds.name AS deck_state,
     b.name AS binder_name,
     bat.name AS batch_name
 FROM collection c
 JOIN printings p ON c.printing_id = p.printing_id
 JOIN cards card ON p.oracle_id = card.oracle_id
 JOIN sets s ON p.set_code = s.set_code
-LEFT JOIN decks d ON c.deck_id = d.id
+LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+LEFT JOIN decks d ON dc.deck_id = d.id
+LEFT JOIN deck_states ds ON d.state_id = ds.id
 LEFT JOIN binders b ON c.binder_id = b.id
 LEFT JOIN batches bat ON c.batch_id = bat.id;
 """
@@ -677,6 +702,12 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v35_to_v36(conn)
         if current < 37:
             _migrate_v36_to_v37(conn)
+        if current < 38:
+            _migrate_v37_to_v38(conn)
+        if current < 39:
+            _migrate_v38_to_v39(conn)
+        if current < 40:
+            _migrate_v39_to_v40(conn)
 
     # Record schema version
     conn.execute(
@@ -2099,6 +2130,390 @@ def _migrate_v36_to_v37(conn: sqlite3.Connection):
             )
 
 
+def _migrate_v37_to_v38(conn: sqlite3.Connection):
+    """Move deck membership from collection.deck_id to a deck_cards join table.
+
+    This allows hypothetical decks and real decks to use the same table
+    for card membership, eliminating the dual-system with deck_expected_cards
+    used as a fallback for hypothetical deck display.
+    """
+    # 1. Create deck_cards table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS deck_cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+            printing_id TEXT NOT NULL REFERENCES printings(printing_id),
+            collection_id INTEGER REFERENCES collection(id) ON DELETE SET NULL,
+            zone TEXT NOT NULL DEFAULT 'mainboard'
+                CHECK(zone IN ('mainboard', 'sideboard', 'commander')),
+            quantity INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards(deck_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_deck_cards_collection ON deck_cards(collection_id)")
+
+    # 2. Populate from existing collection.deck_id assignments (real decks)
+    conn.execute("""
+        INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity)
+        SELECT deck_id, printing_id, id, COALESCE(deck_zone, 'mainboard'), 1
+        FROM collection
+        WHERE deck_id IS NOT NULL
+    """)
+
+    # 3. Populate from deck_expected_cards for hypothetical decks
+    #    (only for cards not already covered by collection assignments)
+    conn.execute("""
+        INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity)
+        SELECT e.deck_id, e.printing_id, NULL, e.zone, e.quantity
+        FROM deck_expected_cards e
+        JOIN decks d ON e.deck_id = d.id
+        WHERE d.hypothetical = 1
+          AND NOT EXISTS (
+              SELECT 1 FROM deck_cards dc
+              WHERE dc.deck_id = e.deck_id AND dc.printing_id = e.printing_id AND dc.zone = e.zone
+          )
+    """)
+
+    # 4. Check if collection still has deck_id column (skip rebuild if already migrated)
+    col_names = [r[1] for r in conn.execute("PRAGMA table_info(collection)").fetchall()]
+    if "deck_id" not in col_names:
+        # Already migrated (or fresh schema) — just ensure views exist
+        conn.execute("DROP VIEW IF EXISTS collection_view")
+        conn.execute("""
+            CREATE VIEW IF NOT EXISTS collection_view AS
+            SELECT
+                c.id, card.name, s.set_name, p.set_code, p.collector_number,
+                p.rarity, p.promo, c.finish, c.condition, c.language,
+                card.type_line, card.mana_cost, card.cmc, card.colors,
+                card.color_identity, p.artist, c.purchase_price, c.acquired_at,
+                c.source, c.source_image, c.notes, c.tags, c.tradelist,
+                c.status, c.sale_price, c.printing_id, p.oracle_id, c.order_id,
+                dc.deck_id, dc.zone AS deck_zone, c.binder_id, c.batch_id,
+                d.name AS deck_name, b.name AS binder_name, bat.name AS batch_name
+            FROM collection c
+            JOIN printings p ON c.printing_id = p.printing_id
+            JOIN cards card ON p.oracle_id = card.oracle_id
+            JOIN sets s ON p.set_code = s.set_code
+            LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+            LEFT JOIN decks d ON dc.deck_id = d.id
+            LEFT JOIN binders b ON c.binder_id = b.id
+            LEFT JOIN batches bat ON c.batch_id = bat.id
+        """)
+        return
+
+    # 5. Check for required tables (skip rebuild if running on incomplete test schemas)
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "orders" not in tables or "binders" not in tables:
+        # Incomplete schema (old migration test) — just drop the columns if possible
+        return
+
+    # 6. Drop views before table rebuild (SQLite validates all views during ALTER TABLE)
+    conn.execute("DROP VIEW IF EXISTS collection_view")
+    conn.execute("DROP VIEW IF EXISTS sealed_collection_view")
+
+    # 7. Rebuild collection table without deck_id and deck_zone
+    has_collection = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='collection'"
+    ).fetchone() is not None
+    has_collection_new = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='collection_new'"
+    ).fetchone() is not None
+
+    if has_collection_new and not has_collection:
+        conn.execute("ALTER TABLE collection_new RENAME TO collection")
+    else:
+        conn.executescript("""
+            DROP TABLE IF EXISTS collection_new;
+
+            CREATE TABLE collection_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                printing_id TEXT NOT NULL REFERENCES printings(printing_id),
+                finish TEXT NOT NULL CHECK(finish IN ('nonfoil', 'foil', 'etched')),
+                condition TEXT NOT NULL DEFAULT 'Near Mint'
+                    CHECK(condition IN ('Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged')),
+                language TEXT NOT NULL DEFAULT 'English',
+                purchase_price REAL,
+                acquired_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                source_image TEXT,
+                notes TEXT,
+                tags TEXT,
+                tradelist INTEGER DEFAULT 0,
+                is_alter INTEGER DEFAULT 0,
+                proxy INTEGER DEFAULT 0,
+                signed INTEGER DEFAULT 0,
+                misprint INTEGER DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'owned'
+                    CHECK(status IN ('owned', 'ordered', 'listed', 'sold', 'removed', 'traded', 'gifted', 'lost')),
+                sale_price REAL,
+                order_id INTEGER REFERENCES orders(id),
+                binder_id INTEGER REFERENCES binders(id) ON DELETE SET NULL,
+                batch_id INTEGER REFERENCES batches(id)
+            );
+
+            INSERT INTO collection_new (
+                id, printing_id, finish, condition, language, purchase_price,
+                acquired_at, source, source_image, notes, tags, tradelist,
+                is_alter, proxy, signed, misprint, status, sale_price,
+                order_id, binder_id, batch_id
+            )
+            SELECT
+                id, printing_id, finish, condition, language, purchase_price,
+                acquired_at, source, source_image, notes, tags, tradelist,
+                is_alter, proxy, signed, misprint, status, sale_price,
+                order_id, binder_id, batch_id
+            FROM collection;
+
+            DROP TABLE collection;
+
+            ALTER TABLE collection_new RENAME TO collection;
+        """)
+
+    # 6. Recreate indexes
+    conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_collection_printing ON collection(printing_id);
+        CREATE INDEX IF NOT EXISTS idx_collection_binder ON collection(binder_id);
+        CREATE INDEX IF NOT EXISTS idx_collection_batch ON collection(batch_id);
+        CREATE INDEX IF NOT EXISTS idx_collection_source ON collection(source);
+        CREATE INDEX IF NOT EXISTS idx_collection_status ON collection(status);
+    """)
+
+    # 7. Recreate collection_view joining through deck_cards
+    conn.execute("""
+        CREATE VIEW IF NOT EXISTS collection_view AS
+        SELECT
+            c.id,
+            card.name,
+            s.set_name,
+            p.set_code,
+            p.collector_number,
+            p.rarity,
+            p.promo,
+            c.finish,
+            c.condition,
+            c.language,
+            card.type_line,
+            card.mana_cost,
+            card.cmc,
+            card.colors,
+            card.color_identity,
+            p.artist,
+            c.purchase_price,
+            c.acquired_at,
+            c.source,
+            c.source_image,
+            c.notes,
+            c.tags,
+            c.tradelist,
+            c.status,
+            c.sale_price,
+            c.printing_id,
+            p.oracle_id,
+            c.order_id,
+            dc.deck_id,
+            dc.zone AS deck_zone,
+            c.binder_id,
+            c.batch_id,
+            d.name AS deck_name,
+            b.name AS binder_name,
+            bat.name AS batch_name
+        FROM collection c
+        JOIN printings p ON c.printing_id = p.printing_id
+        JOIN cards card ON p.oracle_id = card.oracle_id
+        JOIN sets s ON p.set_code = s.set_code
+        LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+        LEFT JOIN decks d ON dc.deck_id = d.id
+        LEFT JOIN binders b ON c.binder_id = b.id
+        LEFT JOIN batches bat ON c.batch_id = bat.id
+    """)
+
+    # 8. Recreate sealed_collection_view if sealed tables exist
+    has_sealed = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sealed_collection'"
+    ).fetchone()
+    if has_sealed:
+        conn.execute("""
+            CREATE VIEW IF NOT EXISTS sealed_collection_view AS
+            SELECT
+                sc.id, sc.quantity, sc.condition, sc.purchase_price, sc.purchase_date,
+                sc.source, sc.seller_name, sc.notes, sc.status, sc.sale_price, sc.added_at,
+                sp.uuid, sp.name, sp.set_code, sp.category, sp.subtype,
+                sp.tcgplayer_product_id, sp.card_count, sp.release_date,
+                sp.purchase_url_tcgplayer, sp.purchase_url_cardkingdom,
+                s.set_name, s.set_type, s.released_at AS set_released_at
+            FROM sealed_collection sc
+            JOIN sealed_products sp ON sc.sealed_product_uuid = sp.uuid
+            LEFT JOIN sets s ON sp.set_code = s.set_code
+        """)
+
+
+def _migrate_v38_to_v39(conn: sqlite3.Connection):
+    """Add deck_status column to decks table."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(decks)").fetchall()]
+    if "deck_status" not in cols:
+        conn.execute(
+            "ALTER TABLE decks ADD COLUMN deck_status TEXT NOT NULL DEFAULT 'under_construction' "
+            "CHECK(deck_status IN ('under_construction', 'ready', 'constructed'))"
+        )
+
+
+def _migrate_v39_to_v40(conn: sqlite3.Connection):
+    """Replace hypothetical + deck_status with deck_states lookup table."""
+    # 1. Create deck_states lookup table and seed rows
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS deck_states (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        INSERT OR IGNORE INTO deck_states (id, name, description, sort_order) VALUES
+            (1, 'idea', 'Brainstorming space for deck ideas', 0),
+            (2, 'ready', 'Finished list, ready to collect', 1),
+            (3, 'constructed', 'Physically built deck', 2)
+    """)
+
+    # 2. Drop views that depend on decks
+    conn.execute("DROP VIEW IF EXISTS collection_view")
+    conn.execute("DROP VIEW IF EXISTS sealed_collection_view")
+
+    # 3. Recreate decks table without hypothetical/deck_status, with state_id
+    conn.execute("""
+        CREATE TABLE decks_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT,
+            format TEXT,
+            is_precon INTEGER NOT NULL DEFAULT 0,
+            sleeve_color TEXT,
+            deck_box TEXT,
+            storage_location TEXT,
+            origin_set_code TEXT,
+            origin_theme TEXT,
+            origin_variation INTEGER,
+            state_id INTEGER NOT NULL DEFAULT 1 REFERENCES deck_states(id),
+            commander_oracle_id TEXT REFERENCES cards(oracle_id),
+            commander_printing_id TEXT REFERENCES printings(printing_id),
+            plan TEXT,
+            sub_plans TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    # 4. Copy data with mapping:
+    #    hypothetical=1 → idea(1)
+    #    hypothetical=0, deck_status='constructed' → constructed(3)
+    #    hypothetical=0, deck_status='under_construction' or 'ready' → ready(2)
+    conn.execute("""
+        INSERT INTO decks_new (
+            id, name, description, format, is_precon,
+            sleeve_color, deck_box, storage_location,
+            origin_set_code, origin_theme, origin_variation,
+            state_id,
+            commander_oracle_id, commander_printing_id,
+            plan, sub_plans, created_at, updated_at
+        )
+        SELECT
+            id, name, description, format, is_precon,
+            sleeve_color, deck_box, storage_location,
+            origin_set_code, origin_theme, origin_variation,
+            CASE
+                WHEN hypothetical = 1 THEN 1
+                WHEN deck_status = 'constructed' THEN 3
+                ELSE 2
+            END,
+            commander_oracle_id, commander_printing_id,
+            plan, sub_plans, created_at, updated_at
+        FROM decks
+    """)
+
+    # 5. Drop old table, rename new
+    conn.execute("DROP TABLE decks")
+    conn.execute("ALTER TABLE decks_new RENAME TO decks")
+
+    # 6. Clean up orphan deck_cards rows (NULL collection_id for idea decks)
+    conn.execute("""
+        DELETE FROM deck_cards
+        WHERE collection_id IS NULL
+        AND deck_id IN (SELECT id FROM decks WHERE state_id = 1)
+    """)
+
+    # 7. Recreate sealed_collection_view if tables exist
+    sealed_tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('sealed_collection', 'sealed_products')"
+    ).fetchall()}
+    if "sealed_collection" in sealed_tables and "sealed_products" in sealed_tables:
+        conn.execute("""
+            CREATE VIEW IF NOT EXISTS sealed_collection_view AS
+            SELECT
+                sc.id, sc.quantity, sc.condition, sc.purchase_price, sc.purchase_date,
+                sc.source, sc.seller_name, sc.notes, sc.status, sc.sale_price, sc.added_at,
+                sp.uuid, sp.name, sp.set_code, sp.category, sp.subtype,
+                sp.tcgplayer_product_id, sp.card_count, sp.release_date,
+                sp.purchase_url_tcgplayer, sp.purchase_url_cardkingdom,
+                s.set_name, s.set_type, s.released_at AS set_released_at
+            FROM sealed_collection sc
+            JOIN sealed_products sp ON sc.sealed_product_uuid = sp.uuid
+            LEFT JOIN sets s ON sp.set_code = s.set_code
+        """)
+
+    # 8. Recreate collection_view with deck_state
+    conn.execute("""
+        CREATE VIEW IF NOT EXISTS collection_view AS
+        SELECT
+            c.id,
+            card.name,
+            s.set_name,
+            p.set_code,
+            p.collector_number,
+            p.rarity,
+            p.promo,
+            c.finish,
+            c.condition,
+            c.language,
+            card.type_line,
+            card.mana_cost,
+            card.cmc,
+            card.colors,
+            card.color_identity,
+            p.artist,
+            c.purchase_price,
+            c.acquired_at,
+            c.source,
+            c.source_image,
+            c.notes,
+            c.tags,
+            c.tradelist,
+            c.status,
+            c.sale_price,
+            c.printing_id,
+            p.oracle_id,
+            c.order_id,
+            dc.deck_id,
+            dc.zone AS deck_zone,
+            c.binder_id,
+            c.batch_id,
+            d.name AS deck_name,
+            ds.name AS deck_state,
+            b.name AS binder_name,
+            bat.name AS batch_name
+        FROM collection c
+        JOIN printings p ON c.printing_id = p.printing_id
+        JOIN cards card ON p.oracle_id = card.oracle_id
+        JOIN sets s ON p.set_code = s.set_code
+        LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+        LEFT JOIN decks d ON dc.deck_id = d.id
+        LEFT JOIN deck_states ds ON d.state_id = ds.id
+        LEFT JOIN binders b ON c.binder_id = b.id
+        LEFT JOIN batches bat ON c.batch_id = bat.id
+    """)
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
@@ -2118,6 +2533,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS mtgjson_printings;
         DROP TABLE IF EXISTS mtgjson_uuid_map;
         DROP TABLE IF EXISTS edhrec_recommendations;
+        DROP TABLE IF EXISTS deck_cards;
         DROP TABLE IF EXISTS deck_expected_cards;
         DROP TABLE IF EXISTS movement_log;
         DROP TABLE IF EXISTS status_log;
@@ -2130,6 +2546,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS collection_views;
         DROP TABLE IF EXISTS collection;
         DROP TABLE IF EXISTS decks;
+        DROP TABLE IF EXISTS deck_states;
         DROP TABLE IF EXISTS binders;
         DROP TABLE IF EXISTS orders;
         DROP TABLE IF EXISTS printings;

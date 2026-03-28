@@ -4,7 +4,12 @@ import json
 import re
 import sqlite3
 
-from mtg_collector.db.models import Deck, DeckRepository
+from mtg_collector.db.models import (
+    DECK_STATE_CONSTRUCTED,
+    DECK_STATE_IDEA,
+    Deck,
+    DeckRepository,
+)
 
 
 class RoleClassifier:
@@ -140,7 +145,7 @@ class DeckBuilderService:
         return results
 
     def create_deck(self, oracle_id: str) -> dict:
-        """Create a hypothetical commander deck for the given commander."""
+        """Create an idea commander deck for the given commander."""
         card = self.conn.execute(
             "SELECT oracle_id, name, color_identity FROM cards WHERE oracle_id = ?",
             (oracle_id,),
@@ -157,7 +162,7 @@ class DeckBuilderService:
             id=None,
             name=card["name"],
             format="commander",
-            hypothetical=True,
+            state_id=DECK_STATE_IDEA,
             commander_oracle_id=oracle_id,
             sub_plans=json.dumps(template_categories),
         )
@@ -221,14 +226,15 @@ class DeckBuilderService:
     def _get_cards_with_text(self, deck_id: int) -> list[dict]:
         """Get deck cards including oracle_text (needed for role classification)."""
         rows = self.conn.execute(
-            """SELECT col.id, col.printing_id, col.finish, col.deck_zone,
+            """SELECT col.id, dc.printing_id, col.finish, dc.zone AS deck_zone,
                       p.set_code, p.collector_number, p.rarity, p.image_uri,
                       c.name, c.type_line, c.mana_cost, c.cmc,
                       c.colors, c.color_identity, c.oracle_text, p.oracle_id
-               FROM collection col
-               JOIN printings p ON col.printing_id = p.printing_id
+               FROM deck_cards dc
+               JOIN printings p ON dc.printing_id = p.printing_id
                JOIN cards c ON p.oracle_id = c.oracle_id
-               WHERE col.deck_id = ?
+               LEFT JOIN collection col ON dc.collection_id = col.id
+               WHERE dc.deck_id = ?
                ORDER BY c.name""",
             (deck_id,),
         ).fetchall()
@@ -391,7 +397,8 @@ class DeckBuilderService:
             """SELECT col.id FROM collection col
                JOIN printings p ON col.printing_id = p.printing_id
                JOIN cards c ON p.oracle_id = c.oracle_id
-               WHERE c.name = ? AND col.status = 'owned' AND col.deck_id IS NULL
+               LEFT JOIN deck_cards dc ON dc.collection_id = col.id
+               WHERE c.name = ? AND col.status = 'owned' AND dc.id IS NULL
                LIMIT 1""",
             (name,),
         ).fetchone()
@@ -525,10 +532,10 @@ class DeckBuilderService:
         # Singleton check (basic lands exempt)
         if card["name"] not in self.BASIC_LAND_NAMES:
             existing = self.conn.execute(
-                """SELECT col.id FROM collection col
-                   JOIN printings p ON col.printing_id = p.printing_id
+                """SELECT dc.id FROM deck_cards dc
+                   JOIN printings p ON dc.printing_id = p.printing_id
                    JOIN cards c ON p.oracle_id = c.oracle_id
-                   WHERE col.deck_id = ? AND c.oracle_id = ?""",
+                   WHERE dc.deck_id = ? AND c.oracle_id = ?""",
                 (deck_id, card["oracle_id"]),
             ).fetchone()
             if existing:
@@ -550,14 +557,8 @@ class DeckBuilderService:
                             f"not within commander identity ({cmd_ci})"
                         )
 
-        # Add card — hypothetical decks skip assignment conflict check
-        if deck["hypothetical"]:
-            self.conn.execute(
-                "UPDATE collection SET deck_id = ?, deck_zone = 'mainboard' WHERE id = ?",
-                (deck_id, collection_id),
-            )
-        else:
-            self.repo.add_cards(deck_id, [collection_id], "mainboard")
+        # Add card to deck
+        self.repo.add_cards(deck_id, [collection_id], "mainboard")
         self.conn.commit()
 
         # Assign to categories (template roles and/or sub-plans)
@@ -568,7 +569,7 @@ class DeckBuilderService:
 
         # Get updated count
         count = self.conn.execute(
-            "SELECT COUNT(*) FROM collection WHERE deck_id = ?", (deck_id,)
+            "SELECT COUNT(*) FROM deck_cards WHERE deck_id = ?", (deck_id,)
         ).fetchone()[0]
 
         roles = self.classifier.classify(card)
@@ -768,8 +769,9 @@ class DeckBuilderService:
             raise ValueError(f"Deck not found: {deck_id}")
 
         preferred_set = deck.get("origin_set_code")
-        existing = {r["id"] for r in self.conn.execute(
-            "SELECT id FROM collection WHERE deck_id = ?", (deck_id,)).fetchall()}
+        existing = {r["collection_id"] for r in self.conn.execute(
+            "SELECT collection_id FROM deck_cards WHERE deck_id = ? AND collection_id IS NOT NULL",
+            (deck_id,)).fetchall()}
 
         results = {}
         total_added = 0
@@ -780,8 +782,9 @@ class DeckBuilderService:
                 FROM collection col
                 JOIN printings p ON col.printing_id = p.printing_id
                 JOIN cards c ON p.oracle_id = c.oracle_id
+                LEFT JOIN deck_cards dc ON dc.collection_id = col.id
                 WHERE c.name = ? AND col.status = 'owned'
-                  AND col.id NOT IN (SELECT id FROM collection WHERE deck_id IS NOT NULL)
+                  AND dc.id IS NULL
                 ORDER BY
                   p.full_art DESC,
                   CASE WHEN p.set_code = ? THEN 0 ELSE 1 END,
@@ -794,8 +797,9 @@ class DeckBuilderService:
                     FROM collection col
                     JOIN printings p ON col.printing_id = p.printing_id
                     JOIN cards c ON p.oracle_id = c.oracle_id
+                    LEFT JOIN deck_cards dc ON dc.collection_id = col.id
                     WHERE c.name = ? AND col.status = 'owned'
-                      AND col.id NOT IN (SELECT id FROM collection WHERE deck_id = ?)
+                      AND (dc.id IS NULL OR dc.deck_id != ?)
                     ORDER BY
                       p.full_art DESC,
                       CASE WHEN p.set_code = ? THEN 0 ELSE 1 END,
@@ -823,7 +827,7 @@ class DeckBuilderService:
                              "full_art": full_art_count}
 
         card_count = self.conn.execute(
-            "SELECT COUNT(*) FROM collection WHERE deck_id = ?", (deck_id,)
+            "SELECT COUNT(*) FROM deck_cards WHERE deck_id = ?", (deck_id,)
         ).fetchone()[0]
 
         return {"basics": results, "total_added": total_added,
@@ -835,14 +839,15 @@ class DeckBuilderService:
         Returns list of swaps (applied unless dry_run=True).
         """
         deck_cards = self.conn.execute("""
-            SELECT col.id as collection_id, col.printing_id, col.finish,
+            SELECT col.id as collection_id, dc.printing_id, col.finish,
                    c.oracle_id, c.name,
                    p.frame_effects, p.promo_types, p.border_color,
                    p.full_art, p.promo, p.set_code, p.collector_number
-            FROM collection col
-            JOIN printings p ON col.printing_id = p.printing_id
+            FROM deck_cards dc
+            JOIN printings p ON dc.printing_id = p.printing_id
             JOIN cards c ON p.oracle_id = c.oracle_id
-            WHERE col.deck_id = ?
+            LEFT JOIN collection col ON dc.collection_id = col.id
+            WHERE dc.deck_id = ?
         """, (deck_id,)).fetchall()
 
         if not deck_cards:
@@ -850,7 +855,7 @@ class DeckBuilderService:
 
         deck = self.repo.get(deck_id)
         sub_plans = json.loads(deck["sub_plans"]) if deck and deck.get("sub_plans") else []
-        hypothetical = deck and deck.get("hypothetical")
+        is_virtual = deck and deck.get("state_id") != DECK_STATE_CONSTRUCTED
 
         def _bling_score(row):
             frame_effects = json.loads(row["frame_effects"]) if row["frame_effects"] else []
@@ -903,18 +908,17 @@ class DeckBuilderService:
             current_score = _bling_score(card)
             oracle_id = card["oracle_id"]
 
-            if hypothetical:
+            if is_virtual:
                 candidates = self.conn.execute("""
                     SELECT col.id as collection_id, col.printing_id, col.finish,
                            p.frame_effects, p.promo_types, p.border_color,
                            p.full_art, p.promo, p.set_code, p.collector_number
                     FROM collection col
                     JOIN printings p ON col.printing_id = p.printing_id
+                    LEFT JOIN deck_cards dc2 ON dc2.collection_id = col.id
                     WHERE p.oracle_id = ? AND col.status = 'owned'
                       AND col.id != ?
-                      AND col.id NOT IN (
-                          SELECT id FROM collection WHERE deck_id = ?
-                      )
+                      AND (dc2.id IS NULL OR dc2.deck_id != ?)
                 """, (oracle_id, card["collection_id"], deck_id)).fetchall()
             else:
                 candidates = self.conn.execute("""
@@ -923,9 +927,10 @@ class DeckBuilderService:
                            p.full_art, p.promo, p.set_code, p.collector_number
                     FROM collection col
                     JOIN printings p ON col.printing_id = p.printing_id
+                    LEFT JOIN deck_cards dc2 ON dc2.collection_id = col.id
                     WHERE p.oracle_id = ? AND col.status = 'owned'
                       AND col.id != ?
-                      AND col.deck_id IS NULL AND col.binder_id IS NULL
+                      AND dc2.id IS NULL AND col.binder_id IS NULL
                 """, (oracle_id, card["collection_id"])).fetchall()
 
             candidates = [c for c in candidates if c["collection_id"] not in claimed_ids]
@@ -954,14 +959,16 @@ class DeckBuilderService:
         if not swaps or dry_run:
             return {"swaps": swaps, "applied": False}
 
-        # Apply swaps
+        # Apply swaps — update deck_cards to point to new collection entry
         for s in swaps:
+            # Get printing_id for the new card
+            new_printing = self.conn.execute(
+                "SELECT printing_id FROM collection WHERE id = ?", (s["new_id"],)
+            ).fetchone()
             self.conn.execute(
-                "UPDATE collection SET deck_id = NULL, deck_zone = NULL WHERE id = ?",
-                (s["old_id"],))
-            self.conn.execute(
-                "UPDATE collection SET deck_id = ?, deck_zone = 'mainboard' WHERE id = ?",
-                (deck_id, s["new_id"]))
+                "UPDATE deck_cards SET collection_id = ?, printing_id = ? "
+                "WHERE deck_id = ? AND collection_id = ?",
+                (s["new_id"], new_printing["printing_id"], deck_id, s["old_id"]))
             for sp in sub_plans:
                 cards = sp.get("cards", [])
                 if s["old_id"] in cards:
@@ -998,10 +1005,10 @@ class DeckBuilderService:
 
         cards = self.conn.execute(
             """SELECT c.name, c.mana_cost, c.cmc, c.type_line
-               FROM collection col
-               JOIN printings p ON col.printing_id = p.printing_id
+               FROM deck_cards dc
+               JOIN printings p ON dc.printing_id = p.printing_id
                JOIN cards c ON p.oracle_id = c.oracle_id
-               WHERE col.deck_id = ?
+               WHERE dc.deck_id = ?
                ORDER BY c.cmc, c.name""",
             (deck_id,),
         ).fetchall()
