@@ -107,9 +107,10 @@
         alert(deck.error);
         return;
       }
-      history.pushState(null, '', '/decks/' + deck.id);
+      const newDeckId = deck.id || deck.deck_id;
+      history.pushState(null, '', '/decks/' + newDeckId);
       document.title = deck.name + ' — Deck Builder';
-      await loadBuilder(deck.id);
+      await loadBuilder(newDeckId);
     });
   }
 

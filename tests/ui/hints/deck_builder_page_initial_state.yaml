@@ -2,13 +2,13 @@ start_page: /deck-builder
 involves:
   - "heading: h2 with text 'New Commander Deck'"
   - "input: placeholder 'Search your collection...' with id 'cmd-input'"
-  - "radio buttons: 'Physical' (checked) and 'Hypothetical'"
+  - "select dropdown: 'Deck State' with options Idea/Ready/Constructed, defaulting to Idea"
   - "button: 'Create Deck' (disabled by default)"
   - "nav link: <a href='/deck-builder'>Build</a> in .site-header"
 fixture_data:
   none: "No fixture data needed for initial state"
 notes: >
   1. Navigate to /deck-builder. 2. Verify heading text.
-  3. Verify search input placeholder. 4. Verify Physical radio is default.
+  3. Verify search input placeholder. 4. Verify deck state dropdown has Idea default.
   5. Verify Create Deck button exists and is disabled.
   6. Verify Build nav link in header.

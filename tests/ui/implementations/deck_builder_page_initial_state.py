@@ -14,10 +14,9 @@ def steps(harness):
     harness.assert_text_present("Build")
     # Verify the commander search input placeholder
     harness.assert_visible("#cmd-input")
-    # Verify Physical radio option is present
-    harness.assert_text_present("Physical")
-    # Verify Hypothetical radio option is present
-    harness.assert_text_present("Hypothetical")
+    # Verify deck state dropdown options are present
+    harness.assert_text_present("Idea")
+    harness.assert_text_present("Constructed")
     # Verify Create Deck button exists
     harness.assert_text_present("Create Deck")
     harness.screenshot("final_state")

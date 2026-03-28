@@ -10,7 +10,8 @@ def steps(harness):
     # Navigate to the deck builder page
     harness.navigate("/deck-builder")
     harness.wait_for_text("New Commander Deck")
-    # Keep "Real" selected (default) so + Add Card button appears
+    # Select "Constructed" state so + Add Card button uses physical cards
+    harness.select_by_label("#deck-state", "Constructed")
     # Search for Judith as commander
     harness.fill_by_placeholder("Search your collection...", "Judith")
     harness.wait_for_text("Judith, Carnage Connoisseur", timeout=3000)
