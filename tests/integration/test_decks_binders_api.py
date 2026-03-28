@@ -391,13 +391,13 @@ class TestExclusivityAPI:
     """Cards can only be in one container at a time."""
 
     def test_card_in_deck_cannot_add_to_binder(self, api):
-        """A card assigned to a deck cannot be added to a binder."""
+        """A card assigned to a constructed deck cannot be added to a binder."""
         card_ids = _get_unassigned_entry_ids(api, count=1)
         if not card_ids:
             pytest.skip("No unassigned cards")
         card_id = card_ids[0]
 
-        _, deck = api.post("/api/decks", {"name": "Excl Test Deck"})
+        _, deck = api.post("/api/decks", {"name": "Excl Test Deck", "state": "constructed"})
         _, binder = api.post("/api/binders", {"name": "Excl Test Binder"})
 
         try:
@@ -425,7 +425,7 @@ class TestExclusivityAPI:
             pytest.skip("No unassigned cards")
         card_id = card_ids[0]
 
-        _, deck = api.post("/api/decks", {"name": "Excl Test Deck 2"})
+        _, deck = api.post("/api/decks", {"name": "Excl Test Deck 2", "state": "constructed"})
         _, binder = api.post("/api/binders", {"name": "Excl Test Binder 2"})
 
         try:
@@ -453,7 +453,7 @@ class TestExclusivityAPI:
             pytest.skip("No unassigned cards")
         card_id = card_ids[0]
 
-        _, deck = api.post("/api/decks", {"name": "Move Source Deck"})
+        _, deck = api.post("/api/decks", {"name": "Move Source Deck", "state": "constructed"})
         _, binder = api.post("/api/binders", {"name": "Move Target Binder"})
 
         try:
