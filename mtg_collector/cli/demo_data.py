@@ -25,6 +25,7 @@ import sqlite3
 from pathlib import Path
 
 from mtg_collector.db.models import (
+    DECK_STATE_CONSTRUCTED,
     Batch,
     BatchRepository,
     Binder,
@@ -601,6 +602,7 @@ def load_demo_data(conn: sqlite3.Connection) -> bool:
             format=deck_def.get("format"),
             sleeve_color=deck_def.get("sleeve_color"),
             deck_box=deck_def.get("deck_box"),
+            state_id=DECK_STATE_CONSTRUCTED,
         )
         deck_id = deck_repo.add(deck)
         # Collect owned collection IDs within the cards_slice

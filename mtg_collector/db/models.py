@@ -97,15 +97,20 @@ class CollectionEntry:
     status: str = "owned"
     sale_price: Optional[float] = None
     order_id: Optional[int] = None
-    deck_id: Optional[int] = None
     binder_id: Optional[int] = None
-    deck_zone: Optional[str] = None
     batch_id: Optional[int] = None
+
+
+DECK_STATE_IDEA = 1
+DECK_STATE_READY = 2
+DECK_STATE_CONSTRUCTED = 3
+
+STATE_NAME_TO_ID = {"idea": DECK_STATE_IDEA, "ready": DECK_STATE_READY, "constructed": DECK_STATE_CONSTRUCTED}
 
 
 @dataclass
 class Deck:
-    """A physical deck grouping."""
+    """A deck grouping — idea, ready, or constructed."""
     id: Optional[int]
     name: str
     description: Optional[str] = None
@@ -117,7 +122,7 @@ class Deck:
     origin_set_code: Optional[str] = None
     origin_theme: Optional[str] = None
     origin_variation: Optional[int] = None
-    hypothetical: bool = False
+    state_id: int = DECK_STATE_IDEA
     commander_oracle_id: Optional[str] = None
     commander_printing_id: Optional[str] = None
     plan: Optional[str] = None
@@ -940,7 +945,7 @@ class CollectionRepository:
                 c.id, c.printing_id, c.finish, c.condition, c.language,
                 c.purchase_price, c.acquired_at, c.source, c.source_image,
                 c.notes, c.tags, c.status, c.sale_price, c.order_id,
-                c.deck_id, c.binder_id, c.deck_zone,
+                dc.deck_id, c.binder_id, dc.zone AS deck_zone,
                 d.name AS deck_name,
                 b.name AS binder_name,
                 o.order_number, o.source AS order_source, o.seller_name,
@@ -949,7 +954,8 @@ class CollectionRepository:
                 ii.id AS image_id
             FROM collection c
             LEFT JOIN orders o ON c.order_id = o.id
-            LEFT JOIN decks d ON c.deck_id = d.id
+            LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+            LEFT JOIN decks d ON dc.deck_id = d.id
             LEFT JOIN binders b ON c.binder_id = b.id
             LEFT JOIN ingest_lineage il ON il.collection_id = c.id
             LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
@@ -1069,21 +1075,9 @@ class CollectionRepository:
         except (IndexError, KeyError):
             pass
 
-        deck_id = None
-        try:
-            deck_id = row["deck_id"]
-        except (IndexError, KeyError):
-            pass
-
         binder_id = None
         try:
             binder_id = row["binder_id"]
-        except (IndexError, KeyError):
-            pass
-
-        deck_zone = None
-        try:
-            deck_zone = row["deck_zone"]
         except (IndexError, KeyError):
             pass
 
@@ -1113,9 +1107,7 @@ class CollectionRepository:
             status=status,
             sale_price=sale_price,
             order_id=order_id,
-            deck_id=deck_id,
             binder_id=binder_id,
-            deck_zone=deck_zone,
             batch_id=batch_id,
         )
 
@@ -1862,28 +1854,30 @@ class DeckRepository:
             """INSERT INTO decks (name, description, format, is_precon,
                sleeve_color, deck_box, storage_location,
                origin_set_code, origin_theme, origin_variation,
-               hypothetical, commander_oracle_id, commander_printing_id,
+               state_id, commander_oracle_id, commander_printing_id,
                plan, sub_plans, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (deck.name, deck.description, deck.format, is_precon,
              deck.sleeve_color, deck.deck_box, deck.storage_location,
              deck.origin_set_code, deck.origin_theme, deck.origin_variation,
-             1 if deck.hypothetical else 0, deck.commander_oracle_id,
+             deck.state_id, deck.commander_oracle_id,
              deck.commander_printing_id, deck.plan, deck.sub_plans, ts, ts),
         )
         return cursor.lastrowid
 
     def get(self, deck_id: int) -> Optional[Dict[str, Any]]:
         row = self.conn.execute(
-            """SELECT d.*,
-                      COUNT(c.id) as card_count,
-                      COALESCE(SUM(c.purchase_price), 0) as total_value,
+            """SELECT d.*, ds.name AS state,
+                      (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
+                      (SELECT COALESCE(SUM(c.purchase_price), 0)
+                       FROM deck_cards dc2
+                       JOIN collection c ON dc2.collection_id = c.id
+                       WHERE dc2.deck_id = d.id) as total_value,
                       (SELECT COALESCE(SUM(e.quantity), 0)
                        FROM deck_expected_cards e WHERE e.deck_id = d.id) as expected_card_count
                FROM decks d
-               LEFT JOIN collection c ON c.deck_id = d.id
-               WHERE d.id = ?
-               GROUP BY d.id""",
+               JOIN deck_states ds ON d.state_id = ds.id
+               WHERE d.id = ?""",
             (deck_id,),
         ).fetchone()
         return dict(row) if row else None
@@ -1894,13 +1888,14 @@ class DeckRepository:
         allowed = ("name", "description", "format", "is_precon",
                     "sleeve_color", "deck_box", "storage_location",
                     "origin_set_code", "origin_theme", "origin_variation",
-                    "hypothetical", "commander_oracle_id", "commander_printing_id",
+                    "state_id",
+                    "commander_oracle_id", "commander_printing_id",
                     "plan", "sub_plans")
         for key in allowed:
             if key in data:
                 fields.append(f"{key} = ?")
                 val = data[key]
-                if key in ("is_precon", "hypothetical"):
+                if key == "is_precon":
                     val = 1 if val else 0
                 params.append(val)
         # Auto-set is_precon when origin_set_code is provided
@@ -1919,44 +1914,37 @@ class DeckRepository:
         return cursor.rowcount > 0
 
     def delete(self, deck_id: int) -> bool:
-        # Log movements before clearing assignments
+        # Log movements before deleting deck_cards rows
         rows = self.conn.execute(
-            "SELECT id, deck_zone FROM collection WHERE deck_id = ?", (deck_id,)
+            "SELECT collection_id, zone FROM deck_cards WHERE deck_id = ? AND collection_id IS NOT NULL",
+            (deck_id,),
         ).fetchall()
         for row in rows:
-            _log_movement(self.conn, row["id"], deck_id, None,
-                          None, None, row["deck_zone"], None, note="deck deleted")
-        self.conn.execute(
-            "UPDATE collection SET deck_id = NULL, deck_zone = NULL WHERE deck_id = ?",
-            (deck_id,),
-        )
+            _log_movement(self.conn, row["collection_id"], deck_id, None,
+                          None, None, row["zone"], None, note="deck deleted")
+        # Explicitly delete deck_cards (don't rely on CASCADE needing PRAGMA foreign_keys)
+        self.conn.execute("DELETE FROM deck_cards WHERE deck_id = ?", (deck_id,))
         cursor = self.conn.execute("DELETE FROM decks WHERE id = ?", (deck_id,))
         return cursor.rowcount > 0
 
     def list_all(self) -> List[Dict[str, Any]]:
         cursor = self.conn.execute(
-            """SELECT d.*,
-                      COUNT(c.id) as card_count,
-                      COALESCE(SUM(c.purchase_price), 0) as total_value,
-                      COALESCE(
-                        (SELECT GROUP_CONCAT(DISTINCT je.value)
-                         FROM collection c2
-                         JOIN printings p ON c2.printing_id = p.printing_id
-                         JOIN cards card ON p.oracle_id = card.oracle_id,
-                              json_each(card.colors) je
-                         WHERE c2.deck_id = d.id),
-                        (SELECT GROUP_CONCAT(DISTINCT je.value)
-                         FROM deck_expected_cards ec
-                         JOIN printings p ON ec.printing_id = p.printing_id
-                         JOIN cards card ON p.oracle_id = card.oracle_id,
-                              json_each(card.colors) je
-                         WHERE ec.deck_id = d.id)
-                      ) as deck_colors,
+            """SELECT d.*, ds.name AS state,
+                      (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
+                      (SELECT COALESCE(SUM(c.purchase_price), 0)
+                       FROM deck_cards dc2
+                       JOIN collection c ON dc2.collection_id = c.id
+                       WHERE dc2.deck_id = d.id) as total_value,
+                      (SELECT GROUP_CONCAT(DISTINCT je.value)
+                       FROM deck_cards dc3
+                       JOIN printings p ON dc3.printing_id = p.printing_id
+                       JOIN cards card ON p.oracle_id = card.oracle_id,
+                            json_each(card.colors) je
+                       WHERE dc3.deck_id = d.id) as deck_colors,
                       (SELECT COALESCE(SUM(e.quantity), 0)
                        FROM deck_expected_cards e WHERE e.deck_id = d.id) as expected_card_count
                FROM decks d
-               LEFT JOIN collection c ON c.deck_id = d.id
-               GROUP BY d.id
+               JOIN deck_states ds ON d.state_id = ds.id
                ORDER BY d.name"""
         )
         return [dict(row) for row in cursor]
@@ -1966,28 +1954,37 @@ class DeckRepository:
         """Find a deck by its origin metadata (set code + theme + optional variation)."""
         if origin_variation is not None:
             row = self.conn.execute(
-                """SELECT d.*, COUNT(c.id) as card_count,
-                          COALESCE(SUM(c.purchase_price), 0) as total_value
-                   FROM decks d LEFT JOIN collection c ON c.deck_id = d.id
+                """SELECT d.*, ds.name AS state,
+                          (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
+                          (SELECT COALESCE(SUM(c.purchase_price), 0)
+                           FROM deck_cards dc2 JOIN collection c ON dc2.collection_id = c.id
+                           WHERE dc2.deck_id = d.id) as total_value
+                   FROM decks d
+                   JOIN deck_states ds ON d.state_id = ds.id
                    WHERE d.origin_set_code = ? AND d.origin_theme = ? AND d.origin_variation = ?
-                   GROUP BY d.id LIMIT 1""",
+                   LIMIT 1""",
                 (origin_set_code, origin_theme, origin_variation),
             ).fetchone()
         else:
             row = self.conn.execute(
-                """SELECT d.*, COUNT(c.id) as card_count,
-                          COALESCE(SUM(c.purchase_price), 0) as total_value
-                   FROM decks d LEFT JOIN collection c ON c.deck_id = d.id
+                """SELECT d.*, ds.name AS state,
+                          (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
+                          (SELECT COALESCE(SUM(c.purchase_price), 0)
+                           FROM deck_cards dc2 JOIN collection c ON dc2.collection_id = c.id
+                           WHERE dc2.deck_id = d.id) as total_value
+                   FROM decks d
+                   JOIN deck_states ds ON d.state_id = ds.id
                    WHERE d.origin_set_code = ? AND d.origin_theme = ?
-                   GROUP BY d.id LIMIT 1""",
+                   LIMIT 1""",
                 (origin_set_code, origin_theme),
             ).fetchone()
         return dict(row) if row else None
 
     def get_cards(self, deck_id: int, zone: Optional[str] = None) -> List[Dict[str, Any]]:
         query = """
-            SELECT c.id, c.printing_id, c.finish, c.condition, c.language,
-                   c.purchase_price, c.acquired_at, c.deck_zone,
+            SELECT c.id, dc.printing_id, c.finish, c.condition, c.language,
+                   c.purchase_price, c.acquired_at, dc.zone AS deck_zone,
+                   dc.quantity,
                    p.set_code, p.collector_number, p.rarity, p.artist,
                    p.image_uri, p.frame_effects, p.border_color, p.full_art,
                    p.promo, p.promo_types, p.finishes,
@@ -1995,15 +1992,16 @@ class DeckRepository:
                    card.colors, card.color_identity, p.oracle_id,
                    json_extract(p.raw_json, '$.layout') as layout,
                    s.set_name
-            FROM collection c
-            JOIN printings p ON c.printing_id = p.printing_id
+            FROM deck_cards dc
+            JOIN printings p ON dc.printing_id = p.printing_id
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
-            WHERE c.deck_id = ?
+            LEFT JOIN collection c ON dc.collection_id = c.id
+            WHERE dc.deck_id = ?
         """
         params: list = [deck_id]
         if zone:
-            query += " AND c.deck_zone = ?"
+            query += " AND dc.zone = ?"
             params.append(zone)
         query += " ORDER BY card.name"
         return [dict(row) for row in self.conn.execute(query, params)]
@@ -2013,39 +2011,57 @@ class DeckRepository:
         if not collection_ids:
             return 0
         placeholders = ",".join("?" * len(collection_ids))
-        conflicts = self.conn.execute(
-            f"SELECT id, deck_id, binder_id FROM collection "
-            f"WHERE id IN ({placeholders}) AND (deck_id IS NOT NULL OR binder_id IS NOT NULL)",
+        # Check for deck conflicts (only block cards in constructed decks)
+        deck_conflicts = self.conn.execute(
+            f"SELECT dc.collection_id FROM deck_cards dc "
+            f"JOIN decks d ON dc.deck_id = d.id "
+            f"WHERE dc.collection_id IN ({placeholders}) "
+            f"AND d.state_id = {DECK_STATE_CONSTRUCTED}",
             collection_ids,
         ).fetchall()
-        if conflicts:
-            ids = [r["id"] for r in conflicts]
-            raise ValueError(f"Cards already assigned to a deck or binder: {ids}")
-        cursor = self.conn.execute(
-            f"UPDATE collection SET deck_id = ?, deck_zone = ? WHERE id IN ({placeholders})",
-            [deck_id, zone] + collection_ids,
-        )
-        for cid in collection_ids:
-            _log_movement(self.conn, cid, None, deck_id, None, None, None, zone)
-        return cursor.rowcount
+        # Check for binder conflicts
+        binder_conflicts = self.conn.execute(
+            f"SELECT id FROM collection "
+            f"WHERE id IN ({placeholders}) AND binder_id IS NOT NULL",
+            collection_ids,
+        ).fetchall()
+        conflict_ids = [r["collection_id"] for r in deck_conflicts] + [r["id"] for r in binder_conflicts]
+        if conflict_ids:
+            raise ValueError(f"Cards already assigned to a deck or binder: {conflict_ids}")
+        # Get printing_ids for the collection entries
+        rows = self.conn.execute(
+            f"SELECT id, printing_id FROM collection WHERE id IN ({placeholders})",
+            collection_ids,
+        ).fetchall()
+        count = 0
+        for row in rows:
+            self.conn.execute(
+                "INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity) "
+                "VALUES (?, ?, ?, ?, 1)",
+                (deck_id, row["printing_id"], row["id"], zone),
+            )
+            _log_movement(self.conn, row["id"], None, deck_id, None, None, None, zone)
+            count += 1
+        return count
 
     def remove_cards(self, deck_id: int, collection_ids: List[int]) -> int:
         if not collection_ids:
             return 0
         placeholders = ",".join("?" * len(collection_ids))
-        # Read current zones before clearing
+        # Read current zones before deleting
         rows = self.conn.execute(
-            f"SELECT id, deck_zone FROM collection WHERE deck_id = ? AND id IN ({placeholders})",
+            f"SELECT collection_id, zone FROM deck_cards "
+            f"WHERE deck_id = ? AND collection_id IN ({placeholders})",
             [deck_id] + collection_ids,
         ).fetchall()
         cursor = self.conn.execute(
-            f"UPDATE collection SET deck_id = NULL, deck_zone = NULL "
-            f"WHERE deck_id = ? AND id IN ({placeholders})",
+            f"DELETE FROM deck_cards "
+            f"WHERE deck_id = ? AND collection_id IN ({placeholders})",
             [deck_id] + collection_ids,
         )
         for row in rows:
-            _log_movement(self.conn, row["id"], deck_id, None,
-                          None, None, row["deck_zone"], None)
+            _log_movement(self.conn, row["collection_id"], deck_id, None,
+                          None, None, row["zone"], None)
         return cursor.rowcount
 
     def move_cards(self, collection_ids: List[int], target_deck_id: int,
@@ -2055,18 +2071,35 @@ class DeckRepository:
         placeholders = ",".join("?" * len(collection_ids))
         # Read current state before moving
         rows = self.conn.execute(
-            f"SELECT id, deck_id, binder_id, deck_zone FROM collection WHERE id IN ({placeholders})",
+            f"SELECT c.id, dc.deck_id, c.binder_id, dc.zone AS deck_zone, c.printing_id "
+            f"FROM collection c "
+            f"LEFT JOIN deck_cards dc ON dc.collection_id = c.id "
+            f"WHERE c.id IN ({placeholders})",
             collection_ids,
         ).fetchall()
-        cursor = self.conn.execute(
-            f"UPDATE collection SET deck_id = ?, deck_zone = ?, binder_id = NULL "
-            f"WHERE id IN ({placeholders})",
-            [target_deck_id, zone] + collection_ids,
-        )
+        count = 0
         for row in rows:
-            _log_movement(self.conn, row["id"], row["deck_id"], target_deck_id,
+            cid = row["id"]
+            # Remove from old deck if any
+            if row["deck_id"]:
+                self.conn.execute(
+                    "DELETE FROM deck_cards WHERE collection_id = ?", (cid,)
+                )
+            # Clear binder if any
+            if row["binder_id"]:
+                self.conn.execute(
+                    "UPDATE collection SET binder_id = NULL WHERE id = ?", (cid,)
+                )
+            # Add to target deck
+            self.conn.execute(
+                "INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity) "
+                "VALUES (?, ?, ?, ?, 1)",
+                (target_deck_id, row["printing_id"], cid, zone),
+            )
+            _log_movement(self.conn, cid, row["deck_id"], target_deck_id,
                           row["binder_id"], None, row["deck_zone"], zone)
-        return cursor.rowcount
+            count += 1
+        return count
 
 
     def set_expected_cards(self, deck_id: int, cards: List[Dict]) -> int:
@@ -2154,12 +2187,12 @@ class DeckRepository:
 
         # Count actual cards by oracle_id+zone in this deck
         actual_rows = self.conn.execute(
-            "SELECT p.oracle_id, card.name, col.deck_zone, COUNT(*) as qty "
-            "FROM collection col "
-            "JOIN printings p ON col.printing_id = p.printing_id "
+            "SELECT p.oracle_id, card.name, dc.zone AS deck_zone, COUNT(*) as qty "
+            "FROM deck_cards dc "
+            "JOIN printings p ON dc.printing_id = p.printing_id "
             "JOIN cards card ON p.oracle_id = card.oracle_id "
-            "WHERE col.deck_id = ? "
-            "GROUP BY p.oracle_id, col.deck_zone",
+            "WHERE dc.deck_id = ? AND dc.collection_id IS NOT NULL "
+            "GROUP BY p.oracle_id, dc.zone",
             (deck_id,),
         ).fetchall()
         actual_map: Dict[str, int] = {}
@@ -2191,9 +2224,10 @@ class DeckRepository:
                     "d.name as deck_name, b.name as binder_name, col.status "
                     "FROM collection col "
                     "JOIN printings p ON col.printing_id = p.printing_id "
-                    "LEFT JOIN decks d ON col.deck_id = d.id "
+                    "LEFT JOIN deck_cards dc ON dc.collection_id = col.id "
+                    "LEFT JOIN decks d ON dc.deck_id = d.id "
                     "LEFT JOIN binders b ON col.binder_id = b.id "
-                    "WHERE p.oracle_id = ? AND (col.deck_id IS NULL OR col.deck_id != ?)",
+                    "WHERE p.oracle_id = ? AND (dc.deck_id IS NULL OR dc.deck_id != ?)",
                     (r["oracle_id"], deck_id),
                 ).fetchall()
                 entry["locations"] = [dict(loc) for loc in locations]
@@ -2212,7 +2246,7 @@ class DeckRepository:
         return {"present": present, "missing": missing, "extra": extra}
 
     def materialize_deck(self, deck_id: int) -> Dict:
-        """Convert a hypothetical deck to physical by assigning owned, unassigned collection entries.
+        """Convert an idea/ready deck to constructed by assigning owned, unassigned collection entries.
 
         For each expected card, prefers the same printing, then FIFO.
         Returns {matched: [...], missing: [...], total_matched, total_missing}.
@@ -2227,8 +2261,9 @@ class DeckRepository:
             rows = self.conn.execute(
                 "SELECT col.id, col.printing_id FROM collection col "
                 "JOIN printings p ON col.printing_id = p.printing_id "
+                "LEFT JOIN deck_cards dc ON dc.collection_id = col.id "
                 "WHERE p.oracle_id = ? AND col.status = 'owned' "
-                "AND col.deck_id IS NULL AND col.binder_id IS NULL "
+                "AND dc.id IS NULL AND col.binder_id IS NULL "
                 "ORDER BY CASE WHEN col.printing_id = ? THEN 0 ELSE 1 END, col.id "
                 "LIMIT ?",
                 (exp["oracle_id"], exp["printing_id"], exp["quantity"]),
@@ -2258,7 +2293,7 @@ class DeckRepository:
         for zone, ids in zone_ids.items():
             self.add_cards(deck_id, ids, zone=zone)
 
-        self.update(deck_id, {"hypothetical": False})
+        self.update(deck_id, {"state_id": DECK_STATE_CONSTRUCTED})
 
         total_matched = sum(len(ids) for ids in zone_ids.values())
         total_missing = sum(
@@ -2371,14 +2406,23 @@ class BinderRepository:
         if not collection_ids:
             return 0
         placeholders = ",".join("?" * len(collection_ids))
-        conflicts = self.conn.execute(
-            f"SELECT id, deck_id, binder_id FROM collection "
-            f"WHERE id IN ({placeholders}) AND (deck_id IS NOT NULL OR binder_id IS NOT NULL)",
+        # Check for deck conflicts (only block cards in constructed decks)
+        deck_conflicts = self.conn.execute(
+            f"SELECT dc.collection_id FROM deck_cards dc "
+            f"JOIN decks d ON dc.deck_id = d.id "
+            f"WHERE dc.collection_id IN ({placeholders}) "
+            f"AND d.state_id = {DECK_STATE_CONSTRUCTED}",
             collection_ids,
         ).fetchall()
-        if conflicts:
-            ids = [r["id"] for r in conflicts]
-            raise ValueError(f"Cards already assigned to a deck or binder: {ids}")
+        # Check for binder conflicts
+        binder_conflicts = self.conn.execute(
+            f"SELECT id FROM collection "
+            f"WHERE id IN ({placeholders}) AND binder_id IS NOT NULL",
+            collection_ids,
+        ).fetchall()
+        conflict_ids = [r["collection_id"] for r in deck_conflicts] + [r["id"] for r in binder_conflicts]
+        if conflict_ids:
+            raise ValueError(f"Cards already assigned to a deck or binder: {conflict_ids}")
         cursor = self.conn.execute(
             f"UPDATE collection SET binder_id = ? WHERE id IN ({placeholders})",
             [binder_id] + collection_ids,
@@ -2406,12 +2450,20 @@ class BinderRepository:
         placeholders = ",".join("?" * len(collection_ids))
         # Read current state before moving
         rows = self.conn.execute(
-            f"SELECT id, deck_id, binder_id, deck_zone FROM collection WHERE id IN ({placeholders})",
+            f"SELECT c.id, dc.deck_id, c.binder_id, dc.zone AS deck_zone "
+            f"FROM collection c "
+            f"LEFT JOIN deck_cards dc ON dc.collection_id = c.id "
+            f"WHERE c.id IN ({placeholders})",
             collection_ids,
         ).fetchall()
+        # Remove from any deck
+        self.conn.execute(
+            f"DELETE FROM deck_cards WHERE collection_id IN ({placeholders})",
+            collection_ids,
+        )
+        # Assign to binder
         cursor = self.conn.execute(
-            f"UPDATE collection SET binder_id = ?, deck_id = NULL, deck_zone = NULL "
-            f"WHERE id IN ({placeholders})",
+            f"UPDATE collection SET binder_id = ? WHERE id IN ({placeholders})",
             [target_binder_id] + collection_ids,
         )
         for row in rows:

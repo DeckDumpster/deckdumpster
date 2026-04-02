@@ -1,7 +1,7 @@
 """
 Hand-written implementation for deck_builder_add_and_remove_cards.
 
-Creates a non-hypothetical deck, adds a card via the add-cards picker,
+Creates a constructed deck, adds a card via the add-cards picker,
 verifies it appears in the deck, then removes it.
 """
 
@@ -10,7 +10,8 @@ def steps(harness):
     # Navigate to the deck builder page
     harness.navigate("/deck-builder")
     harness.wait_for_text("New Commander Deck")
-    # Keep "Real" selected (default) so + Add Card button appears
+    # Select "Constructed" state so + Add Card button uses physical cards
+    harness.select_by_label("#deck-state", "Constructed")
     # Search for Judith as commander
     harness.fill_by_placeholder("Search your collection...", "Judith")
     harness.wait_for_text("Judith, Carnage Connoisseur", timeout=3000)

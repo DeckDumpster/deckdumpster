@@ -37,11 +37,12 @@
           <div class="autocomplete-list" id="cmd-autocomplete" style="display:none"></div>
         </div>
         <div class="form-group">
-          <label>Deck Type</label>
-          <div class="radio-group">
-            <label><input type="radio" name="deck-type" value="physical" checked> Physical</label>
-            <label><input type="radio" name="deck-type" value="hypothetical"> Hypothetical</label>
-          </div>
+          <label>Deck State</label>
+          <select id="deck-state">
+            <option value="idea">Idea</option>
+            <option value="ready">Ready</option>
+            <option value="constructed">Constructed</option>
+          </select>
         </div>
         <button id="create-btn" disabled>Create Deck</button>
       </div>`;
@@ -89,14 +90,14 @@
       if (!selectedCommander) return;
       createBtn.disabled = true;
       createBtn.textContent = 'Creating...';
-      const hypo = document.querySelector('input[name="deck-type"]:checked').value === 'hypothetical';
+      const deckState = document.getElementById('deck-state').value;
       const res = await fetch('/api/deck-builder', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           commander_oracle_id: selectedCommander.oracle_id,
           commander_printing_id: selectedCommander.printing_id,
-          hypothetical: hypo,
+          state: deckState,
         }),
       });
       const deck = await res.json();
@@ -106,9 +107,10 @@
         alert(deck.error);
         return;
       }
-      history.pushState(null, '', '/decks/' + deck.id);
+      const newDeckId = deck.id || deck.deck_id;
+      history.pushState(null, '', '/decks/' + newDeckId);
       document.title = deck.name + ' — Deck Builder';
-      await loadBuilder(deck.id);
+      await loadBuilder(newDeckId);
     });
   }
 
@@ -173,12 +175,12 @@
           <div class="deck-header">
             <h2>${esc(deck.name)}</h2>
             <span class="card-count">${totalCards}/${deckSize}</span>
-            ${deck.hypothetical ? '<span class="hypothetical-badge">Hypothetical</span>' : ''}
+            <span class="state-badge state-${deck.state || 'idea'}">${({'idea':'Idea','ready':'Ready','constructed':'Constructed'})[deck.state] || deck.state || 'Idea'}</span>
             <div class="header-actions">
               <button class="edit-btn" id="edit-deck-btn">Edit</button>
               <button class="add-btn" id="add-card-btn">+ Add Card</button>
               <button class="edit-btn" id="btn-import-expected">Import Expected</button>
-              ${deck.hypothetical ? '<button class="add-btn" id="btn-materialize">Materialize</button>' : ''}
+              ${deck.state !== 'constructed' ? '<button class="add-btn" id="btn-materialize">Materialize</button>' : ''}
               <button class="delete-btn" id="delete-deck-btn">Delete</button>
             </div>
           </div>
@@ -448,7 +450,7 @@
       window.location.href = '/decks';
     });
 
-    // Materialize hypothetical deck
+    // Materialize idea/ready deck to constructed
     const materializeBtn = document.getElementById('btn-materialize');
     if (materializeBtn) {
       materializeBtn.addEventListener('click', async () => {
@@ -570,7 +572,7 @@
   }
 
   function renderGroups(groups, commander) {
-    const hypo = window._builderData && window._builderData.deck.hypothetical;
+    const isVirtual = window._builderData && window._builderData.deck.state !== 'constructed';
     let html = '';
     // Show commander first if present
     if (commander) {
@@ -592,9 +594,9 @@
         const qtyStr = qty > 1 ? `<span class="card-qty">${qty}x</span> ` : '';
         const cids = c.collection_ids || [c.id];
         let removeBtn = '';
-        if (hypo && c.printing_id) {
+        if (isVirtual && c.printing_id) {
           removeBtn = `<button class="remove-btn" data-printing-id="${c.printing_id}" title="Remove">&times;</button>`;
-        } else if (!hypo && cids[0] != null) {
+        } else if (!isVirtual && cids[0] != null) {
           removeBtn = `<button class="remove-btn" data-collection-id="${cids[0]}" title="Remove">&times;</button>`;
         }
         html += `<div class="card-row" data-image-uri="${esc(c.image_uri || '')}" data-card-name="${esc(c.name)}">
@@ -667,14 +669,14 @@
         '<div style="padding:12px;color:var(--text-secondary);">Type at least 2 characters...</div>';
       return;
     }
-    const hypo = window._builderData && window._builderData.deck.hypothetical;
+    const isVirtual = window._builderData && window._builderData.deck.state !== 'constructed';
     const res = await fetch('/api/collection?q=' + encodeURIComponent(q) + '&status=owned&expand=copies');
     const data = await res.json();
     const allCopies = Array.isArray(data) ? data : data.cards || [];
     // Hypothetical decks: dedup by printing_id (don't care about individual copies)
     // Real decks: only show unassigned copies
     let cards;
-    if (hypo) {
+    if (isVirtual) {
       const seen = new Set();
       cards = allCopies.filter(c => {
         if (seen.has(c.printing_id)) return false;
@@ -691,7 +693,7 @@
       return;
     }
     container.innerHTML = cards.map(c => {
-      const key = hypo ? String(c.printing_id) : String(c.collection_id);
+      const key = isVirtual ? String(c.printing_id) : String(c.collection_id);
       const cond = c.condition ? ` [${esc(c.condition)}]` : '';
       const price = c.purchase_price ? ` $${parseFloat(c.purchase_price).toFixed(2)}` : '';
       return `<div class="picker-card ${pickerSelected.has(key) ? 'selected' : ''}" data-key="${esc(key)}">
@@ -717,9 +719,9 @@
   async function addSelectedPickerCards(deckId) {
     if (pickerSelected.size === 0) { alert('No cards selected'); return; }
     const zone = document.getElementById('add-zone').value;
-    const hypo = window._builderData && window._builderData.deck.hypothetical;
+    const isVirtual = window._builderData && window._builderData.deck.state !== 'constructed';
 
-    if (hypo) {
+    if (isVirtual) {
       // Hypothetical deck: add to expected cards by printing_id
       const printingIds = Array.from(pickerSelected);
       const res = await fetch('/api/decks/' + deckId + '/expected-cards/add', {
@@ -809,8 +811,8 @@
       html += `<div style="margin-bottom:12px"><a href="${sfUrl}" target="_blank" rel="noopener" class="btn-scryfall-link">View on Scryfall</a></div>`;
     }
 
-    // Hypothetical decks: cards are in the mainboard table, just show Scryfall link
-    if (deck.hypothetical) {
+    // Idea decks: cards are in the mainboard table, just show Scryfall link
+    if (deck.state === 'idea') {
       if (!html) {
         section.style.display = 'none';
         return;
@@ -820,7 +822,7 @@
       return;
     }
 
-    // Non-hypothetical: show completeness
+    // Ready/Constructed: show completeness
     const res = await fetch('/api/decks/' + deck.id + '/completeness');
     const data = await res.json();
 

@@ -63,6 +63,39 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     return _connection
 
 
+def attach_shared(conn, shared_db_path):
+    """ATTACH a shared reference DB and create temp views to shadow local tables.
+
+    Also re-creates cross-schema views (collection_view, sealed_collection_view)
+    as temp views so they resolve table references through the temp view chain
+    instead of reading from empty main-schema tables.
+    """
+    from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS
+
+    conn.execute("ATTACH DATABASE ? AS shared", (shared_db_path,))
+    for table in SHARED_TABLES:
+        conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{table}] AS SELECT * FROM shared.[{table}]")
+    for view in SHARED_VIEWS:
+        conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{view}] AS SELECT * FROM shared.[{view}]")
+
+    # Re-create cross-schema views as temp views. Stored views in main resolve
+    # table names in the main schema (empty user tables). Temp views resolve via
+    # SQLite's temp → main → attached priority, hitting our temp view redirects.
+    for view_name in ("collection_view", "sealed_collection_view"):
+        row = conn.execute(
+            "SELECT sql FROM main.sqlite_master WHERE type='view' AND name=?",
+            (view_name,),
+        ).fetchone()
+        if not row:
+            continue
+        sql = row[0]
+        conn.execute(f"DROP VIEW IF EXISTS temp.[{view_name}]")
+        # Rewrite "CREATE VIEW collection_view" → "CREATE TEMP VIEW collection_view"
+        temp_sql = sql.replace(f"CREATE VIEW IF NOT EXISTS {view_name}", f"CREATE TEMP VIEW {view_name}", 1)
+        temp_sql = temp_sql.replace(f"CREATE VIEW {view_name}", f"CREATE TEMP VIEW {view_name}", 1)
+        conn.execute(temp_sql)
+
+
 def close_connection():
     """Close the cached connection if one exists."""
     global _connection, _db_path

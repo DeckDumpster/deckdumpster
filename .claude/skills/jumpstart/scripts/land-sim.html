@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jumpstart Land Mana Simulation</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/@sgratzl/chartjs-chart-boxplot@4"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 24px;
+  }
+  h1 {
+    text-align: center;
+    margin-bottom: 4px;
+    font-size: 1.4em;
+    color: #fff;
+  }
+  .subtitle {
+    text-align: center;
+    color: #888;
+    font-size: 0.85em;
+    margin-bottom: 20px;
+  }
+  .chart-container {
+    max-width: 1200px;
+    margin: 0 auto 32px;
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .chart-wrapper {
+    position: relative;
+    height: 450px;
+  }
+  .section-title {
+    max-width: 1200px;
+    margin: 0 auto 12px;
+    font-size: 1.1em;
+    color: #ccc;
+  }
+  .summary {
+    max-width: 1200px;
+    margin: 0 auto 32px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .summary-card {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .summary-card.full { grid-column: 1 / -1; }
+  .summary-card h3 {
+    margin-bottom: 12px;
+    font-size: 1em;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82em;
+    font-variant-numeric: tabular-nums;
+  }
+  th, td { padding: 4px 8px; text-align: right; }
+  th { color: #888; border-bottom: 1px solid #333; }
+  td { border-bottom: 1px solid #222; }
+  td:first-child, th:first-child { text-align: center; }
+  .diff-pos { color: #4ade80; }
+  .diff-neg { color: #f87171; }
+  .diff-zero { color: #666; }
+  .legend-note {
+    text-align: center;
+    color: #666;
+    font-size: 0.75em;
+    margin-top: 8px;
+  }
+  .insight {
+    max-width: 1200px;
+    margin: 0 auto 24px;
+    background: #1e2a4a;
+    border-left: 4px solid #6366f1;
+    border-radius: 0 12px 12px 0;
+    padding: 16px 20px;
+    font-size: 0.9em;
+    line-height: 1.5;
+  }
+  .insight strong { color: #a5b4fc; }
+</style>
+</head>
+<body>
+
+<h1>Jumpstart Mana from Lands: 7/1 vs 6/1/1 Split</h1>
+<div class="subtitle">40-card deck, 16 lands total — Monte Carlo simulation</div>
+
+<div id="insightArea"></div>
+
+<div class="section-title">All Games</div>
+<div class="chart-container">
+  <div class="chart-wrapper">
+    <canvas id="mainChart"></canvas>
+  </div>
+  <div class="legend-note">Box: Q1–Q3 | Whiskers: 5th–95th percentile | Line: median | ◆: mean</div>
+</div>
+
+<div class="section-title">Proposed Split: Games Where EW Was Played vs Not</div>
+<div class="chart-container">
+  <div class="chart-wrapper">
+    <canvas id="splitChart"></canvas>
+  </div>
+  <div class="legend-note">Box: Q1–Q3 | Whiskers: 5th–95th percentile | Line: median | ◆: mean</div>
+</div>
+
+<div class="summary" id="summaryArea"></div>
+
+<script>
+async function loadData() {
+  try {
+    const resp = await fetch('land-sim-data.json');
+    return await resp.json();
+  } catch (e) {
+    document.body.innerHTML = '<p style="color:red;padding:40px">Could not load land-sim-data.json — serve this directory with a local HTTP server (python3 -m http.server 8888).</p>';
+    throw e;
+  }
+}
+
+function buildBoxData(stats) {
+  return stats.map(s => {
+    if (s.empty) return null;
+    return {
+      min: s.p5,
+      q1: s.q1,
+      median: s.median,
+      q3: s.q3,
+      max: s.p95,
+      mean: s.mean,
+    };
+  });
+}
+
+function makeDataset(label, stats, color) {
+  return {
+    label,
+    data: buildBoxData(stats),
+    backgroundColor: color.replace(')', ', 0.3)').replace('rgb', 'rgba'),
+    borderColor: color.replace(')', ', 0.9)').replace('rgb', 'rgba'),
+    borderWidth: 1.5,
+    meanStyle: 'rectRot',
+    meanRadius: 4,
+    meanBackgroundColor: color,
+    meanBorderColor: color,
+    outlierRadius: 0,
+  };
+}
+
+function makeChart(canvasId, datasets, turns) {
+  const labels = Array.from({length: turns}, (_, i) => `Turn ${i + 1}`);
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  new Chart(ctx, {
+    type: 'boxplot',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#ccc', font: { size: 12 } } },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              const d = ctx.raw;
+              if (!d) return '';
+              return [
+                `${ctx.dataset.label}`,
+                `  Mean: ${d.mean.toFixed(2)}`,
+                `  Median: ${d.median}`,
+                `  Q1–Q3: ${d.q1}–${d.q3}`,
+                `  5th–95th: ${d.min}–${d.max}`,
+              ];
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
+        y: {
+          title: { display: true, text: 'Mana Available', color: '#aaa' },
+          ticks: { color: '#aaa', stepSize: 1 },
+          grid: { color: '#333' },
+          min: 0,
+        },
+      },
+    },
+  });
+}
+
+function renderSummary(data) {
+  const area = document.getElementById('summaryArea');
+  const scA = data.scenarios[0];
+  const scB = data.scenarios[1];
+
+  // Difference table
+  const diffCard = document.createElement('div');
+  diffCard.className = 'summary-card full';
+  let diffRows = '';
+  const ewPlayed = scB.ew_played;
+  const ewNot = scB.ew_not_played;
+  for (let t = 0; t < data.turns; t++) {
+    const a = scA.stats[t];
+    const b = scB.stats[t];
+    const diff = b.mean - a.mean;
+    const cls = diff > 0.005 ? 'diff-pos' : diff < -0.005 ? 'diff-neg' : 'diff-zero';
+    const sign = diff > 0 ? '+' : '';
+
+    const ewP = ewPlayed ? ewPlayed.stats[t] : null;
+    const ewN = ewNot ? ewNot.stats[t] : null;
+    const ewPDiff = ewP ? ewP.mean - a.mean : 0;
+    const ewNDiff = ewN ? ewN.mean - a.mean : 0;
+    const ewPCls = ewPDiff > 0.005 ? 'diff-pos' : ewPDiff < -0.005 ? 'diff-neg' : 'diff-zero';
+    const ewNCls = ewNDiff > 0.005 ? 'diff-pos' : ewNDiff < -0.005 ? 'diff-neg' : 'diff-zero';
+    const ewPSign = ewPDiff > 0 ? '+' : '';
+    const ewNSign = ewNDiff > 0 ? '+' : '';
+
+    diffRows += `<tr>
+      <td>${t + 1}</td>
+      <td>${a.mean.toFixed(2)}</td>
+      <td>${b.mean.toFixed(2)}</td>
+      <td class="${cls}">${sign}${diff.toFixed(2)}</td>
+      <td>${ewP ? ewP.mean.toFixed(2) : '—'}</td>
+      <td class="${ewPCls}">${ewP ? ewPSign + ewPDiff.toFixed(2) : '—'}</td>
+      <td>${ewN ? ewN.mean.toFixed(2) : '—'}</td>
+      <td class="${ewNCls}">${ewN ? ewNSign + ewNDiff.toFixed(2) : '—'}</td>
+    </tr>`;
+  }
+  diffCard.innerHTML = `
+    <h3>Mean Mana Comparison (all vs current baseline)</h3>
+    <table>
+      <thead><tr>
+        <th>Turn</th>
+        <th>Current</th>
+        <th>Proposed</th>
+        <th>Δ</th>
+        <th>EW played</th>
+        <th>Δ</th>
+        <th>EW not played</th>
+        <th>Δ</th>
+      </tr></thead>
+      <tbody>${diffRows}</tbody>
+    </table>
+  `;
+  area.appendChild(diffCard);
+}
+
+function renderInsight(data) {
+  const scA = data.scenarios[0];
+  const scB = data.scenarios[1];
+  const ewPlayed = scB.ew_played;
+  if (!ewPlayed) return;
+
+  const ewPct = ((ewPlayed.stats[0].n / data.trials) * 100).toFixed(0);
+  const t7diff = (ewPlayed.stats[6].mean - scA.stats[6].mean).toFixed(2);
+  const t7sign = t7diff > 0 ? '+' : '';
+
+  const area = document.getElementById('insightArea');
+  area.innerHTML = `
+    <div class="insight">
+      <strong>Key finding:</strong> Evolving Wilds is played in ~${ewPct}% of games.
+      In those games, deck thinning nearly compensates for the tapped entry —
+      by turn 7, the mana difference vs current is just <strong>${t7sign}${t7diff}</strong>.
+      The overall drag comes from the ~${100 - ewPct}% of games where EW stays in the deck:
+      you have 2 fewer basics with no thinning upside.
+    </div>
+  `;
+}
+
+loadData().then(data => {
+  document.querySelector('.subtitle').textContent =
+    `40-card deck, 16 lands total — ${data.trials.toLocaleString()} trials per scenario`;
+
+  const scA = data.scenarios[0];
+  const scB = data.scenarios[1];
+
+  // Main chart: Current vs Proposed (all games)
+  makeChart('mainChart', [
+    makeDataset(scA.name, scA.stats, 'rgb(99, 102, 241)'),
+    makeDataset(scB.name, scB.stats, 'rgb(251, 146, 60)'),
+  ], data.turns);
+
+  // Split chart: Current baseline vs EW-played vs EW-not-played
+  const splitDatasets = [
+    makeDataset(scA.name + ' (baseline)', scA.stats, 'rgb(99, 102, 241)'),
+  ];
+  if (scB.ew_played) {
+    splitDatasets.push(makeDataset(
+      scB.ew_played.name, scB.ew_played.stats, 'rgb(74, 222, 128)'
+    ));
+  }
+  if (scB.ew_not_played) {
+    splitDatasets.push(makeDataset(
+      scB.ew_not_played.name, scB.ew_not_played.stats, 'rgb(248, 113, 113)'
+    ));
+  }
+  makeChart('splitChart', splitDatasets, data.turns);
+
+  renderInsight(data);
+  renderSummary(data);
+});
+</script>
+</body>
+</html>

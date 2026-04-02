@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Search owned cards using SQL WHERE clauses, optionally filtered to one color.
+"""Search owned cards using SQL WHERE clauses.
 
 Usage:
-  jumpstart-search.py "<sql_where_clause>" [--color W]
+  jumpstart-search.py "<sql_where_clause>"
   jumpstart-search.py --schema
 
 Examples:
-  jumpstart-search.py "c.oracle_text LIKE '%destroy target%' AND c.cmc <= 3"
-  jumpstart-search.py "c.type_line LIKE '%Creature%' AND c.cmc <= 2" --color G
-  jumpstart-search.py "c.oracle_text LIKE '%draw%card%' AND c.cmc <= 4" --color U
-  jumpstart-search.py --schema
+  jumpstart-search.py "c.type_line LIKE '%Elf%' AND c.colors = '[\"G\"]'"
+  jumpstart-search.py "c.oracle_text LIKE '%create%token%' AND c.cmc <= 3"
+  jumpstart-search.py "p.rarity IN ('rare', 'mythic') AND c.cmc <= 5"
 
 The WHERE clause has access to these table aliases:
   c   = cards (name, oracle_text, type_line, mana_cost, cmc, colors, color_identity)
@@ -17,7 +16,6 @@ The WHERE clause has access to these table aliases:
   col = collection (id, finish, condition, status, deck_id, binder_id)
 
 Results are deduplicated by oracle_id and limited to 50.
-Optional --color flag restricts to mono-colored cards (jumpstart packs are mono-colored).
 """
 import sys
 
@@ -78,22 +76,8 @@ if argv[1] == "--schema":
 
 where_clause = argv[1]
 
-# Parse optional --color flag from remaining args
-color = None
-i = 2
-while i < len(argv):
-    if argv[i] == "--color" and i + 1 < len(argv):
-        color = argv[i + 1].upper()
-        i += 2
-    else:
-        i += 1
-
-body = {"where_clause": where_clause}
-if color:
-    body["color"] = color
-
 client = DeckBuilderClient(base_url)
-results = client.post("/api/jumpstart/sql-search", body)
+results = client.post("/api/jumpstart/sql-search", {"where_clause": where_clause})
 
 if not results:
     print(f"No cards found matching: {where_clause}")
@@ -123,3 +107,8 @@ for card in results:
             text = text[:117] + "..."
         print(f"      Text: {text}")
     print()
+
+if len(results) >= 50:
+    print("--- Results capped at 50. Add filters to narrow: ---")
+    example = f'jumpstart-search.py "{where_clause} AND c.cmc <= 3"'
+    print(f"uv run python .claude/skills/jumpstart/scripts/{example}")

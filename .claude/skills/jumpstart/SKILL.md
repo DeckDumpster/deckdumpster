@@ -7,7 +7,7 @@ disable-model-invocation: false
 
 # Jumpstart Pack Builder
 
-Build custom Jumpstart 2025-style 20-card packs using cards the user actually owns. The process: choose a color + theme + rare category, find an identity card, generate a soft shape, then fill slots theme-first.
+Build custom Jumpstart 2025-style 20-card packs using cards the user actually owns.
 
 ## The J25 Pack Formula (Reference)
 
@@ -15,36 +15,63 @@ Every J25 pack follows this formula (derived from analyzing all 121 real J25 dec
 
 - **20 cards total**: 8 lands + 12 non-land spells
 - **Lands**: 1 Thriving land (color-matched) + 7 basics (always)
-- **Mono-colored** (all colored spells share one color; colorless artifacts OK)
-- **Rarity**: 1 mythic + 1 rare (prefer mythic as identity card; fall back to 2 rares if no mythic available), 3-5 uncommon, rest common. **Rarity is determined by oracle_id, not by the specific printing owned** — if any printing of a card exists at a given rarity, the card counts as that rarity for budget purposes. **Always use the lowest rarity printing** — a card that exists at both rare and uncommon counts as uncommon. This frees up rare/mythic slots for cards that are only available at higher rarities. (e.g., Serra Angel is rare in Alpha but uncommon in Dominaria — it counts as uncommon.)
+- **Mono-colored** (all colored spells share one color; colorless artifacts OK). **Hybrid mana cards are fine** — a W/G hybrid card can go in either a white or green mono-color pack since it can be cast with either color. **Multicolor packs** are also supported — the identity card is multicolored, but most cards in the deck will be mono-colored in one of the two colors. A WU deck is mostly white cards and blue cards, with a few WU gold cards — it doesn't need to be packed with multicolor cards.
+- **Rarity**: 2-3 rare/mythic slots, decided per-deck based on what's available. Valid combos: (M+R), (R+R), (M+R+R), (R+R+R). Choose based on what the theme needs — splashier decks can run 3 R/M. Remainder: 3-5 uncommon, rest common. **Rarity is determined by oracle_id, not by the specific printing owned** — if any printing of a card exists at a given rarity, the card counts as that rarity for budget purposes. **Always use the lowest rarity printing** — a card that exists at both rare and uncommon counts as uncommon. This frees up rare/mythic slots for cards that are only available at higher rarities. (e.g., Serra Angel is rare in Alpha but uncommon in Dominaria — it counts as uncommon.)
 - **Creatures**: 5-8 creature-typed cards (usually 7-8)
 - **Non-creature spells**: 3-7 (usually 4)
 - **Curve**: MV 0 always empty. MV 2 and MV 3 always have at least 1 card each. MV 2+3 combined is 4-10 (usually 6-7). MV 5+ combined is 0-4.
 - **Singletons**: all non-basic non-land cards appear once
 
-## Rare Categories
+## How Themes Work
 
-The identity card defines the pack's game plan. Choose one:
+J25 analysis shows themes exist on a spectrum from tight engine to loose flavor. **All three tiers produce good decks.** The theme guides card selection, not deck mechanics — it tells you *which* good cards to pick.
 
-- **Bomb** (MV 4+): A finisher the deck ramps into. Big creature with evasion, powerful enchantment, game-ending effect. The rest of the deck supports surviving and casting this. Search with `--mv-min 4`.
-- **Engine** (any MV): Generates repeated value through "whenever" triggers, activated abilities, or recursive effects. The deck feeds the engine. Search without MV constraints, evaluate oracle text for repeated effects.
-- **Lord/Enabler** (MV 1-3): Makes the rest of the deck better. Tribal lords, anthems, cost reducers, build-around synergy pieces. The deck goes wide to maximize the buff. Search with `--mv-max 3`.
+### Engine themes
+Almost every card participates in the mechanic. The deck doesn't function without it. Examples: graveyard (11/12 on-theme), draw-two (11/12), mill (12/12), landfall (7-10/11), flash (8-10/12). Build these by finding **2-4 explicit payoffs** and filling the rest with enablers that naturally do the thing.
 
-## Card Quality Evaluation
+### Tribal themes
+The creature type IS the synergy. Elves naturally make mana and go wide. Vampires naturally drain and have lifelink. Clerics naturally gain life and sacrifice. You don't need "Elves you control get +1/+1" for an elf deck to feel like an elf deck — 8 elves doing elf things is plenty. **0-3 tribal payoff cards is normal.** Even the most synergistic tribal decks (goblins: 6-7 payoffs) still run 2-3 off-tribe utility cards.
 
-When choosing between candidates for a slot, evaluate card quality using these signals (in priority order):
+### Flavor themes
+The name is a vibe, the cards are individually good. Real J25 examples: "Encounter" has 1 fight card in 12 — it's actually "+1/+1 counters on green creatures." "Explorers" often has 0 explore cards — it's "green value creatures that find lands." These decks differentiate through card selection coherence, not mechanical density. **Don't force payoffs that aren't there.** If the theme is "big green creatures," just pick the best big green creatures.
 
-1. **Theme fit**: How well does the card advance the pack's theme? A mediocre card that's on-theme beats a powerful card that's off-theme. **Use multiple theme keywords** when searching — a single keyword misses related concepts.
+### Synergy guidance
+- **Don't stress about payoff density. Stress about card selection coherence.** A "Lifegain" deck with 8 creatures that incidentally have lifelink and 3 Ajani's Pridemate-style payoffs is great. A "Lifegain" deck packed with 8 explicit "whenever you gain life" payoffs and not enough life gain sources is terrible.
+- **Every creature should do something.** Only 0.5% of J25 creatures are vanilla (no text). 95% have meaningful abilities beyond keywords. If choosing between a vanilla 3/3 and a 2/2 with an ETB, take the 2/2.
+- **2-4 off-theme utility cards is normal** — removal, card draw, pump spells. Never force 12/12 on-theme.
+- **Removal is optional.** Many real J25 decks run zero removal (elves, landfall, tokens). Aggro decks that just play creatures and attack don't need it. Include removal when it's on-theme (Dragon's Fire in dragons) or the deck needs time.
+- **Match card advantage to game plan speed.** Aggro (zealots, warriors): 0-2 draw effects. Midrange/control (wizards, bookworms): 7-11. Don't force draw into a deck that wants to curve out and attack.
 
-2. **Synergy with identity card**: Does this card work well with the identity card specifically? If the identity is an elf lord, more elves are better. If it's a lifegain engine, cards that gain life or trigger on lifegain are better.
+## Building a Pack
 
-3. **Multiple effects**: Cards that do 2+ things are better than single-effect cards. The `jumpstart-find-card.py` tool shows effect counts automatically — prefer cards showing 2+ effects.
+Packs can start from either direction:
 
-4. **Standalone power**: In a 20-card deck shuffled with another random 20-card deck, cards need to be independently good. Avoid narrow combo pieces.
+### Top-down: theme first
+The user names a theme (tribal, mechanical, or flavor). Search for cards that fit, build an oversized pool, cut to 12.
 
-5. **Set variety**: Prefer cards from a variety of sets over concentrating on one set. Part of the fun is seeing cards from different eras and worlds together. Some overlap is fine — don't sacrifice card quality for variety — but when candidates are close, pick the one from an underrepresented set.
+### Bottom-up: card or mechanic first
+The user names a specific card, sees a cool rare, or notices a cluster of cards that work together. Build outward from that seed — find what supports it, what fills the gaps, what gives it a name.
 
-6. **Price as quality proxy**: Higher-priced cards are generally more played and powerful. Use as a tiebreaker.
+### The process (either direction)
+
+**1. Establish the seed.** Either a theme name or 1-3 cards to build around. If the user is vague ("green deck"), search broadly to find what clusters exist in their collection.
+
+**2. Search broadly.** Cast a wide net with multiple searches. The goal is 15-25+ candidates — much more than the final 12. Use `jumpstart-search.py` with different oracle text patterns, type lines, subtypes, and rarity filters. A single search always misses related cards.
+
+**3. Read oracle text on promising candidates.** Confirm cards actually do what you think. Use `jumpstart-card-oracle.py` for quick lookups.
+
+**4. Identify the synergy tier.** Based on what you found, is this an engine (most cards must participate), tribal (creature type coherence), or flavor (individually good cards with a shared vibe)? This determines how aggressively to prioritize on-theme cards during cuts.
+
+**5. Insert the oversized pool.** Use `jumpstart-insert-deck.py`. The user will trim in the UI, or you can help cut.
+
+**6. Cut to 12.** Prioritize:
+   - Standalone card quality — cards need to be independently good in a shuffled 40-card game
+   - Theme coherence — cards should look like they belong together, but don't over-force synergy
+   - Rarity budget — 2-3 R/M, 3-5 U, rest C
+   - Curve — MV 2+3 combined 4-10, MV 5+ max 4
+   - Creature count — 5-9 (usually 7-8)
+
+**7. Generate a Scryfall URL** so the user can visually verify the final list.
 
 ## Tools
 
@@ -54,153 +81,59 @@ All tools are invoked via `uv run python .claude/skills/jumpstart/scripts/<tool>
 
 **IMPORTANT — one command per tool call.** Do NOT chain multiple script invocations with `&&`, `;`, or subshells. Each script call should be a separate Bash tool invocation. Chaining causes permission prompts for every sub-command.
 
-### jumpstart-generate-shape.py `[COLOR] [--rare-category bomb|engine|lord] [--seed N]`
-Generate a soft pack shape: curve distribution, creature/spell count, rarity budget. Color is W/U/B/R/G; random if omitted. Use `--seed` for reproducibility.
-
-### jumpstart-find-card.py `[options]`
-Find cards matching filters. **Always use `-o` to filter to owned cards.**
-
-Shows quality signals: price, effect count, and effect types.
+### jumpstart-search.py `"<sql_where_clause>"`
+Search owned cards using raw SQL WHERE clauses. The core exploration tool — use it to find candidates, scout what's available in a color, check creature type density, find rares, etc. Use `--schema` to see available columns. All color/hybrid filtering is done via the WHERE clause directly.
 
 ```bash
-# Find identity card (bomb — MV 4+):
-jumpstart-find-card.py -c G -r rare --mv-min 4 -o --theme elf
+# Mono-green creatures
+jumpstart-search.py "c.type_line LIKE '%Elf%' AND c.colors = '[\"G\"]'"
 
-# Find identity card (lord — MV 1-3):
-jumpstart-find-card.py -c G -r rare --mv-max 3 -o --theme elf
+# Cards castable with only green mana (mono-green + G hybrids + colorless)
+jumpstart-search.py "c.mana_cost NOT LIKE '%{W}%' AND c.mana_cost NOT LIKE '%{U}%' AND c.mana_cost NOT LIKE '%{B}%' AND c.mana_cost NOT LIKE '%{R}%' AND c.cmc <= 3"
 
-# Fill a curve slot:
-jumpstart-find-card.py -m 3 -c G -r common -o --theme elf
+# Rarity search
+jumpstart-search.py "p.rarity IN ('rare', 'mythic') AND c.cmc <= 5 AND c.colors = '[\"G\"]'"
 
-# Broader search (drop rarity or type):
-jumpstart-find-card.py -m 2 -c G -o --theme elf
-
-# Flags:
-#   -m / --cmc       Exact mana value
-#   --mv-min         Minimum mana value (inclusive)
-#   --mv-max         Maximum mana value (inclusive)
-#   -c / --color     Color: W/U/B/R/G
-#   -r / --rarity    common / uncommon / rare / mythic
-#   -t / --type      Creature / Instant / Sorcery / Enchantment / Artifact
-#   -o / --owned     IMPORTANT: only show cards the user owns
-#   --theme          Keyword to match in oracle text, type line, or name
-#   --limit N        Max results (default 50)
-```
-
-### jumpstart-search.py `"<sql_where_clause>" [--color W]`
-Search owned cards using raw SQL WHERE clauses. More expressive than `jumpstart-find-card.py` — use when structured filters aren't enough. Optional `--color` restricts to mono-colored cards. Use `--schema` to see available columns.
-
-```bash
-# Find cheap removal:
-jumpstart-search.py "c.oracle_text LIKE '%destroy target%' AND c.cmc <= 3"
-
-# Find green creatures with ETB effects:
-jumpstart-search.py "c.type_line LIKE '%Creature%' AND c.oracle_text LIKE '%enters%'" --color G
-
-# See available columns:
+# See available columns
 jumpstart-search.py --schema
 ```
 
 ### jumpstart-card-oracle.py `"<card name>"`
-Read a card's full oracle text.
+Read a card's full oracle text. Use to confirm a card does what you think before including it.
+
+### jumpstart-generate-shape.py `[COLOR] [--rare-category bomb|engine|lord] [--rm-count 2|3] [--seed N]`
+Generate a soft pack shape: curve distribution, creature/spell count, rarity budget. Color is W/U/B/R/G; random if omitted. `--rm-count` forces 2 or 3 rare/mythic slots (random if omitted). Use `--seed` for reproducibility.
+
+### jumpstart-insert-deck.py `--color C --theme "Theme" --description "..." "Card1" "Card2" ...`
+Insert a finished pack as a idea deck. Color can be a single letter (W/U/B/R/G/C) or a pair (WU/BR/etc). Multicolor decks get one thriving land (first color) and split basics between colors.
+
+### jumpstart-remove-cards.py `--deck <id> "Card1" "Card2" ...`
+Remove cards by name from a idea deck. Useful for trimming oversized pools down to the final 12 spells.
 
 ### jumpstart-scryfall-url.py `"Card 1" "Card 2" ... [--open]`
 Generate a Scryfall search URL showing all cards (using owned printings). Add `--open` to launch in browser.
 
-### jumpstart-insert-deck.py `--color C --theme "Theme" --description "..." "Card1" "Card2" ...`
-Insert a finished pack as a hypothetical deck.
-
-## Building a Pack (Step by Step)
-
-### Step 1: User picks color + theme + rare category
-
-The user says something like "Green Elves with a lord" or "Black Zombies with a bomb." If they just say "Green deck," suggest themes based on their collection and ask for a rare category.
-
-### Step 2: Find the identity card (mythic slot)
-
-Search for a **mythic** first — this is the preferred identity card rarity:
+### jumpstart-odds.py `<group_size> [group_size ...] [--need N ...] [--by N] [--label L ...]`
+Calculate probability of drawing specific card combinations in a Jumpstart game. Pure math — no server needed. Uses simulation (200k trials).
 
 ```bash
-# Bomb (MV 4+):
-uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r mythic --mv-min 4 -o --theme elf
+# Combo check: need Dark Ritual + Gwenom + a land in opening hand
+jumpstart-odds.py 1 1 16 --by 8 --label "Dark Ritual" "Gwenom" "lands"
 
-# Lord/Enabler (MV 1-3):
-uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r mythic --mv-max 3 -o --theme elf
+# Density check: need 5 goblins in first 20 cards from pool of 9
+jumpstart-odds.py 9 --need 5 --by 20 --label "goblins"
 
-# Engine (any MV):
-uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -c G -r mythic -o --theme elf
+# Flags:
+#   --need N [N ...]   How many from each group (default: 1 each)
+#   --by N             Cards drawn (default: 8 = opening hand + first draw)
+#   --deck N           Deck size (default: 40)
+#   --label L [L ...]  Optional names for each group
 ```
 
-If no mythic matches the theme, fall back to rare for the identity card (and use 2 rares total instead). Read oracle text of the top 2-3 candidates. Pick the one that most strongly defines what the pack wants to do.
+## Final Deck Constraints
 
-### Step 2b: Find the second rare/mythic
-
-After picking the identity card, fill the other R/M slot:
-- If identity is mythic → search for a **rare** that supports the theme
-- If identity is rare (mythic fallback) → search for another **rare**
-
-This card should complement the identity card's game plan, not compete with it.
-
-### Step 3: Generate the soft shape
-
-```bash
-uv run python .claude/skills/jumpstart/scripts/jumpstart-generate-shape.py G --rare-category lord
-```
-
-This gives: curve targets, creature count, rarity budget. The identity card consumes one R/M slot and one curve slot at its MV.
-
-### Step 4: Fill remaining slots, ONE AT A TIME
-
-Track these running totals as you go:
-- Remaining creatures needed
-- Remaining non-creature spells needed
-- Remaining rarity budget (R/M, U, C)
-- Remaining curve slots per MV
-
-Maintain a **picked cards list** — before selecting any card, check that it's not already in the list. Every non-basic non-land card must be unique.
-
-For each slot:
-
-1. Decide what you need most: a creature or non-creature? Which MV has the most remaining slots? What rarity?
-2. Search with appropriate filters + theme:
-   ```bash
-   uv run python .claude/skills/jumpstart/scripts/jumpstart-find-card.py -m 3 -c G -r common -o --theme elf
-   ```
-3. If zero results with `--theme`, drop it and scan manually for on-theme cards.
-4. If zero results at that MV, try adjacent MVs (shifting one card by +/-1 MV is fine).
-5. **Evaluate candidates** using the card quality criteria. Prefer on-theme, multi-effect, standalone good.
-6. For promising candidates, read the oracle text to confirm.
-7. Pick the card. Update your running totals. Move to the next slot.
-
-**DO NOT** try to fill multiple slots at once. One card at a time. There are only 11-12 spell slots.
-
-### Step 5: Review and present
-
-After all slots are filled, present the complete deck list with:
-- Each card's name, mana cost, type, and a brief note on why it was chosen
-- The identity card highlighted
-- Overall theme coherence assessment
-- Mana curve summary
-
-Generate a Scryfall URL so the user can visually verify:
-```bash
-uv run python .claude/skills/jumpstart/scripts/jumpstart-scryfall-url.py "Card 1" "Card 2" ... --open
-```
-
-### Step 6: Insert the deck
-
-After user approval:
-```bash
-uv run python .claude/skills/jumpstart/scripts/jumpstart-insert-deck.py \
-    --color G --theme "Elves" \
-    --description "Elf tribal with Elvish Archdruid as lord. Mana elves ramp into ..." \
-    "Card 1" "Card 2" ...
-```
-
-## Soft Shape Constraints
-
-The soft shape is a guide. These constraints are hard:
-- **Rarity budget**: 1 mythic + 1 rare (fall back to 2 rares if no mythic available), 3-5 U, rest C. Rarity is by oracle_id (any printing's rarity counts)
+Hard constraints:
+- **Rarity budget**: 2-3 rare/mythic slots — valid combos: (M+R), (R+R), (M+R+R), (R+R+R). Choose based on theme needs. 3-5 U, rest C. Rarity is by oracle_id (any printing's rarity counts)
 - **Total spells**: 12 (always)
 - **Lands**: 8 (always: 1 Thriving + 7 basics)
 - **Creature count**: 5-9 (need board presence)
@@ -208,7 +141,7 @@ The soft shape is a guide. These constraints are hard:
 - **No MV0 spells**
 - **Singletons**: every non-basic non-land card appears once
 
-These are soft (deviate if it gets a better card):
+Soft (deviate if it gets a better card):
 - Exact count at each MV (+/-1 is fine)
 - Creature vs non-creature at a specific MV
 - Exact uncommon/common split (total rarity budget matters more)
@@ -221,26 +154,12 @@ These rules apply to ALL card choices in the pack:
 
 1. **No wrath effects.** Do not include board wipes, mass removal, "destroy all creatures", or similar mass disruption. These packs are meant to be fun and interactive — wraths are miserable in Jumpstart.
 
-2. **No triple-pip mana costs.** Avoid cards with 3+ colored pips of the same color in their mana cost (e.g., {W}{W}{W}, {B}{B}{B}{B}). With only 8 lands per half-deck (~16 lands total in a shuffled game), triple-pip costs are unreliable. Double-pip is the maximum.
+2. **Triple-pip mana costs are OK but rare.** Cards with 3 colored pips (e.g., {1}{W}{W}{W}) are allowed — ~6% of real J25 decks include one. Don't load up on them (1 per deck max), and avoid 4+ pips. Double-pip is the sweet spot.
 
 3. **Focus on interactivity.** Prefer cards that create interesting game states over cards that shut opponents out. Prioritize creatures with combat tricks, ETB effects, auras, equipment, and targeted removal over pillowfort, stax, or prison effects. The goal is two players trading blows, not one player locked out.
 
-## Theme Search Strategy
-
-The `--theme` flag does a simple substring match. For broad themes, **run multiple searches with related keywords**:
-
-- Angels: "angel", "flying", "life", "lifelink", "vigilance"
-- Zombies: "zombie", "graveyard", "dies", "sacrifice"
-- Goblins: "goblin", "haste", "sacrifice", "damage"
-- Elves: "elf", "mana", "forest", "druid"
-- Lifegain: "life", "lifelink", "gain", "soul"
-- Tokens: "token", "create", "populate"
-- Ramp: "mana", "land", "search your library", "add"
-
-If the first search returns 0 results, **always** drop `--theme` and search the full pool — many on-theme cards won't match a simple keyword.
-
 ## Notes
 
-- All cards must come from the user's collection (use `-o` flag)
-- If the user's collection is thin for a theme, suggest alternative themes
-- Packs are inserted as hypothetical decks (visible in web UI, no physical card assignment)
+- All cards must come from the user's collection (searches return only owned cards)
+- If the user's collection is thin for a theme, suggest alternative themes or pivot to bottom-up from a strong card
+- Packs are inserted as idea-state decks (visible in web UI, no physical card assignment)

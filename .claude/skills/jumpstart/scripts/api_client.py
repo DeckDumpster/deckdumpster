@@ -85,6 +85,14 @@ class DeckBuilderClient:
         req.add_header("Content-Type", "application/json")
         return self._do(req)
 
+    def delete(self, path, body=None):
+        """DELETE request with JSON body. Returns parsed JSON."""
+        url = self.base_url + path
+        data = json.dumps(body or {}).encode()
+        req = urllib.request.Request(url, data=data, method="DELETE")
+        req.add_header("Content-Type", "application/json")
+        return self._do(req)
+
     def _do(self, req):
         """Execute request, return parsed JSON or raise."""
         try:

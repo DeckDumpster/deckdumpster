@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Insert a finished Jumpstart pack as a hypothetical deck.
+"""Insert a finished Jumpstart pack as a idea deck.
 
 Adds non-land spells + lands (Thriving + basics) to deck_expected_cards.
 Ensures the Thriving land exists in the collection (adds it if missing).
@@ -17,7 +17,8 @@ import sys
 
 from api_client import DeckBuilderClient, parse_host_arg
 
-COLOR_NAMES = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
+COLOR_NAMES = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green",
+               "C": "Colorless"}
 
 THRIVING_NAMES = {
     "W": "Thriving Heath", "U": "Thriving Isle", "B": "Thriving Moor",
@@ -34,11 +35,11 @@ def main():
     base_url, argv = parse_host_arg(sys.argv)
 
     parser = argparse.ArgumentParser(
-        description="Insert a Jumpstart pack as a hypothetical deck"
+        description="Insert a Jumpstart pack as a idea deck"
     )
     parser.add_argument("cards", nargs="+", help="Card names (non-land spells)")
-    parser.add_argument("--color", required=True, choices=["W", "U", "B", "R", "G"],
-                        help="Pack color")
+    parser.add_argument("--color", required=True,
+                        help="Pack color (W/U/B/R/G/C or pair like WU/BR)")
     parser.add_argument("--theme", required=True, help="Pack theme name")
     parser.add_argument("--description", required=True, help="Pack description/synergies")
     parser.add_argument("--basics", type=int, default=7,
@@ -64,17 +65,29 @@ def main():
 
     deck_id = result["deck_id"]
     deck_name = result["name"]
-    thriving_name = THRIVING_NAMES[args.color]
-    basic_name = BASIC_NAMES[args.color]
 
-    print(f"Created hypothetical deck: {deck_name} (id={deck_id})")
+    print(f"Created idea deck: {deck_name} (id={deck_id})")
     print(f"Color: {COLOR_NAMES[args.color]}")
     print(f"Spells ({len(args.cards)}):")
     for card_name in args.cards:
         print(f"  {card_name}")
-    print(f"Lands:")
-    print(f"  1 {thriving_name}")
-    print(f"  {args.basics} {basic_name}")
+    color = args.color.upper()
+    if color == "C":
+        print("Lands: (no lands — colorless deck, partner provides lands)")
+    elif len(color) == 1:
+        print("Lands:")
+        print(f"  1 {THRIVING_NAMES[color]}")
+        print(f"  {args.basics} {BASIC_NAMES[color]}")
+    else:
+        colors = list(color)
+        print("Lands:")
+        print(f"  1 {THRIVING_NAMES[colors[0]]}")
+        per_color = args.basics // len(colors)
+        remainder = args.basics % len(colors)
+        for i, c in enumerate(colors):
+            qty = per_color + (1 if i < remainder else 0)
+            if qty > 0:
+                print(f"  {qty} {BASIC_NAMES[c]}")
 
 
 if __name__ == "__main__":

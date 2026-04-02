@@ -4,7 +4,7 @@
 Usage: uv run python .claude/skills/commander/scripts/commander-create-deck.py "<commander name query>"
 
 Searches the collection for legendary creatures matching the query,
-then creates a hypothetical commander deck for the best match.
+then creates an idea commander deck for the best match.
 If multiple matches, prints all and exits — re-run with a more specific query.
 """
 import json
@@ -39,10 +39,10 @@ if len(matches) > 1:
 match = matches[0]
 result = client.post("/api/deck-builder", {
     "commander_oracle_id": match["oracle_id"],
-    "hypothetical": True,
+    "state": "idea",
 })
 
-# Server returns {deck_id, name, color_identity} for hypothetical decks
+# Server returns {deck_id, name, color_identity} for idea decks
 deck_name = result.get("name", match.get("name", "Unknown"))
 deck_id = result.get("deck_id", result.get("id", "?"))
 ci = result.get("color_identity", match.get("color_identity", "[]"))
@@ -50,4 +50,4 @@ ci = result.get("color_identity", match.get("color_identity", "[]"))
 print(f"Created deck: {deck_name}")
 print(f"  Deck ID: {deck_id}")
 print(f"  Color Identity: {ci}")
-print(f"  Format: Commander (hypothetical)")
+print(f"  Format: Commander (idea)")

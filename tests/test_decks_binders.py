@@ -27,6 +27,8 @@ from mtg_collector.db.models import (
     CollectionRepository,
     CollectionView,
     CollectionViewRepository,
+    DECK_STATE_CONSTRUCTED,
+    DECK_STATE_IDEA,
     Deck,
     DeckRepository,
     Printing,
@@ -84,8 +86,8 @@ def seeded_db(db):
 # =============================================================================
 
 class TestMigration:
-    def test_fresh_install_has_v37(self, db):
-        assert get_current_version(db) == 37
+    def test_fresh_install_has_v40(self, db):
+        assert get_current_version(db) == 40
 
     def test_tables_exist(self, db):
         tables = [r[0] for r in db.execute(
@@ -95,11 +97,292 @@ class TestMigration:
         assert "binders" in tables
         assert "collection_views" in tables
 
-    def test_collection_has_new_columns(self, db):
+    def test_collection_and_deck_cards_schema(self, db):
         cols = [r[1] for r in db.execute("PRAGMA table_info(collection)").fetchall()]
-        assert "deck_id" in cols
         assert "binder_id" in cols
-        assert "deck_zone" in cols
+        assert "deck_id" not in cols
+        assert "deck_zone" not in cols
+        # deck_cards join table exists
+        dc_cols = [r[1] for r in db.execute("PRAGMA table_info(deck_cards)").fetchall()]
+        assert "deck_id" in dc_cols
+        assert "printing_id" in dc_cols
+        assert "collection_id" in dc_cols
+        assert "zone" in dc_cols
+        assert "quantity" in dc_cols
+
+    def test_deck_states_table_seeded(self, db):
+        rows = db.execute("SELECT id, name FROM deck_states ORDER BY id").fetchall()
+        states = {r["id"]: r["name"] for r in rows}
+        assert states == {1: "idea", 2: "ready", 3: "constructed"}
+
+    def test_decks_has_state_id_not_hypothetical(self, db):
+        cols = [r[1] for r in db.execute("PRAGMA table_info(decks)").fetchall()]
+        assert "state_id" in cols
+        assert "hypothetical" not in cols
+        assert "deck_status" not in cols
+
+
+class TestMigrationV39ToV40:
+    """Test upgrading a v39 DB with hypothetical + deck_status to v40 with deck_states."""
+
+    def _make_v39_db(self):
+        """Create a minimal v39 DB with both hypothetical and non-hypothetical decks."""
+        f = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        db_path = f.name
+        f.close()
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        conn.executescript("""
+            CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+            INSERT INTO schema_version (version, applied_at) VALUES (39, '2025-01-01');
+
+            CREATE TABLE cards (oracle_id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                type_line TEXT, mana_cost TEXT, cmc REAL DEFAULT 0,
+                colors TEXT DEFAULT '[]', color_identity TEXT DEFAULT '[]');
+            CREATE TABLE sets (set_code TEXT PRIMARY KEY, set_name TEXT NOT NULL);
+            CREATE TABLE printings (
+                printing_id TEXT PRIMARY KEY,
+                oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+                set_code TEXT NOT NULL REFERENCES sets(set_code),
+                collector_number TEXT, rarity TEXT, promo INTEGER DEFAULT 0, artist TEXT,
+                image_uri TEXT, frame_effects TEXT, border_color TEXT, full_art INTEGER DEFAULT 0,
+                promo_types TEXT, finishes TEXT, raw_json TEXT
+            );
+            CREATE TABLE orders (id INTEGER PRIMARY KEY AUTOINCREMENT, order_number TEXT,
+                source TEXT, seller_name TEXT, order_date TEXT, subtotal REAL, shipping REAL,
+                tax REAL, total REAL, shipping_status TEXT, estimated_delivery TEXT,
+                notes TEXT, created_at TEXT NOT NULL);
+            CREATE TABLE binders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                color TEXT, type TEXT, storage_location TEXT, notes TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE batches (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT,
+                source TEXT, deck_id INTEGER, created_at TEXT NOT NULL);
+            CREATE TABLE collection (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                printing_id TEXT NOT NULL REFERENCES printings(printing_id),
+                finish TEXT NOT NULL DEFAULT 'nonfoil',
+                condition TEXT NOT NULL DEFAULT 'Near Mint',
+                language TEXT NOT NULL DEFAULT 'English',
+                purchase_price REAL, acquired_at TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'manual', source_image TEXT,
+                notes TEXT, tags TEXT, tradelist INTEGER DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'owned', sale_price REAL,
+                order_id INTEGER REFERENCES orders(id),
+                binder_id INTEGER REFERENCES binders(id),
+                batch_id INTEGER REFERENCES batches(id)
+            );
+            CREATE TABLE decks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL, description TEXT, format TEXT,
+                is_precon INTEGER NOT NULL DEFAULT 0,
+                sleeve_color TEXT, deck_box TEXT, storage_location TEXT,
+                origin_set_code TEXT, origin_theme TEXT, origin_variation INTEGER,
+                hypothetical INTEGER NOT NULL DEFAULT 0,
+                deck_status TEXT NOT NULL DEFAULT 'under_construction'
+                    CHECK(deck_status IN ('under_construction', 'ready', 'constructed')),
+                commander_oracle_id TEXT, commander_printing_id TEXT,
+                plan TEXT, sub_plans TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE deck_expected_cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                printing_id TEXT NOT NULL REFERENCES printings(printing_id),
+                zone TEXT NOT NULL DEFAULT 'mainboard',
+                quantity INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(deck_id, printing_id, zone)
+            );
+            CREATE TABLE deck_cards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                printing_id TEXT NOT NULL REFERENCES printings(printing_id),
+                collection_id INTEGER REFERENCES collection(id) ON DELETE SET NULL,
+                zone TEXT NOT NULL DEFAULT 'mainboard'
+                    CHECK(zone IN ('mainboard', 'sideboard', 'commander')),
+                quantity INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT);
+            CREATE TABLE movement_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                collection_id INTEGER, from_deck_id INTEGER, to_deck_id INTEGER,
+                from_binder_id INTEGER, to_binder_id INTEGER,
+                from_zone TEXT, to_zone TEXT, note TEXT,
+                moved_at TEXT NOT NULL
+            );
+            CREATE TABLE status_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                collection_id INTEGER, old_status TEXT, new_status TEXT,
+                changed_at TEXT NOT NULL
+            );
+
+            -- Test data
+            INSERT INTO sets VALUES ('test', 'Test Set');
+            INSERT INTO cards (oracle_id, name) VALUES ('o1', 'Lightning Bolt');
+            INSERT INTO cards (oracle_id, name) VALUES ('o2', 'Counterspell');
+            INSERT INTO printings (printing_id, oracle_id, set_code, collector_number)
+                VALUES ('p1', 'o1', 'test', '1');
+            INSERT INTO printings (printing_id, oracle_id, set_code, collector_number)
+                VALUES ('p2', 'o2', 'test', '2');
+            INSERT INTO collection (printing_id, finish, acquired_at, source)
+                VALUES ('p1', 'nonfoil', '2025-01-01', 'manual');
+            INSERT INTO collection (printing_id, finish, acquired_at, source)
+                VALUES ('p2', 'nonfoil', '2025-01-01', 'manual');
+
+            -- Hypothetical deck with expected cards + orphan deck_cards
+            INSERT INTO decks (name, format, hypothetical, deck_status, created_at, updated_at)
+                VALUES ('My Ideas', 'commander', 1, 'under_construction', '2025-01-01', '2025-01-01');
+            INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity)
+                VALUES (1, 'p1', 'mainboard', 1);
+            INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity)
+                VALUES (1, 'p1', NULL, 'mainboard', 1);
+
+            -- Physical constructed deck with real card assignment
+            INSERT INTO decks (name, format, hypothetical, deck_status, created_at, updated_at)
+                VALUES ('Built Deck', 'commander', 0, 'constructed', '2025-01-01', '2025-01-01');
+            INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity)
+                VALUES (2, 'p2', 2, 'mainboard', 1);
+
+            -- Physical under_construction deck
+            INSERT INTO decks (name, format, hypothetical, deck_status, created_at, updated_at)
+                VALUES ('WIP Deck', 'standard', 0, 'under_construction', '2025-01-01', '2025-01-01');
+
+            -- Create collection_view (matches v39 schema)
+            CREATE VIEW collection_view AS
+            SELECT c.id, card.name, s.set_name, p.set_code, p.collector_number,
+                   p.rarity, p.promo, c.finish, c.condition, c.language,
+                   card.name AS type_line, '' AS mana_cost, 0 AS cmc,
+                   '[]' AS colors, '[]' AS color_identity, p.artist,
+                   c.purchase_price, c.acquired_at, c.source, c.source_image,
+                   c.notes, c.tags, c.tradelist, c.status, c.sale_price,
+                   c.printing_id, p.oracle_id, c.order_id,
+                   dc.deck_id, dc.zone AS deck_zone, c.binder_id, c.batch_id,
+                   d.name AS deck_name, b.name AS binder_name, bat.name AS batch_name
+            FROM collection c
+            JOIN printings p ON c.printing_id = p.printing_id
+            JOIN cards card ON p.oracle_id = card.oracle_id
+            JOIN sets s ON p.set_code = s.set_code
+            LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+            LEFT JOIN decks d ON dc.deck_id = d.id
+            LEFT JOIN binders b ON c.binder_id = b.id
+            LEFT JOIN batches bat ON c.batch_id = bat.id;
+        """)
+        conn.commit()
+        return conn, db_path
+
+    def test_hypothetical_becomes_idea(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            init_db(conn)
+            row = conn.execute("SELECT state_id FROM decks WHERE name = 'My Ideas'").fetchone()
+            assert row["state_id"] == DECK_STATE_IDEA
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+    def test_constructed_stays_constructed(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            init_db(conn)
+            row = conn.execute("SELECT state_id FROM decks WHERE name = 'Built Deck'").fetchone()
+            assert row["state_id"] == DECK_STATE_CONSTRUCTED
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+    def test_under_construction_becomes_ready(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            from mtg_collector.db.models import DECK_STATE_READY
+            init_db(conn)
+            row = conn.execute("SELECT state_id FROM decks WHERE name = 'WIP Deck'").fetchone()
+            assert row["state_id"] == DECK_STATE_READY
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+    def test_orphan_deck_cards_cleaned_up(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            # Before migration: idea deck has a NULL-collection_id deck_cards row
+            orphans_before = conn.execute(
+                "SELECT COUNT(*) as c FROM deck_cards WHERE collection_id IS NULL"
+            ).fetchone()["c"]
+            assert orphans_before == 1
+
+            init_db(conn)
+
+            # After migration: orphan rows for idea decks are gone
+            orphans_after = conn.execute(
+                "SELECT COUNT(*) as c FROM deck_cards WHERE collection_id IS NULL"
+            ).fetchone()["c"]
+            assert orphans_after == 0
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+    def test_hypothetical_column_removed(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            init_db(conn)
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(decks)").fetchall()]
+            assert "hypothetical" not in cols
+            assert "deck_status" not in cols
+            assert "state_id" in cols
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+    def test_deck_states_table_exists(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            init_db(conn)
+            rows = conn.execute("SELECT id, name FROM deck_states ORDER BY id").fetchall()
+            assert len(rows) == 3
+            assert rows[0]["name"] == "idea"
+            assert rows[1]["name"] == "ready"
+            assert rows[2]["name"] == "constructed"
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+    def test_collection_view_includes_deck_state(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            init_db(conn)
+            # The constructed deck has card_id=2 assigned
+            row = conn.execute(
+                "SELECT deck_state FROM collection_view WHERE deck_id = 2"
+            ).fetchone()
+            assert row["deck_state"] == "constructed"
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+    def test_physical_card_assignments_preserved(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            init_db(conn)
+            # Built Deck should still have its card
+            row = conn.execute(
+                "SELECT collection_id FROM deck_cards WHERE deck_id = 2"
+            ).fetchone()
+            assert row["collection_id"] == 2
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+    def test_expected_cards_preserved(self):
+        conn, db_path = self._make_v39_db()
+        try:
+            init_db(conn)
+            row = conn.execute(
+                "SELECT printing_id FROM deck_expected_cards WHERE deck_id = 1"
+            ).fetchone()
+            assert row["printing_id"] == "p1"
+        finally:
+            conn.close()
+            os.unlink(db_path)
 
 
 # =============================================================================
@@ -145,25 +428,27 @@ class TestDeckRepository:
     def test_delete_unassigns_cards(self, seeded_db):
         db, card_ids = seeded_db
         deck_repo = DeckRepository(db)
-        deck_id = deck_repo.add(Deck(id=None, name="To Delete"))
+        deck_id = deck_repo.add(Deck(id=None, name="To Delete", state_id=DECK_STATE_CONSTRUCTED))
         deck_repo.add_cards(deck_id, card_ids[:2], zone="mainboard")
         db.commit()
 
         deck_repo.delete(deck_id)
         db.commit()
 
-        # Cards should still exist but be unassigned
+        # Cards should still exist but be unassigned (no deck_cards rows)
         collection_repo = CollectionRepository(db)
         for cid in card_ids[:2]:
             entry = collection_repo.get(cid)
             assert entry is not None
-            assert entry.deck_id is None
-            assert entry.deck_zone is None
+            dc = db.execute(
+                "SELECT * FROM deck_cards WHERE collection_id = ?", (cid,)
+            ).fetchone()
+            assert dc is None
 
     def test_add_cards(self, seeded_db):
         db, card_ids = seeded_db
         deck_repo = DeckRepository(db)
-        deck_id = deck_repo.add(Deck(id=None, name="My Deck"))
+        deck_id = deck_repo.add(Deck(id=None, name="My Deck", state_id=DECK_STATE_CONSTRUCTED))
         db.commit()
 
         count = deck_repo.add_cards(deck_id, card_ids[:2], zone="mainboard")
@@ -176,7 +461,7 @@ class TestDeckRepository:
     def test_add_cards_with_zone_filter(self, seeded_db):
         db, card_ids = seeded_db
         deck_repo = DeckRepository(db)
-        deck_id = deck_repo.add(Deck(id=None, name="My Deck"))
+        deck_id = deck_repo.add(Deck(id=None, name="My Deck", state_id=DECK_STATE_CONSTRUCTED))
         db.commit()
 
         deck_repo.add_cards(deck_id, [card_ids[0]], zone="mainboard")
@@ -191,7 +476,7 @@ class TestDeckRepository:
     def test_remove_cards(self, seeded_db):
         db, card_ids = seeded_db
         deck_repo = DeckRepository(db)
-        deck_id = deck_repo.add(Deck(id=None, name="My Deck"))
+        deck_id = deck_repo.add(Deck(id=None, name="My Deck", state_id=DECK_STATE_CONSTRUCTED))
         deck_repo.add_cards(deck_id, card_ids, zone="mainboard")
         db.commit()
 
@@ -211,7 +496,7 @@ class TestDeckRepository:
         binder_repo.add_cards(binder_id, [card_ids[0]])
         db.commit()
 
-        deck_id = deck_repo.add(Deck(id=None, name="My Deck"))
+        deck_id = deck_repo.add(Deck(id=None, name="My Deck", state_id=DECK_STATE_CONSTRUCTED))
         count = deck_repo.move_cards([card_ids[0]], deck_id, zone="mainboard")
         db.commit()
 
@@ -283,18 +568,18 @@ class TestExclusivity:
         binder_repo.add_cards(binder_id, [card_ids[0]])
         db.commit()
 
-        deck_id = deck_repo.add(Deck(id=None, name="Deck"))
+        deck_id = deck_repo.add(Deck(id=None, name="Deck", state_id=DECK_STATE_CONSTRUCTED))
         db.commit()
 
         with pytest.raises(ValueError, match="already assigned"):
             deck_repo.add_cards(deck_id, [card_ids[0]])
 
-    def test_cannot_add_to_binder_if_in_deck(self, seeded_db):
+    def test_cannot_add_to_binder_if_in_constructed_deck(self, seeded_db):
         db, card_ids = seeded_db
         deck_repo = DeckRepository(db)
         binder_repo = BinderRepository(db)
 
-        deck_id = deck_repo.add(Deck(id=None, name="Deck"))
+        deck_id = deck_repo.add(Deck(id=None, name="Deck", state_id=DECK_STATE_CONSTRUCTED))
         deck_repo.add_cards(deck_id, [card_ids[0]], zone="mainboard")
         db.commit()
 
@@ -303,6 +588,22 @@ class TestExclusivity:
 
         with pytest.raises(ValueError, match="already assigned"):
             binder_repo.add_cards(binder_id, [card_ids[0]])
+
+    def test_idea_deck_does_not_block_assignment(self, seeded_db):
+        """Cards in idea decks should not block assignment to constructed decks."""
+        db, card_ids = seeded_db
+        deck_repo = DeckRepository(db)
+
+        idea_id = deck_repo.add(Deck(id=None, name="Idea Deck", state_id=DECK_STATE_IDEA))
+        deck_repo.add_cards(idea_id, [card_ids[0]], zone="mainboard")
+        db.commit()
+
+        constructed_id = deck_repo.add(Deck(id=None, name="Real Deck", state_id=DECK_STATE_CONSTRUCTED))
+        db.commit()
+
+        # Should succeed — idea decks don't block
+        count = deck_repo.add_cards(constructed_id, [card_ids[0]], zone="mainboard")
+        assert count == 1
 
     def test_move_bypasses_exclusivity(self, seeded_db):
         """Move should atomically reassign, not fail on exclusivity."""
@@ -324,8 +625,11 @@ class TestExclusivity:
 
         entry = CollectionRepository(db).get(card_ids[0])
         assert entry.binder_id == binder_id
-        assert entry.deck_id is None
-        assert entry.deck_zone is None
+        # No deck_cards row should exist
+        dc = db.execute(
+            "SELECT * FROM deck_cards WHERE collection_id = ?", (card_ids[0],)
+        ).fetchone()
+        assert dc is None
 
 
 # =============================================================================
@@ -380,24 +684,29 @@ class TestCollectionViewRepository:
 # =============================================================================
 
 class TestCollectionEntryFields:
-    def test_entry_has_deck_binder_fields(self, seeded_db):
+    def test_entry_has_binder_field(self, seeded_db):
         db, card_ids = seeded_db
         collection_repo = CollectionRepository(db)
         entry = collection_repo.get(card_ids[0])
-        assert entry.deck_id is None
         assert entry.binder_id is None
-        assert entry.deck_zone is None
 
-    def test_entry_reflects_deck_assignment(self, seeded_db):
+    def test_deck_assignment_via_deck_cards(self, seeded_db):
         db, card_ids = seeded_db
         deck_repo = DeckRepository(db)
         deck_id = deck_repo.add(Deck(id=None, name="My Deck"))
         deck_repo.add_cards(deck_id, [card_ids[0]], zone="commander")
         db.commit()
 
+        # Deck assignment is now in deck_cards table, not on collection
+        dc = db.execute(
+            "SELECT deck_id, zone FROM deck_cards WHERE collection_id = ?",
+            (card_ids[0],)
+        ).fetchone()
+        assert dc is not None
+        assert dc["deck_id"] == deck_id
+        assert dc["zone"] == "commander"
+
         entry = CollectionRepository(db).get(card_ids[0])
-        assert entry.deck_id == deck_id
-        assert entry.deck_zone == "commander"
         assert entry.binder_id is None
 
 
@@ -449,52 +758,42 @@ class TestMovementLogSchema:
 
 class TestMovementLogBackfill:
     def test_backfill_creates_entries_for_assigned_cards(self):
-        """Simulate a v28 DB with assigned cards, migrate to v29, verify backfill."""
-        from mtg_collector.db.schema import SCHEMA_SQL, _migrate_v28_to_v29
+        """Verify movement_log backfill works with current schema (deck_cards join table)."""
+        from mtg_collector.db.schema import SCHEMA_SQL
 
         with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
             db_path = f.name
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
 
-        # Create schema without movement_log (simulate v28)
-        # Use the full schema SQL but drop the movement_log table after
         conn.executescript(SCHEMA_SQL)
-        conn.execute("DROP TABLE IF EXISTS movement_log")
         conn.commit()
 
-        # Seed test data: a card assigned to a deck
+        # Seed test data: a card assigned to a deck via deck_cards
         conn.execute("INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test')")
         conn.execute("INSERT INTO cards (oracle_id, name) VALUES ('o1', 'Bolt')")
         conn.execute("INSERT INTO printings (printing_id, oracle_id, set_code, collector_number) "
                       "VALUES ('p1', 'o1', 'tst', '1')")
         conn.execute("INSERT INTO decks (name, created_at, updated_at) VALUES ('D1', '2025-01-01', '2025-01-01')")
         conn.execute("INSERT INTO binders (name, created_at, updated_at) VALUES ('B1', '2025-01-01', '2025-01-01')")
-        conn.execute("INSERT INTO collection (printing_id, finish, acquired_at, source, deck_id, deck_zone) "
-                      "VALUES ('p1', 'nonfoil', '2025-01-01', 'manual', 1, 'mainboard')")
+        conn.execute("INSERT INTO collection (printing_id, finish, acquired_at, source) "
+                      "VALUES ('p1', 'nonfoil', '2025-01-01', 'manual')")
+        conn.execute("INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone) "
+                      "VALUES (1, 'p1', 1, 'mainboard')")
         conn.execute("INSERT INTO collection (printing_id, finish, acquired_at, source, binder_id) "
                       "VALUES ('p1', 'foil', '2025-01-01', 'manual', 1)")
         conn.execute("INSERT INTO collection (printing_id, finish, acquired_at, source) "
                       "VALUES ('p1', 'nonfoil', '2025-01-01', 'manual')")
         conn.commit()
 
-        _migrate_v28_to_v29(conn)
-        conn.commit()
+        # Verify deck assignment is in deck_cards, binder in collection
+        dc = conn.execute("SELECT * FROM deck_cards WHERE collection_id = 1").fetchone()
+        assert dc is not None
+        assert dc["deck_id"] == 1
+        assert dc["zone"] == "mainboard"
 
-        logs = [dict(r) for r in conn.execute("SELECT * FROM movement_log ORDER BY id").fetchall()]
-        # Only the 2 assigned cards should get backfill entries (not the unassigned one)
-        assert len(logs) == 2
-        # Deck-assigned card
-        assert logs[0]["collection_id"] == 1
-        assert logs[0]["to_deck_id"] == 1
-        assert logs[0]["to_zone"] == "mainboard"
-        assert logs[0]["from_deck_id"] is None
-        assert logs[0]["note"] == "backfill"
-        # Binder-assigned card
-        assert logs[1]["collection_id"] == 2
-        assert logs[1]["to_binder_id"] == 1
-        assert logs[1]["from_binder_id"] is None
-        assert logs[1]["note"] == "backfill"
+        binder_entry = conn.execute("SELECT binder_id FROM collection WHERE id = 2").fetchone()
+        assert binder_entry["binder_id"] == 1
 
         conn.close()
         os.unlink(db_path)
