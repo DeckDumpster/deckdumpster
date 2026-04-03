@@ -1,0 +1,15 @@
+# Scenario: Swap printing modal opens with all available printings
+#
+# Related:
+#   pull_requests: [231]
+#
+# Prerequisites:
+#   An idea deck with at least one card that has multiple printings in the DB.
+
+description: >
+  When viewing an idea deck in list view, I hover over a card row to reveal
+  the swap button (⇄). Clicking it opens a modal titled "Swap Printing"
+  showing all printings of that card. Each printing displays: set name with
+  code and collector number, owned count (or "Not owned"), and a "Current"
+  badge on the currently-selected printing. The current printing row is
+  visually distinguished and not clickable.
