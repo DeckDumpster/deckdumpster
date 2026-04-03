@@ -1,0 +1,14 @@
+# Scenario: Partial dispose splits a multi-quantity sealed entry
+#
+# Related:
+#   pull_requests: [233]
+#
+# Prerequisites:
+#   A sealed collection entry with quantity > 1.
+
+description: >
+  When I click "Opened" on a sealed entry that has quantity greater than 1,
+  I am prompted for how many to mark as opened. If I enter a number less
+  than the total quantity, the entry is split: the original keeps the
+  remainder at its current status, and a new entry is created with my
+  specified quantity and the new status.
