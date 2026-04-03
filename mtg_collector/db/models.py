@@ -1808,14 +1808,23 @@ class SealedCollectionRepository:
             disposed.append(entry_id)
         return {"disposed": disposed, "skipped": skipped}
 
+    ACTIVE_STATUSES = ('owned', 'listed')
+
     def stats(self) -> Dict[str, Any]:
-        """Get sealed collection statistics."""
+        """Get sealed collection statistics.
+
+        Totals (entries, quantity, cost, value) only count active
+        inventory (owned/listed).  Disposed items are tracked in
+        by_status but excluded from headline numbers.
+        """
         stats: Dict[str, Any] = {}
         stats["total_entries"] = self.conn.execute(
             "SELECT COUNT(*) FROM sealed_collection"
+            " WHERE status IN ('owned', 'listed')"
         ).fetchone()[0]
         stats["total_quantity"] = self.conn.execute(
             "SELECT COALESCE(SUM(quantity), 0) FROM sealed_collection"
+            " WHERE status IN ('owned', 'listed')"
         ).fetchone()[0]
 
         cursor = self.conn.execute(
@@ -1824,7 +1833,10 @@ class SealedCollectionRepository:
         stats["by_status"] = {row["status"]: {"count": row["cnt"], "quantity": row["qty"]} for row in cursor}
 
         total_cost = self.conn.execute(
-            "SELECT COALESCE(SUM(purchase_price * quantity), 0) FROM sealed_collection WHERE purchase_price IS NOT NULL"
+            "SELECT COALESCE(SUM(purchase_price * quantity), 0)"
+            " FROM sealed_collection"
+            " WHERE purchase_price IS NOT NULL"
+            " AND status IN ('owned', 'listed')"
         ).fetchone()[0]
         stats["total_cost"] = total_cost
 
@@ -1833,7 +1845,7 @@ class SealedCollectionRepository:
             FROM sealed_collection sc
             JOIN sealed_products sp ON sc.sealed_product_uuid = sp.uuid
             LEFT JOIN latest_sealed_prices lsp ON sp.tcgplayer_product_id = lsp.tcgplayer_product_id
-            WHERE sc.status = 'owned'"""
+            WHERE sc.status IN ('owned', 'listed')"""
         ).fetchone()[0]
         stats["market_value"] = market_value
         stats["gain_loss"] = market_value - total_cost
