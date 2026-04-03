@@ -1734,8 +1734,14 @@ class SealedCollectionRepository:
         entry_id: int,
         new_status: str,
         sale_price: Optional[float] = None,
+        quantity: Optional[int] = None,
     ) -> bool:
-        """Transition a sealed product to a disposition status."""
+        """Transition a sealed product to a disposition status.
+
+        If *quantity* is given and less than the entry's current quantity,
+        the entry is split: the original keeps the remainder and a new
+        entry is created with the disposed quantity and new status.
+        """
         entry = self.get(entry_id)
         if not entry:
             raise ValueError(f"Sealed collection entry {entry_id} not found")
@@ -1745,6 +1751,28 @@ class SealedCollectionRepository:
             raise ValueError(
                 f"Cannot transition from '{entry.status}' to '{new_status}'"
             )
+
+        if quantity is not None and quantity < entry.quantity:
+            if quantity < 1:
+                raise ValueError("quantity must be at least 1")
+            # Split: decrement original, create new entry with new status
+            entry.quantity -= quantity
+            self.update(entry)
+            split = SealedCollectionEntry(
+                id=None,
+                sealed_product_uuid=entry.sealed_product_uuid,
+                quantity=quantity,
+                condition=entry.condition,
+                purchase_price=entry.purchase_price,
+                purchase_date=entry.purchase_date,
+                source=entry.source,
+                seller_name=entry.seller_name,
+                notes=entry.notes,
+                status=new_status,
+                sale_price=sale_price,
+            )
+            self.add(split)
+            return True
 
         entry.status = new_status
         if sale_price is not None:

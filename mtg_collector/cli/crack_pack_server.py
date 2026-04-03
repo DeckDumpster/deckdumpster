@@ -7479,7 +7479,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         repo = SealedCollectionRepository(conn)
 
         try:
-            repo.dispose(entry_id, new_status, sale_price=data.get("sale_price"))
+            qty = data.get("quantity")
+            if qty is not None:
+                qty = int(qty)
+            repo.dispose(
+                entry_id, new_status,
+                sale_price=data.get("sale_price"),
+                quantity=qty,
+            )
             conn.commit()
             conn.close()
             self._send_json({"ok": True})

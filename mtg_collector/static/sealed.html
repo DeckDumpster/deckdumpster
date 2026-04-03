@@ -2045,8 +2045,8 @@ function openDetailModal(product) {
         ${sourceStr ? `<span class="entry-detail">${esc(sourceStr)}</span>` : ''}
         ${dateStr ? `<span class="entry-detail">${dateStr}</span>` : ''}
         <span class="entry-actions">
-          ${transitions.includes('opened') ? `<button class="quick-dispose-btn opened" data-entry-id="${entry.id}" data-status="opened">Opened</button>` : ''}
-          ${transitions.includes('sold') ? `<button class="quick-dispose-btn sold" data-entry-id="${entry.id}" data-status="sold">Sold</button>` : ''}
+          ${transitions.includes('opened') ? `<button class="quick-dispose-btn opened" data-entry-id="${entry.id}" data-status="opened" data-qty="${entry.quantity}">Opened</button>` : ''}
+          ${transitions.includes('sold') ? `<button class="quick-dispose-btn sold" data-entry-id="${entry.id}" data-status="sold" data-qty="${entry.quantity}">Sold</button>` : ''}
           <button class="secondary entry-edit-toggle" data-idx="${idx}">Edit</button>
         </span>
       </div>
@@ -2124,11 +2124,26 @@ function openDetailModal(product) {
     btn.addEventListener('click', async () => {
       const entryId = parseInt(btn.dataset.entryId);
       const newStatus = btn.dataset.status;
-      if (!confirm(`Mark this entry as "${newStatus}"?`)) return;
+      const entryQty = parseInt(btn.dataset.qty) || 1;
+
+      const body = { new_status: newStatus };
+      if (entryQty > 1) {
+        const input = prompt(`How many to mark as "${newStatus}"? (1-${entryQty})`, String(entryQty));
+        if (input === null) return;
+        const qty = parseInt(input);
+        if (isNaN(qty) || qty < 1 || qty > entryQty) {
+          alert(`Please enter a number between 1 and ${entryQty}`);
+          return;
+        }
+        if (qty < entryQty) body.quantity = qty;
+      } else {
+        if (!confirm(`Mark this entry as "${newStatus}"?`)) return;
+      }
+
       const res = await fetch(`/api/sealed/collection/${entryId}/dispose`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ new_status: newStatus }),
+        body: JSON.stringify(body),
       });
       if (res.ok) {
         closeDetailModal();
