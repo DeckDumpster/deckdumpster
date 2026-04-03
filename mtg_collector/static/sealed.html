@@ -699,6 +699,13 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
 .disposition-badge.listed { background: #3a1a5c; color: #b87ee8; }
 .disposition-badge.opened { background: #5c3a1a; color: #e8b87e; }
 
+/* Disposed entries (opened/sold/traded/gifted) shown dimmed */
+.sheet-card.disposed .sheet-card-img-wrap {
+  filter: grayscale(85%) brightness(0.55);
+  opacity: 0.6;
+}
+tr.disposed td { opacity: 0.45; }
+
 /* Dispose controls */
 .dispose-controls {
   display: flex;
@@ -1346,12 +1353,14 @@ function initFilters() {
     catContainer.innerHTML += `<input type="checkbox" id="${id}" value="${cat}"><label for="${id}">${label}</label>`;
   });
 
-  // Status pills
+  // Status pills — owned and listed checked by default
   const statusContainer = document.getElementById('status-pills');
+  const defaultStatuses = new Set(['owned', 'listed']);
   STATUSES.forEach(s => {
     const id = `status-${s}`;
     const label = s.charAt(0).toUpperCase() + s.slice(1);
-    statusContainer.innerHTML += `<input type="checkbox" id="${id}" value="${s}"><label for="${id}">${label}</label>`;
+    const checked = defaultStatuses.has(s) ? ' checked' : '';
+    statusContainer.innerHTML += `<input type="checkbox" id="${id}" value="${s}"${checked}><label for="${id}">${label}</label>`;
   });
 }
 
@@ -1879,7 +1888,8 @@ function renderGrid() {
     const selected = selectionMode && isProductSelected(product) ? ' selected' : '';
     const checkboxHtml = selectionMode ? `<input type="checkbox" class="select-checkbox" ${isProductSelected(product) ? 'checked' : ''}>` : '';
 
-    html += `<div class="sheet-card${selectable}${selected}" data-uuid="${product.uuid}">
+    const disposed = (product.primary_status !== 'owned' && product.primary_status !== 'listed') ? ' disposed' : '';
+    html += `<div class="sheet-card${selectable}${selected}${disposed}" data-uuid="${product.uuid}">
       <div class="sheet-card-img-wrap">
         ${checkboxHtml}
         ${imgHtml}
@@ -1926,7 +1936,8 @@ function renderTable() {
     const added = product.added_at ? product.added_at.slice(0, 10) : '';
 
     const rowSelected = selectionMode && isProductSelected(product) ? ' selected' : '';
-    html += `<tr data-uuid="${product.uuid}" class="${rowSelected}">`;
+    const rowDisposed = (product.primary_status !== 'owned' && product.primary_status !== 'listed') ? ' disposed' : '';
+    html += `<tr data-uuid="${product.uuid}" class="${rowSelected}${rowDisposed}">`;
     if (selectionMode) html += `<td class="select-col"><input type="checkbox" class="row-select-cb" ${isProductSelected(product) ? 'checked' : ''}></td>`;
     html += '<td></td>';
     const thumbHtml = product.image_url
