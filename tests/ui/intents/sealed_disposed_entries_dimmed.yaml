@@ -1,0 +1,10 @@
+# Scenario: Disposed sealed entries appear dimmed when filter is enabled
+#
+# Related:
+#   pull_requests: [232]
+
+description: >
+  When I explicitly check the "Opened" status filter on the sealed
+  collection page, opened entries appear in the list but are visually
+  dimmed compared to owned entries. This makes it clear which items
+  are still in my active inventory versus already disposed.

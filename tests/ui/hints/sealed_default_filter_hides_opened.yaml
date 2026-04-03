@@ -1,0 +1,16 @@
+start_page: /sealed
+involves:
+  - "Sealed collection table in #main"
+  - "Status filter pills in #status-pills"
+  - "Checkboxes #status-owned and #status-listed (pre-checked)"
+  - "Stats bar showing entry count"
+fixture_data:
+  total_entries: "8"
+  owned_entries: "6"
+  listed_entries: "1"
+  opened_entries: "1"
+notes: >
+  Navigate to /sealed. The page loads with Owned and Listed checkboxes
+  pre-checked. Verify the stats bar shows 7 entries (6 owned + 1 listed),
+  not 8 (which would include the opened one). The opened entry should
+  not appear in the table.
