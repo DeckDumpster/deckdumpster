@@ -325,6 +325,17 @@
             <button class="secondary" id="btn-cancel-expected">Cancel</button>
           </div>
         </div>
+      </div>
+
+      <!-- Swap Printing Modal -->
+      <div class="modal-backdrop" id="swap-modal">
+        <div class="edit-modal" style="width:600px">
+          <h3>Swap Printing</h3>
+          <div id="swap-printings" class="swap-printings"></div>
+          <div class="form-actions">
+            <button class="secondary" id="btn-cancel-swap">Cancel</button>
+          </div>
+        </div>
       </div>`;
 
     // Init card modal
@@ -399,6 +410,13 @@
       setPreview(row.dataset.imageUri, row.dataset.cardName);
     }, true);
     typeGroupsEl.addEventListener('mouseleave', resetPreview);
+
+    // Swap printing (list view)
+    typeGroupsEl.addEventListener('click', async (e) => {
+      const swapBtn = e.target.closest('.swap-btn');
+      if (!swapBtn) return;
+      showSwapModal(deck.id, swapBtn.dataset.printingId, swapBtn.dataset.oracleId);
+    });
 
     // Remove card (list view)
     typeGroupsEl.addEventListener('click', async (e) => {
@@ -482,6 +500,7 @@
     document.getElementById('btn-cancel-add').addEventListener('click', () => closeModal('add-cards-modal'));
     document.getElementById('btn-import-expected-confirm').addEventListener('click', () => importExpectedList(deck.id));
     document.getElementById('btn-cancel-expected').addEventListener('click', () => closeModal('expected-modal'));
+    document.getElementById('btn-cancel-swap').addEventListener('click', () => closeModal('swap-modal'));
 
     // Precon checkbox toggle
     document.getElementById('f-precon').addEventListener('change', function() {
@@ -594,15 +613,19 @@
         const qtyStr = qty > 1 ? `<span class="card-qty">${qty}x</span> ` : '';
         const cids = c.collection_ids || [c.id];
         let removeBtn = '';
+        let swapBtn = '';
         if (isVirtual && c.printing_id) {
           removeBtn = `<button class="remove-btn" data-printing-id="${c.printing_id}" title="Remove">&times;</button>`;
+          if (c.oracle_id) {
+            swapBtn = `<button class="swap-btn" data-printing-id="${c.printing_id}" data-oracle-id="${c.oracle_id}" title="Swap printing">&#x21c4;</button>`;
+          }
         } else if (!isVirtual && cids[0] != null) {
           removeBtn = `<button class="remove-btn" data-collection-id="${cids[0]}" title="Remove">&times;</button>`;
         }
         html += `<div class="card-row" data-image-uri="${esc(c.image_uri || '')}" data-card-name="${esc(c.name)}">
           <span class="card-name">${qtyStr}<a href="/card/${esc(c.set_code)}/${esc(c.collector_number)}">${esc(c.name)}</a></span>
           <span class="mana-icons">${renderMana(c.mana_cost)}</span>
-          ${removeBtn}
+          ${swapBtn}${removeBtn}
         </div>`;
       }
       html += '</div>';
@@ -747,6 +770,44 @@
   }
 
   // ── Expected List Import ──
+
+  async function showSwapModal(deckId, currentPrintingId, oracleId) {
+    const modal = document.getElementById('swap-modal');
+    const container = document.getElementById('swap-printings');
+    container.innerHTML = '<div class="loading-state"><span class="spinner"></span> Loading...</div>';
+    modal.classList.add('active');
+
+    const res = await fetch('/api/printings/by-oracle/' + oracleId);
+    const printings = await res.json();
+
+    container.innerHTML = printings.map(p => {
+      const isCurrent = p.printing_id === currentPrintingId;
+      const ownedBadge = p.owned_count > 0
+        ? `<span class="owned-badge">Owned: ${p.owned_count}</span>`
+        : `<span class="unowned-badge">Not owned</span>`;
+      const imgSrc = (p.image_uri || '').replace('/large/', '/small/');
+      return `<div class="swap-option${isCurrent ? ' current' : ''}" data-pid="${esc(p.printing_id)}">
+        ${imgSrc ? `<img src="${imgSrc}" class="swap-thumb" loading="lazy">` : '<div class="swap-thumb-placeholder"></div>'}
+        <div class="swap-info">
+          <div class="swap-set">${esc(p.set_name)} (${esc(p.set_code.toUpperCase())}) #${esc(p.collector_number)}</div>
+          <div class="swap-meta">${ownedBadge}${isCurrent ? ' <span class="current-badge">Current</span>' : ''}</div>
+        </div>
+      </div>`;
+    }).join('');
+
+    container.onclick = async (e) => {
+      const option = e.target.closest('.swap-option');
+      if (!option || option.classList.contains('current')) return;
+      const newPid = option.dataset.pid;
+      await fetch('/api/decks/' + deckId + '/expected-cards/swap', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ old_printing_id: currentPrintingId, new_printing_id: newPid }),
+      });
+      closeModal('swap-modal');
+      await loadBuilder(deckId);
+    };
+  }
 
   function showExpectedModal() {
     document.getElementById('f-expected-list').value = '';
