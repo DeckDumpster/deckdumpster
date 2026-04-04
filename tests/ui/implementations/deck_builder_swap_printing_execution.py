@@ -6,7 +6,8 @@ Verifies that clicking an alternate printing swaps it in the deck.
 
 
 def steps(harness):
-    # Create an idea deck with expected cards via API
+    # Create an idea deck with an expected card that has multiple printings.
+    # Pick a card with >1 non-digital printing so the swap modal has alternatives.
     deck_id = harness.page.evaluate("""async () => {
         const res = await fetch('/api/decks', {
             method: 'POST',
@@ -16,6 +17,20 @@ def steps(harness):
         const deck = await res.json();
         const colRes = await fetch('/api/collection?limit=50');
         const cards = await colRes.json();
+        // Find a card with multiple printings by checking the by-oracle endpoint
+        for (const card of cards) {
+            const pRes = await fetch('/api/printings/by-oracle/' + card.oracle_id);
+            const printings = await pRes.json();
+            if (printings.length > 1) {
+                await fetch('/api/decks/' + deck.id + '/expected-cards/add', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({printing_ids: [card.printing_id]})
+                });
+                return deck.id;
+            }
+        }
+        // Fallback: use first card even if only one printing
         if (cards.length > 0) {
             await fetch('/api/decks/' + deck.id + '/expected-cards/add', {
                 method: 'POST',
