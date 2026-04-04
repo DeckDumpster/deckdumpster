@@ -1,0 +1,13 @@
+start_page: /sealed
+involves:
+  - "Filters button to open sidebar"
+  - "Status filter checkbox #status-opened"
+  - "Table rows or grid cards with .disposed class"
+  - "Dimmed visual treatment on disposed entries"
+fixture_data:
+  opened_entry_status: "opened"
+notes: >
+  Navigate to /sealed. Click "Filters" to open the sidebar. Check the
+  "Opened" checkbox (#status-opened). The opened entry should now appear
+  in the list with a .disposed class causing dimmed/grayscale appearance.
+  Verify the opened entry is visible but visually distinct from owned ones.

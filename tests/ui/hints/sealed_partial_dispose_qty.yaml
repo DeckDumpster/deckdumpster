@@ -1,0 +1,19 @@
+start_page: /sealed
+involves:
+  - "Product detail modal (#detail-modal-overlay)"
+  - "Entry rows with Opened/Sold quick-dispose buttons"
+  - "Browser prompt() dialog for quantity input"
+  - "Entry quantity display in the modal"
+fixture_data:
+  multi_qty_entry_id: "3"
+  multi_qty_entry_qty: "6"
+  product_name: "Foundations"
+notes: >
+  Navigate to /sealed. Click on a product that has a multi-quantity entry
+  (e.g., Foundations Collector Booster Pack, entry id=3, qty=6). In the
+  detail modal, the "Opened" button has data-qty="6". Click it. A prompt
+  appears asking how many to mark as opened (1-6). Enter "2". After the
+  API call completes, the modal closes and the collection reloads. The
+  original entry should now show qty=4 (owned) and a new entry with
+  qty=2 (opened) should exist. Note: browser prompt() cannot be automated
+  via Playwright click — use page.on("dialog") to handle it.
