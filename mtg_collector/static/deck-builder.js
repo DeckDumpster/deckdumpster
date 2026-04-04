@@ -234,6 +234,7 @@
             <select id="f-format">
               <option value="">-- None --</option>
               <option value="commander">Commander / EDH</option>
+              <option value="jumpstart">Jumpstart</option>
               <option value="standard">Standard</option>
               <option value="modern">Modern</option>
               <option value="pioneer">Pioneer</option>
@@ -245,6 +246,14 @@
           <div class="form-group">
             <label>Description</label>
             <textarea id="f-description" rows="2"></textarea>
+          </div>
+          <div class="form-group">
+            <label>State</label>
+            <select id="f-deck-state">
+              <option value="idea">Idea</option>
+              <option value="ready">Ready</option>
+              <option value="constructed">Constructed</option>
+            </select>
           </div>
           <div class="form-group">
             <label><input type="checkbox" id="f-precon"> Preconstructed deck</label>
@@ -400,25 +409,20 @@
     }, true);
     typeGroupsEl.addEventListener('mouseleave', resetPreview);
 
-    // Remove card (list view)
+    // Adjust card quantity (+/-)
     typeGroupsEl.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.remove-btn');
+      const btn = e.target.closest('.qty-btn');
       if (!btn) return;
-      if (btn.dataset.printingId) {
-        // Hypothetical deck: remove from expected cards
-        await fetch('/api/decks/' + deck.id + '/expected-cards/remove', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ printing_id: btn.dataset.printingId }),
-        });
-      } else {
-        const cid = parseInt(btn.dataset.collectionId, 10);
-        await fetch('/api/deck-builder/' + deck.id + '/cards', {
-          method: 'DELETE',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ collection_id: cid }),
-        });
-      }
+      const delta = parseInt(btn.dataset.delta, 10);
+      const pid = btn.dataset.printingId;
+      const zone = btn.dataset.zone || 'mainboard';
+      const res = await fetch('/api/decks/' + deck.id + '/cards/quantity', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ printing_id: pid, zone, delta }),
+      });
+      const result = await res.json();
+      if (result.error) { alert(result.error); return; }
       await loadBuilder(deck.id);
     });
 
@@ -457,21 +461,27 @@
         if (!confirm('Materialize this deck? This will assign owned cards from your collection and convert it to a physical deck.')) return;
         materializeBtn.disabled = true;
         materializeBtn.textContent = 'Materializing...';
-        const res = await fetch('/api/decks/' + deck.id + '/materialize', { method: 'POST' });
-        const result = await res.json();
-        if (result.error) {
-          alert(result.error);
+        try {
+          const res = await fetch('/api/decks/' + deck.id + '/materialize', { method: 'POST' });
+          const result = await res.json();
+          if (result.error) {
+            alert('Error: ' + result.error);
+            materializeBtn.disabled = false;
+            materializeBtn.textContent = 'Materialize';
+            return;
+          }
+          let msg = 'Matched ' + result.total_matched + ' card(s).';
+          if (result.total_missing > 0) {
+            const names = result.missing.map(function(m) { return m.name + ' (' + (m.short || m.expected) + ' short)'; }).join('\n');
+            msg += '\n\n' + result.total_missing + ' card(s) missing:\n' + names;
+          }
+          alert(msg);
+          window.location.reload();
+        } catch (err) {
+          alert('Materialize failed: ' + err.message);
           materializeBtn.disabled = false;
           materializeBtn.textContent = 'Materialize';
-          return;
         }
-        let msg = `Matched ${result.total_matched} card(s).`;
-        if (result.total_missing > 0) {
-          const names = result.missing.map(m => `${m.name} (${m.short || m.expected} short)`).join('\n');
-          msg += `\n\n${result.total_missing} card(s) missing:\n${names}`;
-        }
-        alert(msg);
-        window.location.reload();
       });
     }
 
@@ -572,7 +582,6 @@
   }
 
   function renderGroups(groups, commander) {
-    const isVirtual = window._builderData && window._builderData.deck.state !== 'constructed';
     let html = '';
     // Show commander first if present
     if (commander) {
@@ -591,18 +600,17 @@
         <div class="type-group-header">${esc(type)} <span class="group-count">(${typeTotal})</span></div>`;
       for (const c of cards) {
         const qty = c.quantity || 1;
-        const qtyStr = qty > 1 ? `<span class="card-qty">${qty}x</span> ` : '';
-        const cids = c.collection_ids || [c.id];
-        let removeBtn = '';
-        if (isVirtual && c.printing_id) {
-          removeBtn = `<button class="remove-btn" data-printing-id="${c.printing_id}" title="Remove">&times;</button>`;
-        } else if (!isVirtual && cids[0] != null) {
-          removeBtn = `<button class="remove-btn" data-collection-id="${cids[0]}" title="Remove">&times;</button>`;
-        }
+        const zone = c.deck_zone || 'mainboard';
+        const pid = c.printing_id || '';
+        const qtyControls = pid ? `<span class="qty-controls">`
+          + `<button class="qty-btn" data-delta="-1" data-printing-id="${pid}" data-zone="${zone}" title="Remove one">&minus;</button>`
+          + `<span class="qty-count">${qty}</span>`
+          + `<button class="qty-btn" data-delta="1" data-printing-id="${pid}" data-zone="${zone}" title="Add one">&plus;</button>`
+          + `</span>` : '';
         html += `<div class="card-row" data-image-uri="${esc(c.image_uri || '')}" data-card-name="${esc(c.name)}">
-          <span class="card-name">${qtyStr}<a href="/card/${esc(c.set_code)}/${esc(c.collector_number)}">${esc(c.name)}</a></span>
+          <span class="card-name"><a href="/card/${esc(c.set_code)}/${esc(c.collector_number)}">${esc(c.name)}</a></span>
           <span class="mana-icons">${renderMana(c.mana_cost)}</span>
-          ${removeBtn}
+          ${qtyControls}
         </div>`;
       }
       html += '</div>';
@@ -617,6 +625,7 @@
     document.getElementById('f-name').value = deck.name || '';
     document.getElementById('f-format').value = deck.format || '';
     document.getElementById('f-description').value = deck.description || '';
+    document.getElementById('f-deck-state').value = deck.state || 'idea';
     document.getElementById('f-precon').checked = !!deck.is_precon;
     document.getElementById('f-origin-set').value = deck.origin_set_code || '';
     document.getElementById('f-origin-theme').value = deck.origin_theme || '';
@@ -633,6 +642,7 @@
       name: document.getElementById('f-name').value.trim(),
       format: document.getElementById('f-format').value || null,
       description: document.getElementById('f-description').value.trim() || null,
+      state: document.getElementById('f-deck-state').value,
       is_precon: document.getElementById('f-precon').checked,
       sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
       deck_box: document.getElementById('f-deckbox').value.trim() || null,

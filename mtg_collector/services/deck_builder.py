@@ -225,6 +225,23 @@ class DeckBuilderService:
 
     def _get_cards_with_text(self, deck_id: int) -> list[dict]:
         """Get deck cards including oracle_text (needed for role classification)."""
+        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
+        deck = self.repo.get(deck_id)
+        if deck and deck["state_id"] != DECK_STATE_CONSTRUCTED:
+            rows = self.conn.execute(
+                """SELECT NULL as id, e.printing_id, 'nonfoil' as finish, e.zone AS deck_zone,
+                          p.set_code, p.collector_number, p.rarity, p.image_uri,
+                          c.name, c.type_line, c.mana_cost, c.cmc,
+                          c.colors, c.color_identity, c.oracle_text, p.oracle_id,
+                          e.quantity
+                   FROM deck_expected_cards e
+                   JOIN printings p ON e.printing_id = p.printing_id
+                   JOIN cards c ON p.oracle_id = c.oracle_id
+                   WHERE e.deck_id = ?
+                   ORDER BY c.name""",
+                (deck_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
         rows = self.conn.execute(
             """SELECT col.id, dc.printing_id, col.finish, dc.zone AS deck_zone,
                       p.set_code, p.collector_number, p.rarity, p.image_uri,
@@ -1003,15 +1020,27 @@ class DeckBuilderService:
                 cmd_ci = json.loads(row["color_identity"]) if isinstance(row["color_identity"], str) else row["color_identity"]
                 cmd_cmc = int(row["cmc"] or 0)
 
-        cards = self.conn.execute(
-            """SELECT c.name, c.mana_cost, c.cmc, c.type_line
-               FROM deck_cards dc
-               JOIN printings p ON dc.printing_id = p.printing_id
-               JOIN cards c ON p.oracle_id = c.oracle_id
-               WHERE dc.deck_id = ?
-               ORDER BY c.cmc, c.name""",
-            (deck_id,),
-        ).fetchall()
+        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
+        if deck["state_id"] != DECK_STATE_CONSTRUCTED:
+            cards = self.conn.execute(
+                """SELECT c.name, c.mana_cost, c.cmc, c.type_line
+                   FROM deck_expected_cards e
+                   JOIN printings p ON e.printing_id = p.printing_id
+                   JOIN cards c ON p.oracle_id = c.oracle_id
+                   WHERE e.deck_id = ?
+                   ORDER BY c.cmc, c.name""",
+                (deck_id,),
+            ).fetchall()
+        else:
+            cards = self.conn.execute(
+                """SELECT c.name, c.mana_cost, c.cmc, c.type_line
+                   FROM deck_cards dc
+                   JOIN printings p ON dc.printing_id = p.printing_id
+                   JOIN cards c ON p.oracle_id = c.oracle_id
+                   WHERE dc.deck_id = ?
+                   ORDER BY c.cmc, c.name""",
+                (deck_id,),
+            ).fetchall()
 
         color_symbols = {"W": "White", "U": "Blue", "B": "Black", "R": "Red", "G": "Green"}
         pip_counts = {c: 0 for c in color_symbols}

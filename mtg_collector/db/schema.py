@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 40
+SCHEMA_VERSION = 41
 
 # Tables whose data can be served from an ATTACHed shared DB via temp views.
 SHARED_TABLES = [
@@ -708,6 +708,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v38_to_v39(conn)
         if current < 40:
             _migrate_v39_to_v40(conn)
+        if current < 41:
+            _migrate_v40_to_v41(conn)
 
     # Record schema version
     conn.execute(
@@ -2512,6 +2514,16 @@ def _migrate_v39_to_v40(conn: sqlite3.Connection):
         LEFT JOIN binders b ON c.binder_id = b.id
         LEFT JOIN batches bat ON c.batch_id = bat.id
     """)
+
+
+def _migrate_v40_to_v41(conn: sqlite3.Connection):
+    """Remove orphaned deck_cards rows with NULL collection_id.
+
+    These were created by the dual-insert pattern in expected_add and
+    jumpstart_insert. deck_expected_cards is the single source of truth
+    for idea/ready deck contents.
+    """
+    conn.execute("DELETE FROM deck_cards WHERE collection_id IS NULL")
 
 
 def drop_all_tables(conn: sqlite3.Connection):
