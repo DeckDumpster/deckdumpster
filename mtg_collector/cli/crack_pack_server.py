@@ -975,7 +975,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path.startswith("/deck-builder/"):
             self._serve_static("deck_builder.html")
         elif path == "/decks":
-            self._serve_static("decks.html")
+            self._serve_static_with_data("decks.html", self._decks_init_data)
         elif path.startswith("/decks/"):
             self._serve_static("deck_builder.html")
         elif path == "/binders":
@@ -1446,6 +1446,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_expected_remove(int(did), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/cards/quantity"):
+            did = path[len("/api/decks/"):-len("/cards/quantity")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_adjust_quantity(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/cards/move"):
             did = path[len("/api/decks/"):-len("/cards/move")]
             if did.isdigit():
@@ -1691,6 +1700,32 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)
+
+    def _serve_static_with_data(self, filename: str, data_fn):
+        """Serve a static HTML file with /*INIT_DATA*/ replaced by JSON."""
+        import json as _json
+        filepath = self.static_dir / filename
+        if not filepath.resolve().is_relative_to(self.static_dir.resolve()):
+            self._send_json({"error": "Not found"}, 404)
+            return
+        if not filepath.is_file():
+            self._send_json({"error": "Not found"}, 404)
+            return
+        html = filepath.read_text(encoding="utf-8")
+        html = html.replace("/*INIT_DATA*/", _json.dumps(data_fn()))
+        content = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+    def _decks_init_data(self):
+        from mtg_collector.db.models import DeckRepository
+        conn = self._get_conn()
+        data = DeckRepository(conn).list_all()
+        conn.close()
+        return data
 
     def _api_sets(self):
         if not self.generator:
@@ -5092,7 +5127,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         zone = params.get("zone", [None])[0]
-        cards = repo.get_cards(deck_id, zone=zone)
+        cards = repo.get_cards_for_state(deck_id, zone=zone)
 
         for card in cards:
             card["layout"] = card.get("layout") or "normal"
@@ -5174,6 +5209,28 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.commit()
         conn.close()
         self._send_json({"ok": True, "count": count})
+
+    def _api_deck_adjust_quantity(self, deck_id: int, data: dict):
+        """Adjust card quantity by +1 or -1. Works for all deck states."""
+        printing_id = data.get("printing_id")
+        zone = data.get("zone", "mainboard")
+        delta = data.get("delta")
+        if not printing_id or delta not in (1, -1):
+            self._send_json({"error": "printing_id and delta (+1/-1) required"}, 400)
+            return
+        conn = self._get_conn()
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        try:
+            result = repo.adjust_card_quantity(deck_id, printing_id, zone, delta)
+            conn.commit()
+        except (ValueError, Exception) as e:
+            conn.close()
+            code = 409 if isinstance(e, ValueError) else 500
+            self._send_json({"error": str(e)}, code)
+            return
+        conn.close()
+        self._send_json(result)
 
     def _api_deck_move_cards(self, deck_id: int, data: dict):
         collection_ids = data.get("collection_ids", [])
@@ -5286,22 +5343,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "printing_ids is required"}, 400)
             return
         conn = self._get_conn()
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
         try:
-            for pid in printing_ids:
-                conn.execute(
-                    "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
-                    "VALUES (?, ?, ?, 1)",
-                    (deck_id, pid, zone),
-                )
-                conn.execute(
-                    "INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity) "
-                    "VALUES (?, ?, NULL, ?, 1)",
-                    (deck_id, pid, zone),
-                )
+            count = repo.add_expected_cards(deck_id, printing_ids, zone)
             conn.commit()
         finally:
             conn.close()
-        self._send_json({"ok": True, "count": len(printing_ids)})
+        self._send_json({"ok": True, "count": count})
 
     def _api_deck_expected_remove(self, deck_id: int, data: dict):
         """Remove a card from an idea/ready deck's expected list by printing_id."""
@@ -5310,15 +5359,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "printing_id is required"}, 400)
             return
         conn = self._get_conn()
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
         try:
-            conn.execute(
-                "DELETE FROM deck_expected_cards WHERE deck_id = ? AND printing_id = ?",
-                (deck_id, printing_id),
-            )
-            conn.execute(
-                "DELETE FROM deck_cards WHERE deck_id = ? AND printing_id = ? AND collection_id IS NULL",
-                (deck_id, printing_id),
-            )
+            count = repo.remove_expected_cards(deck_id, [printing_id])
             conn.commit()
         finally:
             conn.close()
@@ -5518,7 +5562,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if row:
                 commander = dict(row)
         # Get deck cards grouped by type, collapsed by printing_id
-        cards = repo.get_cards(deck_id)
+        cards = repo.get_cards_for_state(deck_id)
         groups = {}
         type_order = ["Creatures", "Planeswalkers", "Instants", "Sorceries",
                       "Enchantments", "Artifacts", "Lands", "Other"]
@@ -5566,12 +5610,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if row and row["color_identity"]:
                 cmd_colors = json.loads(row["color_identity"]) if isinstance(row["color_identity"], str) else row["color_identity"]
         # Get IDs already in this deck
-        in_deck = {r["printing_id"] for r in conn.execute(
-            "SELECT printing_id FROM deck_cards WHERE deck_id = ?", (deck_id,)
-        ).fetchall()}
+        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
+        if deck["state_id"] != DECK_STATE_CONSTRUCTED:
+            in_deck = {r["printing_id"] for r in conn.execute(
+                "SELECT printing_id FROM deck_expected_cards WHERE deck_id = ?", (deck_id,)
+            ).fetchall()}
+        else:
+            in_deck = {r["printing_id"] for r in conn.execute(
+                "SELECT printing_id FROM deck_cards WHERE deck_id = ?", (deck_id,)
+            ).fetchall()}
         # Search owned cards matching color identity
         search = f"%{q}%"
-        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
         if deck["state_id"] != DECK_STATE_CONSTRUCTED:
             # Idea/Ready: search all owned cards regardless of deck assignment
             rows = conn.execute(
@@ -5589,7 +5638,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 (search, search, search),
             ).fetchall()
         else:
-            # Physical: only unassigned cards
+            # Physical: only cards not already in a constructed deck or binder
             rows = conn.execute(
                 """SELECT col.id, col.printing_id, col.finish, col.condition,
                           p.set_code, p.collector_number, p.rarity, p.image_uri,
@@ -5599,12 +5648,16 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                    JOIN printings p ON col.printing_id = p.printing_id
                    JOIN cards c ON p.oracle_id = c.oracle_id
                    WHERE col.status = 'owned'
-                     AND NOT EXISTS (SELECT 1 FROM deck_cards dc WHERE dc.collection_id = col.id)
+                     AND NOT EXISTS (
+                       SELECT 1 FROM deck_cards dc
+                       JOIN decks d ON dc.deck_id = d.id
+                       WHERE dc.collection_id = col.id AND d.state_id = ?
+                     )
                      AND col.binder_id IS NULL
                      AND (c.name LIKE ? OR c.type_line LIKE ? OR c.oracle_text LIKE ?)
                    ORDER BY c.name
                    LIMIT 50""",
-                (search, search, search),
+                (DECK_STATE_CONSTRUCTED, search, search, search),
             ).fetchall()
         conn.close()
         # Filter by color identity subset and exclude already-in-deck
@@ -6273,12 +6326,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 conn.execute(
                     """INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity)
                        VALUES (?, ?, ?, ?)""",
-                    (deck_id, card["printing_id"], card["zone"], card["quantity"]),
-                )
-                # Also insert into deck_cards for unified deck display
-                conn.execute(
-                    """INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity)
-                       VALUES (?, ?, NULL, ?, ?)""",
                     (deck_id, card["printing_id"], card["zone"], card["quantity"]),
                 )
 

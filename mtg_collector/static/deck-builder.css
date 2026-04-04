@@ -355,20 +355,36 @@
   font-size: 0.8rem;
 }
 
-.card-row .remove-btn {
+.card-row .qty-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+
+}
+.card-row .qty-btn {
   background: none;
-  border: none;
+  border: 1px solid var(--border);
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 2px 6px;
-  font-size: 0.8rem;
-  border-radius: 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 0.75rem;
+  line-height: 1;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-
-.card-row:hover .remove-btn { opacity: 1; }
-.card-row .remove-btn:hover { color: var(--accent); background: rgba(233, 69, 96, 0.15); }
+.card-row .qty-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+.card-row .qty-btn[data-delta="-1"]:hover { color: var(--accent); border-color: var(--accent); }
+.card-row .qty-count {
+  font-size: 0.75rem;
+  min-width: 16px;
+  text-align: center;
+  color: var(--text-secondary);
+}
 
 /* Card grid */
 .deck-grid { padding: 0; }

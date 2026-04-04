@@ -1908,7 +1908,10 @@ class DeckRepository:
     def get(self, deck_id: int) -> Optional[Dict[str, Any]]:
         row = self.conn.execute(
             """SELECT d.*, ds.name AS state,
-                      (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
+                      (CASE WHEN d.state_id = 3
+                            THEN (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id)
+                            ELSE (SELECT COALESCE(SUM(e.quantity), 0) FROM deck_expected_cards e WHERE e.deck_id = d.id)
+                       END) as card_count,
                       (SELECT COALESCE(SUM(c.purchase_price), 0)
                        FROM deck_cards dc2
                        JOIN collection c ON dc2.collection_id = c.id
@@ -1970,17 +1973,34 @@ class DeckRepository:
     def list_all(self) -> List[Dict[str, Any]]:
         cursor = self.conn.execute(
             """SELECT d.*, ds.name AS state,
-                      (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
+                      (CASE WHEN d.state_id = 3
+                            THEN (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id)
+                            ELSE (SELECT COALESCE(SUM(e.quantity), 0) FROM deck_expected_cards e WHERE e.deck_id = d.id)
+                       END) as card_count,
                       (SELECT COALESCE(SUM(c.purchase_price), 0)
                        FROM deck_cards dc2
                        JOIN collection c ON dc2.collection_id = c.id
                        WHERE dc2.deck_id = d.id) as total_value,
-                      (SELECT GROUP_CONCAT(DISTINCT je.value)
-                       FROM deck_cards dc3
-                       JOIN printings p ON dc3.printing_id = p.printing_id
-                       JOIN cards card ON p.oracle_id = card.oracle_id,
-                            json_each(card.colors) je
-                       WHERE dc3.deck_id = d.id) as deck_colors,
+                      (CASE WHEN d.state_id = 3
+                            THEN (SELECT GROUP_CONCAT(color || ':' || cnt)
+                                  FROM (SELECT je.value AS color, COUNT(*) AS cnt
+                                        FROM deck_cards dc3
+                                        JOIN printings p ON dc3.printing_id = p.printing_id
+                                        JOIN cards card ON p.oracle_id = card.oracle_id,
+                                             json_each(card.colors) je
+                                        WHERE dc3.deck_id = d.id
+                                        GROUP BY je.value
+                                        ORDER BY cnt DESC))
+                            ELSE (SELECT GROUP_CONCAT(color || ':' || cnt)
+                                  FROM (SELECT je.value AS color, COUNT(*) AS cnt
+                                        FROM deck_expected_cards e3
+                                        JOIN printings p ON e3.printing_id = p.printing_id
+                                        JOIN cards card ON p.oracle_id = card.oracle_id,
+                                             json_each(card.colors) je
+                                        WHERE e3.deck_id = d.id
+                                        GROUP BY je.value
+                                        ORDER BY cnt DESC))
+                       END) as deck_colors,
                       (SELECT COALESCE(SUM(e.quantity), 0)
                        FROM deck_expected_cards e WHERE e.deck_id = d.id) as expected_card_count
                FROM decks d
@@ -1995,7 +2015,10 @@ class DeckRepository:
         if origin_variation is not None:
             row = self.conn.execute(
                 """SELECT d.*, ds.name AS state,
-                          (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
+                          (CASE WHEN d.state_id = 3
+                                THEN (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id)
+                                ELSE (SELECT COALESCE(SUM(e.quantity), 0) FROM deck_expected_cards e WHERE e.deck_id = d.id)
+                           END) as card_count,
                           (SELECT COALESCE(SUM(c.purchase_price), 0)
                            FROM deck_cards dc2 JOIN collection c ON dc2.collection_id = c.id
                            WHERE dc2.deck_id = d.id) as total_value
@@ -2008,7 +2031,10 @@ class DeckRepository:
         else:
             row = self.conn.execute(
                 """SELECT d.*, ds.name AS state,
-                          (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
+                          (CASE WHEN d.state_id = 3
+                                THEN (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id)
+                                ELSE (SELECT COALESCE(SUM(e.quantity), 0) FROM deck_expected_cards e WHERE e.deck_id = d.id)
+                           END) as card_count,
                           (SELECT COALESCE(SUM(c.purchase_price), 0)
                            FROM deck_cards dc2 JOIN collection c ON dc2.collection_id = c.id
                            WHERE dc2.deck_id = d.id) as total_value
@@ -2045,6 +2071,161 @@ class DeckRepository:
             params.append(zone)
         query += " ORDER BY card.name"
         return [dict(row) for row in self.conn.execute(query, params)]
+
+    def adjust_card_quantity(self, deck_id: int, printing_id: str,
+                             zone: str, delta: int) -> Dict[str, Any]:
+        """Adjust the quantity of a card in a deck by +1 or -1.
+
+        Works for all deck states:
+        - Idea/ready: adjusts quantity in deck_expected_cards.
+        - Constructed: adds/removes a physical collection entry in deck_cards.
+
+        Returns {ok, new_qty} or raises ValueError.
+        """
+        if delta not in (1, -1):
+            raise ValueError("delta must be +1 or -1")
+        row = self.conn.execute(
+            "SELECT state_id FROM decks WHERE id = ?", (deck_id,)
+        ).fetchone()
+        if not row:
+            raise ValueError("Deck not found")
+        state_id = row["state_id"]
+
+        if state_id != DECK_STATE_CONSTRUCTED:
+            # Idea/ready: adjust quantity in deck_expected_cards
+            row = self.conn.execute(
+                "SELECT id, quantity FROM deck_expected_cards "
+                "WHERE deck_id = ? AND printing_id = ? AND zone = ?",
+                (deck_id, printing_id, zone),
+            ).fetchone()
+            if delta == 1:
+                if row:
+                    new_qty = row["quantity"] + 1
+                    self.conn.execute(
+                        "UPDATE deck_expected_cards SET quantity = ? WHERE id = ?",
+                        (new_qty, row["id"]),
+                    )
+                else:
+                    self.conn.execute(
+                        "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
+                        "VALUES (?, ?, ?, 1)",
+                        (deck_id, printing_id, zone),
+                    )
+                    new_qty = 1
+            else:  # delta == -1
+                if not row or row["quantity"] <= 0:
+                    raise ValueError("Card not in deck")
+                new_qty = row["quantity"] - 1
+                if new_qty <= 0:
+                    self.conn.execute(
+                        "DELETE FROM deck_expected_cards WHERE id = ?",
+                        (row["id"],),
+                    )
+                    new_qty = 0
+                else:
+                    self.conn.execute(
+                        "UPDATE deck_expected_cards SET quantity = ? WHERE id = ?",
+                        (new_qty, row["id"]),
+                    )
+            return {"ok": True, "new_qty": new_qty}
+
+        else:
+            # Constructed: add/remove physical collection entries
+            if delta == -1:
+                # Remove one deck_cards row for this printing_id
+                row = self.conn.execute(
+                    "SELECT dc.id, dc.collection_id, dc.zone FROM deck_cards dc "
+                    "WHERE dc.deck_id = ? AND dc.printing_id = ? AND dc.zone = ? "
+                    "LIMIT 1",
+                    (deck_id, printing_id, zone),
+                ).fetchone()
+                if not row:
+                    raise ValueError("Card not in deck")
+                self.conn.execute("DELETE FROM deck_cards WHERE id = ?", (row["id"],))
+                if row["collection_id"]:
+                    _log_movement(self.conn, row["collection_id"],
+                                  from_deck_id=deck_id, to_deck_id=None,
+                                  from_binder_id=None, to_binder_id=None,
+                                  from_zone=row["zone"], to_zone=None,
+                                  note="quantity adjust -1")
+                remaining = self.conn.execute(
+                    "SELECT COUNT(*) as cnt FROM deck_cards "
+                    "WHERE deck_id = ? AND printing_id = ? AND zone = ?",
+                    (deck_id, printing_id, zone),
+                ).fetchone()["cnt"]
+                return {"ok": True, "new_qty": remaining}
+
+            else:  # delta == +1
+                # Find an unassigned owned copy (same oracle_id, not in a constructed deck or binder)
+                oracle_id = self.conn.execute(
+                    "SELECT oracle_id FROM printings WHERE printing_id = ?",
+                    (printing_id,),
+                ).fetchone()
+                if not oracle_id:
+                    raise ValueError("Unknown printing")
+                oracle_id = oracle_id["oracle_id"]
+                candidate = self.conn.execute(
+                    "SELECT col.id, col.printing_id FROM collection col "
+                    "JOIN printings p ON col.printing_id = p.printing_id "
+                    "WHERE p.oracle_id = ? AND col.status = 'owned' "
+                    "AND col.binder_id IS NULL "
+                    "AND NOT EXISTS ("
+                    "  SELECT 1 FROM deck_cards dc "
+                    "  JOIN decks d ON dc.deck_id = d.id "
+                    "  WHERE dc.collection_id = col.id AND d.state_id = ?) "
+                    "ORDER BY CASE WHEN col.printing_id = ? THEN 0 ELSE 1 END, col.id "
+                    "LIMIT 1",
+                    (oracle_id, DECK_STATE_CONSTRUCTED, printing_id),
+                ).fetchone()
+                if not candidate:
+                    raise ValueError("No unassigned copy available")
+                self.add_cards(deck_id, [candidate["id"]], zone=zone)
+                current = self.conn.execute(
+                    "SELECT COUNT(*) as cnt FROM deck_cards "
+                    "WHERE deck_id = ? AND printing_id = ? AND zone = ?",
+                    (deck_id, printing_id, zone),
+                ).fetchone()["cnt"]
+                return {"ok": True, "new_qty": current}
+
+    def get_cards_for_state(self, deck_id: int, zone: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return cards using the appropriate source table based on deck state.
+
+        Constructed decks read from deck_cards (physical assignments).
+        Idea/ready decks read from deck_expected_cards (the planned list).
+        """
+        deck = self.get(deck_id)
+        if not deck:
+            return []
+        if deck["state_id"] == DECK_STATE_CONSTRUCTED:
+            return self.get_cards(deck_id, zone=zone)
+        cards = self.get_expected_cards_as_cards(deck_id)
+        if zone:
+            cards = [c for c in cards if c["deck_zone"] == zone]
+        return cards
+
+    def add_expected_cards(self, deck_id: int, printing_ids: List[str],
+                           zone: str = "mainboard") -> int:
+        """Add cards to an idea/ready deck's expected list."""
+        count = 0
+        for pid in printing_ids:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
+                "VALUES (?, ?, ?, 1)",
+                (deck_id, pid, zone),
+            )
+            count += self.conn.execute("SELECT changes()").fetchone()[0]
+        return count
+
+    def remove_expected_cards(self, deck_id: int, printing_ids: List[str]) -> int:
+        """Remove cards from an idea/ready deck's expected list."""
+        if not printing_ids:
+            return 0
+        placeholders = ",".join("?" * len(printing_ids))
+        cursor = self.conn.execute(
+            f"DELETE FROM deck_expected_cards WHERE deck_id = ? AND printing_id IN ({placeholders})",
+            [deck_id] + printing_ids,
+        )
+        return cursor.rowcount
 
     def add_cards(self, deck_id: int, collection_ids: List[int],
                   zone: str = "mainboard") -> int:
@@ -2301,12 +2482,16 @@ class DeckRepository:
             rows = self.conn.execute(
                 "SELECT col.id, col.printing_id FROM collection col "
                 "JOIN printings p ON col.printing_id = p.printing_id "
-                "LEFT JOIN deck_cards dc ON dc.collection_id = col.id "
                 "WHERE p.oracle_id = ? AND col.status = 'owned' "
-                "AND dc.id IS NULL AND col.binder_id IS NULL "
+                "AND col.binder_id IS NULL "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM deck_cards dc "
+                "  JOIN decks d ON dc.deck_id = d.id "
+                "  WHERE dc.collection_id = col.id AND d.state_id = ?"
+                ") "
                 "ORDER BY CASE WHEN col.printing_id = ? THEN 0 ELSE 1 END, col.id "
                 "LIMIT ?",
-                (exp["oracle_id"], exp["printing_id"], exp["quantity"]),
+                (exp["oracle_id"], DECK_STATE_CONSTRUCTED, exp["printing_id"], exp["quantity"]),
             ).fetchall()
 
             found_ids = [r["id"] for r in rows]
@@ -2329,6 +2514,12 @@ class DeckRepository:
                 missing.append(entry_missing)
             elif not found_ids:
                 missing.append(entry)
+
+        # Clear any existing deck_cards for this deck before re-assigning
+        self.conn.execute(
+            "DELETE FROM deck_cards WHERE deck_id = ?",
+            (deck_id,),
+        )
 
         for zone, ids in zone_ids.items():
             self.add_cards(deck_id, ids, zone=zone)
