@@ -1,0 +1,18 @@
+start_page: /decks/3
+involves:
+  - "List view toggle button (#view-list-btn)"
+  - "Swap button (.swap-btn) on card rows"
+  - "Swap modal (#swap-modal)"
+  - "Swap option rows (.swap-option) — click a non-current one to swap"
+  - "Card row links showing set/collector number"
+fixture_data:
+  deck_id: "3"
+  deck_name: "Swap Test Deck"
+  deck_state: "idea"
+  test_card: "Curator of Destinies"
+notes: >
+  Navigate to idea deck. Switch to list view. Click the swap button on
+  Curator of Destinies. In the modal, click a different printing (not the
+  current one). The modal closes and the deck reloads. Verify the card row
+  link now points to the new set/collector number. Open the swap modal
+  again to confirm the new printing has the "Current" badge.

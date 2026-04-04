@@ -1,0 +1,22 @@
+start_page: /decks/3
+involves:
+  - "List view toggle button (#view-list-btn)"
+  - "Card rows in #type-groups with .card-row class"
+  - "Swap button (.swap-btn) with ⇄ icon, appears on hover"
+  - "Swap modal (#swap-modal) with .swap-printings container"
+  - "Printing options (.swap-option) with set name, owned count"
+  - "Current badge (.current-badge) on the active printing"
+  - "Cancel button (#btn-cancel-swap)"
+fixture_data:
+  deck_id: "3"
+  deck_name: "Swap Test Deck"
+  deck_state: "idea"
+  test_card: "Curator of Destinies"
+  test_card_set: "FDN"
+notes: >
+  Navigate to the idea deck (id=3). Switch to list view. Hover over a card
+  row (e.g., Curator of Destinies) to reveal the swap button. Click the ⇄
+  button. Wait for the swap modal to appear. Verify the modal title says
+  "Swap Printing". Verify multiple printing options are shown with set names
+  and owned counts. Verify the current printing has a "Current" badge.
+  Close the modal with the Cancel button.
