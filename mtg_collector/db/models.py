@@ -2165,12 +2165,41 @@ class DeckRepository:
                 return {"ok": True, "new_qty": current}
 
     def get_cards_for_state(self, deck_id: int, zone: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Return cards assigned to a deck from deck_cards.
+        """Return cards for a deck, branching on state.
 
-        All deck states read from deck_cards (physical assignments).
-        deck_expected_cards is a separate concept for precon completeness tracking.
+        Idea/ready decks read from deck_expected_cards.
+        Constructed decks read from deck_cards (physical assignments).
         """
-        return self.get_cards(deck_id, zone=zone)
+        row = self.conn.execute(
+            "SELECT state_id FROM decks WHERE id = ?", (deck_id,)
+        ).fetchone()
+        if not row or row["state_id"] == DECK_STATE_CONSTRUCTED:
+            return self.get_cards(deck_id, zone=zone)
+
+        query = """
+            SELECT NULL as id, e.printing_id, 'nonfoil' as finish,
+                   NULL as condition, NULL as language,
+                   NULL as purchase_price, NULL as acquired_at,
+                   e.zone AS deck_zone, e.quantity,
+                   p.set_code, p.collector_number, p.rarity, p.artist,
+                   p.image_uri, p.frame_effects, p.border_color, p.full_art,
+                   p.promo, p.promo_types, p.finishes,
+                   card.name, card.type_line, card.mana_cost, card.cmc,
+                   card.colors, card.color_identity, p.oracle_id,
+                   json_extract(p.raw_json, '$.layout') as layout,
+                   s.set_name
+            FROM deck_expected_cards e
+            JOIN printings p ON e.printing_id = p.printing_id
+            JOIN cards card ON p.oracle_id = card.oracle_id
+            JOIN sets s ON p.set_code = s.set_code
+            WHERE e.deck_id = ?
+        """
+        params: list = [deck_id]
+        if zone:
+            query += " AND e.zone = ?"
+            params.append(zone)
+        query += " ORDER BY card.name"
+        return [dict(row) for row in self.conn.execute(query, params)]
 
     def add_expected_cards(self, deck_id: int, printing_ids: List[str],
                            zone: str = "mainboard") -> int:

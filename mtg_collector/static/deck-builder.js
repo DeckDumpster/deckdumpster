@@ -208,7 +208,7 @@
             </div>
           </div>
 
-          <div id="type-groups" style="${currentView === 'list' ? '' : 'display:none'}">${renderGroups(groups, commander)}</div>
+          <div id="type-groups" style="${currentView === 'list' ? '' : 'display:none'}">${renderGroups(groups, commander, deck)}</div>
           <div class="deck-grid" id="deck-grid" style="${currentView === 'grid' ? '' : 'display:none'}"></div>
 
           <div class="completeness-section" id="completeness-section" style="display:none">
@@ -600,7 +600,8 @@
     }).join('');
   }
 
-  function renderGroups(groups, commander) {
+  function renderGroups(groups, commander, deck) {
+    const showSwap = deck && deck.state !== 'constructed';
     let html = '';
     // Show commander first if present
     if (commander) {
@@ -622,7 +623,7 @@
         const zone = c.deck_zone || 'mainboard';
         const pid = c.printing_id || '';
         let swapBtn = '';
-        if (pid && c.oracle_id) {
+        if (showSwap && pid && c.oracle_id) {
           swapBtn = `<button class="swap-btn" data-printing-id="${pid}" data-oracle-id="${c.oracle_id}" title="Swap printing">&#x21c4;</button>`;
         }
         const qtyControls = pid ? `<span class="qty-controls">`
