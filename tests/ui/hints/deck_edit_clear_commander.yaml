@@ -1,0 +1,17 @@
+start_page: /decks/2
+involves:
+  - "Edit button in deck header actions"
+  - "Commander <select> dropdown (id: f-commander) in edit modal"
+  - "Save button (id: btn-save-deck) in edit modal"
+  - "Preview panel fallback to deck name text"
+fixture_data:
+  deck_id: "2"
+  deck_name: "Eldrazi Ramp"
+  commander_before: "Phlage, Titan of Fire's Fury"
+notes: >
+  Prerequisite: deck 2 must already have a commander set (Phlage). This is done
+  via API setup before the test. Navigate to deck 2. Wait for load. Click "Edit".
+  Wait for modal. The Commander dropdown pre-selects the current commander.
+  Change it to "-- None --" (empty value). Click "Save". The page reloads.
+  The preview panel no longer shows a commander image; instead it shows the
+  deck name "Eldrazi Ramp" as fallback text.
