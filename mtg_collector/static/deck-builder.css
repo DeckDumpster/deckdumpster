@@ -370,6 +370,41 @@
 .card-row:hover .remove-btn { opacity: 1; }
 .card-row .remove-btn:hover { color: var(--accent); background: rgba(233, 69, 96, 0.15); }
 
+.card-row .swap-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.card-row:hover .swap-btn { opacity: 1; }
+.card-row .swap-btn:hover { color: var(--link-color, #6495ed); background: rgba(100, 149, 237, 0.15); }
+
+/* Swap printing modal */
+.swap-printings { max-height: 60vh; overflow-y: auto; }
+.swap-option {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px; border-radius: 8px; cursor: pointer;
+  border: 2px solid transparent;
+}
+.swap-option:hover { background: rgba(255,255,255,0.05); }
+.swap-option.current { border-color: var(--accent); opacity: 0.7; cursor: default; }
+.swap-thumb { width: 60px; border-radius: 4px; }
+.swap-thumb-placeholder { width: 60px; height: 84px; background: var(--bg-primary); border-radius: 4px; }
+.swap-info { flex: 1; }
+.swap-set { font-weight: 500; }
+.swap-meta { font-size: 0.8rem; margin-top: 4px; }
+.owned-badge { color: #2ecc71; }
+.unowned-badge { color: var(--text-secondary); }
+.current-badge {
+  background: var(--accent); color: #fff; padding: 1px 6px;
+  border-radius: 4px; font-size: 0.75rem; margin-left: 6px;
+}
+
 /* Card grid */
 .deck-grid { padding: 0; }
 .grid-card { cursor: pointer; }

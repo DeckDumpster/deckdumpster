@@ -1,0 +1,15 @@
+start_page: /decks/1
+involves:
+  - "List view toggle button (#view-list-btn)"
+  - "Card rows in #type-groups"
+  - "Absence of swap button (.swap-btn) on constructed deck card rows"
+fixture_data:
+  constructed_deck_id: "1"
+  constructed_deck_name: "Bolt Tribal"
+  idea_deck_id: "3"
+notes: >
+  Navigate to constructed deck (id=1, Bolt Tribal). Switch to list view.
+  Verify that no swap buttons (⇄) appear on card rows — only remove (×)
+  buttons. Then navigate to the idea deck (id=3). Switch to list view.
+  Verify that swap buttons do appear on card rows, confirming the feature
+  is correctly limited to idea/ready state decks.
