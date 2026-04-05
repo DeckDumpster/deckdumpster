@@ -1908,10 +1908,7 @@ class DeckRepository:
     def get(self, deck_id: int) -> Optional[Dict[str, Any]]:
         row = self.conn.execute(
             """SELECT d.*, ds.name AS state,
-                      (CASE WHEN d.state_id = 3
-                            THEN (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id)
-                            ELSE (SELECT COALESCE(SUM(e.quantity), 0) FROM deck_expected_cards e WHERE e.deck_id = d.id)
-                       END) as card_count,
+                      (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
                       (SELECT COALESCE(SUM(c.purchase_price), 0)
                        FROM deck_cards dc2
                        JOIN collection c ON dc2.collection_id = c.id
@@ -1973,16 +1970,12 @@ class DeckRepository:
     def list_all(self) -> List[Dict[str, Any]]:
         cursor = self.conn.execute(
             """SELECT d.*, ds.name AS state,
-                      (CASE WHEN d.state_id = 3
-                            THEN (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id)
-                            ELSE (SELECT COALESCE(SUM(e.quantity), 0) FROM deck_expected_cards e WHERE e.deck_id = d.id)
-                       END) as card_count,
+                      (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
                       (SELECT COALESCE(SUM(c.purchase_price), 0)
                        FROM deck_cards dc2
                        JOIN collection c ON dc2.collection_id = c.id
                        WHERE dc2.deck_id = d.id) as total_value,
-                      (CASE WHEN d.state_id = 3
-                            THEN (SELECT GROUP_CONCAT(color || ':' || cnt)
+                      (SELECT GROUP_CONCAT(color || ':' || cnt)
                                   FROM (SELECT je.value AS color, COUNT(*) AS cnt
                                         FROM deck_cards dc3
                                         JOIN printings p ON dc3.printing_id = p.printing_id
@@ -1990,17 +1983,7 @@ class DeckRepository:
                                              json_each(card.colors) je
                                         WHERE dc3.deck_id = d.id
                                         GROUP BY je.value
-                                        ORDER BY cnt DESC))
-                            ELSE (SELECT GROUP_CONCAT(color || ':' || cnt)
-                                  FROM (SELECT je.value AS color, COUNT(*) AS cnt
-                                        FROM deck_expected_cards e3
-                                        JOIN printings p ON e3.printing_id = p.printing_id
-                                        JOIN cards card ON p.oracle_id = card.oracle_id,
-                                             json_each(card.colors) je
-                                        WHERE e3.deck_id = d.id
-                                        GROUP BY je.value
-                                        ORDER BY cnt DESC))
-                       END) as deck_colors,
+                                        ORDER BY cnt DESC)) as deck_colors,
                       (SELECT COALESCE(SUM(e.quantity), 0)
                        FROM deck_expected_cards e WHERE e.deck_id = d.id) as expected_card_count
                FROM decks d
@@ -2015,10 +1998,7 @@ class DeckRepository:
         if origin_variation is not None:
             row = self.conn.execute(
                 """SELECT d.*, ds.name AS state,
-                          (CASE WHEN d.state_id = 3
-                                THEN (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id)
-                                ELSE (SELECT COALESCE(SUM(e.quantity), 0) FROM deck_expected_cards e WHERE e.deck_id = d.id)
-                           END) as card_count,
+                          (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
                           (SELECT COALESCE(SUM(c.purchase_price), 0)
                            FROM deck_cards dc2 JOIN collection c ON dc2.collection_id = c.id
                            WHERE dc2.deck_id = d.id) as total_value
@@ -2031,10 +2011,7 @@ class DeckRepository:
         else:
             row = self.conn.execute(
                 """SELECT d.*, ds.name AS state,
-                          (CASE WHEN d.state_id = 3
-                                THEN (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id)
-                                ELSE (SELECT COALESCE(SUM(e.quantity), 0) FROM deck_expected_cards e WHERE e.deck_id = d.id)
-                           END) as card_count,
+                          (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
                           (SELECT COALESCE(SUM(c.purchase_price), 0)
                            FROM deck_cards dc2 JOIN collection c ON dc2.collection_id = c.id
                            WHERE dc2.deck_id = d.id) as total_value
@@ -2188,20 +2165,12 @@ class DeckRepository:
                 return {"ok": True, "new_qty": current}
 
     def get_cards_for_state(self, deck_id: int, zone: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Return cards using the appropriate source table based on deck state.
+        """Return cards assigned to a deck from deck_cards.
 
-        Constructed decks read from deck_cards (physical assignments).
-        Idea/ready decks read from deck_expected_cards (the planned list).
+        All deck states read from deck_cards (physical assignments).
+        deck_expected_cards is a separate concept for precon completeness tracking.
         """
-        deck = self.get(deck_id)
-        if not deck:
-            return []
-        if deck["state_id"] == DECK_STATE_CONSTRUCTED:
-            return self.get_cards(deck_id, zone=zone)
-        cards = self.get_expected_cards_as_cards(deck_id)
-        if zone:
-            cards = [c for c in cards if c["deck_zone"] == zone]
-        return cards
+        return self.get_cards(deck_id, zone=zone)
 
     def add_expected_cards(self, deck_id: int, printing_ids: List[str],
                            zone: str = "mainboard") -> int:
