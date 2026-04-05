@@ -1134,6 +1134,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_builder_get(int(did))
             else:
                 self._send_json({"error": "Not found"}, 404)
+        # Printing API routes
+        elif path.startswith("/api/printings/by-oracle/"):
+            oracle_id = path[len("/api/printings/by-oracle/"):]
+            self._api_printings_by_oracle(oracle_id)
         # Deck API routes
         elif path == "/api/decks/by-origin":
             self._api_deck_by_origin(params)
@@ -1453,6 +1457,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 if data is None:
                     return
                 self._api_deck_adjust_quantity(int(did), data)
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/expected-cards/swap"):
+            did = path[len("/api/decks/"):-len("/expected-cards/swap")]
+            if did.isdigit():
+                data = self._read_json_body()
+                if data is None:
+                    return
+                self._api_deck_expected_swap(int(did), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/cards/move"):
@@ -5363,6 +5376,86 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         repo = DeckRepository(conn)
         try:
             count = repo.remove_expected_cards(deck_id, [printing_id])
+            conn.commit()
+        finally:
+            conn.close()
+        self._send_json({"ok": True})
+
+    def _api_printings_by_oracle(self, oracle_id: str):
+        """Return all printings for an oracle_id with set name and owned count."""
+        conn = self._get_conn()
+        rows = conn.execute(
+            """SELECT p.printing_id, p.oracle_id, p.set_code,
+                      p.collector_number, p.rarity, p.image_uri,
+                      s.set_name,
+                      (SELECT COUNT(*) FROM collection c
+                       WHERE c.printing_id = p.printing_id
+                       AND c.status = 'owned') as owned_count
+               FROM printings p
+               JOIN sets s ON p.set_code = s.set_code
+               WHERE p.oracle_id = ? AND s.digital = 0
+               ORDER BY s.released_at DESC, p.collector_number""",
+            (oracle_id,),
+        ).fetchall()
+        conn.close()
+        self._send_json([dict(r) for r in rows])
+
+    def _api_deck_expected_swap(self, deck_id: int, data: dict):
+        """Swap one printing for another in a deck's expected list."""
+        old_pid = data.get("old_printing_id")
+        new_pid = data.get("new_printing_id")
+        if not old_pid or not new_pid:
+            self._send_json(
+                {"error": "old_printing_id and new_printing_id required"}, 400)
+            return
+        conn = self._get_conn()
+        try:
+            old = conn.execute(
+                "SELECT oracle_id FROM printings WHERE printing_id = ?",
+                (old_pid,),
+            ).fetchone()
+            new = conn.execute(
+                "SELECT oracle_id FROM printings WHERE printing_id = ?",
+                (new_pid,),
+            ).fetchone()
+            if not old or not new:
+                self._send_json({"error": "Printing not found"}, 404)
+                return
+            if old["oracle_id"] != new["oracle_id"]:
+                self._send_json(
+                    {"error": "Printings must be the same card"}, 400)
+                return
+            row = conn.execute(
+                "SELECT zone, quantity FROM deck_expected_cards "
+                "WHERE deck_id = ? AND printing_id = ?",
+                (deck_id, old_pid),
+            ).fetchone()
+            if not row:
+                self._send_json({"error": "Card not in expected list"}, 404)
+                return
+            zone, quantity = row["zone"], row["quantity"]
+            conn.execute(
+                "DELETE FROM deck_expected_cards "
+                "WHERE deck_id = ? AND printing_id = ?",
+                (deck_id, old_pid),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO deck_expected_cards "
+                "(deck_id, printing_id, zone, quantity) VALUES (?, ?, ?, ?)",
+                (deck_id, new_pid, zone, quantity),
+            )
+            conn.execute(
+                "DELETE FROM deck_cards "
+                "WHERE deck_id = ? AND printing_id = ? "
+                "AND collection_id IS NULL",
+                (deck_id, old_pid),
+            )
+            conn.execute(
+                "INSERT INTO deck_cards "
+                "(deck_id, printing_id, collection_id, zone, quantity) "
+                "VALUES (?, ?, NULL, ?, ?)",
+                (deck_id, new_pid, zone, quantity),
+            )
             conn.commit()
         finally:
             conn.close()
