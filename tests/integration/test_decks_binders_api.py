@@ -156,8 +156,8 @@ class TestDeckCards:
 
     @pytest.fixture
     def deck_with_cards(self, api):
-        """Create a deck and find collection card IDs to work with."""
-        _, deck = api.post("/api/decks", {"name": "Card Test Deck"})
+        """Create a constructed deck and find collection card IDs to work with."""
+        _, deck = api.post("/api/decks", {"name": "Card Test Deck", "state": "constructed"})
         deck_id = deck["id"]
 
         card_ids = _get_unassigned_entry_ids(api, count=3)
@@ -494,7 +494,7 @@ class TestDeleteCascade:
         if len(card_ids) < 2:
             pytest.skip("Need at least 2 unassigned cards")
 
-        _, deck = api.post("/api/decks", {"name": "Cascade Test Deck"})
+        _, deck = api.post("/api/decks", {"name": "Cascade Test Deck", "state": "constructed"})
         api.post(f"/api/decks/{deck['id']}/cards", {
             "collection_ids": card_ids,
             "zone": "mainboard",
