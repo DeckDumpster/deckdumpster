@@ -20,7 +20,7 @@ def steps(harness):
     # Verify a sideboard card is present in the list.
     harness.assert_text_present("Condemn")
 
-    # Verify remove button appears on hover (it exists in DOM)
-    harness.assert_visible("#type-groups .remove-btn")
+    # Verify quantity controls appear (replaces old remove button)
+    harness.assert_visible("#type-groups .qty-btn")
 
     harness.screenshot("final_state")
