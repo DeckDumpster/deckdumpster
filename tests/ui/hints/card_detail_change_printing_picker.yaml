@@ -1,0 +1,19 @@
+start_page: /card/dsk/119
+involves:
+  - '"Change" button in the copy section (class .change-printing-btn)'
+  - 'printing picker container (class .printing-picker)'
+  - 'printing picker list (class .printing-picker-list)'
+  - 'printing options with set icon, name, collector number (class .printing-option)'
+  - '"Current" badge on the active printing'
+  - 'owned count badge on each printing'
+fixture_data:
+  card_name: "Unstoppable Slasher"
+  set_code: "dsk"
+  collector_number: "119"
+  printings_count: 3
+notes: >
+  1. Navigate to /card/dsk/119 (Unstoppable Slasher, 3 printings in fixture).
+  2. Wait for copy section to load. 3. Click the "Change" button in the copy section.
+  4. The printing picker appears below with 3 entries. 5. Verify "Current" badge
+  is on DSK #119. 6. Verify owned count badge shows for the current printing.
+  7. Click "Change" again to toggle the picker closed. 8. Verify picker is hidden.

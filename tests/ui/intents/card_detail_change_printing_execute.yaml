@@ -1,0 +1,11 @@
+# Scenario: Change a copy's printing from the card detail page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  From the printing picker on the card detail page, I can click on a
+  different printing to reassign the copy. After selecting, the page
+  navigates to the new printing's card detail page, and the copy
+  appears there with the updated set and collector number.

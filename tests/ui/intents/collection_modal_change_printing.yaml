@@ -1,0 +1,12 @@
+# Scenario: Change a copy's printing from the collection card modal
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When viewing a card in the collection modal, I can click the "Change"
+  button in an owned copy's section to open the printing picker inline.
+  The picker shows all available printings. After selecting a different
+  printing, the modal refreshes and the copy disappears from the current
+  printing's copy list (since it now belongs to a different printing).

@@ -1,0 +1,17 @@
+start_page: /collection
+involves:
+  - 'card grid or table showing collection cards'
+  - 'card modal overlay (id #card-modal-overlay)'
+  - 'copies container in modal (id #copies-container)'
+  - '"Change" button in copy section (class .change-printing-btn)'
+  - 'printing picker list (class .printing-picker-list)'
+  - 'printing option for a different set (class .printing-option)'
+fixture_data:
+  card_name: "Unstoppable Slasher"
+  search_term: "Unstoppable"
+notes: >
+  1. Navigate to /collection. 2. Search for "Unstoppable" to find Unstoppable Slasher.
+  3. Click the card to open the modal. 4. Wait for copies to load in modal.
+  5. Click "Change" button in the copy section. 6. Wait for picker.
+  7. Click a different printing. 8. Modal refreshes — the copy disappears from this
+  printing's copy list since it moved to a new printing.

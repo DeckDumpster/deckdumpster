@@ -1,0 +1,13 @@
+# Scenario: Open the printing picker on the card detail page
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the card detail page for a card with multiple printings, I can
+  click the "Change" button next to a copy's printing info to reveal
+  a scrollable picker listing all available printings. Each entry shows
+  a set icon, set name, collector number, and owned count. The current
+  printing is marked with a "Current" badge and cannot be selected.
+  Clicking "Change" again closes the picker.
