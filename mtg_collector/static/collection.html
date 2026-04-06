@@ -3034,6 +3034,10 @@ function updateUnownedBtn() {
 // --- Fetch ---
 function getFetchParams() {
   const params = new URLSearchParams();
+  if (_sharedCards) {
+    params.set('cards', _sharedCards);
+    return params.toString();
+  }
   const q = searchInput.value.trim();
   if (q) params.set('q', q);
   const oq = oracleSearchInput.value.trim();
@@ -4087,6 +4091,8 @@ async function assignSelectedToBinder() {
 function serializeFiltersToURL() {
   const params = new URLSearchParams();
 
+  if (_sharedCards) { params.set('cards', _sharedCards); params.set('view', 'grid'); }
+
   const q = searchInput.value.trim();
   if (q) params.set('q', q);
 
@@ -4134,10 +4140,20 @@ function serializeFiltersToURL() {
 }
 
 let _pendingContainerValue = '';
+let _sharedCards = '';  // ?cards=set:cn,set:cn,... for shareable links
 
 function restoreFiltersFromURL() {
   const params = new URLSearchParams(window.location.search);
   if (!params.toString()) return;
+
+  // Shared card list — takes precedence, forces grid view
+  const cards = params.get('cards');
+  if (cards) {
+    _sharedCards = cards;
+    includeUnowned = 'base';
+    currentView = 'grid';
+    updateViewButtons();
+  }
 
   // Search
   const q = params.get('q');

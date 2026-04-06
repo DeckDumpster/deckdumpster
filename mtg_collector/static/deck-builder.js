@@ -179,6 +179,7 @@
             <div class="header-actions">
               <button class="edit-btn" id="edit-deck-btn">Edit</button>
               <button class="add-btn" id="add-card-btn">+ Add Card</button>
+              <button class="edit-btn" id="btn-share-deck">Share</button>
               <button class="edit-btn" id="btn-import-expected">Import Expected</button>
               ${deck.state !== 'constructed' ? '<button class="add-btn" id="btn-materialize">Materialize</button>' : ''}
               <button class="delete-btn" id="delete-deck-btn">Delete</button>
@@ -457,6 +458,18 @@
 
     // Edit deck
     document.getElementById('edit-deck-btn').addEventListener('click', () => showEditModal(deck));
+
+    // Share deck as collection URL
+    document.getElementById('btn-share-deck').addEventListener('click', () => {
+      const allCards = window._deckCards || [];
+      const pairs = allCards.map(c => c.set_code + ':' + c.collector_number);
+      const url = window.location.origin + '/collection?cards=' + pairs.join(',') + '&view=grid';
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('btn-share-deck');
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = 'Share'; }, 2000);
+      });
+    });
 
     // Import expected list
     document.getElementById('btn-import-expected').addEventListener('click', showExpectedModal);
