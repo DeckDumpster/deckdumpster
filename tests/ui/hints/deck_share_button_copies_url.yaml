@@ -1,0 +1,11 @@
+start_page: /decks/2
+involves:
+  - "Share button (#btn-share-deck) in deck header actions"
+  - "Button text changes to 'Copied!' after click"
+fixture_data:
+  deck_id: "2"
+  deck_name: "Eldrazi Ramp"
+notes: >
+  Navigate to deck 2 (Eldrazi Ramp). Wait for deck to load. Click the
+  "Share" button. Wait for the button text to change to "Copied!".
+  Verify the button text is "Copied!".

@@ -3062,6 +3062,7 @@ function getFetchParams() {
 }
 
 function hasAnyFilter() {
+  if (_sharedCards) return true;
   if (searchInput.value.trim()) return true;
   if (oracleSearchInput.value.trim()) return true;
   if (selectedSets.size) return true;

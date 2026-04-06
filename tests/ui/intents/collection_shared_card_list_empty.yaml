@@ -1,0 +1,10 @@
+# Scenario: Shared card list with nonexistent cards shows empty results
+#
+# Related:
+#   issues: []
+#   pull_requests: [238]
+
+description: >
+  When I navigate to /collection?cards=zzz:999&view=grid with a
+  nonexistent set code and collector number, the page loads normally
+  but shows zero cards and a status indicating 0 results.
