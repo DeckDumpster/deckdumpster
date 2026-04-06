@@ -1975,7 +1975,8 @@ class DeckRepository:
                        FROM deck_cards dc2
                        JOIN collection c ON dc2.collection_id = c.id
                        WHERE dc2.deck_id = d.id) as total_value,
-                      (SELECT GROUP_CONCAT(color || ':' || cnt)
+                      (CASE WHEN d.state_id = 3
+                            THEN (SELECT GROUP_CONCAT(color || ':' || cnt)
                                   FROM (SELECT je.value AS color, COUNT(*) AS cnt
                                         FROM deck_cards dc3
                                         JOIN printings p ON dc3.printing_id = p.printing_id
@@ -1983,7 +1984,17 @@ class DeckRepository:
                                              json_each(card.colors) je
                                         WHERE dc3.deck_id = d.id
                                         GROUP BY je.value
-                                        ORDER BY cnt DESC)) as deck_colors,
+                                        ORDER BY cnt DESC))
+                            ELSE (SELECT GROUP_CONCAT(color || ':' || cnt)
+                                  FROM (SELECT je.value AS color, COUNT(*) AS cnt
+                                        FROM deck_expected_cards e3
+                                        JOIN printings p ON e3.printing_id = p.printing_id
+                                        JOIN cards card ON p.oracle_id = card.oracle_id,
+                                             json_each(card.colors) je
+                                        WHERE e3.deck_id = d.id
+                                        GROUP BY je.value
+                                        ORDER BY cnt DESC))
+                       END) as deck_colors,
                       (SELECT COALESCE(SUM(e.quantity), 0)
                        FROM deck_expected_cards e WHERE e.deck_id = d.id) as expected_card_count
                FROM decks d
