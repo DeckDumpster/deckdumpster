@@ -1721,6 +1721,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         ".jpg": "image/jpeg",
         ".png": "image/png",
         ".webp": "image/webp",
+        ".woff2": "font/woff2",
+        ".woff": "font/woff",
+        ".ttf": "font/ttf",
+        ".eot": "application/vnd.ms-fontobject",
+        ".svg": "image/svg+xml",
     }
 
     def _serve_homepage(self):

@@ -28,19 +28,15 @@ log = logging.getLogger(__name__)
 _CONTAINER_DB = "/data/collection.sqlite"
 _CONTAINER_DB_BACKUP = "/data/collection.sqlite.bak"
 
-# Python one-liner for safe SQLite backup (handles open connections).
+# Backup uses Python sqlite3.backup() for safe snapshot with open connections.
+# Restore uses cp — fast (~5ms vs ~500ms), and no connections are active between tests.
 _BACKUP_CMD = (
     f'python3 -c "import sqlite3; '
     f"s=sqlite3.connect('{_CONTAINER_DB}'); "
     f"d=sqlite3.connect('{_CONTAINER_DB_BACKUP}'); "
     f's.backup(d); s.close(); d.close()"'
 )
-_RESTORE_CMD = (
-    f'python3 -c "import sqlite3; '
-    f"s=sqlite3.connect('{_CONTAINER_DB_BACKUP}'); "
-    f"d=sqlite3.connect('{_CONTAINER_DB}'); "
-    f's.backup(d); s.close(); d.close()"'
-)
+_RESTORE_CMD = f"cp {_CONTAINER_DB_BACKUP} {_CONTAINER_DB}"
 
 
 def pytest_addoption(parser):
