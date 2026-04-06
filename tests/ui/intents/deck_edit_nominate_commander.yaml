@@ -1,0 +1,12 @@
+# Scenario: Nominate a commander from cards already in the deck
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I open the Edit modal on a commander deck that has cards but no
+  commander set, I see a Commander dropdown listing all cards currently in
+  the deck. I select one of the legendary creatures and click Save. The
+  deck page reloads and shows the selected card as the commander in the
+  preview panel.

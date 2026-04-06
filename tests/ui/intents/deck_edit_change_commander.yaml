@@ -1,0 +1,11 @@
+# Scenario: Change the commander to a different card in the deck
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I open the Edit modal on a commander deck that already has a
+  commander set, the Commander dropdown pre-selects the current commander.
+  I change the selection to a different card in the deck, click Save, and
+  the deck page updates to show the new commander in the preview panel.

@@ -226,6 +226,10 @@
         <div class="edit-modal">
           <h3 id="modal-title">Edit Deck</h3>
           <div class="form-group">
+            <label>Commander</label>
+            <select id="f-commander"></select>
+          </div>
+          <div class="form-group">
             <label>Name *</label>
             <input type="text" id="f-name" placeholder="My Commander Deck">
           </div>
@@ -637,6 +641,27 @@
 
   function showEditModal(deck) {
     document.getElementById('modal-title').textContent = 'Edit Deck';
+
+    // Commander dropdown — populated from cards in the deck
+    const cmdSelect = document.getElementById('f-commander');
+    const allCards = window._deckCards || [];
+    // Dedupe by oracle_id, keeping first occurrence
+    const seen = new Set();
+    const uniqueCards = allCards.filter(c => {
+      if (seen.has(c.oracle_id)) return false;
+      seen.add(c.oracle_id);
+      return true;
+    });
+    uniqueCards.sort((a, b) => a.name.localeCompare(b.name));
+    cmdSelect.innerHTML = '<option value="">-- None --</option>' +
+      uniqueCards.map(c =>
+        `<option value="${esc(c.oracle_id)}|${esc(c.printing_id)}">${esc(c.name)}</option>`
+      ).join('');
+    // Pre-select current commander
+    if (deck.commander_oracle_id) {
+      const match = uniqueCards.find(c => c.oracle_id === deck.commander_oracle_id);
+      if (match) cmdSelect.value = match.oracle_id + '|' + match.printing_id;
+    }
     document.getElementById('f-name').value = deck.name || '';
     document.getElementById('f-format').value = deck.format || '';
     document.getElementById('f-description').value = deck.description || '';
@@ -664,6 +689,15 @@
       origin_theme: document.getElementById('f-origin-theme').value.trim() || null,
       origin_variation: document.getElementById('f-origin-variation').value ? parseInt(document.getElementById('f-origin-variation').value) : null,
     };
+    const cmdVal = document.getElementById('f-commander').value;
+    if (cmdVal) {
+      const [oid, pid] = cmdVal.split('|');
+      data.commander_oracle_id = oid;
+      data.commander_printing_id = pid;
+    } else {
+      data.commander_oracle_id = null;
+      data.commander_printing_id = null;
+    }
     if (!data.name) { alert('Name is required'); return; }
 
     await fetch('/api/decks/' + deckId, {

@@ -1,0 +1,11 @@
+# Scenario: Clear the commander designation from a deck
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I open the Edit modal on a commander deck that has a commander set,
+  I change the Commander dropdown to "-- None --" and click Save. The deck
+  page reloads and no longer shows a commander image in the preview panel,
+  falling back to the deck name as the preview text.

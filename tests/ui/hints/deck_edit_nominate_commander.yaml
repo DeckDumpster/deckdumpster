@@ -1,0 +1,20 @@
+start_page: /decks/2
+involves:
+  - "Edit button in deck header actions"
+  - "Commander <select> dropdown (id: f-commander) in edit modal"
+  - "Save button (id: btn-save-deck) in edit modal"
+  - "Commander preview image and name in sidebar"
+fixture_data:
+  deck_id: "2"
+  deck_name: "Eldrazi Ramp"
+  deck_format: "commander"
+  legendary_in_deck: "Bonny Pall, Clearcutter"
+  initial_commander: null
+notes: >
+  Navigate to deck 2 (Eldrazi Ramp, commander format, no commander set).
+  Wait for deck to load. Click the "Edit" button in the header actions.
+  Wait for the edit modal to appear. The Commander dropdown (select#f-commander)
+  lists all cards in the deck sorted alphabetically, with "-- None --" selected
+  by default since no commander is set. Select "Bonny Pall, Clearcutter" from
+  the dropdown. Click "Save". The modal closes and the page reloads. The preview
+  panel now shows "Bonny Pall, Clearcutter" as the commander name.
