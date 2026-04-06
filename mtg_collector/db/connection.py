@@ -10,6 +10,7 @@ from mtg_collector.utils import get_mtgc_home
 # Global connection cache
 _connection: Optional[sqlite3.Connection] = None
 _db_path: Optional[str] = None
+_attached: bool = False
 
 
 def get_db_path(override: Optional[str] = None) -> str:
@@ -32,13 +33,33 @@ def get_db_path(override: Optional[str] = None) -> str:
     return str(default_dir / "collection.sqlite")
 
 
+def get_shared_db_path() -> Optional[str]:
+    """Return MTGC_SHARED_DB path if set and exists, else None."""
+    path = os.environ.get("MTGC_SHARED_DB")
+    if path and os.path.exists(path):
+        return path
+    return None
+
+
+def get_shared_write_path(default_path: str) -> str:
+    """Return the DB path where shared table data should be written.
+
+    In split mode (MTGC_SHARED_DB set), returns the shared DB path so
+    that cache/import commands write reference data to the shared file.
+    In single-DB mode, returns the default path unchanged.
+    """
+    shared = get_shared_db_path()
+    return shared if shared else default_path
+
+
 def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     """
     Get or create a database connection.
 
     Uses a cached connection for the same path.
+    Automatically ATTACHes a shared reference DB if MTGC_SHARED_DB is set.
     """
-    global _connection, _db_path
+    global _connection, _db_path, _attached
 
     path = get_db_path(db_path)
 
@@ -59,6 +80,14 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     _connection.row_factory = sqlite3.Row
     _connection.execute("PRAGMA foreign_keys = ON")
     _db_path = path
+    _attached = False
+
+    # Auto-ATTACH shared reference DB if configured
+    # Skip if this connection IS the shared DB (write-path for import commands)
+    shared = get_shared_db_path()
+    if shared and os.path.abspath(path) != os.path.abspath(shared):
+        attach_shared(_connection, shared)
+        _attached = True
 
     return _connection
 
@@ -98,9 +127,10 @@ def attach_shared(conn, shared_db_path):
 
 def close_connection():
     """Close the cached connection if one exists."""
-    global _connection, _db_path
+    global _connection, _db_path, _attached
 
     if _connection is not None:
         _connection.close()
         _connection = None
         _db_path = None
+        _attached = False

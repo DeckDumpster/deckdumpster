@@ -1,6 +1,13 @@
 """Database layer for MTG Collector."""
 
-from mtg_collector.db.connection import attach_shared, close_connection, get_connection, get_db_path
+from mtg_collector.db.connection import (
+    attach_shared,
+    close_connection,
+    get_connection,
+    get_db_path,
+    get_shared_db_path,
+    get_shared_write_path,
+)
 from mtg_collector.db.models import (
     CardRepository,
     CollectionRepository,
@@ -16,6 +23,8 @@ __all__ = [
     "get_connection",
     "close_connection",
     "attach_shared",
+    "get_shared_db_path",
+    "get_shared_write_path",
     "init_db",
     "SCHEMA_VERSION",
     "SHARED_TABLES",

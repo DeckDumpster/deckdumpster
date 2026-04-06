@@ -1,4 +1,4 @@
-"""Database management commands: mtg db init/refresh"""
+"""Database management commands: mtg db init/refresh/split"""
 
 from mtg_collector.db import SCHEMA_VERSION, get_connection, init_db
 
@@ -30,6 +30,20 @@ def register(subparsers):
     )
     recache_parser.set_defaults(func=run_recache)
 
+    # db split
+    split_parser = db_subparsers.add_parser(
+        "split", help="Split monolithic DB into shared reference + user DBs"
+    )
+    split_parser.add_argument(
+        "--shared-out", default=None,
+        help="Path for shared reference DB (default: <db_dir>/shared.sqlite)",
+    )
+    split_parser.add_argument(
+        "--prune", action="store_true",
+        help="Remove shared table data from the source DB after copying",
+    )
+    split_parser.set_defaults(func=run_split)
+
     db_parser.set_defaults(func=lambda args: db_parser.print_help())
 
 
@@ -45,6 +59,105 @@ def run_init(args):
     else:
         print(f"Database already up to date (version {SCHEMA_VERSION})")
         print(f"Location: {args.db_path}")
+
+
+def run_split(args):
+    """Split a monolithic DB into shared reference + user DBs."""
+    import sqlite3
+    from pathlib import Path
+
+    from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS
+
+    source_path = args.db_path
+    shared_path = args.shared_out
+    if not shared_path:
+        shared_path = str(Path(source_path).parent / "shared.sqlite")
+
+    print(f"Source DB:  {source_path}")
+    print(f"Shared DB:  {shared_path}")
+
+    # Open source and create shared DB via ATTACH
+    conn = sqlite3.connect(source_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = OFF")
+
+    # Create the shared DB with full schema
+    shared_conn = sqlite3.connect(shared_path)
+    shared_conn.row_factory = sqlite3.Row
+    init_db(shared_conn)
+    shared_conn.close()
+
+    conn.execute("ATTACH DATABASE ? AS shared", (shared_path,))
+
+    total_rows = 0
+    for table in SHARED_TABLES:
+        # Check if table exists in source
+        exists = conn.execute(
+            "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        if not exists:
+            continue
+        conn.execute(f"DELETE FROM shared.[{table}]")
+        conn.execute(f"INSERT INTO shared.[{table}] SELECT * FROM main.[{table}]")
+        count = conn.execute(f"SELECT COUNT(*) FROM shared.[{table}]").fetchone()[0]
+        if count:
+            print(f"  {table}: {count} rows")
+        total_rows += count
+
+    conn.commit()
+
+    # Refresh materialized price views in shared DB
+    for view in SHARED_VIEWS:
+        exists = conn.execute(
+            "SELECT 1 FROM shared.sqlite_master WHERE type='table' AND name=?",
+            (view,),
+        ).fetchone()
+        if exists:
+            source_count = conn.execute(f"SELECT COUNT(*) FROM main.[{view}]").fetchone()[0]
+            if source_count:
+                conn.execute(f"DELETE FROM shared.[{view}]")
+                conn.execute(f"INSERT INTO shared.[{view}] SELECT * FROM main.[{view}]")
+                count = conn.execute(f"SELECT COUNT(*) FROM shared.[{view}]").fetchone()[0]
+                print(f"  {view}: {count} rows")
+                total_rows += count
+
+    conn.commit()
+    print(f"\nCopied {total_rows} total rows to shared DB")
+
+    if args.prune:
+        print("\nPruning shared data from source DB...")
+        pruned = 0
+        for table in SHARED_TABLES:
+            exists = conn.execute(
+                "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            if not exists:
+                continue
+            count = conn.execute(f"SELECT COUNT(*) FROM main.[{table}]").fetchone()[0]
+            if count:
+                conn.execute(f"DELETE FROM main.[{table}]")
+                print(f"  {table}: {count} rows removed")
+                pruned += count
+        for view in SHARED_VIEWS:
+            exists = conn.execute(
+                "SELECT 1 FROM main.sqlite_master WHERE type='table' AND name=?",
+                (view,),
+            ).fetchone()
+            if exists:
+                count = conn.execute(f"SELECT COUNT(*) FROM main.[{view}]").fetchone()[0]
+                if count:
+                    conn.execute(f"DELETE FROM main.[{view}]")
+                    print(f"  {view}: {count} rows removed")
+                    pruned += count
+        conn.commit()
+        conn.execute("VACUUM main")
+        print(f"Pruned {pruned} rows from source DB")
+
+    conn.execute("DETACH DATABASE shared")
+    conn.close()
+    print("Done!")
 
 
 def run_recache(args):

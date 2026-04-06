@@ -3,7 +3,7 @@
 import json
 import sys
 
-from mtg_collector.db import get_connection, init_db
+from mtg_collector.db import get_connection, get_shared_write_path, init_db
 from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
 from mtg_collector.services.bulk_import import resolve_reversible_oracle_id
 from mtg_collector.services.scryfall import ScryfallAPI
@@ -45,7 +45,7 @@ def run(args):
 
 def cache_all(db_path: str):
     """Download Scryfall bulk data and cache all cards/sets/printings."""
-    conn = get_connection(db_path)
+    conn = get_connection(get_shared_write_path(db_path))
     init_db(conn)
 
     card_repo = CardRepository(conn)
@@ -255,7 +255,7 @@ def cache_all(db_path: str):
 
 def cache_set(db_path: str, set_code: str):
     """Fetch all cards for a specific set from the Scryfall per-set API."""
-    conn = get_connection(db_path)
+    conn = get_connection(get_shared_write_path(db_path))
     init_db(conn)
 
     card_repo = CardRepository(conn)

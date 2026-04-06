@@ -135,6 +135,14 @@ sed \
     -e "s|{{PORT}}:8081|${PORT_MAPPING}|g" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
 
+# Conditionally mount shared reference volume if it exists
+SHARED_REF_VOL="mtgc-shared-ref"
+if podman volume exists "$SHARED_REF_VOL" 2>/dev/null; then
+    sed -i '/^Volume=mtgc-.*-data/a Volume=mtgc-shared-ref:/shared:ro,z' "$QUADLET_FILE"
+    sed -i '/^Environment=MTGC_HOME/a Environment=MTGC_SHARED_DB=/shared/shared.sqlite' "$QUADLET_FILE"
+    echo "    Shared reference volume detected — MTGC_SHARED_DB enabled"
+fi
+
 ## --- Generate and install timer units ---
 
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
@@ -195,6 +203,20 @@ if [ "$TEST" = "true" ]; then
         --entrypoint mtg \
         "$IMAGE" \
         setup --demo --from-fixture /app/test-data.sqlite
+
+    # 1b. Split shared reference data into a separate volume
+    SHARED_REF_VOL="mtgc-shared-ref"
+    if ! podman volume exists "$SHARED_REF_VOL" 2>/dev/null; then
+        echo "==> Creating shared reference volume from fixture..."
+        podman volume create "$SHARED_REF_VOL" >/dev/null
+        podman run --rm \
+            -v "${TEMP_VOL}:/data:Z" \
+            -v "${SHARED_REF_VOL}:/shared:Z" \
+            -e MTGC_HOME=/data \
+            --entrypoint mtg \
+            "$IMAGE" \
+            db split --shared-out /shared/shared.sqlite --prune
+    fi
 
     # 2. Package into a backup tarball
     TARBALL=$(mktemp --suffix=.tar.gz)
