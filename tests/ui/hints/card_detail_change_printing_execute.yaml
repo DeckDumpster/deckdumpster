@@ -1,0 +1,17 @@
+start_page: /card/fdn/34
+involves:
+  - '"Change" button in the copy section (class .change-printing-btn)'
+  - 'printing picker list (class .printing-picker-list)'
+  - 'printing option for a different printing (class .printing-option, not .current)'
+  - 'page navigation to new printing URL'
+fixture_data:
+  card_name: "Curator of Destinies"
+  set_code: "fdn"
+  collector_number: "34"
+  target_set_code: "fdn"
+  target_collector_number: "305"
+notes: >
+  1. Navigate to /card/fdn/34 (Curator of Destinies, 4 printings).
+  2. Wait for copy section. 3. Click "Change" button. 4. Wait for picker to load.
+  5. Click the printing option for FDN #305 (a different printing of same card).
+  6. Page navigates to /card/fdn/305. 7. Verify the copy now appears on the new page.

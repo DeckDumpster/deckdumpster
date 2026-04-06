@@ -314,6 +314,14 @@
       priceHtml += `<div class="detail-row"><span class="label">Sale Price</span><span class="value">$${parseFloat(copy.sale_price).toFixed(2)}</span></div>`;
     }
 
+    const changePrintingHtml = isActive
+      ? `<div class="detail-row"><span class="label">Printing</span><span class="value" style="display:flex;gap:8px;align-items:center;">
+          <span>${esc(card.set_code.toUpperCase())} #${esc(card.collector_number)}</span>
+          <button class="change-printing-btn" data-copy-id="${copy.id}" data-printing-id="${copy.printing_id}" style="padding:2px 8px;font-size:0.8rem;background:#0f3460;color:#e0e0e0;border:1px solid #16213e;border-radius:4px;cursor:pointer;">Change</button>
+        </span></div>
+        <div class="printing-picker" id="printing-picker-${copy.id}" style="display:none;"></div>`
+      : '';
+
     // Deck/binder assignment row
     let assignHtml = '';
     if (isActive) {
@@ -382,7 +390,7 @@
         <span class="copy-id">#${copy.id}</span>
       </div>
       ${statusBadge ? `<div style="margin-bottom:6px;">${statusBadge}</div>` : ''}
-      ${orderHtml}${priceHtml}${lineageHtml}${assignHtml}
+      ${orderHtml}${priceHtml}${lineageHtml}${changePrintingHtml}${assignHtml}
       ${controlsHtml}
       <button class="history-toggle" data-copy-id="${copy.id}">History &#x25BE;</button>
       <div class="history-container" id="history-${copy.id}"></div>
@@ -651,6 +659,59 @@
         }
         btn.innerHTML = 'History &#x25B4;';
         loadHistory(copyId, histContainer);
+      });
+    });
+
+    // Change printing
+    container.querySelectorAll('.change-printing-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const copyId = btn.dataset.copyId;
+        const currentPid = btn.dataset.printingId;
+        const picker = document.getElementById(`printing-picker-${copyId}`);
+        if (picker.style.display !== 'none') { picker.style.display = 'none'; return; }
+        picker.style.display = 'block';
+        picker.innerHTML = '<div style="color:#888;font-size:0.8rem;padding:4px;">Loading printings...</div>';
+        const res = await fetch('/api/printings/by-oracle/' + card.oracle_id);
+        const printings = await res.json();
+        picker.innerHTML = '<div class="printing-picker-list">' + printings.map(p => {
+          const isCurrent = p.printing_id === currentPid;
+          const ownedBadge = p.owned_count > 0
+            ? `<span style="color:#2ecc71;font-size:0.75rem;">Owned: ${p.owned_count}</span>`
+            : `<span style="color:#888;font-size:0.75rem;">Not owned</span>`;
+          const sc = p.set_code.toLowerCase();
+          const rarityClass = `ss-${p.rarity || 'common'}`;
+          const imgSrc = (p.image_uri || '').replace('/large/', '/small/');
+          return `<div class="printing-option${isCurrent ? ' current' : ''}" data-pid="${esc(p.printing_id)}">
+            ${imgSrc ? `<img src="${imgSrc}" class="printing-thumb" loading="lazy">` : '<div class="printing-thumb-placeholder"></div>'}
+            <div class="printing-info">
+              <div class="printing-set"><i class="ss ss-${sc} ${rarityClass} ss-grad"></i> ${esc(p.set_name)} (${esc(p.set_code.toUpperCase())}) #${esc(p.collector_number)}</div>
+              <div class="printing-meta">${ownedBadge}${isCurrent ? ' <span style="background:#e94560;color:#fff;padding:1px 6px;border-radius:4px;font-size:0.7rem;margin-left:4px;">Current</span>' : ''}</div>
+            </div>
+          </div>`;
+        }).join('') + '</div>';
+        picker.onclick = async (e) => {
+          const option = e.target.closest('.printing-option');
+          if (!option || option.classList.contains('current')) return;
+          const newPid = option.dataset.pid;
+          option.style.opacity = '0.5';
+          const r = await fetch(`/api/collection/${copyId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ printing_id: newPid }),
+          });
+          if (r.ok) {
+            const newPrinting = printings.find(p => p.printing_id === newPid);
+            if (newPrinting) {
+              window.location.href = `/card/${newPrinting.set_code}/${newPrinting.collector_number}`;
+            } else {
+              window.location.reload();
+            }
+          } else {
+            const err = await r.json();
+            alert(err.error || 'Change printing failed');
+            option.style.opacity = '1';
+          }
+        };
       });
     });
   }

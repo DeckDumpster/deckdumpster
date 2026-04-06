@@ -270,6 +270,23 @@
 }
 .delete-copy-btn:hover { background: #7a2a2a; color: #fff; }
 
+/* Change printing picker */
+.printing-picker { margin: 6px 0; }
+.printing-picker-list { max-height: 300px; overflow-y: auto; border: 1px solid #333; border-radius: 6px; background: var(--bg-secondary); }
+.printing-option {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; cursor: pointer;
+  border-bottom: 1px solid #222;
+}
+.printing-option:last-child { border-bottom: none; }
+.printing-option:hover { background: rgba(255,255,255,0.05); }
+.printing-option.current { opacity: 0.6; cursor: default; border-left: 3px solid var(--accent); }
+.printing-thumb { width: 45px; border-radius: 3px; }
+.printing-thumb-placeholder { width: 45px; height: 63px; background: var(--bg-primary); border-radius: 3px; }
+.printing-info { flex: 1; }
+.printing-set { font-size: 0.8rem; font-weight: 500; }
+.printing-meta { font-size: 0.75rem; margin-top: 2px; }
+
 /* Price chart */
 .price-chart-section { padding-top: 8px; display: none; }
 .price-chart-section.visible { display: block; }
