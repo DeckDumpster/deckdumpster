@@ -7721,9 +7721,16 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_sealed_fetch_prices(self):
         """Trigger TCGCSV sealed price fetch."""
-        from mtg_collector.cli.data_cmd import fetch_sealed_prices
+        import sqlite3 as _sqlite3
 
-        conn = self._get_conn()
+        from mtg_collector.cli.data_cmd import fetch_sealed_prices
+        from mtg_collector.db.schema import init_db as _init_db
+
+        # Open a direct connection to the user DB — not _get_conn() which has
+        # ATTACH temp views that block writes to shared tables.
+        conn = _sqlite3.connect(self.db_path)
+        conn.row_factory = _sqlite3.Row
+        _init_db(conn)
         try:
             result = fetch_sealed_prices(self.db_path, conn=conn)
         finally:
