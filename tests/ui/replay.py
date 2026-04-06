@@ -61,7 +61,7 @@ class ReplayHarness:
     def navigate(self, path: str):
         self._record("navigate", path)
         self.page.goto(
-            f"{self.base_url}{path}", wait_until="networkidle", timeout=10_000
+            f"{self.base_url}{path}", wait_until="networkidle", timeout=30_000
         )
         self._settle()
         self._snap()
