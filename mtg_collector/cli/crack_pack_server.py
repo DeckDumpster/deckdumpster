@@ -37,6 +37,34 @@ def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source
     return str(row[0]) if row else None
 
 
+def _bulk_attach_prices(conn, cards: list[dict]) -> None:
+    """Batch-attach tcg_price and ck_price to a list of card dicts.
+
+    Uses a single SQL query instead of per-card connections.
+    Each card dict must have set_code, collector_number, and foil (bool).
+    """
+    if not cards:
+        return
+    unique_pairs = list({(c.get("set_code", "").lower(), c.get("collector_number", "")) for c in cards})
+    if not unique_pairs:
+        return
+    ph = ",".join("(?,?)" for _ in unique_pairs)
+    params = [v for pair in unique_pairs for v in pair]
+    price_map: dict[tuple, str] = {}
+    for r in conn.execute(
+        f"SELECT set_code, collector_number, source, price_type, price "
+        f"FROM latest_prices WHERE (set_code, collector_number) IN ({ph})",
+        params,
+    ).fetchall():
+        price_map[(r["set_code"], r["collector_number"], r["source"], r["price_type"])] = str(r["price"])
+    for card in cards:
+        sc = card.get("set_code", "").lower()
+        cn = card.get("collector_number", "")
+        pt = "foil" if card.get("foil") else "normal"
+        card["tcg_price"] = price_map.get((sc, cn, "tcgplayer", pt))
+        card["ck_price"] = price_map.get((sc, cn, "cardkingdom", f"buylist_{pt}")) or price_map.get((sc, cn, "cardkingdom", pt))
+
+
 _INGEST_IMAGES_DIR = None  # Set in _get_ingest_images_dir()
 
 # ── Background ingest worker ──
@@ -1711,6 +1739,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "public, max-age=300")
         self.end_headers()
         self.wfile.write(content)
 
@@ -1776,15 +1805,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         result = self.generator.get_sheet_data(set_code, product)
 
-        # Attach local prices from SQLite
-        for sheet in result["sheets"].values():
-            for card in sheet["cards"]:
-                foil = card.get("foil", False)
-                price_type = "foil" if foil else "normal"
-                sc = card.get("set_code", "").lower()
-                cn = card.get("collector_number", "")
-                card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
-                card["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
+        # Batch-attach prices from SQLite (single query instead of per-card)
+        conn = self._get_conn()
+        all_cards = [c for sheet in result["sheets"].values() for c in sheet["cards"]]
+        _bulk_attach_prices(conn, all_cards)
+        conn.close()
 
         self._send_json(result)
 
@@ -1802,14 +1827,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             seed = int(seed)
         result = self.generator.generate_pack(set_code, product, seed=seed)
 
-        # Attach prices from local DB
-        for card in result["cards"]:
-            foil = card.get("foil", False)
-            price_type = "foil" if foil else "normal"
-            sc = card.get("set_code", "").lower()
-            cn = card.get("collector_number", "")
-            card["tcg_price"] = _get_sqlite_price(self.db_path, sc, cn, "tcgplayer", price_type)
-            card["ck_price"] = _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", f"buylist_{price_type}") or _get_sqlite_price(self.db_path, sc, cn, "cardkingdom", price_type)
+        # Batch-attach prices from local DB (single query)
+        conn = self._get_conn()
+        _bulk_attach_prices(conn, result["cards"])
+        conn.close()
 
         self._send_json(result)
 
