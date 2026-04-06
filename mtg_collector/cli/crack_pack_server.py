@@ -1854,6 +1854,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         filter_wanted = params.get("filter_wanted", [""])[0] == "true"
         _unowned_raw = params.get("include_unowned", [""])[0]
         include_unowned = _unowned_raw if _unowned_raw in ("base", "full") else ""
+        # Explicit card list: ?cards=set:cn,set:cn,... — forces include_unowned=base
+        cards_param = params.get("cards", [""])[0]
+        card_pairs = []
+        if cards_param:
+            for entry in cards_param.split(","):
+                entry = entry.strip()
+                if ":" in entry:
+                    sc, cn = entry.split(":", 1)
+                    card_pairs.append((sc.lower(), cn))
+            if card_pairs:
+                include_unowned = include_unowned or "base"
         filter_deck_id = params.get("deck_id", [""])[0]
         filter_binder_id = params.get("binder_id", [""])[0]
         filter_unassigned = params.get("unassigned", [""])[0] == "1"
@@ -1877,8 +1888,16 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 where_clauses.append("c.status = ?")
                 sql_params.append(filter_status)
 
+        # Explicit card list filter
+        if card_pairs:
+            pair_clauses = []
+            for sc, cn in card_pairs:
+                pair_clauses.append("(p.set_code = ? AND p.collector_number = ?)")
+                sql_params.extend([sc, cn])
+            where_clauses.append(f"({' OR '.join(pair_clauses)})")
+
         # Exclude non-collectible cards (digital-only, meld backs)
-        if include_unowned:
+        if include_unowned and not card_pairs:
             where_clauses.append("json_extract(p.raw_json, '$.digital') = 0")
             where_clauses.append(
                 "NOT (json_extract(p.raw_json, '$.layout') = 'meld'"

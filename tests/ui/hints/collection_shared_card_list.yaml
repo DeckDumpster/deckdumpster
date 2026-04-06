@@ -1,0 +1,17 @@
+start_page: /collection?cards=fdn:188,otj:196&view=grid
+involves:
+  - "Card grid (.card-grid) showing card images"
+  - "Status bar (#status) showing owned/missing counts"
+  - "Sheet card elements (.sheet-card) with optional .unowned class"
+fixture_data:
+  card1_set_cn: "fdn:188"
+  card1_name: "Abrade"
+  card1_owned: false
+  card2_set_cn: "otj:196"
+  card2_name: "Bonny Pall, Clearcutter"
+  card2_owned: true
+notes: >
+  Navigate directly to the URL with cards param. Wait for the grid to render.
+  The status bar should show "1 owned, 1 missing (base)". Verify at least
+  2 .sheet-card elements are present. One card (Abrade) is unowned so its
+  element should have the .unowned class.

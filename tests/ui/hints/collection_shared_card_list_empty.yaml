@@ -1,0 +1,11 @@
+start_page: /collection?cards=zzz:999&view=grid
+involves:
+  - "Card grid (.card-grid) empty"
+  - "Status bar (#status) showing 0 results"
+fixture_data:
+  nonexistent_card: "zzz:999"
+notes: >
+  Navigate directly to the URL with a nonexistent set:cn pair.
+  Wait for the page to load. The status bar should show
+  "0 owned, 0 missing (base)". The grid should have no .sheet-card
+  elements.

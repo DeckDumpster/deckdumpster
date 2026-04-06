@@ -1,0 +1,11 @@
+# Scenario: View a shared card list via URL
+#
+# Related:
+#   issues: []
+#   pull_requests: [238]
+
+description: >
+  When I navigate to /collection?cards=fdn:188,otj:196&view=grid, I see
+  those two specific cards rendered in the grid view. The status bar shows
+  owned and missing counts. Cards I own appear normally while cards I don't
+  own appear dimmed (unowned style).
