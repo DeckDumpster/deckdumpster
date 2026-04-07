@@ -219,6 +219,8 @@ class ScryfallBulkClient:
             oracle_text=_field("oracle_text"),
             colors=_field("colors", []),
             color_identity=_field("color_identity", []),
+            keywords=data.get("keywords", []),
+            legalities=data.get("legalities"),
         )
 
     def to_set_model(self, data: Dict) -> Set:
@@ -247,6 +249,15 @@ class ScryfallBulkClient:
 
         raw_json = json.dumps(data)
 
+        faces = data.get("card_faces", [])
+        face0 = faces[0] if faces else {}
+
+        def _pfield(key, default=None):
+            val = data.get(key)
+            if val is not None:
+                return val
+            return face0.get(key, default)
+
         return Printing(
             printing_id=data["id"],
             oracle_id=data["oracle_id"],
@@ -262,6 +273,18 @@ class ScryfallBulkClient:
             artist=data.get("artist"),
             image_uri=image_uri,
             raw_json=raw_json,
+            power=_pfield("power"),
+            toughness=_pfield("toughness"),
+            loyalty=_pfield("loyalty"),
+            layout=data.get("layout"),
+            flavor_text=_pfield("flavor_text"),
+            flavor_name=data.get("flavor_name"),
+            watermark=_pfield("watermark"),
+            digital=data.get("digital", False),
+            reserved=data.get("reserved", False),
+            reprint=data.get("reprint", False),
+            produced_mana=data.get("produced_mana", []),
+            games=data.get("games", []),
         )
 
 

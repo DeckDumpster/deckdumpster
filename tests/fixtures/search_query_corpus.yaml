@@ -1,0 +1,890 @@
+# Scryfall search query corpus for automated testing.
+# Sources: Scryfall docs, findingsimple/scryfall-local test suite, EDHREC guide.
+#
+# Fields:
+#   query: the search query string
+#   category: grouping for test organization
+#   should_parse: true if our parser should accept it
+#   compiler_supported: true if our SQL compiler handles it (subset of should_parse)
+
+# ============================================================================
+# Color queries
+# ============================================================================
+- query: "c:r"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:rg"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:blue"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:u"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:urg"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c=rg"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c>=uw"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c<=w"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c>2"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c=2"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:c"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:m"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:azorius"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:esper"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:temur"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "color>=uw -c:red"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c!=r"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:colorless"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:multicolor"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Color identity queries
+# ============================================================================
+- query: "id:r"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "id:wubrg"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "id:esper"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "identity:grixis"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "ci:rg"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "id<=rg"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "id:colorless"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "id<=esper t:instant"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "id:c t:land"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Type queries
+# ============================================================================
+- query: "t:creature"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:instant"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:sorcery"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:land"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:enchantment"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:artifact"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:planeswalker"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:legendary"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:merfolk t:legend"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:goblin -t:creature"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+- query: "type:instant"
+  category: type
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Oracle text queries
+# ============================================================================
+- query: "o:flying"
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: "o:draw"
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: 'o:"enters tapped"'
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: 'o:"deals damage"'
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: "o:draw t:creature"
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: "oracle:draw"
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: "o:destroy"
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: "o:counter"
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: "o:exile"
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+- query: "o:sacrifice"
+  category: oracle_text
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Numeric queries (mana value, power, toughness, loyalty)
+# ============================================================================
+- query: "mv>=3"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "mv<=2"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "mv=5"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "cmc=5"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "cmc<4"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "manavalue>=3"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "pow>=8"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "pow>5"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "pow:*"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "power<2"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "tou>=5"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "tou<=3"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "toughness<=3"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "loy>=4"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "loy:3"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "loyalty<5"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:u mv=5"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:planeswalker loy>=4"
+  category: numeric
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Rarity queries
+# ============================================================================
+- query: "r:rare"
+  category: rarity
+  should_parse: true
+  compiler_supported: true
+
+- query: "r:m"
+  category: rarity
+  should_parse: true
+  compiler_supported: true
+
+- query: "r:common"
+  category: rarity
+  should_parse: true
+  compiler_supported: true
+
+- query: "r:uncommon"
+  category: rarity
+  should_parse: true
+  compiler_supported: true
+
+- query: "r>=r"
+  category: rarity
+  should_parse: true
+  compiler_supported: true
+
+- query: "r!=c"
+  category: rarity
+  should_parse: true
+  compiler_supported: true
+
+- query: "rarity:rare"
+  category: rarity
+  should_parse: true
+  compiler_supported: true
+
+- query: "r:common t:artifact"
+  category: rarity
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Set queries
+# ============================================================================
+- query: "s:fdn"
+  category: set
+  should_parse: true
+  compiler_supported: true
+
+- query: "set:mh3"
+  category: set
+  should_parse: true
+  compiler_supported: true
+
+- query: "e:dsk"
+  category: set
+  should_parse: true
+  compiler_supported: true
+
+- query: "edition:lci"
+  category: set
+  should_parse: true
+  compiler_supported: true
+
+- query: "s:fdn t:creature"
+  category: set
+  should_parse: true
+  compiler_supported: true
+
+- query: "s:mh3 r:mythic"
+  category: set
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Format / legality queries
+# ============================================================================
+- query: "f:modern"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+- query: "f:standard"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+- query: "f:commander"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+- query: "format:legacy"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+- query: "f:pauper"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+- query: "f:pioneer"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+- query: "banned:legacy"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+- query: "restricted:vintage"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:g t:creature f:pauper"
+  category: format
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# is: / has: flag queries
+# ============================================================================
+- query: "is:foil"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:nonfoil"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:fullart"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:promo"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:reserved"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:reprint"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:digital"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:borderless"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:showcase"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:dfc"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:split"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:vanilla"
+  category: is_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "has:watermark"
+  category: has_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "has:flavor"
+  category: has_flag
+  should_parse: true
+  compiler_supported: true
+
+- query: "has:loyalty"
+  category: has_flag
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Artist / flavor queries
+# ============================================================================
+- query: "a:rush"
+  category: artist
+  should_parse: true
+  compiler_supported: true
+
+- query: 'a:"rebecca guay"'
+  category: artist
+  should_parse: true
+  compiler_supported: true
+
+- query: "artist:terese"
+  category: artist
+  should_parse: true
+  compiler_supported: true
+
+- query: "ft:mishra"
+  category: flavor
+  should_parse: true
+  compiler_supported: true
+
+- query: "ft:fire"
+  category: flavor
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Keyword ability queries
+# ============================================================================
+- query: "kw:flying"
+  category: keyword
+  should_parse: true
+  compiler_supported: true
+
+- query: "kw:deathtouch"
+  category: keyword
+  should_parse: true
+  compiler_supported: true
+
+- query: "keyword:vigilance"
+  category: keyword
+  should_parse: true
+  compiler_supported: true
+
+- query: "kw:flying -t:creature"
+  category: keyword
+  should_parse: true
+  compiler_supported: true
+
+- query: "kw:flying kw:vigilance"
+  category: keyword
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Name / exact name queries
+# ============================================================================
+- query: "bolt"
+  category: name
+  should_parse: true
+  compiler_supported: true
+
+- query: "lightning bolt"
+  category: name
+  should_parse: true
+  compiler_supported: true
+
+- query: '!"Lightning Bolt"'
+  category: name
+  should_parse: true
+  compiler_supported: true
+
+- query: "!bolt"
+  category: name
+  should_parse: true
+  compiler_supported: true
+
+- query: "dragon"
+  category: name
+  should_parse: true
+  compiler_supported: true
+
+- query: "serra angel"
+  category: name
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Boolean logic queries
+# ============================================================================
+- query: "c:r or c:g"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:r OR c:g"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:fish or t:bird"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "-c:r"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "-t:creature"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "-c:r t:creature"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "(c:r or c:g) t:creature"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:legendary (t:goblin or t:elf)"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "-(c:r or c:g)"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "(t:elf or t:goblin) c:green"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:green (t:elf or t:goblin) r:rare"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:instant or t:sorcery"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Combined multi-keyword queries
+# ============================================================================
+- query: "c:r t:creature mv<=3"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:r t:instant mv<=2"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: 'c:r t:instant mv<=2 o:"damage"'
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "(c:r or c:g) t:creature pow>=4"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:blue t:instant cmc<=2"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "c>=ur t:legendary"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "s:fdn r:mythic t:creature"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "f:modern c:r t:instant"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:r t:creature f:pauper pow>=3"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:r t:creature is:foil"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:creature kw:flying c:w"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:blue t:instant -cmc:0"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+- query: "s:mh3 r:mythic c:r"
+  category: combined
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Mana cost queries
+# ============================================================================
+- query: "m:{R}"
+  category: mana
+  should_parse: true
+  compiler_supported: true
+
+- query: "m:{U}{U}"
+  category: mana
+  should_parse: true
+  compiler_supported: true
+
+- query: "mana:{W}{W}"
+  category: mana
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Layout queries
+# ============================================================================
+- query: "is:mdfc"
+  category: layout
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:adventure"
+  category: layout
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:transform"
+  category: layout
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Year / collector number
+# ============================================================================
+- query: "year>=2020"
+  category: year
+  should_parse: true
+  compiler_supported: true
+
+- query: "year<=2023"
+  category: year
+  should_parse: true
+  compiler_supported: true
+
+- query: "cn>100"
+  category: collector_number
+  should_parse: true
+  compiler_supported: true
+
+# ============================================================================
+# Unsupported (parses but compiler doesn't fully handle)
+# ============================================================================
+- query: "b:zendikar"
+  category: unsupported
+  should_parse: true
+  compiler_supported: false
+
+- query: "is:fetchland"
+  category: unsupported
+  should_parse: true
+  compiler_supported: false
+
+- query: "is:shockland"
+  category: unsupported
+  should_parse: true
+  compiler_supported: false
+
+- query: "is:dual"
+  category: unsupported
+  should_parse: true
+  compiler_supported: false
+
+- query: "is:manland"
+  category: unsupported
+  should_parse: true
+  compiler_supported: false
+
+- query: "is:bear"
+  category: unsupported
+  should_parse: true
+  compiler_supported: false
+
+# ============================================================================
+# Error cases (should NOT parse)
+# ============================================================================
+- query: ""
+  category: error
+  should_parse: false
+  compiler_supported: false
+
+- query: "   "
+  category: error
+  should_parse: false
+  compiler_supported: false
+
+- query: "xyz:value"
+  category: error
+  should_parse: false
+  compiler_supported: false
+
+- query: "zzz:abc"
+  category: error
+  should_parse: false
+  compiler_supported: false

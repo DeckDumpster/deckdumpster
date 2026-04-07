@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 41
+SCHEMA_VERSION = 42
 
 # Tables whose data can be served from an ATTACHed shared DB via temp views.
 SHARED_TABLES = [
@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS cards (
     cmc REAL,
     oracle_text TEXT,
     colors TEXT,           -- JSON array: ["R", "G"]
-    color_identity TEXT    -- JSON array
+    color_identity TEXT,   -- JSON array
+    keywords TEXT,         -- JSON array: ["Flying", "Trample"]
+    legalities TEXT        -- JSON object: {"standard": "legal", ...}
 );
 
 -- Sets (cached from Scryfall)
@@ -52,6 +54,18 @@ CREATE TABLE IF NOT EXISTS printings (
     artist TEXT,
     image_uri TEXT,
     raw_json TEXT,         -- Full Scryfall API response as JSON (for semantic search, etc.)
+    power TEXT,
+    toughness TEXT,
+    loyalty TEXT,
+    layout TEXT,
+    flavor_text TEXT,
+    flavor_name TEXT,
+    watermark TEXT,
+    digital INTEGER DEFAULT 0,
+    reserved INTEGER DEFAULT 0,
+    reprint INTEGER DEFAULT 0,
+    produced_mana TEXT,    -- JSON array
+    games TEXT,            -- JSON array: ["paper", "mtgo", "arena"]
     UNIQUE(set_code, collector_number)
 );
 
@@ -419,6 +433,13 @@ CREATE INDEX IF NOT EXISTS idx_printings_oracle ON printings(oracle_id);
 CREATE INDEX IF NOT EXISTS idx_printings_set ON printings(set_code);
 CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name);
 
+-- Full-text search on cards (external content mode — no data duplication)
+CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
+    name, type_line, oracle_text,
+    content='cards', content_rowid='rowid',
+    tokenize='unicode61 remove_diacritics 2'
+);
+
 -- Sealed product reference data (imported from MTGJSON AllPrintings.json)
 CREATE TABLE IF NOT EXISTS sealed_products (
     uuid TEXT PRIMARY KEY,
@@ -710,6 +731,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v39_to_v40(conn)
         if current < 41:
             _migrate_v40_to_v41(conn)
+        if current < 42:
+            _migrate_v41_to_v42(conn)
 
     # Record schema version
     conn.execute(
@@ -2526,9 +2549,132 @@ def _migrate_v40_to_v41(conn: sqlite3.Connection):
     conn.execute("DELETE FROM deck_cards WHERE collection_id IS NULL")
 
 
+def _migrate_v41_to_v42(conn: sqlite3.Connection):
+    """Add search-related columns to cards/printings and create FTS5 table."""
+    # --- cards table: add keywords and legalities ---
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(cards)").fetchall()}
+    if "keywords" not in existing:
+        conn.execute("ALTER TABLE cards ADD COLUMN keywords TEXT")
+    if "legalities" not in existing:
+        conn.execute("ALTER TABLE cards ADD COLUMN legalities TEXT")
+
+    # --- printings table: add extracted fields ---
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(printings)").fetchall()}
+    new_cols = [
+        ("power", "TEXT"),
+        ("toughness", "TEXT"),
+        ("loyalty", "TEXT"),
+        ("layout", "TEXT"),
+        ("flavor_text", "TEXT"),
+        ("flavor_name", "TEXT"),
+        ("watermark", "TEXT"),
+        ("digital", "INTEGER DEFAULT 0"),
+        ("reserved", "INTEGER DEFAULT 0"),
+        ("reprint", "INTEGER DEFAULT 0"),
+        ("produced_mana", "TEXT"),
+        ("games", "TEXT"),
+    ]
+    for col_name, col_type in new_cols:
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE printings ADD COLUMN {col_name} {col_type}")
+
+    # --- Backfill from raw_json (only if the column exists) ---
+    printing_cols = {r[1] for r in conn.execute("PRAGMA table_info(printings)").fetchall()}
+    if "raw_json" in printing_cols:
+        conn.execute("""
+            UPDATE printings SET
+                power = COALESCE(
+                    json_extract(raw_json, '$.power'),
+                    json_extract(raw_json, '$.card_faces[0].power')
+                ),
+                toughness = COALESCE(
+                    json_extract(raw_json, '$.toughness'),
+                    json_extract(raw_json, '$.card_faces[0].toughness')
+                ),
+                loyalty = COALESCE(
+                    json_extract(raw_json, '$.loyalty'),
+                    json_extract(raw_json, '$.card_faces[0].loyalty')
+                ),
+                layout = json_extract(raw_json, '$.layout'),
+                flavor_text = COALESCE(
+                    json_extract(raw_json, '$.flavor_text'),
+                    json_extract(raw_json, '$.card_faces[0].flavor_text')
+                ),
+                flavor_name = json_extract(raw_json, '$.flavor_name'),
+                watermark = COALESCE(
+                    json_extract(raw_json, '$.watermark'),
+                    json_extract(raw_json, '$.card_faces[0].watermark')
+                ),
+                digital = COALESCE(json_extract(raw_json, '$.digital'), 0),
+                reserved = COALESCE(json_extract(raw_json, '$.reserved'), 0),
+                reprint = COALESCE(json_extract(raw_json, '$.reprint'), 0),
+                produced_mana = json_extract(raw_json, '$.produced_mana'),
+                games = json_extract(raw_json, '$.games')
+            WHERE raw_json IS NOT NULL
+        """)
+
+        # --- Backfill cards.legalities from first printing per oracle_id ---
+        conn.execute("""
+            UPDATE cards SET legalities = (
+                SELECT json_extract(p.raw_json, '$.legalities')
+                FROM printings p
+                WHERE p.oracle_id = cards.oracle_id AND p.raw_json IS NOT NULL
+                LIMIT 1
+            )
+            WHERE legalities IS NULL
+        """)
+
+        # --- Backfill cards.keywords from first printing per oracle_id ---
+        conn.execute("""
+            UPDATE cards SET keywords = (
+                SELECT json_extract(p.raw_json, '$.keywords')
+                FROM printings p
+                WHERE p.oracle_id = cards.oracle_id AND p.raw_json IS NOT NULL
+                LIMIT 1
+            )
+            WHERE keywords IS NULL
+        """)
+
+    # --- Create FTS5 virtual table ---
+    # Only create if cards table has required columns (may not in minimal test DBs)
+    card_cols = {r[1] for r in conn.execute("PRAGMA table_info(cards)").fetchall()}
+    if "oracle_text" in card_cols:
+        conn.execute("DROP TABLE IF EXISTS cards_fts")
+        conn.execute("""
+            CREATE VIRTUAL TABLE cards_fts USING fts5(
+                name, type_line, oracle_text,
+                content='cards', content_rowid='rowid',
+                tokenize='unicode61 remove_diacritics 2'
+            )
+        """)
+        conn.execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild')")
+
+
+def rebuild_fts(conn):
+    """Rebuild the cards_fts full-text search index.
+
+    Call after bulk imports (cache all) to sync FTS with cards table.
+    """
+    # Ensure FTS table exists
+    existing = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='cards_fts'"
+    ).fetchone()
+    if not existing:
+        conn.execute("""
+            CREATE VIRTUAL TABLE cards_fts USING fts5(
+                name, type_line, oracle_text,
+                content='cards', content_rowid='rowid',
+                tokenize='unicode61 remove_diacritics 2'
+            )
+        """)
+    conn.execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild')")
+    conn.commit()
+
+
 def drop_all_tables(conn: sqlite3.Connection):
     """Drop all tables (for testing/reset)."""
     conn.executescript("""
+        DROP TABLE IF EXISTS cards_fts;
         DROP VIEW IF EXISTS latest_sealed_prices;
         DROP VIEW IF EXISTS sealed_collection_view;
         DROP VIEW IF EXISTS collection_view;
