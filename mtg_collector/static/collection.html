@@ -96,7 +96,12 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   position: relative;
 }
 
-#search-input { width: 220px; }
+#search-input { width: 320px; }
+#search-input.advanced-active { border-color: #7c3aed; box-shadow: 0 0 0 1px #7c3aed33; }
+#search-error { color: #e94560; font-size: 11px; position: absolute; top: 100%; left: 0; white-space: nowrap; z-index: 10; }
+.search-wrap { position: relative; display: inline-block; }
+.search-mode-badge { display: none; font-size: 9px; color: #7c3aed; position: absolute; top: -10px; right: 2px; pointer-events: none; }
+.search-mode-badge.visible { display: block; }
 #oracle-search-input { width: 220px; }
 
 /* Icon buttons in view toggle */
@@ -1236,6 +1241,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 
 @media (max-width: 768px) {
   #search-input, #oracle-search-input { width: 100%; order: -1; }
+  .search-wrap { width: 100%; order: -1; }
   .controls { flex-wrap: wrap; }
   .sidebar { width: 280px; left: -300px; }
   .wishlist-panel { width: 280px; right: -300px; }
@@ -1248,7 +1254,11 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 <header>
   <h1><a href="/" style="color:inherit;text-decoration:none">Collection</a></h1>
   <div class="controls">
-    <input type="text" id="search-input" placeholder="Search cards...">
+    <div class="search-wrap">
+      <input type="text" id="search-input" placeholder="Search cards... (e.g. c:r t:instant mv&lt;=2)">
+      <span class="search-mode-badge" id="search-mode-badge">scryfall syntax</span>
+      <div id="search-error"></div>
+    </div>
     <input type="text" id="oracle-search-input" placeholder="Oracle text...">
     <div class="view-toggle-group" id="view-toggle-group">
       <button class="secondary" id="view-table-btn" title="Table view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2" width="14" height="2" rx=".5"/><rect x="1" y="7" width="14" height="2" rx=".5"/><rect x="1" y="12" width="14" height="2" rx=".5"/></svg></button>
@@ -1548,6 +1558,24 @@ let lastSelectedIdx = null;
 let wishlistMap = {};  // wishlist_id → {id, oracle_id, printing_id, name, set_code, collector_number, ...}
 let wishlistByPrinting = {};  // printing_id → entry (only for printing-specific wants)
 let wishlistByOracle = {};  // oracle_id → entry (only for card-level wants where printing_id is null)
+const searchModeBadge = document.getElementById('search-mode-badge');
+const searchErrorEl = document.getElementById('search-error');
+
+// Detect Scryfall-style advanced query syntax
+function isAdvancedQuery(q) {
+  if (!q) return false;
+  // keyword:value patterns (c:r, t:instant, o:"text", etc.)
+  if (/[a-z]+[:=!<>]/.test(q)) return true;
+  // Exact name match: !"Lightning Bolt"
+  if (/^!"/.test(q)) return true;
+  // Explicit OR operator
+  if (/\bor\b/i.test(q)) return true;
+  // Parenthesized grouping
+  if (/[()]/.test(q)) return true;
+  // Leading negation: -word
+  if (/^-[a-z]/.test(q)) return true;
+  return false;
+}
 
 function _addWishlistEntry(e) {
   wishlistMap[e.id] = e;
@@ -3289,10 +3317,41 @@ function updateStatusText() {
 
 async function fetchCollection() {
   updateUnownedBtn();
-  const params = getFetchParams();
+  const q = searchInput.value.trim();
+  const advanced = isAdvancedQuery(q);
+
+  // Update visual indicators
+  searchInput.classList.toggle('advanced-active', advanced);
+  searchModeBadge.classList.toggle('visible', advanced);
+  searchErrorEl.textContent = '';
+
   statusEl.textContent = 'Loading...';
-  const res = await fetch(`/api/collection?${params}`);
-  allCardsUnfiltered = await res.json();
+
+  let res;
+  if (advanced && q) {
+    // Use Scryfall-style search endpoint
+    const params = new URLSearchParams();
+    params.set('q', q);
+    if (includeUnowned && hasAnyFilter()) params.set('include_unowned', includeUnowned);
+    const dispositionStatuses = ['sold', 'traded', 'gifted', 'lost'];
+    const hasDisposition = dispositionStatuses.some(s => document.getElementById('sf-' + s)?.checked);
+    if (hasDisposition) params.set('status', 'all');
+    res = await fetch(`/api/search?${params}`);
+    const data = await res.json();
+    if (!res.ok) {
+      searchErrorEl.textContent = data.error || 'Search error';
+      allCardsUnfiltered = [];
+    } else {
+      searchErrorEl.textContent = '';
+      allCardsUnfiltered = data;
+    }
+  } else {
+    // Use standard collection endpoint
+    const params = getFetchParams();
+    res = await fetch(`/api/collection?${params}`);
+    allCardsUnfiltered = await res.json();
+  }
+
   selectedCards.clear();
   lastSelectedIdx = null;
   updateSelectionBar();

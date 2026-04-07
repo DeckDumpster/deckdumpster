@@ -1042,6 +1042,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_collection_copies(params)
         elif path == "/api/collection":
             self._api_collection(params)
+        elif path == "/api/search":
+            self._api_search(params)
         elif path == "/api/wishlist":
             self._api_wishlist_list(params)
         elif path == "/api/cards/by-name":
@@ -1833,6 +1835,111 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.close()
 
         self._send_json(result)
+
+    def _api_search(self, params: dict):
+        """Scryfall-style search endpoint."""
+        import time as _time
+
+        from mtg_collector.search import SearchError, compile_query, execute_search, parse_query
+
+        q = params.get("q", [""])[0]
+        if not q:
+            self._send_json([])
+            return
+
+        include_unowned = params.get("include_unowned", [""])[0]
+        status = params.get("status", ["owned"])[0]
+
+        timings = {}
+
+        # Parse
+        t0 = _time.monotonic()
+        try:
+            ast = parse_query(q)
+        except SearchError as e:
+            self._send_json({"error": str(e), "position": e.position}, 400)
+            return
+        timings["parse_ms"] = round((_time.monotonic() - t0) * 1000, 1)
+
+        # Compile
+        t0 = _time.monotonic()
+        compiled = compile_query(ast)
+        timings["compile_ms"] = round((_time.monotonic() - t0) * 1000, 1)
+
+        # Execute
+        mode = "all" if include_unowned else "collection"
+        conn = self._get_conn()
+        rows, query_timings = execute_search(conn, compiled, mode=mode, status=status)
+        timings.update(query_timings)
+
+        # Format results
+        results = []
+        for row in rows:
+            keys = row.keys()
+            card = {
+                "oracle_id": row["oracle_id"],
+                "name": row["name"],
+                "type_line": row["type_line"],
+                "mana_cost": row["mana_cost"],
+                "cmc": row["cmc"],
+                "colors": row["colors"],
+                "color_identity": row["color_identity"],
+                "set_code": row["set_code"],
+                "set_name": row["set_name"],
+                "collector_number": row["collector_number"],
+                "rarity": row["rarity"],
+                "printing_id": row["printing_id"],
+                "image_uri": row["image_uri"],
+                "artist": row["artist"],
+                "frame_effects": row["frame_effects"],
+                "border_color": row["border_color"],
+                "full_art": bool(row["full_art"]) if row["full_art"] else False,
+                "promo": bool(row["promo"]) if row["promo"] else False,
+                "promo_types": row["promo_types"],
+                "finishes": row["finishes"],
+                "layout": row["layout"] or "normal",
+                "finish": row["finish"],
+                "condition": row["condition"],
+                "status": row["status"],
+                "qty": row["qty"],
+                "acquired_at": row["acquired_at"] if "acquired_at" in keys else None,
+                "owned": row["collection_id"] is not None if include_unowned else True,
+            }
+            if row["flavor_name"]:
+                card["oracle_name"] = row["name"]
+                card["name"] = row["flavor_name"]
+            # Optional fields
+            if "collection_id" in keys and row["collection_id"]:
+                card["collection_id"] = row["collection_id"]
+            if "order_id" in keys and row["order_id"]:
+                card["order_id"] = row["order_id"]
+            if "binder_id" in keys and row["binder_id"]:
+                card["binder_id"] = row["binder_id"]
+
+            results.append(card)
+
+        # Attach prices
+        _bulk_attach_prices(conn, results)
+        conn.close()
+
+        timings["total_ms"] = round(
+            timings.get("parse_ms", 0) + timings.get("compile_ms", 0) + timings.get("query_ms", 0), 1
+        )
+        timings["row_count"] = len(results)
+
+        # Send response with timing headers
+        body = json.dumps(results).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        for key, val in timings.items():
+            self.send_header(f"X-Search-{key.replace('_', '-').title()}", str(val))
+        accept_enc = self.headers.get("Accept-Encoding", "")
+        if "gzip" in accept_enc and len(body) > 1024:
+            body = gzip.compress(body)
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _api_collection(self, params: dict):
         """Return aggregated collection data with optional search/sort/filter."""
