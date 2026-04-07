@@ -1,5 +1,6 @@
 """Database models and repositories."""
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,8 @@ class Card:
     oracle_text: Optional[str] = None
     colors: List[str] = field(default_factory=list)
     color_identity: List[str] = field(default_factory=list)
+    keywords: List[str] = field(default_factory=list)
+    legalities: Optional[Dict] = None
 
 
 @dataclass
@@ -48,6 +51,18 @@ class Printing:
     artist: Optional[str] = None
     image_uri: Optional[str] = None
     raw_json: Optional[str] = None  # Full card data as JSON string (cached from bulk import)
+    power: Optional[str] = None
+    toughness: Optional[str] = None
+    loyalty: Optional[str] = None
+    layout: Optional[str] = None
+    flavor_text: Optional[str] = None
+    flavor_name: Optional[str] = None
+    watermark: Optional[str] = None
+    digital: bool = False
+    reserved: bool = False
+    reprint: bool = False
+    produced_mana: List[str] = field(default_factory=list)
+    games: List[str] = field(default_factory=list)
 
     def get_card_data(self) -> Optional[Dict]:
         """Parse and return the full card data as a dict."""
@@ -235,11 +250,15 @@ class CardRepository:
 
     def upsert(self, card: Card) -> None:
         """Insert or update a card."""
+        legalities_json = None
+        if card.legalities is not None:
+            legalities_json = json.dumps(card.legalities) if isinstance(card.legalities, dict) else card.legalities
         self.conn.execute(
             """
             INSERT INTO cards
-            (oracle_id, name, type_line, mana_cost, cmc, oracle_text, colors, color_identity)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (oracle_id, name, type_line, mana_cost, cmc, oracle_text, colors, color_identity,
+             keywords, legalities)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(oracle_id) DO UPDATE SET
                 name = excluded.name,
                 type_line = excluded.type_line,
@@ -247,7 +266,9 @@ class CardRepository:
                 cmc = excluded.cmc,
                 oracle_text = excluded.oracle_text,
                 colors = excluded.colors,
-                color_identity = excluded.color_identity
+                color_identity = excluded.color_identity,
+                keywords = excluded.keywords,
+                legalities = excluded.legalities
             """,
             (
                 card.oracle_id,
@@ -258,7 +279,28 @@ class CardRepository:
                 card.oracle_text,
                 to_json_array(card.colors),
                 to_json_array(card.color_identity),
+                to_json_array(card.keywords),
+                legalities_json,
             ),
+        )
+
+    def _row_to_card(self, row) -> Card:
+        """Convert a database row to a Card object."""
+        legalities = None
+        leg_raw = row["legalities"] if "legalities" in row.keys() else None
+        if leg_raw:
+            legalities = json.loads(leg_raw) if isinstance(leg_raw, str) else leg_raw
+        return Card(
+            oracle_id=row["oracle_id"],
+            name=row["name"],
+            type_line=row["type_line"],
+            mana_cost=row["mana_cost"],
+            cmc=row["cmc"],
+            oracle_text=row["oracle_text"],
+            colors=parse_json_array(row["colors"]),
+            color_identity=parse_json_array(row["color_identity"]),
+            keywords=parse_json_array(row["keywords"] if "keywords" in row.keys() else None),
+            legalities=legalities,
         )
 
     def get(self, oracle_id: str) -> Optional[Card]:
@@ -269,17 +311,7 @@ class CardRepository:
         row = cursor.fetchone()
         if row is None:
             return None
-
-        return Card(
-            oracle_id=row["oracle_id"],
-            name=row["name"],
-            type_line=row["type_line"],
-            mana_cost=row["mana_cost"],
-            cmc=row["cmc"],
-            oracle_text=row["oracle_text"],
-            colors=parse_json_array(row["colors"]),
-            color_identity=parse_json_array(row["color_identity"]),
-        )
+        return self._row_to_card(row)
 
     def get_by_name(self, name: str) -> Optional[Card]:
         """Get a card by exact name."""
@@ -289,17 +321,7 @@ class CardRepository:
         row = cursor.fetchone()
         if row is None:
             return None
-
-        return Card(
-            oracle_id=row["oracle_id"],
-            name=row["name"],
-            type_line=row["type_line"],
-            mana_cost=row["mana_cost"],
-            cmc=row["cmc"],
-            oracle_text=row["oracle_text"],
-            colors=parse_json_array(row["colors"]),
-            color_identity=parse_json_array(row["color_identity"]),
-        )
+        return self._row_to_card(row)
 
     def search_by_name(self, name: str) -> Optional[Card]:
         """Search for a card by name (case-insensitive, handles DFCs).
@@ -366,18 +388,6 @@ class CardRepository:
             results.append(self._row_to_card(row))
 
         return results
-
-    def _row_to_card(self, row) -> Card:
-        return Card(
-            oracle_id=row["oracle_id"],
-            name=row["name"],
-            type_line=row["type_line"],
-            mana_cost=row["mana_cost"],
-            cmc=row["cmc"],
-            oracle_text=row["oracle_text"],
-            colors=parse_json_array(row["colors"]),
-            color_identity=parse_json_array(row["color_identity"]),
-        )
 
 
 class SetRepository:
@@ -520,8 +530,11 @@ class PrintingRepository:
             INSERT INTO printings
             (printing_id, oracle_id, set_code, collector_number, rarity,
              frame_effects, border_color, full_art, promo, promo_types,
-             finishes, artist, image_uri, raw_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             finishes, artist, image_uri, raw_json,
+             power, toughness, loyalty, layout, flavor_text, flavor_name,
+             watermark, digital, reserved, reprint, produced_mana, games)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(printing_id) DO UPDATE SET
                 oracle_id = excluded.oracle_id,
                 set_code = excluded.set_code,
@@ -535,7 +548,19 @@ class PrintingRepository:
                 finishes = excluded.finishes,
                 artist = excluded.artist,
                 image_uri = excluded.image_uri,
-                raw_json = excluded.raw_json
+                raw_json = excluded.raw_json,
+                power = excluded.power,
+                toughness = excluded.toughness,
+                loyalty = excluded.loyalty,
+                layout = excluded.layout,
+                flavor_text = excluded.flavor_text,
+                flavor_name = excluded.flavor_name,
+                watermark = excluded.watermark,
+                digital = excluded.digital,
+                reserved = excluded.reserved,
+                reprint = excluded.reprint,
+                produced_mana = excluded.produced_mana,
+                games = excluded.games
             """,
             (
                 p.printing_id,
@@ -552,6 +577,18 @@ class PrintingRepository:
                 p.artist,
                 p.image_uri,
                 p.raw_json,
+                p.power,
+                p.toughness,
+                p.loyalty,
+                p.layout,
+                p.flavor_text,
+                p.flavor_name,
+                p.watermark,
+                1 if p.digital else 0,
+                1 if p.reserved else 0,
+                1 if p.reprint else 0,
+                to_json_array(p.produced_mana),
+                to_json_array(p.games),
             ),
         )
 
@@ -612,12 +649,10 @@ class PrintingRepository:
         return cursor.fetchone() is not None
 
     def _row_to_printing(self, row: sqlite3.Row) -> Printing:
-        # Handle raw_json which might not exist in older databases
-        raw_json = None
-        try:
-            raw_json = row["raw_json"]
-        except (IndexError, KeyError):
-            pass
+        keys = row.keys()
+
+        def _get(key, default=None):
+            return row[key] if key in keys else default
 
         return Printing(
             printing_id=row["printing_id"],
@@ -633,7 +668,19 @@ class PrintingRepository:
             finishes=parse_json_array(row["finishes"]),
             artist=row["artist"],
             image_uri=row["image_uri"],
-            raw_json=raw_json,
+            raw_json=_get("raw_json"),
+            power=_get("power"),
+            toughness=_get("toughness"),
+            loyalty=_get("loyalty"),
+            layout=_get("layout"),
+            flavor_text=_get("flavor_text"),
+            flavor_name=_get("flavor_name"),
+            watermark=_get("watermark"),
+            digital=bool(_get("digital", 0)),
+            reserved=bool(_get("reserved", 0)),
+            reprint=bool(_get("reprint", 0)),
+            produced_mana=parse_json_array(_get("produced_mana")),
+            games=parse_json_array(_get("games")),
         )
 
 
