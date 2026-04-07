@@ -16,16 +16,16 @@ def steps(harness):
     harness.wait_for_visible("#open-modal-overlay.active")
     # Search for the first product.
     harness.fill_by_selector("#open-search-input", "Foundations Beginner")
-    harness.wait_for_visible("#open-product-results li", timeout=10_000)
+    harness.wait_for_visible("#open-product-results li", timeout=500)
     # Click the Beginner Box result.
     harness.click_by_text("Foundations Beginner Box")
     # Wait for the preview with confirm button.
-    harness.wait_for_visible("#open-confirm-btn", timeout=10_000)
+    harness.wait_for_visible("#open-confirm-btn", timeout=500)
     harness.screenshot("first_product_preview")
     # Open the product.
     harness.click_by_selector("#open-confirm-btn")
     # Wait for modal to close and success feedback.
-    harness.wait_for_hidden("#open-modal-overlay.active", timeout=10_000)
+    harness.wait_for_hidden("#open-modal-overlay.active", timeout=500)
     harness.wait_for_text("Added")
     harness.screenshot("first_product_opened")
     # Reopen the modal — this is the regression check.
@@ -35,8 +35,8 @@ def steps(harness):
     harness.assert_visible("#open-search-input")
     # Search for a second product to verify full functionality.
     harness.fill_by_selector("#open-search-input", "Foundations Starter")
-    harness.wait_for_visible("#open-product-results li", timeout=10_000)
+    harness.wait_for_visible("#open-product-results li", timeout=500)
     # Click the Starter Collection result.
     harness.click_by_text("Foundations Starter Collection")
-    harness.wait_for_visible("#open-confirm-btn", timeout=10_000)
+    harness.wait_for_visible("#open-confirm-btn", timeout=500)
     harness.screenshot("second_product_preview")

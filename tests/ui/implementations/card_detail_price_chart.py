@@ -40,8 +40,9 @@ def steps(harness):
     container = _find_container(harness.base_url)
     if container:
         python_script = (
-            "import sqlite3, datetime as dt; "
-            "conn = sqlite3.connect('/data/collection.sqlite'); "
+            "import sqlite3, datetime as dt, os; "
+            "db = os.environ.get('MTGC_SHARED_DB', '/data/collection.sqlite'); "
+            "conn = sqlite3.connect(db); "
             "rows = ["
             "('blb','124','tcgplayer','normal',8.50,(dt.date.today()-dt.timedelta(days=60)).isoformat()),"
             "('blb','124','tcgplayer','normal',9.00,(dt.date.today()-dt.timedelta(days=45)).isoformat()),"
@@ -52,6 +53,9 @@ def steps(harness):
             "conn.executemany('INSERT OR IGNORE INTO prices "
             "(set_code,collector_number,source,price_type,price,observed_at) "
             "VALUES (?,?,?,?,?,?)', rows); "
+            "conn.execute('INSERT OR REPLACE INTO latest_prices "
+            "(set_code,collector_number,source,price_type,price,observed_at) "
+            "VALUES (?,?,?,?,?,?)', rows[-1]); "
             "conn.commit(); conn.close()"
         )
         subprocess.run(
@@ -63,8 +67,8 @@ def steps(harness):
     harness.navigate("/card/blb/124")
     harness.wait_for_text("Artist's Talent")
 
-    # The price chart section should become visible.
-    harness.wait_for_visible(".price-chart-section.visible", timeout=10_000)
+    # The price chart section should become visible (chart.js render takes time).
+    harness.wait_for_visible(".price-chart-section.visible", timeout=2000)
     # Canvas element should exist.
     harness.assert_visible("#price-chart-canvas")
     # A range pill should be active.

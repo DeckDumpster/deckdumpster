@@ -10,7 +10,7 @@ is auto-accepted by the harness.
 def steps(harness):
     # Navigate and search for an unassigned card
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=15000)
+    harness.wait_for_visible(".collection-table", timeout=500)
     harness.fill_by_placeholder("Search cards...", "Graceful Takedown")
     harness.wait_for_visible("tr[data-idx]")
 

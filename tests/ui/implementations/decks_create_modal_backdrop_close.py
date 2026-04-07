@@ -22,7 +22,6 @@ def steps(harness):
     # position (10, 10) which is in the top-left corner of the backdrop,
     # outside the centered .modal content.
     harness.page.click("#deck-modal", position={"x": 10, "y": 10})
-    harness.page.wait_for_timeout(500)
 
     # Verify the modal is no longer visible
     harness.wait_for_hidden("#deck-modal.active")

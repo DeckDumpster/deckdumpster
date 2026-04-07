@@ -9,7 +9,7 @@ Enables multi-select on the collection page, searches for Unstoppable Slasher
 def steps(harness):
     # Navigate and search for Unstoppable Slasher
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=15000)
+    harness.wait_for_visible(".collection-table", timeout=500)
     harness.fill_by_placeholder("Search cards...", "Unstoppable Slasher")
     harness.wait_for_visible("tr[data-idx]")
 

@@ -15,7 +15,7 @@ def steps(harness):
     harness.fill_by_selector("#add-qty", "2")
     harness.fill_by_selector("#add-price", "10.00")
     harness.click_by_selector("#confirm-add-btn")
-    harness.wait_for_hidden("#add-modal-overlay.active", timeout=5_000)
+    harness.wait_for_hidden("#add-modal-overlay.active", timeout=500)
 
     # Add the same product again (second time with different qty/price).
     harness.click_by_selector("#add-btn")
@@ -25,7 +25,7 @@ def steps(harness):
     harness.fill_by_selector("#add-qty", "3")
     harness.fill_by_selector("#add-price", "15.00")
     harness.click_by_selector("#confirm-add-btn")
-    harness.wait_for_hidden("#add-modal-overlay.active", timeout=5_000)
+    harness.wait_for_hidden("#add-modal-overlay.active", timeout=500)
 
     # Verify aggregated display shows the product.
     harness.wait_for_text("Lorwyn")

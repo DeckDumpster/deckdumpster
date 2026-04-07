@@ -9,7 +9,7 @@ Uses green (G) which has 12 cards in the fixture for clear visual feedback.
 def steps(harness):
     # Navigate to Collection page (default is table view)
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=15000)
+    harness.wait_for_visible(".collection-table", timeout=500)
 
     # Open the filter sidebar
     harness.click_by_selector("#sidebar-toggle-btn")

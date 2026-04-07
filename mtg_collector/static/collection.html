@@ -1945,9 +1945,12 @@ const purchaseLinesPlugin = {
   }
 };
 
+let _priceChartCardKey = null;
 async function renderPriceChart(card) {
   const section = document.getElementById('price-chart-section');
   if (!section) return;
+  const cardKey = `${card.set_code}/${card.collector_number}`;
+  _priceChartCardKey = cardKey;
   section.classList.remove('visible');
 
   let data;
@@ -1955,6 +1958,9 @@ async function renderPriceChart(card) {
     const res = await fetch(`/api/price-history/${encodeURIComponent(card.set_code)}/${encodeURIComponent(card.collector_number)}`);
     data = await res.json();
   } catch { return; }
+
+  // Guard: if modal switched to a different card while we were fetching, bail
+  if (_priceChartCardKey !== cardKey) return;
 
   const seriesKeys = Object.keys(data).filter(k => data[k].length > 0);
   if (!seriesKeys.length) return;

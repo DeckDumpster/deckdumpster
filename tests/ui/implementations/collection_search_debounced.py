@@ -9,7 +9,7 @@ to show only matching cards, then clears the search to restore the full view.
 def steps(harness):
     # Navigate to Collection page and wait for table to load
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=15000)
+    harness.wait_for_visible(".collection-table", timeout=500)
 
     # Type a search term (debounced server fetch after 300ms)
     harness.fill_by_placeholder("Search cards...", "Scrawling")

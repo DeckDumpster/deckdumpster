@@ -9,11 +9,11 @@ to confirm the deck persists with correct metadata.
 
 def steps(harness):
     # start_page is /decks (auto-navigated by harness)
-    harness.wait_for_text("New Deck", timeout=5_000)
+    harness.wait_for_text("New Deck", timeout=500)
 
     # Open deck creation modal
     harness.click_by_text("New Deck")
-    harness.wait_for_visible("#deck-modal.active", timeout=5_000)
+    harness.wait_for_visible("#deck-modal.active", timeout=500)
 
     # Fill deck name
     harness.fill_by_placeholder("My Commander Deck", "Elves JMP")
@@ -28,7 +28,7 @@ def steps(harness):
 
     # Save — auto-navigates to deck detail page
     harness.click_by_text("Save")
-    harness.wait_for_text("Elves JMP", timeout=10_000)
+    harness.wait_for_text("Elves JMP", timeout=500)
 
     # Verify origin metadata on detail page
     harness.assert_text_present("Preconstructed")
@@ -37,7 +37,7 @@ def steps(harness):
 
     # Navigate back to deck list to confirm persistence
     harness.navigate("/decks")
-    harness.wait_for_text("Elves JMP", timeout=5_000)
+    harness.wait_for_text("Elves JMP", timeout=500)
     harness.assert_text_present("Elves JMP")
 
     harness.screenshot("final_state")

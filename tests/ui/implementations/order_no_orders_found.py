@@ -20,6 +20,6 @@ def steps(harness):
     harness.click_by_selector("#parse-btn")
 
     # Wait for error
-    harness.wait_for_text("No orders found in input.", timeout=10000)
+    harness.wait_for_text("No orders found in input.", timeout=500)
 
     harness.screenshot("final_state")

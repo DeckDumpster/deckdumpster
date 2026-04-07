@@ -14,11 +14,11 @@ def steps(harness):
     harness.select_by_label("#deck-state", "Constructed")
     # Search for Judith as commander
     harness.fill_by_placeholder("Search your collection...", "Judith")
-    harness.wait_for_text("Judith, Carnage Connoisseur", timeout=3000)
+    harness.wait_for_text("Judith, Carnage Connoisseur", timeout=500)
     harness.click_by_text("Judith, Carnage Connoisseur")
     # Create the deck
     harness.click_by_text("Create Deck")
-    harness.wait_for_text("+ Add Card", timeout=5000)
+    harness.wait_for_text("+ Add Card", timeout=500)
     # Verify initial count
     harness.assert_text_present("0/100")
     # Open the Add Cards modal via the button
@@ -26,12 +26,12 @@ def steps(harness):
     harness.wait_for_visible("#add-cards-modal.active")
     # Search for an unassigned owned card
     harness.fill_by_placeholder("Search by name...", "Infernal Vessel")
-    harness.wait_for_text("Infernal Vessel", timeout=3000)
+    harness.wait_for_text("Infernal Vessel", timeout=500)
     # Select the card
     harness.click_by_text("Infernal Vessel")
     # Add the card
     harness.click_by_text("Add Selected")
-    harness.wait_for_hidden("#add-cards-modal.active", timeout=3000)
+    harness.wait_for_hidden("#add-cards-modal.active", timeout=500)
     # Verify the card count updated
     harness.assert_text_present("1/100")
     # Verify the card is in the deck

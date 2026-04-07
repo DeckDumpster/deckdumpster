@@ -19,9 +19,8 @@ def steps(harness):
         document.getElementById('results-section').style.display = 'block';
         document.getElementById('deck-selector').style.display = 'block';
     """)
-    harness.page.wait_for_timeout(500)
     # Wait for the deck selector to be visible.
-    harness.wait_for_visible("#deck-select", timeout=10_000)
+    harness.wait_for_visible("#deck-select", timeout=500)
     # Verify the "Create new deck" option exists.
     harness.assert_text_present("Create new deck")
     # Verify zone selector has expected options.

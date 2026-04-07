@@ -8,7 +8,7 @@ and card row elements are present.
 
 def steps(harness):
     # start_page: /edit-order?id=1 — auto-navigated by test runner.
-    harness.wait_for_visible("#save-meta-btn", timeout=10_000)
+    harness.wait_for_visible("#save-meta-btn", timeout=500)
     # Verify seller name is pre-filled.
     harness.assert_visible("#meta-seller")
     # Verify order number field.
@@ -25,7 +25,7 @@ def steps(harness):
     # Verify Save Order Details button.
     harness.assert_text_present("Save Order Details")
     # Verify summary bar with card count.
-    harness.wait_for_visible(".summary-bar", timeout=10_000)
+    harness.wait_for_visible(".summary-bar", timeout=500)
     harness.assert_text_present("5 cards")
     # Verify Add Card button.
     harness.assert_visible("#add-card-btn")

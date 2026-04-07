@@ -11,13 +11,13 @@ def steps(harness):
     harness.wait_for_text("New Commander Deck")
     # Search for a commander
     harness.fill_by_placeholder("Search your collection...", "Bonny")
-    harness.wait_for_text("Bonny Pall, Clearcutter", timeout=3000)
+    harness.wait_for_text("Bonny Pall, Clearcutter", timeout=500)
     # Select the commander
     harness.click_by_text("Bonny Pall, Clearcutter")
     # Click Create Deck
     harness.click_by_text("Create Deck")
     # Wait for builder mode to render with commander name as deck title
-    harness.wait_for_text("Bonny Pall, Clearcutter", timeout=5000)
+    harness.wait_for_text("Bonny Pall, Clearcutter", timeout=500)
     # Verify the card count badge
     harness.assert_text_present("0/100")
     # Verify the Commander section exists

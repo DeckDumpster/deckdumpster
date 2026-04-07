@@ -18,7 +18,6 @@ def steps(harness):
 
     # Modal should close and collection should reload
     harness.wait_for_hidden("#detail-modal-overlay.active")
-    harness.page.wait_for_timeout(1000)
 
     # Verify the split happened — original should now show qty 4
     harness.assert_text_present("4")

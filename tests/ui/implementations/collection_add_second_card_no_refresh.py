@@ -16,7 +16,7 @@ def steps(harness):
     # Click the first card in grid view to open the modal.
     harness.click_by_selector(".sheet-card[data-idx]")
     # Wait for modal to appear.
-    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=500)
     # Click the "Add" button to show the add form.
     harness.click_by_selector("#modal-add-btn")
     # Fill in purchase details for the first card.
@@ -30,7 +30,7 @@ def steps(harness):
     # Click the second card in grid view.
     harness.click_by_selector(".sheet-card[data-idx]:nth-child(2)")
     # Wait for the modal to reappear.
-    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=500)
     # Click "Add" again — this is the regression check.
     harness.click_by_selector("#modal-add-btn")
     # The form must appear. Fill in details for the second card.

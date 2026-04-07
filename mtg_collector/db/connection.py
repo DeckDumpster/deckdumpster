@@ -78,7 +78,7 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     # Create new connection
     _connection = sqlite3.connect(path)
     _connection.row_factory = sqlite3.Row
-    _connection.execute("PRAGMA foreign_keys = ON")
+    # FK enforcement is deferred until after potential ATTACH — see below
     _db_path = path
     _attached = False
 
@@ -88,6 +88,12 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     if shared and os.path.abspath(path) != os.path.abspath(shared):
         attach_shared(_connection, shared)
         _attached = True
+    else:
+        # Only enable FK enforcement when NOT using split DB.
+        # With ATTACH, temp views shadow the main tables but SQLite FK checks
+        # only look at main-schema tables (which are empty after prune),
+        # causing false constraint failures.
+        _connection.execute("PRAGMA foreign_keys = ON")
 
     return _connection
 

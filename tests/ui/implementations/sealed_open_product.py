@@ -37,7 +37,7 @@ def steps(harness):
     harness.click_by_selector("#open-confirm-btn")
 
     # Wait for modal to close and status to update
-    harness.wait_for_hidden("#open-modal-overlay.active", timeout=10000)
+    harness.wait_for_hidden("#open-modal-overlay.active", timeout=500)
     harness.wait_for_text("Added")
 
     # Final state: sealed page with status showing added cards

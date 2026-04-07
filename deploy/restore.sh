@@ -119,6 +119,12 @@ trap cleanup EXIT
 echo "    Restoring collection.sqlite..."
 podman cp "$STAGING_DIR/collection.sqlite" "$TEMP_CONTAINER:/data/collection.sqlite"
 
+# Copy shared database if present (from db split)
+if [ -f "$STAGING_DIR/shared.sqlite" ]; then
+    echo "    Restoring shared.sqlite..."
+    podman cp "$STAGING_DIR/shared.sqlite" "$TEMP_CONTAINER:/data/shared.sqlite"
+fi
+
 # Copy images (remove existing first to avoid stale files)
 echo "    Restoring source_images/..."
 podman exec "$TEMP_CONTAINER" rm -rf /data/source_images

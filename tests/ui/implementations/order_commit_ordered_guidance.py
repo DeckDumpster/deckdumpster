@@ -21,11 +21,11 @@ def steps(harness):
 
     # Parse and wait for results
     harness.click_by_selector("#parse-btn")
-    harness.wait_for_text("Resolved", timeout=10000)
+    harness.wait_for_text("Resolved", timeout=500)
 
     # Commit
     harness.click_by_selector("#commit-btn")
-    harness.wait_for_text("Added", timeout=10000)
+    harness.wait_for_text("Added", timeout=500)
 
     # Verify guidance message about Ordered status
     harness.assert_text_present("Ordered")

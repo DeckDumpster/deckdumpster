@@ -9,7 +9,7 @@ The demo fixture has order ID 1 (DEMO-TCG-001 from CardHaus Gaming).
 def steps(harness):
     # First go to collection and switch to orders view to find an order.
     harness.navigate("/collection")
-    harness.wait_for_visible("#view-orders-btn", timeout=10_000)
+    harness.wait_for_visible("#view-orders-btn", timeout=500)
     harness.click_by_selector("#view-orders-btn")
     harness.wait_for_text("CardHaus Gaming")
     # Click the "Edit" link to go to the order edit page.

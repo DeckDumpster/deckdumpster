@@ -27,7 +27,7 @@ def steps(harness):
     harness.click_by_selector("#resolve-btn")
 
     # Wait for resolved card
-    harness.wait_for_text("Beast-Kin Ranger", timeout=10000)
+    harness.wait_for_text("Beast-Kin Ranger", timeout=500)
 
     # Verify rarity mismatch warning
     harness.assert_text_present("Expected")

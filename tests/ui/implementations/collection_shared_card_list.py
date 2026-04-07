@@ -9,10 +9,10 @@ def steps(harness):
     # start_page from hints navigates to /collection?cards=fdn:188,otj:196&view=grid
 
     # Wait for the grid to render with card images
-    harness.wait_for_visible(".sheet-card", timeout=10_000)
+    harness.wait_for_visible(".sheet-card", timeout=500)
 
     # Verify status bar shows owned/missing counts
-    harness.wait_for_text("1 owned, 1 missing", timeout=10_000)
+    harness.wait_for_text("1 owned, 1 missing", timeout=500)
 
     # Verify both cards are rendered
     harness.assert_element_count(".sheet-card", 2)

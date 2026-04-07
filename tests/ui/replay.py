@@ -61,7 +61,7 @@ class ReplayHarness:
     def navigate(self, path: str):
         self._record("navigate", path)
         self.page.goto(
-            f"{self.base_url}{path}", wait_until="networkidle", timeout=30_000
+            f"{self.base_url}{path}", wait_until="networkidle", timeout=5_000
         )
         self._settle()
         self._snap()
@@ -70,31 +70,31 @@ class ReplayHarness:
 
     def click_by_text(self, text: str, *, exact: bool = False):
         self._record("click_by_text", text)
-        self.page.get_by_text(text, exact=exact).first.click(timeout=5_000)
+        self.page.get_by_text(text, exact=exact).first.click(timeout=500)
         self._settle()
         self._snap()
 
     def click_by_selector(self, selector: str):
         self._record("click_by_selector", selector)
-        self.page.click(selector, timeout=5_000)
+        self.page.click(selector, timeout=500)
         self._settle()
         self._snap()
 
     def click_by_test_id(self, test_id: str):
         self._record("click_by_test_id", test_id)
-        self.page.get_by_test_id(test_id).click(timeout=5_000)
+        self.page.get_by_test_id(test_id).click(timeout=500)
         self._settle()
         self._snap()
 
     def fill_by_placeholder(self, placeholder: str, value: str):
         self._record("fill_by_placeholder", f"{placeholder}={value}")
-        self.page.get_by_placeholder(placeholder).fill(value, timeout=5_000)
+        self.page.get_by_placeholder(placeholder).fill(value, timeout=500)
         self._settle()
         self._snap()
 
     def fill_by_selector(self, selector: str, value: str):
         self._record("fill_by_selector", f"{selector}={value}")
-        self.page.fill(selector, value, timeout=5_000)
+        self.page.fill(selector, value, timeout=500)
         self._settle()
         self._snap()
 
@@ -103,7 +103,7 @@ class ReplayHarness:
         target = selector or "active element"
         self._record("press_key", f"{key} on {target}")
         if selector:
-            self.page.press(selector, key, timeout=5_000)
+            self.page.press(selector, key, timeout=500)
         else:
             self.page.keyboard.press(key)
         self._settle()
@@ -111,13 +111,13 @@ class ReplayHarness:
 
     def set_input_files(self, selector: str, file_path: str):
         self._record("set_input_files", f"{selector} <- {file_path}")
-        self.page.set_input_files(selector, file_path, timeout=5_000)
+        self.page.set_input_files(selector, file_path, timeout=500)
         self._settle()
         self._snap()
 
     def select_by_label(self, selector: str, label: str):
         self._record("select_by_label", f"{selector}={label}")
-        self.page.select_option(selector, label=label, timeout=5_000)
+        self.page.select_option(selector, label=label, timeout=500)
         self._settle()
         self._snap()
 
@@ -130,17 +130,17 @@ class ReplayHarness:
 
     # ── Waiting ────────────────────────────────────────────────────────
 
-    def wait_for_visible(self, selector: str, timeout: int = 5_000):
+    def wait_for_visible(self, selector: str, timeout: int = 500):
         self._record("wait_for_visible", selector)
         self.page.wait_for_selector(selector, state="visible", timeout=timeout)
         self._snap()
 
-    def wait_for_hidden(self, selector: str, timeout: int = 5_000):
+    def wait_for_hidden(self, selector: str, timeout: int = 500):
         self._record("wait_for_hidden", selector)
         self.page.wait_for_selector(selector, state="hidden", timeout=timeout)
         self._snap()
 
-    def wait_for_text(self, text: str, timeout: int = 5_000):
+    def wait_for_text(self, text: str, timeout: int = 500):
         self._record("wait_for_text", text)
         self.page.get_by_text(text).first.wait_for(state="visible", timeout=timeout)
         self._snap()
@@ -149,14 +149,14 @@ class ReplayHarness:
 
     def assert_visible(self, selector: str):
         self._record("assert_visible", selector)
-        visible = self.page.is_visible(selector, timeout=5_000)
+        visible = self.page.is_visible(selector, timeout=500)
         if not visible:
             self._fail(f"Expected visible: {selector}")
         self._snap()
 
     def assert_hidden(self, selector: str):
         self._record("assert_hidden", selector)
-        hidden = self.page.is_hidden(selector, timeout=5_000)
+        hidden = self.page.is_hidden(selector, timeout=500)
         if not hidden:
             self._fail(f"Expected hidden: {selector}")
         self._snap()
@@ -236,10 +236,10 @@ class ReplayHarness:
         step.dom_snapshot = elements
 
     def _settle(self):
-        """Wait for async page updates."""
-        self.page.wait_for_timeout(500)
+        """Wait for async page updates: one animation frame + networkidle."""
+        self.page.wait_for_timeout(50)
         try:
-            self.page.wait_for_load_state("networkidle", timeout=3_000)
+            self.page.wait_for_load_state("networkidle", timeout=500)
         except Exception:
             pass
 

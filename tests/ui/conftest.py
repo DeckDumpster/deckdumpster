@@ -24,19 +24,31 @@ from playwright.sync_api import sync_playwright
 
 log = logging.getLogger(__name__)
 
-# DB path inside the container (data volume mount point).
+# DB paths inside the container (data volume mount point).
 _CONTAINER_DB = "/data/collection.sqlite"
 _CONTAINER_DB_BACKUP = "/data/collection.sqlite.bak"
+_CONTAINER_SHARED_DB = "/data/shared.sqlite"
+_CONTAINER_SHARED_DB_BACKUP = "/data/shared.sqlite.bak"
 
-# Backup uses Python sqlite3.backup() for safe snapshot with open connections.
-# Restore uses cp — fast (~5ms vs ~500ms), and no connections are active between tests.
+# Backup uses sqlite3.backup() for safe snapshot with open server connections.
+# Restore uses cp — fast and safe because the server opens fresh connections
+# (with fresh ATTACH) per request, so no stale handles.
+# Both collection.sqlite and shared.sqlite are backed up and restored,
+# since tests may write to shared tables (e.g. price seeding).
 _BACKUP_CMD = (
-    f'python3 -c "import sqlite3; '
+    f'python3 -c "import sqlite3, os; '
     f"s=sqlite3.connect('{_CONTAINER_DB}'); "
     f"d=sqlite3.connect('{_CONTAINER_DB_BACKUP}'); "
-    f's.backup(d); s.close(); d.close()"'
+    f"s.backup(d); s.close(); d.close(); "
+    f"p='{_CONTAINER_SHARED_DB}'; "
+    f"b='{_CONTAINER_SHARED_DB_BACKUP}'; "
+    f"exec('if os.path.exists(p):\\n s=sqlite3.connect(p)\\n d=sqlite3.connect(b)\\n s.backup(d)\\n s.close()\\n d.close()')"
+    '"'
 )
-_RESTORE_CMD = f"cp {_CONTAINER_DB_BACKUP} {_CONTAINER_DB}"
+_RESTORE_CMD = (
+    f"cp {_CONTAINER_DB_BACKUP} {_CONTAINER_DB}"
+    f" && {{ [ -f {_CONTAINER_SHARED_DB_BACKUP} ] && cp {_CONTAINER_SHARED_DB_BACKUP} {_CONTAINER_SHARED_DB}; true; }}"
+)
 
 
 def pytest_addoption(parser):
