@@ -203,6 +203,94 @@ class TestKeywordAbilities:
         assert "keywords" in c.where_sql.lower()
 
 
+class TestCollectionKeywords:
+    """Test compilation of collection-specific keywords."""
+
+    def test_status_owned(self):
+        c = _compile("status:owned")
+        assert "c.status = ?" in c.where_sql
+        assert "owned" in c.params
+        assert c.has_status_filter
+
+    def test_status_ordered(self):
+        c = _compile("status:ordered")
+        assert "c.status = ?" in c.where_sql
+        assert "ordered" in c.params
+
+    def test_status_not_equal(self):
+        c = _compile("status!=sold")
+        assert "c.status != ?" in c.where_sql
+        assert "sold" in c.params
+
+    def test_status_unknown(self):
+        c = _compile("status:bogus")
+        assert "1=0" in c.where_sql
+
+    def test_added_gte(self):
+        c = _compile("added>=2024-01-01")
+        assert "acquired_at" in c.where_sql
+        assert "2024-01-01" in c.params
+
+    def test_added_lte(self):
+        c = _compile("added<=2025-12-31")
+        assert "acquired_at" in c.where_sql
+
+    def test_price_gte(self):
+        c = _compile("price>=5.00")
+        assert c.needs_price_join
+        assert "_lp.price" in c.where_sql
+        assert 5.0 in c.params
+
+    def test_deck_wildcard(self):
+        c = _compile("deck:*")
+        assert c.needs_deck_join
+        assert "deck_id IS NOT NULL" in c.where_sql
+
+    def test_deck_wildcard_negated(self):
+        c = _compile("deck!=*")
+        assert c.needs_deck_join
+        assert "deck_id IS NULL" in c.where_sql
+
+    def test_deck_named(self):
+        c = _compile('deck:"Mono Red"')
+        assert c.needs_deck_join
+        assert "d.name" in c.where_sql
+
+    def test_binder_wildcard(self):
+        c = _compile("binder:*")
+        assert "binder_id IS NOT NULL" in c.where_sql
+
+    def test_binder_named(self):
+        c = _compile('binder:"Trade"')
+        assert "b.name" in c.where_sql
+
+    def test_is_unassigned(self):
+        c = _compile("is:unassigned")
+        assert c.needs_deck_join
+        assert "deck_id IS NULL" in c.where_sql
+        assert "binder_id IS NULL" in c.where_sql
+
+    def test_is_decked(self):
+        c = _compile("is:decked")
+        assert c.needs_deck_join
+        assert "deck_id IS NOT NULL" in c.where_sql
+
+    def test_is_bindered(self):
+        c = _compile("is:bindered")
+        assert "binder_id IS NOT NULL" in c.where_sql
+
+    def test_is_wanted(self):
+        c = _compile("is:wanted")
+        assert c.needs_wishlist_join
+        assert "_wl.id IS NOT NULL" in c.where_sql
+
+    def test_not_wanted(self):
+        c = _compile("not:wanted")
+        assert c.needs_wishlist_join
+        assert "NOT" in c.where_sql
+        assert "_wl.id IS NOT NULL" in c.where_sql
+
+
 class TestSQLValidity:
     """Test that compiled queries produce valid SQL by executing against an in-memory DB."""
 
@@ -235,6 +323,14 @@ class TestSQLValidity:
             INSERT INTO collection (printing_id, finish, condition, language, acquired_at, source, status)
             VALUES ('p1', 'nonfoil', 'Near Mint', 'English', '2024-01-01', 'manual', 'owned')
         """)
+        conn.execute("""
+            INSERT INTO decks (name, created_at, updated_at)
+            VALUES ('Test Deck', '2024-01-01', '2024-01-01')
+        """)
+        conn.execute("""
+            INSERT INTO binders (name, created_at, updated_at)
+            VALUES ('Test Binder', '2024-01-01', '2024-01-01')
+        """)
         conn.execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild')")
         conn.commit()
         yield conn
@@ -259,6 +355,23 @@ class TestSQLValidity:
         '!"Test Card"',
         'o:"Test text"',
         "c:r order:cmc direction:desc",
+        # Collection-specific queries
+        "status:owned",
+        "status:ordered",
+        "added>=2024-01-01",
+        "deck:*",
+        "deck!=*",
+        'deck:"Test Deck"',
+        "binder:*",
+        'binder:"Test Binder"',
+        "is:unassigned",
+        "is:decked",
+        "is:bindered",
+        "is:wanted",
+        "not:wanted",
+        "status:owned c:r t:creature",
+        "is:unassigned added>=2024-01-01",
+        "order:added direction:desc",
     ])
     def test_valid_sql(self, db, query):
         """Every supported query should produce valid SQL that executes without error."""

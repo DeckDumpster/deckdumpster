@@ -57,6 +57,7 @@ class TestCorpusCompilation:
     def test_executes_against_fixture(self, search_db, entry):
         ast = parse_query(entry["query"])
         compiled = compile_query(ast)
-        rows, timings = execute_search(search_db, compiled, mode="all")
+        mode = "collection" if entry.get("category") == "collection" else "all"
+        rows, timings = execute_search(search_db, compiled, mode=mode)
         assert isinstance(rows, list)
         assert "query_ms" in timings

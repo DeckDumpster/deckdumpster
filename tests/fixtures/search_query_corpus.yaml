@@ -888,3 +888,112 @@
   category: error
   should_parse: false
   compiler_supported: false
+
+# ============================================================================
+# Collection-specific keywords
+# ============================================================================
+
+- query: "status:owned"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "status:ordered"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "status!=sold"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "added>=2024-01-01"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "added<=2025-12-31"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "price>=5.00"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "price<=100"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "deck:*"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "deck!=*"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: 'deck:"Mono Red"'
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "binder:*"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: 'binder:"Trade"'
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:unassigned"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:decked"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:bindered"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:wanted"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "not:wanted"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "status:owned c:r t:creature"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "is:unassigned added>=2024-01-01"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "deck:* c:r mv>=3 order:price direction:desc"
+  category: collection
+  should_parse: true
+  compiler_supported: true
+
+- query: "-is:decked -is:bindered"
+  category: collection
+  should_parse: true
+  compiler_supported: true

@@ -12,7 +12,7 @@ from .ast_nodes import (
     NotNode,
     OrNode,
 )
-from .keywords import COLOR_MAP, RARITY_ALIASES, RARITY_ORDER
+from .keywords import COLOR_MAP, RARITY_ALIASES, RARITY_ORDER, STATUS_VALUES
 
 ALL_COLORS = {"W", "U", "B", "R", "G"}
 
@@ -20,7 +20,11 @@ ALL_COLORS = {"W", "U", "B", "R", "G"}
 class CompiledQuery:
     """Result of compiling an AST into SQL."""
 
-    __slots__ = ("where_sql", "params", "needs_fts", "order_by", "order_dir")
+    __slots__ = (
+        "where_sql", "params", "needs_fts", "order_by", "order_dir",
+        "needs_deck_join", "needs_price_join", "needs_wishlist_join",
+        "has_status_filter",
+    )
 
     def __init__(self):
         self.where_sql: str = "1=1"
@@ -28,6 +32,10 @@ class CompiledQuery:
         self.needs_fts: bool = False
         self.order_by: str | None = None
         self.order_dir: str = "asc"
+        self.needs_deck_join: bool = False
+        self.needs_price_join: bool = False
+        self.needs_wishlist_join: bool = False
+        self.has_status_filter: bool = False
 
 
 class CompileError(Exception):
@@ -241,11 +249,11 @@ def _compile_comparison(node: ComparisonNode, ctx: CompiledQuery) -> tuple[str, 
 
     # --- is: flags ---
     if kw == "is_flag":
-        return _compile_is_flag(val)
+        return _compile_is_flag(val, ctx)
 
     # --- not: flags (negate is:) ---
     if kw == "not_flag":
-        sql, params = _compile_is_flag(val)
+        sql, params = _compile_is_flag(val, ctx)
         return f"NOT ({sql})", params
 
     # --- has: flags ---
@@ -280,6 +288,54 @@ def _compile_comparison(node: ComparisonNode, ctx: CompiledQuery) -> tuple[str, 
             params.append(f'%"{c}"%')
         if conditions:
             return f"({' AND '.join(conditions)})", params
+        return "1=1", []
+
+    # --- Collection-specific: status ---
+    if kw == "status":
+        ctx.has_status_filter = True
+        lower_val = val.lower()
+        if lower_val not in STATUS_VALUES:
+            return "1=0 /* unknown status */", []
+        if op in (":", "="):
+            return "c.status = ?", [lower_val]
+        if op == "!=":
+            return "c.status != ?", [lower_val]
+        return "1=1", []
+
+    # --- Collection-specific: added (acquired_at date) ---
+    if kw == "added":
+        return _compile_text_like("c.acquired_at", op, val) if op in (":", "=", "!=") \
+            else _compile_date("c.acquired_at", op, val)
+
+    # --- Collection-specific: price ---
+    if kw == "price":
+        ctx.needs_price_join = True
+        return _compile_numeric("_lp.price", op, val,
+                                extra_where="_lp.price IS NOT NULL")
+
+    # --- Collection-specific: deck ---
+    if kw == "deck":
+        ctx.needs_deck_join = True
+        if val == "*":
+            if op == "!=":
+                return "dc.deck_id IS NULL", []
+            return "dc.deck_id IS NOT NULL", []
+        if op in (":", "="):
+            return "d.name LIKE ? COLLATE NOCASE", [f"%{val}%"] if op == ":" else [val]
+        if op == "!=":
+            return "(d.name IS NULL OR d.name != ? COLLATE NOCASE)", [val]
+        return "1=1", []
+
+    # --- Collection-specific: binder ---
+    if kw == "binder":
+        if val == "*":
+            if op == "!=":
+                return "c.binder_id IS NULL", []
+            return "c.binder_id IS NOT NULL", []
+        if op in (":", "="):
+            return "b.name LIKE ? COLLATE NOCASE", [f"%{val}%"] if op == ":" else [val]
+        if op == "!=":
+            return "(b.name IS NULL OR b.name != ? COLLATE NOCASE)", [val]
         return "1=1", []
 
     # Fallback: unsupported keyword, match nothing
@@ -436,6 +492,12 @@ def _compile_numeric(expr: str, op: str, val: str,
     return f"({' AND '.join(parts)})", params
 
 
+def _compile_date(column: str, op: str, val: str) -> tuple[str, list]:
+    """Compile a date comparison (ISO 8601 string ordering)."""
+    sql_op = _SAFE_OPS.get(op, "=")
+    return f"(SUBSTR({column}, 1, 10) {sql_op} ?)", [val]
+
+
 def _compile_stat(column: str, op: str, val: str) -> tuple[str, list]:
     """Compile power/toughness/loyalty with * handling."""
     if val == "*":
@@ -553,6 +615,11 @@ _IS_FLAG_MAP = {
     "creature": "card.type_line LIKE '%Creature%'",
     # Security stamp
     "acorn": "p.frame_effects LIKE '%acorn%' OR json_extract(p.raw_json, '$.security_stamp') = 'acorn'",
+    # Collection-specific flags (require collection mode)
+    "unassigned": None,  # handled dynamically (needs deck join)
+    "decked": None,      # handled dynamically (needs deck join)
+    "bindered": None,    # handled dynamically
+    "wanted": None,      # handled dynamically (needs wishlist join)
 }
 
 _HAS_FLAG_MAP = {
@@ -566,9 +633,26 @@ _HAS_FLAG_MAP = {
 }
 
 
-def _compile_is_flag(val: str) -> tuple[str, list]:
+def _compile_is_flag(val: str, ctx: CompiledQuery | None = None) -> tuple[str, list]:
     """Compile is:X flags."""
     lower = val.lower()
+
+    # Collection-specific dynamic flags
+    if lower == "unassigned":
+        if ctx:
+            ctx.needs_deck_join = True
+        return "dc.deck_id IS NULL AND c.binder_id IS NULL", []
+    if lower == "decked":
+        if ctx:
+            ctx.needs_deck_join = True
+        return "dc.deck_id IS NOT NULL", []
+    if lower == "bindered":
+        return "c.binder_id IS NOT NULL", []
+    if lower == "wanted":
+        if ctx:
+            ctx.needs_wishlist_join = True
+        return "_wl.id IS NOT NULL", []
+
     sql = _IS_FLAG_MAP.get(lower)
     if sql:
         return sql, []
@@ -597,6 +681,8 @@ def _extract_modifiers(ast: ASTNode, ctx: CompiledQuery) -> ASTNode | None:
     if isinstance(ast, ComparisonNode):
         if ast.keyword == "order":
             ctx.order_by = ast.value.lower()
+            if ctx.order_by == "price":
+                ctx.needs_price_join = True
             return None
         if ast.keyword == "direction":
             ctx.order_dir = ast.value.lower()
@@ -637,6 +723,8 @@ _SORT_MAP = {
     "toughness": "CAST(p.toughness AS REAL)",
     "artist": "p.artist",
     "collector_number": "CAST(p.collector_number AS INTEGER)",
+    "added": "c.acquired_at",
+    "price": "_lp.price",
 }
 
 
@@ -652,11 +740,40 @@ def _build_full_sql(compiled: CompiledQuery, mode: str = "collection",
     order_clause = f"ORDER BY {order_col} {direction}"
 
     if mode == "collection":
-        status_clause = "c.status IN ('owned', 'ordered')"
-        if status == "all":
+        # When the query has an explicit status: filter, don't add a default
+        if compiled.has_status_filter:
             status_clause = "1=1"
-        elif status != "owned":
+        elif status == "all":
+            status_clause = "1=1"
+        elif status == "owned":
+            status_clause = "c.status IN ('owned', 'ordered')"
+        else:
             status_clause = f"c.status = '{status}'"
+
+        # Conditional JOINs for collection-specific keywords
+        extra_joins = []
+        if compiled.needs_deck_join:
+            extra_joins.append(
+                "LEFT JOIN deck_cards dc ON dc.collection_id = c.id"
+                "\n            LEFT JOIN decks d ON dc.deck_id = d.id"
+            )
+        if compiled.needs_price_join:
+            extra_joins.append(
+                "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
+                "\n              AND _lp.collector_number = p.collector_number"
+                "\n              AND _lp.price_type = 'normal'"
+            )
+        if compiled.needs_wishlist_join:
+            extra_joins.append(
+                "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id"
+                "\n              AND _wl.fulfilled_at IS NULL"
+            )
+        extra_joins_sql = "\n            ".join(extra_joins)
+        # Add binder LEFT JOIN unconditionally since binder_id is on collection
+        # but we need binders table for binder:name queries
+        binder_join = ""
+        if "b.name" in compiled.where_sql:
+            binder_join = "LEFT JOIN binders b ON c.binder_id = b.id"
 
         return f"""
             SELECT
@@ -680,13 +797,15 @@ def _build_full_sql(compiled: CompiledQuery, mode: str = "collection",
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
             {fts_join}
+            {extra_joins_sql}
+            {binder_join}
             WHERE {status_clause}
               AND ({compiled.where_sql})
             GROUP BY p.printing_id, c.finish, c.condition, c.status
             {order_clause}
         """
     else:
-        # All cards mode
+        # All cards mode — collection-specific keywords don't apply
         return f"""
             SELECT
                 card.name, card.oracle_id, card.type_line, card.mana_cost,

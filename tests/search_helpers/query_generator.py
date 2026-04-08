@@ -25,6 +25,10 @@ for _alias, _canonical in KEYWORD_ALIASES.items():
 
 _UNSUPPORTED = {"block", "date", "order", "direction", "unique"}
 
+# Collection-specific keywords: valid in our engine but not on Scryfall.
+# Excluded from Scryfall comparison tests; included in local parse/compile/execute.
+COLLECTION_ONLY = {"status", "added", "price", "deck", "binder"}
+
 # ---------------------------------------------------------------------------
 # Operator sets per keyword type
 # ---------------------------------------------------------------------------
@@ -63,6 +67,12 @@ _KEYWORD_OPS: dict[str, list[str]] = {
     "year": _NUMERIC_OPS,
     "layout": _ENUM_OPS,
     "produces": _TEXT_OPS,
+    # Collection-specific
+    "status": _ENUM_OPS + ["!="],
+    "added": _NUMERIC_OPS,
+    "price": _NUMERIC_OPS,
+    "deck": _ENUM_OPS + ["!="],
+    "binder": _ENUM_OPS + ["!="],
 }
 
 # ---------------------------------------------------------------------------
@@ -118,6 +128,12 @@ _VALUE_POOLS: dict[str, list[str]] = {
                "meld", "leveler", "class", "case", "saga", "mutate", "prototype",
                "battle", "augment", "host", "reversible_card", "prepare"],
     "produces": ["w", "u", "b", "r", "g"],
+    # Collection-specific
+    "status": ["owned", "ordered", "sold", "traded", "gifted", "lost"],
+    "added": ["2023-01-01", "2024-01-01", "2024-06-15", "2025-01-01"],
+    "price": ["0.25", "1.00", "5.00", "10.00", "50.00"],
+    "deck": ["*", "Mono Red", "Elves", "Control"],
+    "binder": ["*", "Trade", "Valuable"],
 }
 
 _BARE_WORDS = [
@@ -129,6 +145,9 @@ _EXACT_NAMES = [
     "Lightning Bolt", "Sol Ring", "Counterspell", "Dark Ritual",
     "Llanowar Elves", "Swords to Plowshares", "Birds of Paradise",
 ]
+
+
+_COLLECTION_IS_FLAGS = {"unassigned", "decked", "bindered", "wanted"}
 
 
 class QueryGenerator:
@@ -143,35 +162,47 @@ class QueryGenerator:
         rng: random.Random,
         *,
         supported_only: bool = True,
+        include_collection: bool = False,
         max_depth: int = 3,
         max_and_terms: int = 4,
         max_or_branches: int = 3,
     ):
         self.rng = rng
         self.supported_only = supported_only
+        self.include_collection = include_collection
         self.max_depth = max_depth
         self.max_and_terms = max_and_terms
         self.max_or_branches = max_or_branches
         self._depth = 0
+        self._used_collection_keyword = False
 
         # Build the set of canonical keywords we can use.
         # Only include keywords that actually appear in KEYWORD_ALIASES
         # (the parser rejects unknown keywords).
         _known_canonicals = set(KEYWORD_ALIASES.values())
+        excluded = set(_UNSUPPORTED)
+        if not include_collection:
+            excluded |= COLLECTION_ONLY
         self._keywords = sorted(
             k for k in _KEYWORD_OPS
             if k in _known_canonicals
-            and not (supported_only and k in _UNSUPPORTED)
+            and not (supported_only and k in excluded)
         )
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def generate(self) -> str:
-        """Return a random, syntactically valid query string."""
+    def generate(self) -> tuple[str, bool]:
+        """Return (query_string, needs_collection_mode).
+
+        needs_collection_mode is True if the query uses collection-specific
+        keywords (status, added, price, deck, binder, is:wanted, etc.).
+        """
         self._depth = 0
-        return self._gen_query()
+        self._used_collection_keyword = False
+        query = self._gen_query()
+        return query, self._used_collection_keyword
 
     # ------------------------------------------------------------------
     # Grammar productions
@@ -230,6 +261,9 @@ class QueryGenerator:
     def _gen_keyword_expr(self) -> str:
         canonical = self.rng.choice(self._keywords)
 
+        if canonical in COLLECTION_ONLY:
+            self._used_collection_keyword = True
+
         # Pick an alias that maps to this canonical keyword
         aliases = _CANONICAL_TO_ALIASES.get(canonical, [canonical])
         alias = self.rng.choice(aliases)
@@ -240,7 +274,17 @@ class QueryGenerator:
 
         # Pick a value from the pool
         pool = _VALUE_POOLS.get(canonical, ["1"])
+        # Filter is:/not: flag pools based on collection mode
+        if canonical in ("is_flag", "not_flag") and not self.include_collection:
+            pool = [v for v in pool if v not in _COLLECTION_IS_FLAGS]
+        elif canonical in ("is_flag", "not_flag"):
+            # If we pick a collection-specific is: flag, mark it
+            pass  # handled after value selection below
+
         value = self.rng.choice(pool)
+
+        if canonical in ("is_flag", "not_flag") and value in _COLLECTION_IS_FLAGS:
+            self._used_collection_keyword = True
 
         # Edge case: power/toughness '*' only valid with : or =
         if canonical in ("power", "toughness") and value == "*":
