@@ -1008,6 +1008,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("deck_builder.html")
         elif path == "/binders":
             self._serve_static("binders.html")
+        elif path == "/search-help":
+            self._serve_static("search-help.html")
         elif path == "/set-value":
             self._serve_static("set_value.html")
         elif path.startswith("/card/"):

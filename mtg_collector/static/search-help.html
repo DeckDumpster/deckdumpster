@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search Syntax Help</title>
+<link rel="stylesheet" href="/static/shared.css">
+<style>
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.intro {
+  margin-bottom: 32px;
+  line-height: 1.6;
+}
+
+.intro a {
+  color: var(--link-color);
+  text-decoration: none;
+}
+.intro a:hover { text-decoration: underline; }
+
+h2 {
+  color: var(--accent);
+  font-size: 1.2rem;
+  margin: 32px 0 16px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+h3 {
+  color: var(--text-primary);
+  font-size: 1rem;
+  margin: 20px 0 8px;
+}
+
+p {
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+
+code {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: #f0c040;
+  white-space: nowrap;
+}
+
+.keyword-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0 24px;
+}
+
+.keyword-table th,
+.keyword-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.keyword-table th {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--bg-secondary);
+}
+
+.keyword-table td:first-child {
+  white-space: nowrap;
+}
+
+.keyword-table tr:hover td {
+  background: rgba(15, 52, 96, 0.3);
+}
+
+.example-block {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin: 12px 0 24px;
+}
+
+.example-block .example-row {
+  display: flex;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(15, 52, 96, 0.5);
+  align-items: baseline;
+}
+
+.example-block .example-row:last-child {
+  border-bottom: none;
+}
+
+.example-block code {
+  min-width: 320px;
+  flex-shrink: 0;
+}
+
+.example-block .example-desc {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.operator-table {
+  width: auto;
+  border-collapse: collapse;
+  margin: 12px 0 24px;
+}
+
+.operator-table th,
+.operator-table td {
+  text-align: left;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.operator-table th {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--bg-secondary);
+}
+
+.note {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-style: italic;
+  margin: 8px 0;
+}
+
+.back-link {
+  display: inline-block;
+  margin-top: 32px;
+  color: var(--link-color);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.back-link:hover { text-decoration: underline; }
+
+@media (max-width: 700px) {
+  .example-block .example-row {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .example-block code {
+    min-width: 0;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="site-header">
+  <h1><a href="/" style="color:inherit;text-decoration:none;">DeckDumpster</a></h1>
+  <a href="/collection">Collection</a>
+  <a href="/decks">Decks</a>
+  <a href="/deck-builder">Build</a>
+  <a href="/binders">Binders</a>
+  <a href="/sealed">Sealed</a>
+</div>
+
+<div class="container">
+
+<h2 style="margin-top:16px; border-bottom:none; font-size:1.4rem;">Search Syntax</h2>
+
+<div class="intro">
+  <p>The collection search bar accepts <strong>Scryfall-style query syntax</strong> with additional
+  keywords for collection-specific filtering. You can combine multiple keywords in a single query
+  to narrow results.</p>
+  <p>For the full Scryfall syntax reference, see
+  <a href="https://scryfall.com/docs/syntax" target="_blank" rel="noopener">scryfall.com/docs/syntax</a>.
+  The sections below cover the supported keywords and our collection-specific extensions.</p>
+</div>
+
+<!-- ======================================== -->
+<h2>Standard Scryfall Keywords</h2>
+<p>These keywords follow Scryfall conventions. Brief descriptions and examples are listed here;
+see the Scryfall docs for full details.</p>
+
+<table class="keyword-table">
+  <thead>
+    <tr><th>Keyword</th><th>Description</th><th>Examples</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Name (bare words)</td>
+      <td>Bare words match card name. Quote multi-word names.</td>
+      <td><code>bolt</code> &nbsp; <code>"Lightning Bolt"</code></td>
+    </tr>
+    <tr>
+      <td><code>!</code></td>
+      <td>Exact name match</td>
+      <td><code>!"Lightning Bolt"</code></td>
+    </tr>
+    <tr>
+      <td><code>c:</code></td>
+      <td>Color (r/w/u/b/g, guild/shard names, colorless, multicolor)</td>
+      <td><code>c:r</code> &nbsp; <code>c:uw</code> &nbsp; <code>c:azorius</code> &nbsp; <code>c>=2</code> &nbsp; <code>c:c</code> &nbsp; <code>c:m</code></td>
+    </tr>
+    <tr>
+      <td><code>id:</code></td>
+      <td>Color identity</td>
+      <td><code>id:rg</code> &nbsp; <code>id:sultai</code></td>
+    </tr>
+    <tr>
+      <td><code>t:</code></td>
+      <td>Type line (creature, legendary, subtypes)</td>
+      <td><code>t:creature</code> &nbsp; <code>t:legendary</code> &nbsp; <code>t:elf</code></td>
+    </tr>
+    <tr>
+      <td><code>o:</code></td>
+      <td>Oracle text contains</td>
+      <td><code>o:draw</code> &nbsp; <code>o:"enters the battlefield"</code></td>
+    </tr>
+    <tr>
+      <td><code>mv:</code> / <code>cmc:</code></td>
+      <td>Mana value (converted mana cost)</td>
+      <td><code>mv:3</code> &nbsp; <code>mv>=5</code> &nbsp; <code>cmc<=2</code></td>
+    </tr>
+    <tr>
+      <td><code>pow:</code> / <code>tou:</code></td>
+      <td>Power and toughness</td>
+      <td><code>pow>=4</code> &nbsp; <code>tou<=2</code> &nbsp; <code>pow:*</code></td>
+    </tr>
+    <tr>
+      <td><code>r:</code></td>
+      <td>Rarity</td>
+      <td><code>r:rare</code> &nbsp; <code>r:m</code> &nbsp; <code>r>=uncommon</code></td>
+    </tr>
+    <tr>
+      <td><code>s:</code></td>
+      <td>Set code</td>
+      <td><code>s:lci</code> &nbsp; <code>s:mh3</code></td>
+    </tr>
+    <tr>
+      <td><code>a:</code></td>
+      <td>Artist name</td>
+      <td><code>a:nielsen</code></td>
+    </tr>
+    <tr>
+      <td><code>ft:</code></td>
+      <td>Flavor text</td>
+      <td><code>ft:dragon</code></td>
+    </tr>
+    <tr>
+      <td><code>kw:</code></td>
+      <td>Keyword abilities</td>
+      <td><code>kw:flying</code> &nbsp; <code>kw:trample</code></td>
+    </tr>
+    <tr>
+      <td><code>f:</code> / <code>banned:</code></td>
+      <td>Format legality</td>
+      <td><code>f:modern</code> &nbsp; <code>f:commander</code> &nbsp; <code>banned:legacy</code></td>
+    </tr>
+    <tr>
+      <td><code>cn:</code></td>
+      <td>Collector number</td>
+      <td><code>cn>=100</code></td>
+    </tr>
+    <tr>
+      <td><code>year:</code></td>
+      <td>Release year</td>
+      <td><code>year:2024</code> &nbsp; <code>year>=2020</code></td>
+    </tr>
+    <tr>
+      <td><code>layout:</code></td>
+      <td>Card layout</td>
+      <td><code>layout:transform</code> &nbsp; <code>layout:adventure</code></td>
+    </tr>
+    <tr>
+      <td><code>m:</code></td>
+      <td>Mana cost (uses mana symbols)</td>
+      <td><code>m:{R}{R}</code></td>
+    </tr>
+    <tr>
+      <td><code>produces:</code></td>
+      <td>Colors of mana the card produces</td>
+      <td><code>produces:g</code></td>
+    </tr>
+    <tr>
+      <td><code>is:</code></td>
+      <td>Card flags and treatments</td>
+      <td><code>is:foil</code> &nbsp; <code>is:nonfoil</code> &nbsp; <code>is:etched</code> &nbsp; <code>is:fullart</code> &nbsp; <code>is:borderless</code> &nbsp; <code>is:showcase</code> &nbsp; <code>is:extendedart</code> &nbsp; <code>is:promo</code> &nbsp; <code>is:reserved</code> &nbsp; <code>is:reprint</code> &nbsp; <code>is:commander</code> &nbsp; <code>is:vanilla</code></td>
+    </tr>
+    <tr>
+      <td><code>has:</code></td>
+      <td>Card has a specific property</td>
+      <td><code>has:watermark</code> &nbsp; <code>has:flavor</code></td>
+    </tr>
+  </tbody>
+</table>
+
+
+<!-- ======================================== -->
+<h2>Collection-Specific Extensions</h2>
+<p>These keywords are unique to DeckDumpster and are not part of Scryfall's syntax.
+They filter based on your personal collection data.</p>
+
+<h3>Status</h3>
+<p>Filter cards by their collection status. The default view shows <code>owned</code> and <code>ordered</code> cards.</p>
+<table class="keyword-table">
+  <thead>
+    <tr><th>Query</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>status:owned</code></td>
+      <td>Cards you currently own (the default filter includes owned + ordered)</td>
+    </tr>
+    <tr>
+      <td><code>status:ordered</code></td>
+      <td>Cards that have been ordered but not yet received</td>
+    </tr>
+    <tr>
+      <td><code>status:sold</code></td>
+      <td>Cards that have been sold</td>
+    </tr>
+    <tr>
+      <td><code>status:traded</code></td>
+      <td>Cards that have been traded away</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Date Added</h3>
+<p>Filter by the date a card was added to your collection. Uses ISO 8601 format (YYYY-MM-DD).</p>
+<table class="keyword-table">
+  <thead>
+    <tr><th>Query</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>added>=2024-01-01</code></td>
+      <td>Cards added on or after January 1, 2024</td>
+    </tr>
+    <tr>
+      <td><code>added<=2025-12-31</code></td>
+      <td>Cards added on or before December 31, 2025</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Price</h3>
+<p>Filter by the card's current market price in USD.</p>
+<table class="keyword-table">
+  <thead>
+    <tr><th>Query</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>price>=5.00</code></td>
+      <td>Cards worth $5 or more</td>
+    </tr>
+    <tr>
+      <td><code>price<=1.00</code></td>
+      <td>Cards worth $1 or less</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Deck and Binder Assignment</h3>
+<p>Filter cards based on their deck or binder assignment. Supports name matching and wildcards.</p>
+<table class="keyword-table">
+  <thead>
+    <tr><th>Query</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>deck:"Mono Red"</code></td>
+      <td>Cards in the deck named "Mono Red"</td>
+    </tr>
+    <tr>
+      <td><code>deck:*</code></td>
+      <td>Cards in any deck</td>
+    </tr>
+    <tr>
+      <td><code>deck!=*</code></td>
+      <td>Cards not in any deck</td>
+    </tr>
+    <tr>
+      <td><code>binder:"Trade"</code></td>
+      <td>Cards in the binder named "Trade"</td>
+    </tr>
+    <tr>
+      <td><code>binder:*</code></td>
+      <td>Cards in any binder</td>
+    </tr>
+    <tr>
+      <td><code>binder!=*</code></td>
+      <td>Cards not in any binder</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Collection Flags</h3>
+<p>Shorthand flags for common collection queries.</p>
+<table class="keyword-table">
+  <thead>
+    <tr><th>Query</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>is:unassigned</code></td>
+      <td>Cards not in any deck or binder</td>
+    </tr>
+    <tr>
+      <td><code>is:decked</code></td>
+      <td>Cards in any deck (same as <code>deck:*</code>)</td>
+    </tr>
+    <tr>
+      <td><code>is:bindered</code></td>
+      <td>Cards in any binder (same as <code>binder:*</code>)</td>
+    </tr>
+    <tr>
+      <td><code>is:wanted</code></td>
+      <td>Cards on your unfulfilled wishlist</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Sorting</h3>
+<p>Control the sort order of results. These can be combined with any other query.</p>
+<table class="keyword-table">
+  <thead>
+    <tr><th>Query</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>order:name</code></td>
+      <td>Sort by card name</td>
+    </tr>
+    <tr>
+      <td><code>order:price</code></td>
+      <td>Sort by current market price</td>
+    </tr>
+    <tr>
+      <td><code>order:added</code></td>
+      <td>Sort by date added to collection</td>
+    </tr>
+    <tr>
+      <td><code>order:cmc</code></td>
+      <td>Sort by mana value</td>
+    </tr>
+    <tr>
+      <td><code>order:rarity</code></td>
+      <td>Sort by rarity</td>
+    </tr>
+    <tr>
+      <td><code>direction:asc</code></td>
+      <td>Sort ascending (A-Z, low to high)</td>
+    </tr>
+    <tr>
+      <td><code>direction:desc</code></td>
+      <td>Sort descending (Z-A, high to low)</td>
+    </tr>
+  </tbody>
+</table>
+
+
+<!-- ======================================== -->
+<h2>Boolean Logic</h2>
+<p>Combine multiple conditions using boolean operators.</p>
+
+<table class="keyword-table">
+  <thead>
+    <tr><th>Operator</th><th>Usage</th><th>Example</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>AND (implicit)</td>
+      <td>Space-separated terms are ANDed together</td>
+      <td><code>c:r t:creature</code> &mdash; red creatures</td>
+    </tr>
+    <tr>
+      <td>OR</td>
+      <td>Use <code>or</code> between terms</td>
+      <td><code>c:r or c:g</code> &mdash; red or green cards</td>
+    </tr>
+    <tr>
+      <td>NOT</td>
+      <td>Prefix a term with <code>-</code></td>
+      <td><code>-c:b</code> &mdash; not black</td>
+    </tr>
+    <tr>
+      <td>Grouping</td>
+      <td>Use parentheses to group conditions</td>
+      <td><code>(c:r or c:g) t:creature</code> &mdash; red or green creatures</td>
+    </tr>
+    <tr>
+      <td>Negated group</td>
+      <td>Prefix a group with <code>-</code></td>
+      <td><code>-(c:r or c:g)</code> &mdash; neither red nor green</td>
+    </tr>
+  </tbody>
+</table>
+
+
+<!-- ======================================== -->
+<h2>Operators</h2>
+
+<table class="operator-table">
+  <thead>
+    <tr><th>Operator</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>:</code></td><td>Default &mdash; contains or has</td></tr>
+    <tr><td><code>=</code></td><td>Exact match</td></tr>
+    <tr><td><code>!=</code></td><td>Not equal</td></tr>
+    <tr><td><code>&lt;</code></td><td>Less than</td></tr>
+    <tr><td><code>&gt;</code></td><td>Greater than</td></tr>
+    <tr><td><code>&lt;=</code></td><td>Less than or equal</td></tr>
+    <tr><td><code>&gt;=</code></td><td>Greater than or equal</td></tr>
+  </tbody>
+</table>
+
+
+<!-- ======================================== -->
+<h2>Example Queries</h2>
+
+<div class="example-block">
+  <div class="example-row">
+    <code>t:creature c:r mv>=3</code>
+    <span class="example-desc">Red creatures with mana value 3 or higher</span>
+  </div>
+  <div class="example-row">
+    <code>is:foil r:mythic</code>
+    <span class="example-desc">Foil mythic rares in your collection</span>
+  </div>
+  <div class="example-row">
+    <code>s:lci r>=rare</code>
+    <span class="example-desc">Rares and mythics from Lost Caverns of Ixalan</span>
+  </div>
+  <div class="example-row">
+    <code>o:draw -c:b</code>
+    <span class="example-desc">Cards with "draw" in their text that are not black</span>
+  </div>
+  <div class="example-row">
+    <code>deck:* is:foil</code>
+    <span class="example-desc">All foil cards currently assigned to any deck</span>
+  </div>
+  <div class="example-row">
+    <code>is:unassigned added>=2024-01-01</code>
+    <span class="example-desc">Recently added cards not yet assigned to a deck or binder</span>
+  </div>
+  <div class="example-row">
+    <code>status:ordered</code>
+    <span class="example-desc">Cards that have been ordered but not yet received</span>
+  </div>
+  <div class="example-row">
+    <code>price>=10 order:price direction:desc</code>
+    <span class="example-desc">Cards worth $10 or more, sorted by price descending</span>
+  </div>
+</div>
+
+<a class="back-link" href="/collection">&larr; Back to Collection</a>
+
+</div>
+
+<script src="/static/shared.js"></script>
+</body>
+</html>
