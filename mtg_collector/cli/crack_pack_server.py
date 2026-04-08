@@ -1043,7 +1043,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path == "/api/collection":
             self._api_collection(params)
         elif path == "/api/search":
-            self._api_search(params)
+            # Legacy endpoint — redirect to /api/collection
+            self._api_collection(params)
         elif path == "/api/wishlist":
             self._api_wishlist_list(params)
         elif path == "/api/cards/by-name":
@@ -1942,26 +1943,20 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _api_collection(self, params: dict):
-        """Return aggregated collection data with optional search/sort/filter."""
+        """Return aggregated collection data with Scryfall-style search.
+
+        The `q` param accepts full Scryfall query syntax plus collection
+        extensions (status:, added:, price:, deck:, binder:, is:wanted, etc.).
+        When no status: is in the query, defaults to status:owned.
+        """
+        from mtg_collector.search import SearchError, compile_query, parse_query
+
         q = params.get("q", [""])[0]
-        sort = params.get("sort", ["name"])[0]
-        order = params.get("order", ["asc"])[0]
-        filter_colors = params.get("filter_color", [])
-        filter_rarities = params.get("filter_rarity", [])
-        filter_sets = params.get("filter_set", [])
-        filter_types = params.get("filter_type[]", [])
-        filter_subtypes = params.get("filter_subtype[]", [])
-        filter_finish = params.get("filter_finish", [])
-        filter_badges = params.get("filter_badge[]", [])
-        filter_cmc_min = params.get("filter_cmc_min", [""])[0]
-        filter_cmc_max = params.get("filter_cmc_max", [""])[0]
-        filter_date_min = params.get("filter_date_min", [""])[0]
-        filter_date_max = params.get("filter_date_max", [""])[0]
-        filter_status = params.get("status", ["owned"])[0]
-        filter_wanted = params.get("filter_wanted", [""])[0] == "true"
-        _unowned_raw = params.get("include_unowned", [""])[0]
-        include_unowned = _unowned_raw if _unowned_raw in ("base", "full") else ""
-        # Explicit card list: ?cards=set:cn,set:cn,... — forces include_unowned=base
+        sort = params.get("sort", [""])[0]
+        order = params.get("order", [""])[0]
+        expand_copies = params.get("expand", [""])[0] == "copies"
+
+        # Explicit card list: ?cards=set:cn,set:cn,... (shared links)
         cards_param = params.get("cards", [""])[0]
         card_pairs = []
         if cards_param:
@@ -1970,147 +1965,41 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 if ":" in entry:
                     sc, cn = entry.split(":", 1)
                     card_pairs.append((sc.lower(), cn))
-            if card_pairs:
-                include_unowned = include_unowned or "base"
-        filter_deck_id = params.get("deck_id", [""])[0]
-        filter_binder_id = params.get("binder_id", [""])[0]
-        filter_unassigned = params.get("unassigned", [""])[0] == "1"
-        expand_copies = params.get("expand", [""])[0] == "copies"
 
         conn = self._get_conn()
 
-        # When including unowned cards, sets must already be cached via `mtg cache all`
+        # Parse and compile the Scryfall query
+        where_sql = "1=1"
+        sql_params: list = []
+        compiled = None
+        if q:
+            try:
+                ast = parse_query(q)
+                compiled = compile_query(ast)
+                where_sql = compiled.where_sql
+                sql_params = list(compiled.params)
+            except SearchError as e:
+                self._send_json({"error": str(e), "position": e.position}, 400)
+                return
 
-        where_clauses = []
-        sql_params = []
-
-        # Status filter (default: owned)
-        # "owned" includes both owned and ordered cards so ordered items are visible
-        # For include_unowned: applied in the LEFT JOIN ON clause (see query below)
-        # so unowned cards (c.* IS NULL) aren't filtered out
-        if not include_unowned and filter_status != "all":
-            if filter_status == "owned":
-                where_clauses.append("c.status IN ('owned', 'ordered')")
+        # Status default: owned (unless query has explicit status: filter)
+        has_status = compiled and compiled.has_status_filter
+        if not has_status and not card_pairs:
+            if where_sql == "1=1":
+                where_sql = "c.status IN ('owned', 'ordered')"
             else:
-                where_clauses.append("c.status = ?")
-                sql_params.append(filter_status)
+                where_sql = f"c.status IN ('owned', 'ordered') AND ({where_sql})"
 
-        # Explicit card list filter
+        # Explicit card list filter (shared links)
         if card_pairs:
             pair_clauses = []
             for sc, cn in card_pairs:
                 pair_clauses.append("(p.set_code = ? AND p.collector_number = ?)")
                 sql_params.extend([sc, cn])
-            where_clauses.append(f"({' OR '.join(pair_clauses)})")
+            card_filter = f"({' OR '.join(pair_clauses)})"
+            where_sql = f"{card_filter} AND ({where_sql})" if where_sql != "1=1" else card_filter
 
-        # Exclude non-collectible cards (digital-only, meld backs)
-        if include_unowned and not card_pairs:
-            where_clauses.append("json_extract(p.raw_json, '$.digital') = 0")
-            where_clauses.append(
-                "NOT (json_extract(p.raw_json, '$.layout') = 'meld'"
-                " AND p.collector_number LIKE '%b')"
-            )
-
-        if q:
-            where_clauses.append("(card.name LIKE ? OR card.type_line LIKE ? OR json_extract(p.raw_json, '$.flavor_name') LIKE ?)")
-            sql_params.append(f"%{q}%")
-            sql_params.append(f"%{q}%")
-            sql_params.append(f"%{q}%")
-
-        oracle_text = params.get("oracle_text", [""])[0]
-        if oracle_text:
-            where_clauses.append("card.oracle_text LIKE ?")
-            sql_params.append(f"%{oracle_text}%")
-
-        if filter_colors:
-            color_conditions = []
-            for color in filter_colors:
-                if color == "C":
-                    color_conditions.append("(card.colors IS NULL OR card.colors = '[]')")
-                else:
-                    color_conditions.append("card.colors LIKE ?")
-                    sql_params.append(f'%"{color}"%')
-            where_clauses.append(f"({' AND '.join(color_conditions)})")
-
-        if filter_rarities:
-            placeholders = ",".join("?" * len(filter_rarities))
-            where_clauses.append(f"p.rarity IN ({placeholders})")
-            sql_params.extend(filter_rarities)
-
-        if filter_sets:
-            placeholders = ",".join("?" * len(filter_sets))
-            where_clauses.append(f"p.set_code IN ({placeholders})")
-            sql_params.extend(filter_sets)
-
-        if filter_types:
-            type_conditions = []
-            for t in filter_types:
-                type_conditions.append("card.type_line LIKE ?")
-                sql_params.append(f"%{t}%")
-            where_clauses.append(f"({' OR '.join(type_conditions)})")
-
-        if filter_subtypes:
-            subtype_conditions = []
-            for st in filter_subtypes:
-                subtype_conditions.append("card.type_line LIKE ?")
-                sql_params.append(f"%{st}%")
-            where_clauses.append(f"({' OR '.join(subtype_conditions)})")
-
-        if filter_finish:
-            placeholders = ",".join("?" * len(filter_finish))
-            if include_unowned == "full":
-                # Full mode: filter on the expanded finish value
-                where_clauses.append(f"f.value IN ({placeholders})")
-                sql_params.extend(filter_finish)
-            elif not include_unowned:
-                # Normal mode: filter on collection finish
-                where_clauses.append(f"c.finish IN ({placeholders})")
-                sql_params.extend(filter_finish)
-            # Base mode: skip finish filter (rows span all finishes)
-
-        if filter_badges:
-            badge_conditions = []
-            for badge in filter_badges:
-                if badge == "borderless":
-                    badge_conditions.append("p.border_color = 'borderless'")
-                elif badge == "showcase":
-                    badge_conditions.append("p.frame_effects LIKE '%showcase%'")
-                elif badge == "extendedart":
-                    badge_conditions.append("p.frame_effects LIKE '%extendedart%'")
-                elif badge == "fullart":
-                    badge_conditions.append("p.full_art = 1")
-                elif badge == "promo":
-                    badge_conditions.append("p.promo = 1")
-            if badge_conditions:
-                where_clauses.append(f"({' OR '.join(badge_conditions)})")
-
-        if filter_cmc_min:
-            where_clauses.append("card.cmc >= ?")
-            sql_params.append(float(filter_cmc_min))
-
-        if filter_cmc_max:
-            where_clauses.append("card.cmc <= ?")
-            sql_params.append(float(filter_cmc_max))
-
-        if filter_date_min and not include_unowned:
-            where_clauses.append("c.acquired_at >= ?")
-            sql_params.append(filter_date_min)
-        if filter_date_max and not include_unowned:
-            where_clauses.append("c.acquired_at < date(?, '+1 day')")
-            sql_params.append(filter_date_max)
-
-        if filter_deck_id and not include_unowned:
-            where_clauses.append("dc.deck_id = ?")
-            sql_params.append(int(filter_deck_id))
-        if filter_binder_id and not include_unowned:
-            where_clauses.append("c.binder_id = ?")
-            sql_params.append(int(filter_binder_id))
-        if filter_unassigned and not include_unowned:
-            where_clauses.append("dc.id IS NULL AND c.binder_id IS NULL")
-
-        where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
-
-        # Map sort param to SQL column
+        # Sort: use search engine order:/direction: if present, else URL params
         sort_map = {
             "name": "card.name",
             "cmc": "card.cmc",
@@ -2118,106 +2007,83 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "set": "p.set_code",
             "color": "card.color_identity",
             "qty": "qty",
-            "price": "card.name",  # sorted client-side since prices are attached after
             "collector_number": "CAST(p.collector_number AS INTEGER)",
             "date_added": "c.acquired_at",
+            "added": "c.acquired_at",
+            "price": "_lp.price",
         }
-        sort_col = sort_map.get(sort, "card.name")
-        order_dir = "DESC" if order == "desc" else "ASC"
+        if compiled and compiled.order_by:
+            sort_col = sort_map.get(compiled.order_by, "card.name")
+        else:
+            sort_col = sort_map.get(sort, "card.name")
+        if compiled and compiled.order_dir == "desc":
+            order_dir = "DESC"
+        elif order:
+            order_dir = "DESC" if order == "desc" else "ASC"
+        else:
+            order_dir = "ASC"
 
-        # Wishlist filter: INNER JOIN to restrict results to wishlisted cards
-        wanted_join = ""
-        if filter_wanted:
-            wanted_join = """
-                    JOIN wishlist w ON (
-                        w.printing_id = p.printing_id
-                        OR (w.printing_id IS NULL AND w.oracle_id = card.oracle_id)
-                    ) AND w.fulfilled_at IS NULL"""
+        # Conditional JOINs from the search engine
+        extra_joins = []
+        needs_deck_join = compiled and compiled.needs_deck_join
+        needs_price_join = compiled and compiled.needs_price_join
+        needs_wishlist_join = compiled and compiled.needs_wishlist_join
+        needs_binder_join = compiled and "b.name" in (compiled.where_sql or "")
 
-        if include_unowned:
-            if filter_status == "owned":
-                join_status_sql = " AND c.status IN ('owned', 'ordered')"
-                join_params = []
-            elif filter_status != "all":
-                join_status_sql = " AND c.status = ?"
-                join_params = [filter_status]
-            else:
-                join_status_sql = ""
-                join_params = []
-            if include_unowned == "full":
-                # Full set: one row per (printing_id, finish) via json_each
-                query = f"""
-                    SELECT
-                        card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
-                        card.colors, card.color_identity,
-                        p.set_code, s.set_name, p.collector_number, p.rarity,
-                        p.printing_id, p.image_uri, p.artist,
-                        p.frame_effects, p.border_color, p.full_art, p.promo,
-                        p.promo_types, p.finishes,
-                        COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
-                        json_extract(p.raw_json, '$.layout') as layout,
-                        json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
-                        json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana,
-                        COALESCE(c.finish, f.value) as finish,
-                        c.condition, c.status,
-                        COALESCE(COUNT(DISTINCT c.id), 0) as qty,
-                        MAX(c.acquired_at) as acquired_at,
-                        CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END as owned,
-                        c.order_id,
-                        o.seller_name as order_seller,
-                        o.order_number as order_number,
-                        o.order_date as order_date,
-                        c.purchase_price,
-                        GROUP_CONCAT(DISTINCT ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at) as ingest_lineage_raw
-                    FROM printings p
-                    JOIN cards card ON p.oracle_id = card.oracle_id
-                    JOIN sets s ON p.set_code = s.set_code
-                    CROSS JOIN json_each(p.finishes) AS f
-                    LEFT JOIN collection c ON p.printing_id = c.printing_id AND c.finish = f.value{join_status_sql}
-                    LEFT JOIN orders o ON c.order_id = o.id
-                    LEFT JOIN ingest_lineage il ON il.collection_id = c.id
-                    LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
-                    WHERE {where_sql}
-                    GROUP BY p.printing_id, f.value
-                    ORDER BY {sort_col} {order_dir}, card.name ASC
-                """
-            else:
-                # Base set: one row per printing_id
-                query = f"""
-                    SELECT
-                        card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
-                        card.colors, card.color_identity,
-                        p.set_code, s.set_name, p.collector_number, p.rarity,
-                        p.printing_id, p.image_uri, p.artist,
-                        p.frame_effects, p.border_color, p.full_art, p.promo,
-                        p.promo_types, p.finishes,
-                        COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
-                        json_extract(p.raw_json, '$.layout') as layout,
-                        json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
-                        json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana,
-                        c.finish, c.condition, c.status,
-                        COALESCE(COUNT(DISTINCT c.id), 0) as qty,
-                        MAX(c.acquired_at) as acquired_at,
-                        CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END as owned,
-                        c.order_id,
-                        o.seller_name as order_seller,
-                        o.order_number as order_number,
-                        o.order_date as order_date,
-                        c.purchase_price,
-                        GROUP_CONCAT(DISTINCT ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at) as ingest_lineage_raw
-                    FROM printings p
-                    JOIN cards card ON p.oracle_id = card.oracle_id
-                    JOIN sets s ON p.set_code = s.set_code
-                    LEFT JOIN collection c ON p.printing_id = c.printing_id{join_status_sql}
-                    LEFT JOIN orders o ON c.order_id = o.id
-                    LEFT JOIN ingest_lineage il ON il.collection_id = c.id
-                    LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
-                    WHERE {where_sql}
-                    GROUP BY p.printing_id
-                    ORDER BY {sort_col} {order_dir}, card.name ASC
-                """
-            sql_params = join_params + sql_params
+        if needs_deck_join:
+            extra_joins.append("LEFT JOIN deck_cards dc ON dc.collection_id = c.id")
+            extra_joins.append("LEFT JOIN decks d ON dc.deck_id = d.id")
+        if needs_price_join:
+            extra_joins.append(
+                "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
+                " AND _lp.collector_number = p.collector_number AND _lp.price_type = 'normal'"
+            )
+        if needs_wishlist_join:
+            extra_joins.append(
+                "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
+            )
+        if needs_binder_join:
+            extra_joins.append("LEFT JOIN binders b ON c.binder_id = b.id")
+        extra_joins_sql = "\n                ".join(extra_joins)
+
+        if card_pairs:
+            # Shared card links: LEFT JOIN so unowned cards appear
+            query = f"""
+                SELECT
+                    card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
+                    card.colors, card.color_identity,
+                    p.set_code, s.set_name, p.collector_number, p.rarity,
+                    p.printing_id, p.image_uri, p.artist,
+                    p.frame_effects, p.border_color, p.full_art, p.promo,
+                    p.promo_types, p.finishes,
+                    COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
+                    json_extract(p.raw_json, '$.layout') as layout,
+                    json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
+                    json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana,
+                    c.finish, c.condition, c.status,
+                    COALESCE(COUNT(DISTINCT c.id), 0) as qty,
+                    MAX(c.acquired_at) as acquired_at,
+                    CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END as owned,
+                    c.order_id,
+                    o.seller_name as order_seller,
+                    o.order_number as order_number,
+                    o.order_date as order_date,
+                    c.purchase_price,
+                    GROUP_CONCAT(DISTINCT ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at) as ingest_lineage_raw
+                FROM printings p
+                JOIN cards card ON p.oracle_id = card.oracle_id
+                JOIN sets s ON p.set_code = s.set_code
+                LEFT JOIN collection c ON p.printing_id = c.printing_id
+                LEFT JOIN orders o ON c.order_id = o.id
+                LEFT JOIN ingest_lineage il ON il.collection_id = c.id
+                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
+                {extra_joins_sql}
+                WHERE {where_sql}
+                GROUP BY p.printing_id
+                ORDER BY {sort_col} {order_dir}, card.name ASC
+            """
         elif expand_copies:
+            # One row per collection entry (for deck builder picker)
             query = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
@@ -2252,11 +2118,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
-                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
+                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
+                {extra_joins_sql}
                 WHERE {where_sql}
                 ORDER BY {sort_col} {order_dir}, card.name ASC
             """
         else:
+            # Default: aggregated, one row per (printing, finish, condition, status)
             query = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
@@ -2290,7 +2158,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
-                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5{wanted_join}
+                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
+                {extra_joins_sql}
                 WHERE {where_sql}
                 GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
                 ORDER BY {sort_col} {order_dir}, card.name ASC
@@ -2299,6 +2168,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         cursor = conn.execute(query, sql_params)
         rows = cursor.fetchall()
 
+        include_unowned = bool(card_pairs)
         results = []
         for row in rows:
             mana_cost = row["mana_cost"]
