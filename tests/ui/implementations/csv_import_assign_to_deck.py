@@ -18,13 +18,13 @@ def steps(harness):
 
     # Parse & Resolve
     harness.click_by_selector("#parse-btn")
-    harness.wait_for_text("Resolved", timeout=10000)
+    harness.wait_for_text("Resolved", timeout=500)
 
     # Select a deck (assign targets load automatically after resolve)
     harness.select_by_label("#assign-target", "Bolt Tribal")
 
     # Commit
     harness.click_by_selector("#commit-btn")
-    harness.wait_for_text("Successfully added", timeout=10000)
+    harness.wait_for_text("Successfully added", timeout=500)
 
     harness.screenshot("final_state")

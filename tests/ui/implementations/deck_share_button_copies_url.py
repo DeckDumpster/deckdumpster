@@ -18,7 +18,7 @@ def steps(harness):
     harness.click_by_selector("#btn-share-deck")
 
     # Verify button text changes to "Copied!"
-    harness.wait_for_text("Copied!", timeout=5_000)
+    harness.wait_for_text("Copied!", timeout=500)
     harness.assert_text_present("Copied!")
 
     harness.screenshot("final_state")

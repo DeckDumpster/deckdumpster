@@ -12,10 +12,10 @@ def steps(harness):
     # Click "Bolt Tribal" deck link — navigates to /decks/1 standalone page.
     harness.click_by_text("Bolt Tribal")
     # Wait for the standalone deck detail page to load.
-    harness.wait_for_visible("#btn-import-expected", timeout=10_000)
+    harness.wait_for_visible("#btn-import-expected", timeout=500)
     # Click "Import Expected" to open the modal.
     harness.click_by_selector("#btn-import-expected")
-    harness.wait_for_visible("#expected-modal.active", timeout=5_000)
+    harness.wait_for_visible("#expected-modal.active", timeout=500)
     # Paste a decklist: Beast-Kin Ranger is in the deck, Cathar Commando is not.
     harness.fill_by_selector(
         "#f-expected-list",
@@ -24,8 +24,8 @@ def steps(harness):
     # Click "Import".
     harness.click_by_selector("#expected-modal button")
     # Wait for modal to close and completeness to load.
-    harness.wait_for_hidden("#expected-modal.active", timeout=5_000)
-    harness.wait_for_visible("#completeness-section", timeout=5_000)
+    harness.wait_for_hidden("#expected-modal.active", timeout=500)
+    harness.wait_for_visible("#completeness-section", timeout=500)
     # Verify the completeness section shows present and missing cards.
     harness.assert_text_present("Present")
     harness.assert_text_present("Beast-Kin Ranger")

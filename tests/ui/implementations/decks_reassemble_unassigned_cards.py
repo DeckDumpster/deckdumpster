@@ -12,14 +12,14 @@ def steps(harness):
     # Click "Bolt Tribal" deck link — navigates to /decks/1 standalone page.
     harness.click_by_text("Bolt Tribal")
     # Wait for the standalone deck detail page to load.
-    harness.wait_for_visible("#btn-import-expected", timeout=10_000)
+    harness.wait_for_visible("#btn-import-expected", timeout=500)
     # Import expected list with only Cathar Commando (unassigned in collection).
     harness.click_by_selector("#btn-import-expected")
-    harness.wait_for_visible("#expected-modal.active", timeout=5_000)
+    harness.wait_for_visible("#expected-modal.active", timeout=500)
     harness.fill_by_selector("#f-expected-list", "1 Cathar Commando (FDN) 139")
     harness.click_by_selector("#expected-modal button")
-    harness.wait_for_hidden("#expected-modal.active", timeout=5_000)
-    harness.wait_for_visible("#completeness-section", timeout=5_000)
+    harness.wait_for_hidden("#expected-modal.active", timeout=500)
+    harness.wait_for_visible("#completeness-section", timeout=500)
     # Verify Cathar Commando is missing with Unassigned tag.
     harness.assert_text_present("Missing")
     harness.assert_text_present("Cathar Commando")
@@ -27,7 +27,7 @@ def steps(harness):
     # Click the "Reassemble 1 Unassigned Card" button.
     harness.click_by_text("Reassemble 1 Unassigned Card")
     # Wait for completeness to refresh — Cathar Commando should now be Present.
-    harness.wait_for_text("Present", timeout=5_000)
+    harness.wait_for_text("Present", timeout=500)
     harness.assert_text_present("Cathar Commando")
     harness.assert_text_absent("Unassigned")
     harness.screenshot("final_state")

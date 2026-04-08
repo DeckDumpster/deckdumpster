@@ -10,7 +10,7 @@ to deck 2 (Eldrazi Ramp).
 def steps(harness):
     # Navigate to collection and search
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=15000)
+    harness.wait_for_visible(".collection-table", timeout=500)
     harness.fill_by_placeholder("Search cards...", "Scrawling Crawler")
     harness.wait_for_visible("tr[data-idx]")
 

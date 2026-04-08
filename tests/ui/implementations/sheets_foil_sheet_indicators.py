@@ -10,7 +10,7 @@ def steps(harness):
     # start_page: /sheets#set=blb&product=play — auto-navigated by test runner.
 
     # Wait for sections to render
-    harness.wait_for_visible(".section-header", timeout=15_000)
+    harness.wait_for_visible(".section-header", timeout=500)
 
     # Verify foil tags exist in section header meta (foil sheets)
     harness.assert_visible(".foil-tag")
@@ -21,9 +21,8 @@ def steps(harness):
     # Expand the "Foil" sheet section to see foil card wrappers
     # Use Playwright locator for exact h2 text match (not "Foil Land")
     harness.page.locator(".section-header").filter(has_text="Foil").first.click()
-    harness.page.wait_for_timeout(500)
     # Verify foil card wrappers are visible in the expanded section
-    harness.wait_for_visible(".section.open .sheet-card-img-wrap.foil", timeout=10_000)
+    harness.wait_for_visible(".section.open .sheet-card-img-wrap.foil", timeout=500)
 
     # Verify card wrappers have the foil class
     harness.assert_visible(".sheet-card-img-wrap.foil")

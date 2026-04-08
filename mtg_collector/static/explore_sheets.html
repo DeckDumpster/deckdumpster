@@ -869,7 +869,10 @@ loadSets().then(async () => {
   if (hashParams) {
     const s = allSets.find(s => s.code.toLowerCase() === hashParams.set.toLowerCase());
     if (s) {
-      selectSet(s);
+      // Set state directly without calling selectSet (which would fire
+      // a duplicate loadProducts and race with our awaited one).
+      selectedSetCode = s.code;
+      setInput.value = `${s.name} (${s.code})`;
       await loadProducts(s.code);
       setSelectedProduct(hashParams.product);
     }

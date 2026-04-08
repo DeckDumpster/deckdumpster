@@ -13,7 +13,7 @@ def steps(harness):
     # Type a legendary creature name into the search
     harness.fill_by_placeholder("Search your collection...", "Glarb")
     # Wait for autocomplete dropdown to show results
-    harness.wait_for_text("Glarb, Calamity's Augur", timeout=3000)
+    harness.wait_for_text("Glarb, Calamity's Augur", timeout=500)
     # Click the autocomplete result
     harness.click_by_text("Glarb, Calamity's Augur")
     # Verify the Create Deck button is now enabled (text still present)

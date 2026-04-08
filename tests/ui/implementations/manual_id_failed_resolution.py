@@ -19,7 +19,7 @@ def steps(harness):
     harness.click_by_selector("#resolve-btn")
 
     # Wait for failed results
-    harness.wait_for_text("Failed", timeout=10000)
+    harness.wait_for_text("Failed", timeout=500)
 
     # Verify failed section appears
     harness.assert_visible(".failed-section")

@@ -19,5 +19,5 @@ def steps(harness):
     harness.click_by_selector("#add-confirm-btn")
     # Form should disappear and a new copy should appear.
     harness.wait_for_hidden(".add-collection-form")
-    harness.wait_for_visible(".copy-section", timeout=10_000)
+    harness.wait_for_visible(".copy-section", timeout=500)
     harness.screenshot("final_state")

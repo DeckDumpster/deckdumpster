@@ -16,7 +16,7 @@ def steps(harness):
     # Brimstone Mage was inserted as READY_FOR_OCR by --demo.
     # Server processes it on startup. Wait for cards to appear.
     harness.navigate("/recent")
-    harness.wait_for_visible(".img-card", timeout=15_000)
+    harness.wait_for_visible(".img-card", timeout=500)
 
     # After the unicode artist fix, _resolve_candidates finds the ROE
     # printing. With 1 candidate, auto-disambiguation selects it.

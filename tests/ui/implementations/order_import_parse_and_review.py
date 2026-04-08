@@ -21,7 +21,7 @@ def steps(harness):
     harness.click_by_selector("#parse-btn")
 
     # Wait for resolved results to appear
-    harness.wait_for_text("Resolved", timeout=10000)
+    harness.wait_for_text("Resolved", timeout=500)
 
     # Verify order group appears with card entries
     harness.assert_visible(".order-group")

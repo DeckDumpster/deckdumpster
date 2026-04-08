@@ -17,11 +17,11 @@ def steps(harness):
     # Click the card in grid view.
     harness.click_by_selector(".sheet-card[data-idx]")
     # Wait for modal and copies to load.
-    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
-    harness.wait_for_visible("select.copy-add-to-deck", timeout=10_000)
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=500)
+    harness.wait_for_visible("select.copy-add-to-deck", timeout=500)
     # Select "New Deck..." — the prompt auto-accepts with "Test View".
     harness.select_by_label("select.copy-add-to-deck", "New Deck...")
     # Wait for the assignment to complete — the copy section re-renders
     # showing a "Remove" link instead of the "Add to Deck" dropdown.
-    harness.wait_for_visible(".copy-remove-deck", timeout=10_000)
+    harness.wait_for_visible(".copy-remove-deck", timeout=500)
     harness.screenshot("final_state")

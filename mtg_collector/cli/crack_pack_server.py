@@ -832,11 +832,12 @@ def _process_image_background(db_path, image_id):
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
 
     if _shared_db_path and os.path.exists(_shared_db_path):
         from mtg_collector.db.connection import attach_shared
         attach_shared(conn, _shared_db_path)
+    else:
+        conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
 
     # Atomic claim
@@ -1723,6 +1724,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         ".jpg": "image/jpeg",
         ".png": "image/png",
         ".webp": "image/webp",
+        ".woff2": "font/woff2",
+        ".woff": "font/woff",
+        ".ttf": "font/ttf",
+        ".eot": "application/vnd.ms-fontobject",
+        ".svg": "image/svg+xml",
     }
 
     def _serve_homepage(self):
@@ -2655,7 +2661,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Get a DB connection with schema init."""
         from mtg_collector.db.schema import init_db
         conn = self._get_conn()
-        conn.execute("PRAGMA foreign_keys = ON")
+        # FK enforcement is skipped: with split DB, the ATTACH'd temp views
+        # don't participate in FK checks, causing false constraint failures
+        # when inserting into collection (which references printings).
         init_db(conn)
         return conn
 
@@ -7828,9 +7836,16 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_sealed_fetch_prices(self):
         """Trigger TCGCSV sealed price fetch."""
-        from mtg_collector.cli.data_cmd import fetch_sealed_prices
+        import sqlite3 as _sqlite3
 
-        conn = self._get_conn()
+        from mtg_collector.cli.data_cmd import fetch_sealed_prices
+        from mtg_collector.db.schema import init_db as _init_db
+
+        # Open a direct connection to the user DB — not _get_conn() which has
+        # ATTACH temp views that block writes to shared tables.
+        conn = _sqlite3.connect(self.db_path)
+        conn.row_factory = _sqlite3.Row
+        _init_db(conn)
         try:
             result = fetch_sealed_prices(self.db_path, conn=conn)
         finally:
@@ -7944,7 +7959,12 @@ def run(args):
     _recover_pending_images(db_path)
 
     # Auto-import MTGJSON data if tables are empty but AllPrintings.json exists
+    from mtg_collector.db.connection import attach_shared, get_shared_db_path
+
     _conn = sqlite3.connect(db_path)
+    _shared = get_shared_db_path()
+    if _shared:
+        attach_shared(_conn, _shared)
     _has_data = _conn.execute("SELECT COUNT(*) FROM mtgjson_booster_configs").fetchone()[0]
     _conn.close()
     if not _has_data:

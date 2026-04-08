@@ -5,10 +5,10 @@
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collection Browser</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/keyrune@latest/css/keyrune.min.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mana-font@latest/css/mana.min.css">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<link rel="stylesheet" href="/static/vendor/keyrune/keyrune.min.css">
+<link rel="stylesheet" href="/static/vendor/mana-font/mana.min.css">
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
 <link rel="stylesheet" href="/static/shared-card-table.css">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1973,9 +1973,12 @@ const purchaseLinesPlugin = {
   }
 };
 
+let _priceChartCardKey = null;
 async function renderPriceChart(card) {
   const section = document.getElementById('price-chart-section');
   if (!section) return;
+  const cardKey = `${card.set_code}/${card.collector_number}`;
+  _priceChartCardKey = cardKey;
   section.classList.remove('visible');
 
   let data;
@@ -1983,6 +1986,9 @@ async function renderPriceChart(card) {
     const res = await fetch(`/api/price-history/${encodeURIComponent(card.set_code)}/${encodeURIComponent(card.collector_number)}`);
     data = await res.json();
   } catch { return; }
+
+  // Guard: if modal switched to a different card while we were fetching, bail
+  if (_priceChartCardKey !== cardKey) return;
 
   const seriesKeys = Object.keys(data).filter(k => data[k].length > 0);
   if (!seriesKeys.length) return;

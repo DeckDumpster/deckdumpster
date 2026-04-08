@@ -19,11 +19,11 @@ def steps(harness):
     # Click "Add to Deck" in the selection bar.
     harness.click_by_selector("#sel-deck-btn")
     # Wait for the assign overlay to appear.
-    harness.wait_for_visible("#assign-deck-overlay", timeout=5_000)
+    harness.wait_for_visible("#assign-deck-overlay", timeout=500)
     # Select "New Deck..." — the prompt auto-accepts with "Test View".
     harness.select_by_label("#assign-deck-select", "New Deck...")
     # Click the Add button to confirm.
     harness.click_by_text("Add", exact=True)
     # Wait for the overlay to close.
-    harness.wait_for_hidden("#assign-deck-overlay", timeout=10_000)
+    harness.wait_for_hidden("#assign-deck-overlay", timeout=500)
     harness.screenshot("final_state")

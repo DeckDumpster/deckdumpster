@@ -12,13 +12,13 @@ def steps(harness):
 
     # Select first set: Bloomburrow
     harness.fill_by_selector("#set-search", "Bloom")
-    harness.wait_for_visible("#set-dropdown.open li", timeout=10_000)
+    harness.wait_for_visible("#set-dropdown.open li", timeout=500)
     harness.click_by_selector("#set-dropdown li")
     harness.wait_for_visible(".selected-pill")
 
     # Clear search and select second set: Foundations
     harness.fill_by_selector("#set-search", "Foundations")
-    harness.wait_for_visible("#set-dropdown.open li", timeout=10_000)
+    harness.wait_for_visible("#set-dropdown.open li", timeout=500)
     harness.click_by_selector("#set-dropdown li")
 
     # Verify two pills are present
@@ -27,7 +27,6 @@ def steps(harness):
     # Clear search input and click elsewhere to close any dropdown
     harness.fill_by_selector("#set-search", "")
     harness.click_by_selector("h1")
-    harness.page.wait_for_timeout(300)
     harness.screenshot("two_pills")
 
     # Remove the first pill by clicking its x button

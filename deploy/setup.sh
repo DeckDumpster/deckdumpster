@@ -135,6 +135,15 @@ sed \
     -e "s|{{PORT}}:8081|${PORT_MAPPING}|g" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
 
+# Conditionally mount shared reference volume if it exists.
+# Skip for --test: test containers manage their own shared DB on the data volume.
+SHARED_REF_VOL="mtgc-shared-ref"
+if [ "$TEST" != "true" ] && podman volume exists "$SHARED_REF_VOL" 2>/dev/null; then
+    sed -i '/^Volume=mtgc-.*-data/a Volume=mtgc-shared-ref:/shared:ro,z' "$QUADLET_FILE"
+    sed -i '/^Environment=MTGC_HOME/a Environment=MTGC_SHARED_DB=/shared/shared.sqlite' "$QUADLET_FILE"
+    echo "    Shared reference volume detected — MTGC_SHARED_DB enabled"
+fi
+
 ## --- Generate and install timer units ---
 
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
@@ -168,13 +177,17 @@ create_backup_tarball() {
         --entrypoint sleep "$image" infinity >/dev/null
 
     podman cp "$temp:/data/collection.sqlite" "$staging/collection.sqlite"
+    podman cp "$temp:/data/shared.sqlite" "$staging/shared.sqlite" 2>/dev/null || true
     podman cp "$temp:/data/source_images" "$staging/source_images" 2>/dev/null \
         || mkdir -p "$staging/source_images"
     podman cp "$temp:/data/ingest_images" "$staging/ingest_images" 2>/dev/null \
         || mkdir -p "$staging/ingest_images"
     podman rm -f "$temp" >/dev/null
 
-    tar czf "$tarball_path" -C "$staging" collection.sqlite source_images ingest_images
+    # Include shared.sqlite in the tarball if it exists (after db split)
+    local tar_files="collection.sqlite source_images ingest_images"
+    [ -f "$staging/shared.sqlite" ] && tar_files="$tar_files shared.sqlite"
+    tar czf "$tarball_path" -C "$staging" $tar_files
     rm -rf "$staging"
 }
 
@@ -196,13 +209,28 @@ if [ "$TEST" = "true" ]; then
         "$IMAGE" \
         setup --demo --from-fixture /app/test-data.sqlite
 
-    # 2. Package into a backup tarball
+    # 1b. Split shared reference data onto the same volume (writable).
+    # Production uses a separate read-only shared volume; test containers
+    # keep everything on one volume so tests can write to any table.
+    echo "==> Splitting shared reference data..."
+    podman run --rm \
+        -v "${TEMP_VOL}:/data:Z" \
+        -e MTGC_HOME=/data \
+        --entrypoint mtg \
+        "$IMAGE" \
+        db split --shared-out /data/shared.sqlite --prune
+
+    # 2. Set MTGC_SHARED_DB BEFORE restore (restore starts the service)
+    sed -i '/^Environment=MTGC_HOME/a Environment=MTGC_SHARED_DB=/data/shared.sqlite' "$QUADLET_FILE"
+    systemctl --user daemon-reload
+
+    # 3. Package into a backup tarball
     TARBALL=$(mktemp --suffix=.tar.gz)
     echo "==> Packaging data into backup tarball..."
     create_backup_tarball "$TEMP_VOL" "$IMAGE" "$TARBALL"
     podman volume rm "$TEMP_VOL" >/dev/null
 
-    # 3. Restore from the tarball (exercises the full restore pipeline)
+    # 4. Restore from the tarball (exercises the full restore pipeline)
     bash "$REPO_DIR/deploy/restore.sh" --yes "$TARBALL" "$INSTANCE"
     rm -f "$TARBALL"
     RESTORED=true
