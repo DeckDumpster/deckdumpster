@@ -96,6 +96,22 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 #search-input { flex: 1; min-width: 280px; }
 #search-error { color: #e94560; font-size: 11px; position: absolute; top: 100%; left: 0; white-space: nowrap; z-index: 10; }
 .search-wrap { position: relative; }
+/* Autocomplete dropdown */
+.ac-dropdown {
+  display: none; position: absolute; top: 100%; left: 0; right: 40px;
+  background: #16213e; border: 1px solid #0f3460; border-top: none;
+  border-radius: 0 0 6px 6px; max-height: 260px; overflow-y: auto;
+  z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.ac-dropdown.open { display: block; }
+.ac-item {
+  padding: 6px 12px; cursor: pointer; font-size: 0.85rem;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.ac-item:hover, .ac-item.active { background: #0f3460; }
+.ac-item .ac-label { color: #e0e0e0; }
+.ac-item .ac-hint { color: #888; font-size: 0.75rem; margin-left: 12px; white-space: nowrap; }
+.ac-item .ac-cat { color: #e94560; font-size: 0.7rem; text-transform: uppercase; margin-left: 8px; }
 /* Icon buttons in view toggle */
 .view-toggle-group button svg { display: block; }
 
@@ -1074,9 +1090,10 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
   <h1><a href="/" style="color:inherit;text-decoration:none">Collection</a></h1>
   <div class="controls">
     <div class="search-wrap" style="flex:1;display:flex;align-items:center;gap:4px">
-      <input type="text" id="search-input" placeholder="Search (e.g. t:creature c:r mv>=3)">
+      <input type="text" id="search-input" placeholder="Search (e.g. t:creature c:r mv>=3)" autocomplete="off">
       <a href="/search-help" target="_blank" title="Search syntax help" style="color:#888;font-size:0.8rem;text-decoration:none">?</a>
       <div id="search-error"></div>
+      <div class="ac-dropdown" id="ac-dropdown"></div>
     </div>
     <div class="view-toggle-group" id="view-toggle-group">
       <button class="secondary" id="view-table-btn" title="Table view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2" width="14" height="2" rx=".5"/><rect x="1" y="7" width="14" height="2" rx=".5"/><rect x="1" y="12" width="14" height="2" rx=".5"/></svg></button>
@@ -1193,6 +1210,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 
 <script src="/static/shared-card-table.js"></script>
 <script>
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 const searchInput = document.getElementById('search-input');
 const viewTableBtn = document.getElementById('view-table-btn');
 const viewGridBtn = document.getElementById('view-grid-btn');
@@ -2841,7 +2859,229 @@ function renderGrid() {
 searchInput.addEventListener('input', () => {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(fetchCollection, 300);
+  acUpdate();
 });
+
+// ---------------------------------------------------------------------------
+// Autocomplete
+// ---------------------------------------------------------------------------
+const acDropdown = document.getElementById('ac-dropdown');
+let acIdx = -1;
+let acItems = [];
+// Dynamic data loaded once on first focus
+let acSets = null;   // [{code, name}]
+let acDecks = null;  // [{id, name}]
+let acBinders = null; // [{id, name}]
+
+const AC_KEYWORDS = [
+  {k:'c:',    label:'c:',    hint:'Color',          cat:'card'},
+  {k:'id:',   label:'id:',   hint:'Color identity', cat:'card'},
+  {k:'t:',    label:'t:',    hint:'Type',            cat:'card'},
+  {k:'o:',    label:'o:',    hint:'Oracle text',     cat:'card'},
+  {k:'mv',    label:'mv',    hint:'Mana value',      cat:'card'},
+  {k:'pow',   label:'pow',   hint:'Power',           cat:'card'},
+  {k:'tou',   label:'tou',   hint:'Toughness',       cat:'card'},
+  {k:'r:',    label:'r:',    hint:'Rarity',          cat:'card'},
+  {k:'s:',    label:'s:',    hint:'Set',             cat:'card'},
+  {k:'a:',    label:'a:',    hint:'Artist',          cat:'card'},
+  {k:'ft:',   label:'ft:',   hint:'Flavor text',     cat:'card'},
+  {k:'kw:',   label:'kw:',   hint:'Keyword ability', cat:'card'},
+  {k:'f:',    label:'f:',    hint:'Format legality',  cat:'card'},
+  {k:'cn',    label:'cn',    hint:'Collector number', cat:'card'},
+  {k:'year',  label:'year',  hint:'Release year',    cat:'card'},
+  {k:'m:',    label:'m:',    hint:'Mana cost',       cat:'card'},
+  {k:'is:',   label:'is:',   hint:'Flag',            cat:'card'},
+  {k:'has:',  label:'has:',  hint:'Has property',    cat:'card'},
+  {k:'layout:', label:'layout:', hint:'Card layout', cat:'card'},
+  {k:'status:', label:'status:', hint:'Collection status', cat:'collection'},
+  {k:'added', label:'added', hint:'Date added',      cat:'collection'},
+  {k:'price', label:'price', hint:'Market price',    cat:'collection'},
+  {k:'deck:', label:'deck:', hint:'In deck',         cat:'collection'},
+  {k:'binder:', label:'binder:', hint:'In binder',   cat:'collection'},
+  {k:'order:', label:'order:', hint:'Sort by',        cat:'modifier'},
+  {k:'direction:', label:'direction:', hint:'Sort direction', cat:'modifier'},
+];
+
+const AC_VALUES = {
+  'c:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya','orzhov','izzet','golgari','boros','simic','esper','grixis','jund','naya','bant','abzan','jeskai','sultai','mardu','temur'],
+  'id:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya'],
+  'r:': ['common','uncommon','rare','mythic'],
+  't:': ['creature','instant','sorcery','enchantment','artifact','planeswalker','land','battle','legendary','token','elf','goblin','human','merfolk','dragon','wizard','angel','demon'],
+  'is:': ['foil','nonfoil','etched','fullart','borderless','showcase','extendedart','promo','reprint','reserved','firstprint','commander','vanilla','split','transform','mdfc','adventure','saga','unassigned','decked','bindered','wanted'],
+  'has:': ['watermark','flavor','power','toughness','loyalty'],
+  'f:': ['standard','modern','legacy','vintage','commander','pioneer','pauper'],
+  'status:': ['owned','ordered','sold','traded','gifted','lost'],
+  'order:': ['name','cmc','rarity','set','color','power','toughness','artist','collector_number','price','added'],
+  'direction:': ['asc','desc'],
+  'layout:': ['normal','split','flip','transform','modal_dfc','adventure','meld','leveler','class','saga','battle','prototype'],
+};
+
+function acLoadDynamic() {
+  if (acSets) return;
+  acSets = []; acDecks = []; acBinders = [];
+  fetch('/api/cached-sets').then(r=>r.json()).then(d => { acSets = d; }).catch(()=>{});
+  fetch('/api/decks').then(r=>r.json()).then(d => { acDecks = d; }).catch(()=>{});
+  fetch('/api/binders').then(r=>r.json()).then(d => { acBinders = d; }).catch(()=>{});
+}
+
+function acGetCurrentToken() {
+  const val = searchInput.value;
+  const pos = searchInput.selectionStart || val.length;
+  // Walk backward from cursor to find token start
+  let start = pos;
+  while (start > 0 && val[start-1] !== ' ') start--;
+  const token = val.substring(start, pos);
+  return {token, start, end: pos};
+}
+
+function acUpdate() {
+  const {token} = acGetCurrentToken();
+  if (!token) { acHide(); return; }
+
+  acItems = [];
+  const lower = token.toLowerCase();
+
+  // Check if we're after a keyword prefix (e.g. "s:" or "is:")
+  const colonIdx = token.indexOf(':');
+  if (colonIdx >= 0) {
+    const prefix = token.substring(0, colonIdx + 1).toLowerCase();
+    const valPart = token.substring(colonIdx + 1).toLowerCase();
+
+    // Static value completions
+    let pool = AC_VALUES[prefix];
+    if (pool) {
+      for (const v of pool) {
+        if (v.startsWith(valPart) && v !== valPart) {
+          acItems.push({text: prefix + v, label: v, hint: '', cat: ''});
+        }
+      }
+    }
+    // Dynamic: set codes
+    if (prefix === 's:' && acSets) {
+      for (const s of acSets) {
+        const code = s.code.toLowerCase();
+        const name = (s.name||'').toLowerCase();
+        if ((code.startsWith(valPart) || name.includes(valPart)) && code !== valPart) {
+          acItems.push({text: 's:' + code, label: code.toUpperCase(), hint: s.name, cat: ''});
+        }
+        if (acItems.length >= 12) break;
+      }
+    }
+    // Dynamic: deck names
+    if (prefix === 'deck:' && acDecks) {
+      acItems.push({text: 'deck:*', label: '*', hint: 'Any deck', cat: ''});
+      for (const d of acDecks) {
+        const name = (d.name||'');
+        if (name.toLowerCase().includes(valPart)) {
+          const q = name.includes(' ') ? `deck:"${name}"` : `deck:${name}`;
+          acItems.push({text: q, label: name, hint: '', cat: ''});
+        }
+        if (acItems.length >= 12) break;
+      }
+    }
+    // Dynamic: binder names
+    if (prefix === 'binder:' && acBinders) {
+      acItems.push({text: 'binder:*', label: '*', hint: 'Any binder', cat: ''});
+      for (const b of acBinders) {
+        const name = (b.name||'');
+        if (name.toLowerCase().includes(valPart)) {
+          const q = name.includes(' ') ? `binder:"${name}"` : `binder:${name}`;
+          acItems.push({text: q, label: name, hint: '', cat: ''});
+        }
+        if (acItems.length >= 12) break;
+      }
+    }
+  } else {
+    // Keyword suggestions
+    for (const kw of AC_KEYWORDS) {
+      if (kw.k.startsWith(lower) && kw.k !== lower) {
+        acItems.push({text: kw.k, label: kw.label, hint: kw.hint, cat: kw.cat});
+      }
+    }
+    // Also suggest negation
+    if (lower === '-') {
+      acItems.push({text: '-', label: '-...', hint: 'Negate next term', cat: ''});
+    }
+  }
+
+  if (acItems.length > 15) acItems.length = 15;
+  if (acItems.length === 0) { acHide(); return; }
+  acIdx = -1;
+  acRender();
+}
+
+function acRender() {
+  acDropdown.innerHTML = acItems.map((item, i) =>
+    `<div class="ac-item${i===acIdx?' active':''}" data-i="${i}">` +
+    `<span class="ac-label">${esc(item.label)}</span>` +
+    (item.hint ? `<span class="ac-hint">${esc(item.hint)}</span>` : '') +
+    (item.cat ? `<span class="ac-cat">${esc(item.cat)}</span>` : '') +
+    `</div>`
+  ).join('');
+  acDropdown.classList.add('open');
+}
+
+function acHide() {
+  acDropdown.classList.remove('open');
+  acItems = [];
+  acIdx = -1;
+}
+
+function acAccept(idx) {
+  const item = acItems[idx >= 0 ? idx : 0];
+  if (!item) return;
+  const {start, end} = acGetCurrentToken();
+  const val = searchInput.value;
+  const before = val.substring(0, start);
+  const after = val.substring(end);
+  // Add trailing space unless the completion ends with : (expecting value)
+  const suffix = item.text.endsWith(':') ? '' : ' ';
+  searchInput.value = before + item.text + suffix + after;
+  const newPos = start + item.text.length + suffix.length;
+  searchInput.setSelectionRange(newPos, newPos);
+  searchInput.focus();
+  acHide();
+  // If we inserted a full keyword:value, trigger fetch
+  if (suffix === ' ') {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(fetchCollection, 300);
+  } else {
+    acUpdate();
+  }
+}
+
+searchInput.addEventListener('keydown', (e) => {
+  if (!acDropdown.classList.contains('open')) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    acIdx = Math.min(acIdx + 1, acItems.length - 1);
+    acRender();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    acIdx = Math.max(acIdx - 1, -1);
+    acRender();
+  } else if (e.key === 'Tab' || e.key === 'Enter') {
+    if (acIdx >= 0) {
+      e.preventDefault();
+      acAccept(acIdx);
+    } else if (acItems.length > 0 && e.key === 'Tab') {
+      e.preventDefault();
+      acAccept(0);
+    }
+    // Enter with no selection: let it fall through to default (fetch)
+  } else if (e.key === 'Escape') {
+    acHide();
+  }
+});
+
+acDropdown.addEventListener('mousedown', (e) => {
+  e.preventDefault(); // Don't blur search input
+  const item = e.target.closest('.ac-item');
+  if (item) acAccept(parseInt(item.dataset.i));
+});
+
+searchInput.addEventListener('focus', () => { acLoadDynamic(); acUpdate(); });
+searchInput.addEventListener('blur', () => { setTimeout(acHide, 150); });
 
 function applySettings() {
   const style = document.getElementById('dynamic-settings-style');
