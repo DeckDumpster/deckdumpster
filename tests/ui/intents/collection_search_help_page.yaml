@@ -1,0 +1,10 @@
+# Scenario: Search help page is accessible and has content
+#
+# Related:
+#   issues: []
+#   pull_requests: [243]
+
+description: >
+  I can click the "?" help link next to the search bar to open the
+  search syntax help page. The page documents collection-specific
+  extensions like status, deck, binder, and sorting keywords.

@@ -1,0 +1,11 @@
+start_page: /collection
+involves:
+  - 'search input (#search-input)'
+  - 'status text (#status) showing entry/card counts'
+  - 'collection table (.collection-table)'
+fixture_data:
+  owned_cards: 43
+  ordered_cards: 5
+notes: >
+  Default load shows 43 owned + 5 ordered = 48 entries.
+  Search "status:ordered" narrows to 5 entries.

@@ -1,0 +1,10 @@
+# Scenario: Filter collection by deck name using Scryfall syntax
+#
+# Related:
+#   issues: []
+#   pull_requests: [243]
+
+description: >
+  I can type deck:"Bolt Tribal" in the search bar to filter the
+  collection to only cards assigned to that deck. The results update
+  to show the deck's cards.

@@ -1,0 +1,8 @@
+start_page: /collection
+involves:
+  - 'search input (#search-input)'
+  - 'error display (#search-error) below search input'
+notes: >
+  Type "(unclosed" to trigger a parse error. The #search-error
+  element should show "Missing closing parenthesis". Then clear
+  the input to dismiss the error.

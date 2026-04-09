@@ -1,0 +1,10 @@
+start_page: /collection
+involves:
+  - 'search input (#search-input)'
+  - 'collection table showing deck-filtered results'
+fixture_data:
+  deck_name: "Bolt Tribal"
+  deck_card_count: 11
+notes: >
+  Type deck:"Bolt Tribal" in the search bar. Wait for results
+  to show 11 entries matching the Bolt Tribal deck.

@@ -1,0 +1,10 @@
+# Scenario: Invalid search query shows error message
+#
+# Related:
+#   issues: []
+#   pull_requests: [243]
+
+description: >
+  When I type an invalid query like "(unclosed" in the search bar,
+  an error message appears below the input showing what went wrong.
+  Fixing the query clears the error.

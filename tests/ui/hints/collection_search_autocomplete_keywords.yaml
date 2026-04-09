@@ -1,0 +1,9 @@
+start_page: /collection
+involves:
+  - 'search input (#search-input) with placeholder "Search (e.g. t:creature c:r mv>=3)"'
+  - "autocomplete dropdown (#ac-dropdown) appears below search input"
+  - "autocomplete items (.ac-item) show label, hint, and category"
+notes: >
+  Type "c:" in the search input. Autocomplete shows color values
+  (white, blue, black, red, green, etc.). Click or press Enter on
+  a suggestion to insert it. The dropdown should close after selection.
