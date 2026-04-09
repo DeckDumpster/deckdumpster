@@ -78,13 +78,15 @@ def steps(harness):
     harness.wait_for_hidden("#card-modal-overlay.active", timeout=5_000)
 
     # Now open a card with no price data to verify chart is hidden.
-    # Still in grid view from above — search and click grid card.
-    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Orazca Puzzle-Door")
-    harness.wait_for_visible(".sheet-card[data-idx]", timeout=15_000)
+    # Clear search first then type new term to ensure debounced re-fetch fires.
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "")
+    harness.page.wait_for_timeout(400)  # debounce
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Orazca")
+    # Wait for the card grid to update — exactly 1 entry for Orazca.
+    harness.wait_for_text("1 entries, 1 cards", timeout=5_000)
     harness.click_by_selector(".sheet-card[data-idx]")
     harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
     # Scroll down — chart section should not be visible.
     harness.page.evaluate("document.querySelector('#modal-details').scrollTop = 9999")
-    harness.page.wait_for_timeout(500)
-    harness.assert_hidden(".price-chart-section.visible")
+    harness.wait_for_hidden(".price-chart-section.visible", timeout=2_000)
     harness.screenshot("final_state")

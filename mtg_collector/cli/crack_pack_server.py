@@ -830,13 +830,15 @@ def _process_image_background(db_path, image_id):
 
     _log_ingest(f"[bg:{image_id}] Background worker started")
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=10.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
 
     if _shared_db_path and os.path.exists(_shared_db_path):
         from mtg_collector.db.connection import attach_shared
         attach_shared(conn, _shared_db_path)
+        # FK enforcement is incompatible with ATTACH'd shared tables.
+    else:
+        conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
 
     # Atomic claim
@@ -976,11 +978,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _get_conn(self):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         if _shared_db_path and os.path.exists(_shared_db_path):
             from mtg_collector.db.connection import attach_shared
             attach_shared(conn, _shared_db_path)
+            # FK enforcement is incompatible with ATTACH'd shared tables —
+            # SQLite FK checks only see empty main-schema tables.
+        else:
+            conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def do_GET(self):
@@ -2529,7 +2535,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Get a DB connection with schema init."""
         from mtg_collector.db.schema import init_db
         conn = self._get_conn()
-        conn.execute("PRAGMA foreign_keys = ON")
+        # FK setting handled by _get_conn (skipped when ATTACH'd shared DB).
         init_db(conn)
         return conn
 

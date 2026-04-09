@@ -122,6 +122,29 @@ def main():
             fallback_count += 1
     if fallback_count:
         print(f"  Inserted {fallback_count} fallback sealed products")
+
+    # Seed price history for blb/124 (Artist's Talent) — used by collection_price_chart UI test
+    print("  Seeding price data for UI tests...")
+    price_rows = [
+        ("blb", "124", "tcgplayer", "normal", 8.50, "2026-02-08"),
+        ("blb", "124", "tcgplayer", "normal", 9.00, "2026-02-23"),
+        ("blb", "124", "tcgplayer", "normal", 10.00, "2026-03-09"),
+        ("blb", "124", "tcgplayer", "normal", 10.50, "2026-03-24"),
+        ("blb", "124", "tcgplayer", "normal", 10.46, "2026-04-01"),
+    ]
+    for sc, cn, src, pt, price, observed in price_rows:
+        conn.execute(
+            "INSERT OR IGNORE INTO prices (set_code, collector_number, source, price_type, price, observed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (sc, cn, src, pt, price, observed),
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO latest_prices (set_code, collector_number, source, price_type, price, observed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("blb", "124", "tcgplayer", "normal", 10.46, "2026-04-01"),
+    )
+    print(f"  Seeded {len(price_rows)} price rows for blb/124")
+
     conn.commit()
 
     # Compact
