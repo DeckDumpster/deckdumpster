@@ -7704,11 +7704,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Trigger TCGCSV sealed price fetch."""
         from mtg_collector.cli.data_cmd import fetch_sealed_prices
 
-        conn = self._get_conn()
-        try:
-            result = fetch_sealed_prices(self.db_path, conn=conn)
-        finally:
-            conn.close()
+        # Don't pass conn — fetch_sealed_prices writes to shared tables
+        # (tcgplayer_groups, sealed_prices) which need a direct connection
+        # to the shared DB, not the ATTACHed main DB where they're views.
+        result = fetch_sealed_prices(self.db_path)
         self._send_json({"ok": True, **(result or {})})
 
     def _api_sealed_from_tcgplayer(self, data: dict):
