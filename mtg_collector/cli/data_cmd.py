@@ -9,6 +9,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from mtg_collector.db.connection import get_shared_write_path
 from mtg_collector.utils import get_mtgc_home, now_iso
 
 _USER_AGENT = "MTGCollectionTool/2.0"
@@ -219,7 +220,7 @@ def import_mtgjson(db_path: str):
     with open(path) as f:
         raw = json.load(f)
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(get_shared_write_path(db_path))
     conn.execute("PRAGMA foreign_keys = OFF")  # defer FK checks for bulk import
     init_db(conn)
 
@@ -623,7 +624,7 @@ def import_prices(db_path: str):
 
     t0 = time.time()
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(get_shared_write_path(db_path))
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)
     _ensure_uuid_map(conn)
@@ -809,7 +810,7 @@ def fetch_sealed_prices(db_path: str, set_code: str = None, conn: sqlite3.Connec
 
     own_conn = conn is None
     if own_conn:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(get_shared_write_path(db_path))
         conn.row_factory = sqlite3.Row
         init_db(conn)
 
@@ -981,7 +982,7 @@ def import_sealed_products(db_path: str, set_code: str = None):
 
     t0 = time.time()
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(get_shared_write_path(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = OFF")
     init_db(conn)
@@ -1227,7 +1228,7 @@ def import_edhrec(db_path: str):
         print("No EDHREC JSON files found.")
         return
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(get_shared_write_path(db_path))
     conn.row_factory = sqlite3.Row
     init_db(conn)
 

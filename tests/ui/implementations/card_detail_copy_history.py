@@ -11,11 +11,11 @@ def steps(harness):
     # start_page: /card/blb/124 — auto-navigated by test runner.
     harness.wait_for_text("Artist's Talent")
     # Wait for copies to load.
-    harness.wait_for_visible(".copy-section", timeout=10_000)
+    harness.wait_for_visible(".copy-section", timeout=500)
     # Click the "History" toggle button.
     harness.click_by_selector(".history-toggle")
     # Timeline should appear.
-    harness.wait_for_visible(".history-timeline", timeout=10_000)
+    harness.wait_for_visible(".history-timeline", timeout=500)
     harness.assert_visible(".history-event")
     harness.screenshot("history_expanded")
     # Click again to collapse.

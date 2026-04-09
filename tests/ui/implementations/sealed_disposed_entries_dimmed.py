@@ -16,7 +16,6 @@ def steps(harness):
 
     # Close sidebar via backdrop
     harness.click_by_selector("#sidebar-backdrop")
-    harness.page.wait_for_timeout(500)
 
     # Verify the opened entry now appears with the .disposed class
     harness.assert_visible(".disposed")

@@ -15,8 +15,8 @@ def steps(harness):
     # Click the card in grid view.
     harness.click_by_selector(".sheet-card[data-idx]")
     # Wait for modal and copies to load.
-    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
-    harness.wait_for_visible("select.copy-add-to-deck", timeout=10_000)
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=500)
+    harness.wait_for_visible("select.copy-add-to-deck", timeout=500)
     # Assign to Bolt Tribal deck using the dropdown.
     harness.select_by_label("select.copy-add-to-deck", "Bolt Tribal")
     harness.screenshot("final_state")

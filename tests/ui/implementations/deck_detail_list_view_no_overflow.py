@@ -38,6 +38,5 @@ def steps(harness):
 
     # Resize to mobile width and verify no overflow
     harness.page.set_viewport_size({"width": 390, "height": 844})
-    harness.page.wait_for_timeout(500)
     _assert_no_overflow(harness, "mobile (390px)")
     harness.screenshot("final_state")

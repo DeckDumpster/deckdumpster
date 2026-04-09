@@ -18,7 +18,7 @@ def steps(harness):
 
     # Click Resolve
     harness.click_by_selector("#resolve-btn")
-    harness.wait_for_text("Beast-Kin Ranger", timeout=10000)
+    harness.wait_for_text("Beast-Kin Ranger", timeout=500)
 
     # Verify resolved table appears
     harness.assert_visible(".resolved-table")
@@ -28,6 +28,6 @@ def steps(harness):
 
     # Commit to collection
     harness.click_by_selector("#commit-btn")
-    harness.wait_for_text("Added", timeout=10000)
+    harness.wait_for_text("Added", timeout=500)
 
     harness.screenshot("final_state")

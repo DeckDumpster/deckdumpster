@@ -9,7 +9,7 @@ are displayed, then closes the modal.
 def steps(harness):
     # Navigate to Collection page (default is table view)
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=15000)
+    harness.wait_for_visible(".collection-table", timeout=500)
 
     # Click the first card row to open its modal
     harness.click_by_selector(".collection-table tbody tr")

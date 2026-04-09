@@ -9,7 +9,7 @@ removes one entry, and closes the panel via the backdrop.
 def steps(harness):
     # Navigate to Collection page
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=15000)
+    harness.wait_for_visible(".collection-table", timeout=500)
 
     # Open the more menu and click Wishlist
     harness.click_by_selector("#more-menu-btn")

@@ -19,7 +19,6 @@ def steps(harness):
     harness.fill_by_selector("#search-input", "")
 
     # Wait for async filtering to complete
-    harness.page.wait_for_timeout(1000)
 
     # Open filter sidebar
     harness.click_by_selector("#filter-btn")

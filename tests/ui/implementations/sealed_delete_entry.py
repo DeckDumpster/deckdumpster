@@ -23,7 +23,7 @@ def steps(harness):
     harness.click_by_selector(".entry-delete-btn")
 
     # Modal closes and collection re-fetches
-    harness.wait_for_hidden("#detail-modal-overlay.active", timeout=5000)
+    harness.wait_for_hidden("#detail-modal-overlay.active", timeout=500)
 
     # Verify the product is gone (its UUID should no longer be in the DOM)
     harness.assert_hidden('[data-uuid="989edd8e-fba0-5102-9dad-178755d59c74"]')

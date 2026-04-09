@@ -16,7 +16,7 @@ def steps(harness):
     # Click the first non-current printing option
     harness.click_by_selector(".printing-option:not(.current)")
     # Page should navigate to the new printing's detail page
-    harness.wait_for_text("Curator of Destinies", timeout=10_000)
+    harness.wait_for_text("Curator of Destinies", timeout=500)
     # Verify the copy now exists on this page
-    harness.wait_for_visible(".copy-section", timeout=10_000)
+    harness.wait_for_visible(".copy-section", timeout=500)
     harness.screenshot("final_state")

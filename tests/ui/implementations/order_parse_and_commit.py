@@ -20,11 +20,11 @@ def steps(harness):
     harness.click_by_selector("#parse-btn")
 
     # Wait for resolved results
-    harness.wait_for_text("Resolved", timeout=10000)
+    harness.wait_for_text("Resolved", timeout=500)
     harness.assert_visible(".order-group")
 
     # Commit to collection
     harness.click_by_selector("#commit-btn")
-    harness.wait_for_text("Added", timeout=10000)
+    harness.wait_for_text("Added", timeout=500)
 
     harness.screenshot("final_state")

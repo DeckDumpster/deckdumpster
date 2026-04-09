@@ -10,7 +10,7 @@ def steps(harness):
     # start_page: /sheets#set=blb&product=play — auto-navigated by test runner.
 
     # Wait for sheet sections to render (proves data loaded)
-    harness.wait_for_visible(".section-header", timeout=15_000)
+    harness.wait_for_visible(".section-header", timeout=500)
 
     # Verify the set input auto-filled with Bloomburrow (input value, not text)
     val = harness.page.input_value("#set-input")

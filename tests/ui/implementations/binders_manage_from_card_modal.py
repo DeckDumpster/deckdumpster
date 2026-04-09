@@ -17,9 +17,9 @@ def steps(harness):
     # Click the card in grid view.
     harness.click_by_selector(".sheet-card[data-idx]")
     # Wait for modal to appear.
-    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=500)
     # Wait for the binder dropdown to appear (copies section loads async).
-    harness.wait_for_visible("select.copy-add-to-binder", timeout=10_000)
+    harness.wait_for_visible("select.copy-add-to-binder", timeout=500)
     # Assign to Trade Binder using the dropdown.
     harness.select_by_label("select.copy-add-to-binder", "Trade Binder")
     harness.screenshot("final_state")

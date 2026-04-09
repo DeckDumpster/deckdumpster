@@ -29,7 +29,7 @@ def steps(harness):
     harness.click_by_text("Save")
 
     # Wait for redirect to the unified deck page (renders deck header h2)
-    harness.wait_for_text("Test Redirect Deck", timeout=5000)
+    harness.wait_for_text("Test Redirect Deck", timeout=500)
 
     # Verify zone tabs are present (confirms standalone page, not list)
     harness.assert_text_present("Mainboard")

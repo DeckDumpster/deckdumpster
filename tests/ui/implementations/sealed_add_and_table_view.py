@@ -14,10 +14,12 @@ def steps(harness):
     # Wait for results and click the first matching product.
     harness.wait_for_visible(".product-results li")
     harness.click_by_selector(".product-results li")
-    # Fill in the quantity and confirm.
+    # Wait for the add form to render (replaces product list with form).
+    harness.wait_for_visible("#confirm-add-btn")
+    # Confirm.
     harness.click_by_selector("#confirm-add-btn")
     # Close the modal overlay if still visible.
-    harness.wait_for_hidden("#add-modal-overlay.active", timeout=5_000)
+    harness.wait_for_hidden("#add-modal-overlay.active", timeout=500)
     # Switch to table view.
     harness.click_by_selector("#view-table-btn")
     # Verify the product appears in the table.

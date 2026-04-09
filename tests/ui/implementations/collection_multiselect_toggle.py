@@ -9,7 +9,7 @@ toggle off. Also verifies the selection bar count updates.
 def steps(harness):
     # Navigate to Collection page
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=15000)
+    harness.wait_for_visible(".collection-table", timeout=500)
 
     # Open more menu and enable multi-select
     harness.click_by_selector("#more-menu-btn")

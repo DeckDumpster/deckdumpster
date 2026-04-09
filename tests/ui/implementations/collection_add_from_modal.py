@@ -13,7 +13,7 @@ def steps(harness):
     # Click the first card in grid view to open the modal.
     harness.click_by_selector(".sheet-card[data-idx]")
     # Wait for modal to appear.
-    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=500)
     # Click the "Add" button to show the add form.
     harness.click_by_selector("#modal-add-btn")
     # Fill in purchase details.

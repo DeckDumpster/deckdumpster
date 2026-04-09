@@ -18,7 +18,7 @@ def steps(harness):
 
     # Parse & Resolve
     harness.click_by_selector("#parse-btn")
-    harness.wait_for_text("Resolved", timeout=10000)
+    harness.wait_for_text("Resolved", timeout=500)
 
     # Cancel
     harness.click_by_selector("#cancel-btn")

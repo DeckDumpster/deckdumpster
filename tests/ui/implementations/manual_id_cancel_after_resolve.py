@@ -16,7 +16,7 @@ def steps(harness):
 
     # Resolve
     harness.click_by_selector("#resolve-btn")
-    harness.wait_for_text("Beast-Kin Ranger", timeout=10000)
+    harness.wait_for_text("Beast-Kin Ranger", timeout=500)
 
     # Click Cancel
     harness.click_by_selector("#cancel-btn")
