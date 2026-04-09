@@ -11,13 +11,13 @@ def steps(harness):
     harness.navigate("/collection")
     harness.wait_for_visible(".collection-table", timeout=15000)
 
-    # Type a search term (debounced server fetch after 300ms)
-    harness.fill_by_placeholder("Search cards...", "Scrawling")
+    # Type a search term using Scryfall syntax (debounced server fetch after 300ms)
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Scrawling")
     harness.wait_for_text("Scrawling Crawler")
     harness.screenshot("search_filtered")
 
     # Clear the search to restore full view
-    harness.fill_by_placeholder("Search cards...", "")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "")
     harness.wait_for_text("43")
 
     harness.screenshot("final_state")
