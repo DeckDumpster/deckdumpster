@@ -2026,27 +2026,29 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             order_dir = "ASC"
 
         # Conditional JOINs from the search engine
-        extra_joins = []
-        needs_deck_join = compiled and compiled.needs_deck_join
+        # Note: expand_copies and default templates already include dc/d/b joins.
+        # Only the shared-links (card_pairs) template needs them dynamically.
         needs_price_join = compiled and compiled.needs_price_join
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
-        needs_binder_join = compiled and "b.name" in (compiled.where_sql or "")
 
-        if needs_deck_join:
-            extra_joins.append("LEFT JOIN deck_cards dc ON dc.collection_id = c.id")
-            extra_joins.append("LEFT JOIN decks d ON dc.deck_id = d.id")
-        if needs_price_join:
-            extra_joins.append(
-                "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
-                " AND _lp.collector_number = p.collector_number AND _lp.price_type = 'normal'"
-            )
-        if needs_wishlist_join:
-            extra_joins.append(
-                "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
-            )
-        if needs_binder_join:
-            extra_joins.append("LEFT JOIN binders b ON c.binder_id = b.id")
-        extra_joins_sql = "\n                ".join(extra_joins)
+        def _build_extra_joins(*, has_deck_binder_joins: bool) -> str:
+            joins = []
+            if not has_deck_binder_joins:
+                if compiled and compiled.needs_deck_join:
+                    joins.append("LEFT JOIN deck_cards dc ON dc.collection_id = c.id")
+                    joins.append("LEFT JOIN decks d ON dc.deck_id = d.id")
+                if compiled and "b.name" in (compiled.where_sql or ""):
+                    joins.append("LEFT JOIN binders b ON c.binder_id = b.id")
+            if needs_price_join:
+                joins.append(
+                    "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
+                    " AND _lp.collector_number = p.collector_number AND _lp.price_type = 'normal'"
+                )
+            if needs_wishlist_join:
+                joins.append(
+                    "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
+                )
+            return "\n                ".join(joins)
 
         if card_pairs:
             # Shared card links: LEFT JOIN so unowned cards appear
@@ -2079,7 +2081,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN orders o ON c.order_id = o.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                 LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
-                {extra_joins_sql}
+                {_build_extra_joins(has_deck_binder_joins=False)}
                 WHERE {where_sql}
                 GROUP BY p.printing_id
                 ORDER BY {sort_col} {order_dir}, card.name ASC
@@ -2121,7 +2123,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN binders b ON c.binder_id = b.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                 LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
-                {extra_joins_sql}
+                {_build_extra_joins(has_deck_binder_joins=True)}
                 WHERE {where_sql}
                 ORDER BY {sort_col} {order_dir}, card.name ASC
             """
@@ -2161,7 +2163,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN binders b ON c.binder_id = b.id
                 LEFT JOIN ingest_lineage il ON il.collection_id = c.id
                 LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
-                {extra_joins_sql}
+                {_build_extra_joins(has_deck_binder_joins=True)}
                 WHERE {where_sql}
                 GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
                 ORDER BY {sort_col} {order_dir}, card.name ASC

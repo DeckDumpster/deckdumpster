@@ -132,8 +132,7 @@ def known_oracle_ids(search_db):
 def scryfall_cache(request):
     """SQLite cache for Scryfall API responses. Only created when --scryfall is used.
 
-    Automatically invalidated when query_generator.py changes (different
-    generator source → different seed-to-query mapping → stale cache).
+    Cached responses persist across runs — only uncached queries hit the API.
     """
     import pathlib
 

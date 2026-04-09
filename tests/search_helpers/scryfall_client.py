@@ -1,8 +1,8 @@
 """Rate-limited Scryfall search client with SQLite response caching.
 
-Cache is keyed by query string. A generator_hash in the meta table tracks
-whether the query_generator.py source has changed; if so, the entire cache
-is wiped on next run (since seed → query mapping changed).
+Cache is keyed by query string. Cached responses persist across generator
+changes — a query's Scryfall result doesn't depend on how it was generated.
+Only uncached queries trigger network requests.
 """
 
 import hashlib
@@ -21,8 +21,6 @@ _MAX_PAGES = 3  # up to 525 cards
 
 _last_request_time = 0.0
 
-_GENERATOR_PATH = pathlib.Path(__file__).parent / "query_generator.py"
-
 
 def _rate_limit():
     global _last_request_time
@@ -36,15 +34,8 @@ def _cache_key(query: str) -> str:
     return hashlib.sha256(query.strip().lower().encode()).hexdigest()
 
 
-def _generator_hash() -> str:
-    """Hash the query generator source to detect changes."""
-    if _GENERATOR_PATH.exists():
-        return hashlib.sha256(_GENERATOR_PATH.read_bytes()).hexdigest()[:16]
-    return "unknown"
-
-
 def init_cache(cache_path: str | pathlib.Path) -> sqlite3.Connection:
-    """Open or create the Scryfall cache DB, invalidating if generator changed."""
+    """Open or create the Scryfall cache DB."""
     conn = sqlite3.connect(str(cache_path))
     conn.row_factory = sqlite3.Row
     conn.execute("""
@@ -57,32 +48,7 @@ def init_cache(cache_path: str | pathlib.Path) -> sqlite3.Connection:
             fetched_at TEXT NOT NULL
         )
     """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-    """)
     conn.commit()
-
-    # Check if generator changed
-    current_hash = _generator_hash()
-    row = conn.execute(
-        "SELECT value FROM meta WHERE key = 'generator_hash'"
-    ).fetchone()
-    stored_hash = row["value"] if row else None
-
-    if stored_hash != current_hash:
-        # Generator source changed — invalidate all cached results
-        count = conn.execute("SELECT COUNT(*) FROM query_cache").fetchone()[0]
-        if count > 0:
-            conn.execute("DELETE FROM query_cache")
-        conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES ('generator_hash', ?)",
-            (current_hash,),
-        )
-        conn.commit()
-
     return conn
 
 

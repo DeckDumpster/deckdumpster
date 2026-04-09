@@ -610,13 +610,12 @@ class TestCollectionViewCRUD:
 
 
 class TestCollectionDeckBinderFilters:
-    """GET /api/collection supports deck_id, binder_id, unassigned filters."""
+    """GET /api/collection supports deck/binder queries via Scryfall syntax."""
 
     def test_unassigned_filter(self, api):
-        status, data = api.get("/api/collection?unassigned=1&limit=5")
+        status, data = api.get("/api/collection?q=is%3Aunassigned&limit=5")
         assert status == 200
         for card in data:
-            # Unassigned cards won't have deck_id/binder_id fields
             assert card.get("deck_id") is None
             assert card.get("binder_id") is None
 
@@ -632,7 +631,9 @@ class TestCollectionDeckBinderFilters:
         })
 
         try:
-            status, filtered = api.get(f"/api/collection?deck_id={deck['id']}")
+            from urllib.parse import quote
+            q = quote(f'deck:"{deck["name"]}"')
+            status, filtered = api.get(f"/api/collection?q={q}")
             assert status == 200
             assert len(filtered) >= 1
             for card in filtered:
@@ -651,7 +652,9 @@ class TestCollectionDeckBinderFilters:
         })
 
         try:
-            status, filtered = api.get(f"/api/collection?binder_id={binder['id']}")
+            from urllib.parse import quote
+            q = quote(f'binder:"{binder["name"]}"')
+            status, filtered = api.get(f"/api/collection?q={q}")
             assert status == 200
             assert len(filtered) >= 1
             for card in filtered:
