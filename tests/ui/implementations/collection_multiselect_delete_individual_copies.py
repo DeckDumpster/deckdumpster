@@ -10,7 +10,7 @@ def steps(harness):
     # Navigate and search for Unstoppable Slasher
     harness.navigate("/collection")
     harness.wait_for_visible(".collection-table", timeout=15000)
-    harness.fill_by_placeholder("Search cards...", "Unstoppable Slasher")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Unstoppable Slasher")
     harness.wait_for_visible("tr[data-idx]")
 
     # Enable multi-select (triggers re-fetch with expand=copies)

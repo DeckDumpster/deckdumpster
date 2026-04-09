@@ -11,8 +11,8 @@ def steps(harness):
     # Wait for the grid to render with card images
     harness.wait_for_visible(".sheet-card", timeout=10_000)
 
-    # Verify status bar shows owned/missing counts
-    harness.wait_for_text("1 owned, 1 missing", timeout=10_000)
+    # Verify status bar shows entry/card counts
+    harness.wait_for_text("2 entries", timeout=10_000)
 
     # Verify both cards are rendered
     harness.assert_element_count(".sheet-card", 2)

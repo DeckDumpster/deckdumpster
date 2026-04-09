@@ -8,7 +8,7 @@ Scrawling Crawler has 3 copies: 2 in Bolt Tribal, 1 unassigned (#3).
 
 def steps(harness):
     # Search for Scrawling Crawler on the collection page.
-    harness.fill_by_placeholder("Search cards...", "Scrawling Crawler")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Scrawling Crawler")
     # Wait for results and switch to grid view.
     harness.wait_for_visible("tr[data-idx]")
     harness.click_by_selector("#view-grid-btn")

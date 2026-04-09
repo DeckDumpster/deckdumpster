@@ -9,7 +9,7 @@ unassigned. The prompt dialog is auto-accepted with "Test View".
 
 def steps(harness):
     # Search for an unassigned card.
-    harness.fill_by_placeholder("Search cards...", "Ruby Medallion")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Ruby Medallion")
     harness.wait_for_visible("tr[data-idx]")
     # Open the more menu and enable multi-select.
     harness.click_by_selector("#more-menu-btn")

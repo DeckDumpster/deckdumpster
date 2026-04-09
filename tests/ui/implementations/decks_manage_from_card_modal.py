@@ -8,7 +8,7 @@ Uses Cathar Commando (FDN 139) which is owned and unassigned in the fixture.
 
 def steps(harness):
     # Search for an unassigned owned card.
-    harness.fill_by_placeholder("Search cards...", "Cathar Commando")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Cathar Commando")
     # Wait for results and switch to grid view.
     harness.wait_for_visible("tr[data-idx]")
     harness.click_by_selector("#view-grid-btn")

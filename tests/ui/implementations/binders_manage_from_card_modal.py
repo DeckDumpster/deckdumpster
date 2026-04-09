@@ -9,7 +9,7 @@ and not used by any other test.
 
 def steps(harness):
     # Search for an unassigned card.
-    harness.fill_by_placeholder("Search cards...", "Orazca")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Orazca")
     # Wait for search results to render.
     harness.wait_for_visible("tr[data-idx]")
     # Switch to grid view so we can click the card directly.

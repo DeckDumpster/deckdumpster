@@ -58,7 +58,7 @@ def steps(harness):
 
     # start_page: /collection — auto-navigated by test runner.
     # Search for Artist's Talent (blb/124) which has seeded price data.
-    harness.fill_by_placeholder("Search cards...", "Artist's Talent")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Artist's Talent")
     harness.wait_for_visible("tr[data-idx]", timeout=15_000)
     # Switch to grid view and click the card.
     harness.click_by_selector("#view-grid-btn")
@@ -79,7 +79,7 @@ def steps(harness):
 
     # Now open a card with no price data to verify chart is hidden.
     # Still in grid view from above — search and click grid card.
-    harness.fill_by_placeholder("Search cards...", "Orazca Puzzle-Door")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Orazca Puzzle-Door")
     harness.wait_for_visible(".sheet-card[data-idx]", timeout=15_000)
     harness.click_by_selector(".sheet-card[data-idx]")
     harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
