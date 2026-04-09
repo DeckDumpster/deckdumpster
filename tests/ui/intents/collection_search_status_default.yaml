@@ -1,0 +1,10 @@
+# Scenario: Default status filter shows owned/ordered cards
+#
+# Related:
+#   issues: []
+#   pull_requests: [243]
+
+description: >
+  When I load the collection page with no query, the default filter
+  shows owned and ordered cards. When I search for "status:ordered",
+  only ordered cards appear and the count changes.

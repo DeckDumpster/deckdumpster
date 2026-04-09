@@ -1,10 +1,78 @@
 """Top-level conftest for search test infrastructure."""
 
+import json
+import os
 import shutil
 import sqlite3
 import tempfile
+import time
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Progress file — write test results as JSONL for real-time monitoring
+# ---------------------------------------------------------------------------
+
+_PROGRESS_PATH = os.environ.get(
+    "PYTEST_PROGRESS_FILE",
+    os.path.join(tempfile.gettempdir(), "pytest-progress.jsonl"),
+)
+_progress_file = None
+_session_start = None
+
+
+def pytest_sessionstart(session):
+    global _progress_file, _session_start
+    _session_start = time.monotonic()
+    _progress_file = open(_PROGRESS_PATH, "w")
+    _progress_file.write(json.dumps({
+        "event": "session_start",
+        "collected": 0,
+        "ts": time.time(),
+    }) + "\n")
+    _progress_file.flush()
+
+
+def pytest_collection_finish(session):
+    if _progress_file:
+        _progress_file.write(json.dumps({
+            "event": "collected",
+            "total": len(session.items),
+            "ts": time.time(),
+        }) + "\n")
+        _progress_file.flush()
+
+
+def pytest_runtest_logreport(report):
+    if _progress_file and report.when == "call":
+        elapsed = time.monotonic() - _session_start
+        _progress_file.write(json.dumps({
+            "event": "test_result",
+            "nodeid": report.nodeid,
+            "outcome": report.outcome,
+            "duration": round(report.duration, 2),
+            "elapsed": round(elapsed, 1),
+        }) + "\n")
+        _progress_file.flush()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    global _progress_file
+    if _progress_file:
+        elapsed = time.monotonic() - _session_start
+        _progress_file.write(json.dumps({
+            "event": "session_end",
+            "exitstatus": exitstatus,
+            "elapsed": round(elapsed, 1),
+            "ts": time.time(),
+        }) + "\n")
+        _progress_file.close()
+        _progress_file = None
+
+
+# ---------------------------------------------------------------------------
+# CLI options and markers
+# ---------------------------------------------------------------------------
 
 
 def pytest_addoption(parser):
@@ -132,8 +200,7 @@ def known_oracle_ids(search_db):
 def scryfall_cache(request):
     """SQLite cache for Scryfall API responses. Only created when --scryfall is used.
 
-    Automatically invalidated when query_generator.py changes (different
-    generator source → different seed-to-query mapping → stale cache).
+    Cached responses persist across runs — only uncached queries hit the API.
     """
     import pathlib
 

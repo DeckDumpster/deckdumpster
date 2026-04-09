@@ -2,6 +2,7 @@
 
 Local tests (always run): verify generated queries parse, compile, and execute.
 Scryfall tests (--scryfall): compare results with Scryfall API (report mode).
+Collection tests: verify collection-specific keywords parse/compile/execute.
 """
 
 import json
@@ -25,7 +26,7 @@ class TestGenerativeLocal:
         for seed in seed_range:
             rng = random.Random(seed)
             gen = QueryGenerator(rng, supported_only=True)
-            query = gen.generate()
+            query, _ = gen.generate()
             try:
                 ast = parse_query(query)
                 assert ast is not None
@@ -39,7 +40,7 @@ class TestGenerativeLocal:
         for seed in seed_range:
             rng = random.Random(seed)
             gen = QueryGenerator(rng, supported_only=True)
-            query = gen.generate()
+            query, _ = gen.generate()
             ast = parse_query(query)
             compiled = compile_query(ast)
             assert "1=0" not in compiled.where_sql, (
@@ -53,7 +54,7 @@ class TestGenerativeLocal:
         for seed in seed_range:
             rng = random.Random(seed)
             gen = QueryGenerator(rng, supported_only=True)
-            query = gen.generate()
+            query, _ = gen.generate()
             ast = parse_query(query)
             compiled = compile_query(ast)
             try:
@@ -64,9 +65,63 @@ class TestGenerativeLocal:
 
 
 @pytest.mark.generative
+class TestGenerativeCollection:
+    """Generate queries with collection-specific keywords, verify locally."""
+
+    def test_collection_parse(self, seed_range):
+        """Collection-specific queries must parse without error."""
+        from tests.search_helpers.query_generator import QueryGenerator
+
+        for seed in seed_range:
+            rng = random.Random(seed)
+            gen = QueryGenerator(rng, supported_only=True, include_collection=True)
+            query, _ = gen.generate()
+            try:
+                ast = parse_query(query)
+                assert ast is not None
+            except SearchError as e:
+                pytest.fail(f"Seed {seed} generated unparseable query: {query!r}\n  Error: {e}")
+
+    def test_collection_compile(self, seed_range):
+        """Collection-specific queries must compile (no unsupported fallback)."""
+        from tests.search_helpers.query_generator import QueryGenerator
+
+        for seed in seed_range:
+            rng = random.Random(seed)
+            gen = QueryGenerator(rng, supported_only=True, include_collection=True)
+            query, _ = gen.generate()
+            ast = parse_query(query)
+            compiled = compile_query(ast)
+            assert "1=0" not in compiled.where_sql, (
+                f"Seed {seed}: unsupported keyword in {query!r}"
+            )
+
+    def test_collection_execute(self, search_db, seed_range):
+        """Collection-specific queries must execute in collection mode."""
+        from tests.search_helpers.query_generator import QueryGenerator
+
+        for seed in seed_range:
+            rng = random.Random(seed)
+            gen = QueryGenerator(rng, supported_only=True, include_collection=True)
+            query, needs_collection = gen.generate()
+            ast = parse_query(query)
+            compiled = compile_query(ast)
+            mode = "collection" if needs_collection else "all"
+            try:
+                rows, _ = execute_search(search_db, compiled, mode=mode)
+                assert isinstance(rows, list)
+            except Exception as e:
+                pytest.fail(f"Seed {seed}: SQL error for {query!r} (mode={mode})\n  Error: {e}")
+
+
+@pytest.mark.generative
 @pytest.mark.scryfall
 class TestGenerativeScryfall:
-    """Compare generated query results with Scryfall API (report mode)."""
+    """Compare generated query results with Scryfall API (report mode).
+
+    Only generates standard (non-collection) keywords since Scryfall
+    doesn't understand our collection extensions.
+    """
 
     def test_results_report(self, search_db, known_oracle_ids,
                             scryfall_cache, seed_range):
@@ -83,7 +138,7 @@ class TestGenerativeScryfall:
             total += 1
             rng = random.Random(seed)
             gen = QueryGenerator(rng, supported_only=True)
-            query = gen.generate()
+            query, _ = gen.generate()
 
             # Local execution
             ast = parse_query(query)

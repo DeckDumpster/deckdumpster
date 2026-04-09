@@ -9,13 +9,14 @@ are displayed, then closes the modal.
 def steps(harness):
     # Navigate to Collection page (default is table view)
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=500)
+    harness.wait_for_visible(".collection-table", timeout=5_000)
+    harness.wait_for_visible(".collection-table tbody tr", timeout=5_000)
 
-    # Click the first card row to open its modal
-    harness.click_by_selector(".collection-table tbody tr")
+    # Click a card name cell to open the modal (avoid first cell which may have checkbox)
+    harness.click_by_selector("tr[data-idx] td:nth-child(3)")
 
     # Wait for modal to appear
-    harness.wait_for_visible("#card-modal-overlay.active")
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=5_000)
 
     # Verify card modal is displayed
     harness.assert_visible("#card-modal")

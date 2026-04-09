@@ -20,12 +20,30 @@ MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gath
 
 ```bash
 uv sync                                                # Install deps
-uv run pytest                                          # All tests
 uv run ruff check mtg_collector/                       # Lint
 uv run shot-scraper install                            # One-time: install Chromium for Playwright
 
-# UI scenario tests (requires running container instance + ANTHROPIC_API_KEY)
-uv run pytest tests/ui/ -v --instance <instance>       # Run all UI scenarios
+# --- Test suites (run in order of speed) ---
+
+# 1. Unit tests — no container, no network (~2.5 min, runs generative fuzz)
+uv run pytest tests/ --ignore=tests/ui --ignore=tests/integration
+
+# 2. Targeted tests — for fast iteration on specific areas (~20s)
+uv run pytest tests/test_search_compiler.py tests/test_search_corpus.py -q
+
+# 3. Integration tests — requires running container instance (~10s)
+bash deploy/setup.sh <instance> --test                           # fast fixture, no network
+systemctl --user start mtgc-<instance>
+uv run pytest tests/integration/ --instance <instance>
+
+# 4. Scryfall comparison — opt-in, results cached in tests/.scryfall_cache.sqlite
+#    First run hits Scryfall API; subsequent runs use cache (~30s cached)
+uv run pytest tests/test_search_scryfall.py --scryfall
+
+# 5. UI scenario tests — requires container + ANTHROPIC_API_KEY (expensive)
+uv run pytest tests/ui/ -v --instance <instance>
+
+# Always-skipped: 7 order parser tests need real vendor HTML files (not in repo)
 
 mtg setup                                              # Init DB + cache Scryfall + fetch MTGJSON
 mtg setup --demo                                       # Full setup + load demo data (~50 cards)
@@ -128,7 +146,7 @@ Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-
 
 ### Collection page filtering
 
-Only search queries and include-unowned toggle trigger server fetches. All other filters (color, rarity, set, type, finish, status, CMC, date, price) and sorting are applied **client-side** for instant responsiveness.
+All filtering uses a single Scryfall-style query bar (`?q=...`). Standard Scryfall syntax plus collection extensions: `status:`, `added:`, `price:`, `deck:`, `binder:`, `is:unassigned`, `is:decked`, `is:bindered`, `is:wanted`, `order:price`. Default filter: `status:owned OR status:ordered` (when no explicit `status:` in query). Autocomplete suggests keywords and values. Help page at `/search-help`.
 
 ### Card data access policy
 

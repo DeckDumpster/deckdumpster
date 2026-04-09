@@ -1,0 +1,9 @@
+start_page: /search-help
+involves:
+  - 'help page at /search-help'
+  - '"Collection-Specific Extensions" section heading'
+  - '"Standard Scryfall Keywords" section heading'
+  - '"Example Queries" section heading'
+notes: >
+  Navigate directly to /search-help. Verify key section headings
+  and collection-specific content are present.

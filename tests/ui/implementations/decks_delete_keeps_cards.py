@@ -15,6 +15,6 @@ def steps(harness):
     harness.click_by_selector(".delete-btn")
     # Navigate to collection to verify cards remain.
     harness.navigate("/collection")
-    harness.fill_by_placeholder("Search cards...", "Disruptor Flute")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Disruptor Flute")
     harness.wait_for_text("Disruptor Flute")
     harness.screenshot("final_state")

@@ -69,7 +69,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "--ignore=tests/ui/"
+addopts = "--ignore=tests/ui/ --tb=short -q"
 markers = [
     "scryfall: tests requiring Scryfall API access (use --scryfall to enable)",
     "generative: seed-based generative tests with reverse parser",

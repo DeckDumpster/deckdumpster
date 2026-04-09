@@ -5,10 +5,10 @@
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collection Browser</title>
-<link rel="stylesheet" href="/static/vendor/keyrune/keyrune.min.css">
-<link rel="stylesheet" href="/static/vendor/mana-font/mana.min.css">
-<script src="/static/vendor/chart.umd.min.js"></script>
-<script src="/static/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/keyrune@latest/css/keyrune.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mana-font@latest/css/mana.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 <link rel="stylesheet" href="/static/shared-card-table.css">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -88,22 +88,30 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 .view-toggle-group button.secondary:last-child {
   border-radius: 0 6px 6px 0;
 }
-/* When Orders is hidden, Grid becomes the visual last child */
-.view-toggle-group.no-orders #view-orders-btn { display: none; }
-.view-toggle-group.no-orders #view-grid-btn { border-radius: 0 6px 6px 0; }
 .view-toggle-group button.secondary.active {
   z-index: 1; /* active button's border-color (#e94560) shows over the adjacent border */
   position: relative;
 }
 
-#search-input { width: 320px; }
-#search-input.advanced-active { border-color: #7c3aed; box-shadow: 0 0 0 1px #7c3aed33; }
+#search-input { flex: 1; min-width: 280px; }
 #search-error { color: #e94560; font-size: 11px; position: absolute; top: 100%; left: 0; white-space: nowrap; z-index: 10; }
-.search-wrap { position: relative; display: inline-block; }
-.search-mode-badge { display: none; font-size: 9px; color: #7c3aed; position: absolute; top: -10px; right: 2px; pointer-events: none; }
-.search-mode-badge.visible { display: block; }
-#oracle-search-input { width: 220px; }
-
+.search-wrap { position: relative; }
+/* Autocomplete dropdown */
+.ac-dropdown {
+  display: none; position: absolute; top: 100%; left: 0; right: 40px;
+  background: #16213e; border: 1px solid #0f3460; border-top: none;
+  border-radius: 0 0 6px 6px; max-height: 260px; overflow-y: auto;
+  z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.ac-dropdown.open { display: block; }
+.ac-item {
+  padding: 6px 12px; cursor: pointer; font-size: 0.85rem;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.ac-item:hover, .ac-item.active { background: #0f3460; }
+.ac-item .ac-label { color: #e0e0e0; }
+.ac-item .ac-hint { color: #888; font-size: 0.75rem; margin-left: 12px; white-space: nowrap; }
+.ac-item .ac-cat { color: #e94560; font-size: 0.7rem; text-transform: uppercase; margin-left: 8px; }
 /* Icon buttons in view toggle */
 .view-toggle-group button svg { display: block; }
 
@@ -112,10 +120,6 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 
 /* Menu divider */
 .menu-divider { height: 1px; background: #0f3460; margin: 4px 0; }
-
-/* Active state for unowned toggle inside the menu */
-#include-unowned-btn.active { color: #e94560; font-weight: 700; }
-#include-unowned-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 #status {
   font-size: 0.85rem;
@@ -129,32 +133,6 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   min-height: calc(100vh - 70px);
 }
 
-/* Sidebar (slide-in panel from left) */
-.sidebar-backdrop {
-  display: none;
-  position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.4);
-  z-index: 90;
-}
-.sidebar-backdrop.active { display: block; }
-
-.sidebar {
-  position: fixed;
-  top: 0; left: -320px;
-  width: 300px;
-  height: 100vh;
-  background: #16213e;
-  border-right: 2px solid #0f3460;
-  padding: 16px;
-  overflow-y: auto;
-  z-index: 91;
-  transition: left 0.25s ease;
-  box-shadow: 4px 0 20px rgba(0,0,0,0.5);
-}
-
-.sidebar.open { left: 0; }
-
 /* Columns drawer — slides in from the right */
 .col-drawer-backdrop {
   display: none;
@@ -166,15 +144,22 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 .col-drawer-backdrop.active { display: block; }
 
 .col-drawer {
-  left: auto;
+  position: fixed;
+  top: 0;
   right: -320px;
-  border-right: none;
+  width: 300px;
+  height: 100vh;
+  background: #16213e;
   border-left: 2px solid #0f3460;
+  padding: 16px;
+  overflow-y: auto;
+  z-index: 91;
   transition: right 0.25s ease;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.5);
 }
-.col-drawer.open { right: 0; left: auto; }
+.col-drawer.open { right: 0; }
 
-.sidebar h3 {
+.col-drawer h3 {
   font-size: 0.85rem;
   color: #888;
   text-transform: uppercase;
@@ -182,7 +167,7 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   margin: 16px 0 8px;
 }
 
-.sidebar h3:first-child { margin-top: 0; }
+.col-drawer h3:first-child { margin-top: 0; }
 
 /* Pill groups */
 .pill-group { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -209,95 +194,6 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 /* Color pill mana icons */
 .pill-group label .ms { font-size: 1rem; }
 
-/* Rarity dots */
-.rarity-dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-/* Multi-select search component */
-.multi-select-wrap { position: relative; }
-.multi-search-input {
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid #0f3460;
-  border-radius: 4px;
-  background: #1a1a2e;
-  color: #e0e0e0;
-  font-size: 0.85rem;
-}
-.multi-search-input:focus { outline: 2px solid #e94560; }
-.multi-dropdown {
-  display: none;
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  max-height: 200px;
-  overflow-y: auto;
-  background: #1a1a2e;
-  border: 1px solid #0f3460;
-  border-top: none;
-  border-radius: 0 0 4px 4px;
-  z-index: 50;
-  list-style: none;
-}
-.multi-dropdown.open { display: block; }
-.multi-dropdown li {
-  padding: 6px 10px;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-.multi-dropdown li:hover { background: #0f3460; }
-.multi-dropdown li.selected { color: #e94560; }
-.selected-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
-}
-.selected-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: #0f3460;
-  border: 1px solid #e94560;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  color: #e0e0e0;
-}
-.selected-pill .remove-pill {
-  cursor: pointer;
-  color: #e94560;
-  font-weight: bold;
-  font-size: 0.85rem;
-  line-height: 1;
-}
-.selected-pill .remove-pill:hover { color: #fff; }
-
-/* Range filter inputs */
-.range-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-.range-row input[type="number"], .range-row input[type="date"] {
-  width: 60px;
-  padding: 4px 6px;
-  border: 1px solid #0f3460;
-  border-radius: 4px;
-  background: #1a1a2e;
-  color: #e0e0e0;
-  font-size: 0.8rem;
-}
-.range-row input[type="date"] { width: auto; }
-.range-row input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
-.range-row input[type="number"]:focus, .range-row input[type="date"]:focus { outline: 2px solid #e94560; }
-.range-row span { font-size: 0.8rem; color: #888; }
 
 /* Main content */
 .main {
@@ -947,67 +843,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 .modal-copy-info .copy-status.ordered { color: #f0a030; }
 .modal-copy-info .copy-status.owned { color: #4caf50; }
 
-/* Order group headers for grid view */
-.order-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px;
-  margin: 8px 0 4px;
-  background: #1e2a45;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-}
-.order-group-info {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  font-size: 0.85rem;
-  color: #ccc;
-}
-.order-group-info .seller { font-weight: 600; color: #e0e0e0; }
-.order-group-info .order-num { color: #888; }
-.order-group-info .order-count { color: #f0a030; font-weight: 600; }
 
-/* Receive all button (order groups) */
-.receive-all-btn {
-  background: #f0a030;
-  color: #1a1a2e;
-  border: none;
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-.receive-all-btn:hover { background: #e89520; }
-.receive-all-btn:disabled { background: #555; color: #888; cursor: not-allowed; }
-.receive-all-btn.received { background: #4caf50; color: #fff; cursor: default; }
-
-/* Ordered banner */
-.ordered-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 16px;
-  margin: 8px 16px;
-  background: rgba(240, 160, 48, 0.1);
-  border: 1px solid rgba(240, 160, 48, 0.3);
-  border-radius: 8px;
-  font-size: 0.85rem;
-  color: #f0c878;
-}
-.ordered-banner button {
-  background: #f0a030;
-  color: #1a1a2e;
-  border: none;
-  border-radius: 6px;
-  padding: 5px 12px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-.ordered-banner button:hover { background: #e89520; }
 
 
 /* Want button in modal */
@@ -1240,10 +1076,9 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 #sel-delete-btn:hover { background: #7a2a2a; color: #fff; }
 
 @media (max-width: 768px) {
-  #search-input, #oracle-search-input { width: 100%; order: -1; }
+  #search-input { width: 100%; }
   .search-wrap { width: 100%; order: -1; }
   .controls { flex-wrap: wrap; }
-  .sidebar { width: 280px; left: -300px; }
   .wishlist-panel { width: 280px; right: -300px; }
 }
 </style>
@@ -1254,26 +1089,19 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 <header>
   <h1><a href="/" style="color:inherit;text-decoration:none">Collection</a></h1>
   <div class="controls">
-    <div class="search-wrap">
-      <input type="text" id="search-input" placeholder="Search cards... (e.g. c:r t:instant mv&lt;=2)">
-      <span class="search-mode-badge" id="search-mode-badge">scryfall syntax</span>
+    <div class="search-wrap" style="flex:1;display:flex;align-items:center;gap:4px">
+      <input type="text" id="search-input" placeholder="Search (e.g. t:creature c:r mv>=3)" autocomplete="off">
+      <a href="/search-help" target="_blank" title="Search syntax help" style="color:#888;font-size:0.8rem;text-decoration:none">?</a>
       <div id="search-error"></div>
+      <div class="ac-dropdown" id="ac-dropdown"></div>
     </div>
-    <input type="text" id="oracle-search-input" placeholder="Oracle text...">
     <div class="view-toggle-group" id="view-toggle-group">
       <button class="secondary" id="view-table-btn" title="Table view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2" width="14" height="2" rx=".5"/><rect x="1" y="7" width="14" height="2" rx=".5"/><rect x="1" y="12" width="14" height="2" rx=".5"/></svg></button>
       <button class="secondary" id="view-grid-btn" title="Grid view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
-      <button class="secondary" id="view-orders-btn" title="Group by order" style="display:none"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5.5" y="4.5" width="9" height="8" rx="1"/><path d="M5.5 4.5L10 8.5l4.5-4"/><line x1="1" y1="7" x2="3.5" y2="7" stroke-linecap="round"/><line x1=".5" y1="10" x2="3" y2="10" stroke-linecap="round"/></svg></button>
     </div>
-    <button class="secondary" id="sidebar-toggle-btn" title="Toggle filters">Filters</button>
     <div class="col-config-wrap">
       <button class="secondary" id="more-menu-btn" title="More options">&#8942;</button>
       <div class="col-config-dropdown" id="more-menu-dropdown">
-        <button class="menu-item" id="include-unowned-btn" disabled title="Select a set first">+ Unowned</button>
-        <div id="buy-missing-menu-section" style="display:none">
-          <button class="menu-item" id="buy-missing-ck">Copy for Card Kingdom</button>
-          <button class="menu-item" id="buy-missing-tcg">Copy for TCGplayer</button>
-        </div>
         <button class="menu-item" id="wishlist-toggle-btn">Wishlist (0)</button>
         <div class="menu-divider"></div>
         <button class="menu-item" id="toggle-multiselect-btn">Toggle Multi-Select</button>
@@ -1285,12 +1113,11 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
           </div>
         </div>
         <div class="more-menu-section">
-          <span class="more-menu-label">Price Floor</span>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="color:#888;font-size:0.85rem">$</span>
-            <input type="number" id="price-floor-input" step="0.01" min="0" placeholder="0"
-              style="width:70px;padding:4px 6px;background:#16213e;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;font-size:0.85rem">
-          </div>
+          <span class="more-menu-label">Saved Views</span>
+          <select id="view-select" style="width:100%;margin-bottom:4px;padding:4px 6px;background:#1a1a2e;border:1px solid #0f3460;color:#e0e0e0;border-radius:4px;font-size:0.85rem">
+            <option value="">-- None --</option>
+          </select>
+          <button class="menu-item" style="padding:4px 0" onclick="saveCurrentView()">Save Current Query as View</button>
         </div>
       </div>
     </div>
@@ -1312,132 +1139,13 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
   </div>
 </div>
 
-<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
 <div class="col-drawer-backdrop" id="col-drawer-backdrop"></div>
 
-<aside class="sidebar col-drawer" id="col-drawer">
+<aside class="col-drawer" id="col-drawer">
   <h3>Columns</h3>
   <div class="pill-group" id="col-config-dropdown"></div>
 </aside>
 <div class="layout">
-  <aside class="sidebar" id="sidebar">
-    <button class="secondary" id="sidebar-close-btn" style="width:100%;margin-bottom:12px;font-size:0.85rem" onclick="toggleSidebar(false)">Close Filters ✕</button>
-
-    <h3>Saved Views</h3>
-    <select id="view-select" style="width:100%;margin-bottom:4px">
-      <option value="">-- None --</option>
-    </select>
-    <button class="secondary" style="width:100%;margin-top:4px;font-size:0.8rem" onclick="saveCurrentView()">Save Current Filters as View</button>
-
-    <h3>Color</h3>
-    <div class="pill-group" id="color-filters">
-      <input type="checkbox" id="cf-W" value="W"><label for="cf-W"><i class="ms ms-w ms-cost"></i></label>
-      <input type="checkbox" id="cf-U" value="U"><label for="cf-U"><i class="ms ms-u ms-cost"></i></label>
-      <input type="checkbox" id="cf-B" value="B"><label for="cf-B"><i class="ms ms-b ms-cost"></i></label>
-      <input type="checkbox" id="cf-R" value="R"><label for="cf-R"><i class="ms ms-r ms-cost"></i></label>
-      <input type="checkbox" id="cf-G" value="G"><label for="cf-G"><i class="ms ms-g ms-cost"></i></label>
-      <input type="checkbox" id="cf-C" value="C"><label for="cf-C"><i class="ms ms-c ms-cost"></i></label>
-    </div>
-
-    <h3>Rarity</h3>
-    <div class="pill-group" id="rarity-filters">
-      <input type="checkbox" id="rf-common" value="common"><label for="rf-common"><span class="rarity-dot" style="background:#111"></span> C</label>
-      <input type="checkbox" id="rf-uncommon" value="uncommon"><label for="rf-uncommon"><span class="rarity-dot" style="background:#6a6a6a"></span> U</label>
-      <input type="checkbox" id="rf-rare" value="rare"><label for="rf-rare"><span class="rarity-dot" style="background:#c9a816"></span> R</label>
-      <input type="checkbox" id="rf-mythic" value="mythic"><label for="rf-mythic"><span class="rarity-dot" style="background:#d4422a"></span> M</label>
-    </div>
-
-    <h3>Set</h3>
-    <div class="multi-select-wrap" id="set-filter-wrap">
-      <input type="text" class="multi-search-input" id="set-search" placeholder="Search sets..." autocomplete="off">
-      <ul class="multi-dropdown" id="set-dropdown"></ul>
-      <div class="selected-pills" id="set-pills"></div>
-    </div>
-
-    <h3>Type</h3>
-    <div class="pill-group" id="type-filters">
-      <input type="checkbox" id="tf-creature" value="Creature"><label for="tf-creature">Creature</label>
-      <input type="checkbox" id="tf-instant" value="Instant"><label for="tf-instant">Instant</label>
-      <input type="checkbox" id="tf-sorcery" value="Sorcery"><label for="tf-sorcery">Sorcery</label>
-      <input type="checkbox" id="tf-enchantment" value="Enchantment"><label for="tf-enchantment">Enchantment</label>
-      <input type="checkbox" id="tf-artifact" value="Artifact"><label for="tf-artifact">Artifact</label>
-      <input type="checkbox" id="tf-planeswalker" value="Planeswalker"><label for="tf-planeswalker">PW</label>
-      <input type="checkbox" id="tf-land" value="Land"><label for="tf-land">Land</label>
-      <input type="checkbox" id="tf-battle" value="Battle"><label for="tf-battle">Battle</label>
-      <input type="checkbox" id="tf-kindred" value="Kindred"><label for="tf-kindred">Kindred</label>
-      <input type="checkbox" id="tf-token" value="Token"><label for="tf-token">Token</label>
-    </div>
-
-    <h3>Subtype</h3>
-    <div class="multi-select-wrap" id="subtype-filter-wrap">
-      <input type="text" class="multi-search-input" id="subtype-search" placeholder="Search subtypes..." autocomplete="off">
-      <ul class="multi-dropdown" id="subtype-dropdown"></ul>
-      <div class="selected-pills" id="subtype-pills"></div>
-    </div>
-
-    <h3>Collector #</h3>
-    <div class="range-row">
-      <input type="number" id="cn-min" min="1" placeholder="Min">
-      <span>&ndash;</span>
-      <input type="number" id="cn-max" min="1" placeholder="Max">
-    </div>
-
-    <h3>Mana Value</h3>
-    <div class="range-row">
-      <input type="number" id="cmc-min" min="0" placeholder="Min">
-      <span>&ndash;</span>
-      <input type="number" id="cmc-max" min="0" placeholder="Max">
-    </div>
-
-    <h3>Finish</h3>
-    <div class="pill-group" id="finish-filters">
-      <input type="checkbox" id="ff-nonfoil" value="nonfoil"><label for="ff-nonfoil">Nonfoil</label>
-      <input type="checkbox" id="ff-foil" value="foil"><label for="ff-foil">Foil</label>
-      <input type="checkbox" id="ff-etched" value="etched"><label for="ff-etched">Etched</label>
-    </div>
-
-    <h3>Status</h3>
-    <div class="pill-group" id="status-filters">
-      <input type="checkbox" id="sf-ordered" value="ordered"><label for="sf-ordered">Ordered</label>
-      <input type="checkbox" id="sf-wanted" value="wanted"><label for="sf-wanted">Wanted</label>
-      <input type="checkbox" id="sf-sold" value="sold"><label for="sf-sold">Sold</label>
-      <input type="checkbox" id="sf-traded" value="traded"><label for="sf-traded">Traded</label>
-      <input type="checkbox" id="sf-gifted" value="gifted"><label for="sf-gifted">Gifted</label>
-      <input type="checkbox" id="sf-lost" value="lost"><label for="sf-lost">Lost</label>
-    </div>
-
-    <h3>Treatment</h3>
-    <div class="pill-group" id="badge-filters">
-      <input type="checkbox" id="bf-borderless" value="borderless"><label for="bf-borderless">BL</label>
-      <input type="checkbox" id="bf-showcase" value="showcase"><label for="bf-showcase">SC</label>
-      <input type="checkbox" id="bf-extendedart" value="extendedart"><label for="bf-extendedart">EA</label>
-      <input type="checkbox" id="bf-fullart" value="fullart"><label for="bf-fullart">FA</label>
-      <input type="checkbox" id="bf-promo" value="promo"><label for="bf-promo">Promo</label>
-    </div>
-
-    <h3>Price (USD)</h3>
-    <div class="range-row">
-      <input type="number" id="price-min" min="0" step="0.01" placeholder="Min">
-      <span>&ndash;</span>
-      <input type="number" id="price-max" min="0" step="0.01" placeholder="Max">
-    </div>
-
-    <h3>Date Added</h3>
-    <div class="range-row">
-      <input type="date" id="date-min">
-      <span>&ndash;</span>
-      <input type="date" id="date-max">
-    </div>
-
-    <h3>Container</h3>
-    <select id="container-filter" style="width:100%;margin-bottom:4px">
-      <option value="">All Cards</option>
-      <option value="unassigned">Unassigned Only</option>
-    </select>
-
-    <button style="margin-top:16px;width:100%" id="clear-filters-btn">Clear Filters</button>
-  </aside>
-
   <div class="main" id="main">
     <div class="empty-state">Loading collection...</div>
   </div>
@@ -1502,13 +1210,10 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 
 <script src="/static/shared-card-table.js"></script>
 <script>
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 const searchInput = document.getElementById('search-input');
-const oracleSearchInput = document.getElementById('oracle-search-input');
 const viewTableBtn = document.getElementById('view-table-btn');
 const viewGridBtn = document.getElementById('view-grid-btn');
-const viewOrdersBtn = document.getElementById('view-orders-btn');
-const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
-const sidebar = document.getElementById('sidebar');
 const main = document.getElementById('main');
 const statusEl = document.getElementById('status');
 const modalOverlay = document.getElementById('card-modal-overlay');
@@ -1519,7 +1224,6 @@ const modalFlipBtn = document.getElementById('modal-flip-btn');
 const modalDetails = document.getElementById('modal-details');
 let _currentModalCard = null;
 const modalClose = document.getElementById('modal-close');
-const clearFiltersBtn = document.getElementById('clear-filters-btn');
 const colConfigDropdown = document.getElementById('col-config-dropdown');
 const colDrawer = document.getElementById('col-drawer');
 const colDrawerBackdrop = document.getElementById('col-drawer-backdrop');
@@ -1529,53 +1233,22 @@ const selectionBar = document.getElementById('selection-bar');
 const selCountEl = document.getElementById('sel-count');
 const selShareBtn = document.getElementById('sel-share-btn');
 
-// Range inputs
-const cnMinEl = document.getElementById('cn-min');
-const cnMaxEl = document.getElementById('cn-max');
-const cmcMinEl = document.getElementById('cmc-min');
-const cmcMaxEl = document.getElementById('cmc-max');
-const priceMinEl = document.getElementById('price-min');
-const priceMaxEl = document.getElementById('price-max');
-const dateMinEl = document.getElementById('date-min');
-const dateMaxEl = document.getElementById('date-max');
-
 const gridSizeWrap = document.getElementById('grid-size-wrap');
-
-const includeUnownedBtn = document.getElementById('include-unowned-btn');
-let includeUnowned = '';  // '' | 'base' | 'full'
 
 let currentView = 'table';
 let sortOrder = 'asc';
 let sortColumn = 'name';
 let allCards = [];
-let allCardsUnfiltered = [];  // pre-status-filter snapshot for client-side re-filtering
+let allCardsUnfiltered = [];
 let debounceTimer = null;
 let _settings = {};
 let multiSelectMode = false;
-let groupByOrder = false;
 let selectedCards = new Set();
 let lastSelectedIdx = null;
-let wishlistMap = {};  // wishlist_id → {id, oracle_id, printing_id, name, set_code, collector_number, ...}
-let wishlistByPrinting = {};  // printing_id → entry (only for printing-specific wants)
-let wishlistByOracle = {};  // oracle_id → entry (only for card-level wants where printing_id is null)
-const searchModeBadge = document.getElementById('search-mode-badge');
+let wishlistMap = {};
+let wishlistByPrinting = {};
+let wishlistByOracle = {};
 const searchErrorEl = document.getElementById('search-error');
-
-// Detect Scryfall-style advanced query syntax
-function isAdvancedQuery(q) {
-  if (!q) return false;
-  // keyword:value patterns (c:r, t:instant, o:"text", etc.)
-  if (/[a-z]+[:=!<>]/.test(q)) return true;
-  // Exact name match: !"Lightning Bolt"
-  if (/^!"/.test(q)) return true;
-  // Explicit OR operator
-  if (/\bor\b/i.test(q)) return true;
-  // Parenthesized grouping
-  if (/[()]/.test(q)) return true;
-  // Leading negation: -word
-  if (/^-[a-z]/.test(q)) return true;
-  return false;
-}
 
 function _addWishlistEntry(e) {
   wishlistMap[e.id] = e;
@@ -1616,13 +1289,6 @@ document.getElementById('col-plus').addEventListener('click', () => {
 });
 
 applyGridCols();
-
-// Multi-select state
-let selectedSets = new Map();   // code -> name
-let selectedSubtypes = new Set();
-let allSetOptions = [];         // [{code, name}]
-let allSubtypeOptions = [];     // [string]
-let cachedSets = [];            // [{code, name}] from /api/cached-sets
 
 // --- Column definitions ---
 const ALL_COLUMNS = [
@@ -1721,16 +1387,6 @@ document.querySelectorAll('#image-display-pills .pill').forEach(pill => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image_display: pill.dataset.value }),
     });
-  });
-});
-
-document.getElementById('price-floor-input').addEventListener('change', async (e) => {
-  _settings.price_floor = e.target.value || '0';
-  updateStatusText();
-  await fetch('/api/settings', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ price_floor: _settings.price_floor }),
   });
 });
 
@@ -1911,7 +1567,7 @@ modalDetails.addEventListener('click', (e) => {
     e.stopPropagation();
     _destroyPriceChart();
     modalOverlay.classList.remove('active');
-    applyFilter(filterEl.dataset.filterType, filterEl.dataset.filterValue);
+    applyFilterViaSearch(filterEl.dataset.filterType, filterEl.dataset.filterValue);
   }
 });
 
@@ -1973,12 +1629,9 @@ const purchaseLinesPlugin = {
   }
 };
 
-let _priceChartCardKey = null;
 async function renderPriceChart(card) {
   const section = document.getElementById('price-chart-section');
   if (!section) return;
-  const cardKey = `${card.set_code}/${card.collector_number}`;
-  _priceChartCardKey = cardKey;
   section.classList.remove('visible');
 
   let data;
@@ -1986,9 +1639,6 @@ async function renderPriceChart(card) {
     const res = await fetch(`/api/price-history/${encodeURIComponent(card.set_code)}/${encodeURIComponent(card.collector_number)}`);
     data = await res.json();
   } catch { return; }
-
-  // Guard: if modal switched to a different card while we were fetching, bail
-  if (_priceChartCardKey !== cardKey) return;
 
   const seriesKeys = Object.keys(data).filter(k => data[k].length > 0);
   if (!seriesKeys.length) return;
@@ -2854,216 +2504,38 @@ function renderMana(cost) {
   });
 }
 
-// --- Multi-select component ---
-function initMultiSelect(config) {
-  const searchEl = document.getElementById(config.searchId);
-  const dropdownEl = document.getElementById(config.dropdownId);
-  const pillsEl = document.getElementById(config.pillsId);
 
-  function renderDropdown(filter) {
-    const q = (filter || '').toLowerCase();
-    const items = config.getOptions().filter(item => {
-      const label = config.getLabel(item).toLowerCase();
-      return !q || label.includes(q);
-    });
-    dropdownEl.innerHTML = '';
-    for (const item of items.slice(0, 50)) {
-      const li = document.createElement('li');
-      const key = config.getKey(item);
-      li.textContent = config.getLabel(item);
-      if (config.isSelected(key)) li.classList.add('selected');
-      li.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        config.toggle(key, item);
-        renderPills();
-        renderDropdown(searchEl.value);
-        (config.onChange || refilterAndRender)();
-      });
-      dropdownEl.appendChild(li);
-    }
+// --- Filterable click helpers (set search query) ---
+function applyFilterViaSearch(type, value) {
+  const queryMap = {
+    name: `!"${value}"`,
+    set: `s:${value.toLowerCase()}`,
+    rarity: `r:${value.charAt(0)}`,
+    type: `t:${value.toLowerCase()}`,
+    subtype: `t:${value.toLowerCase()}`,
+    cmc: `mv=${value}`,
+    finish: value === 'foil' ? 'is:foil' : value === 'etched' ? 'is:etched' : '',
+    badge: value === 'borderless' ? 'is:borderless' : value === 'showcase' ? 'is:showcase' : value === 'extendedart' ? 'is:extendedart' : value === 'fullart' ? 'is:fullart' : value === 'promo' ? 'is:promo' : '',
+    date_added: '',
+  };
+  const q = queryMap[type] || '';
+  if (q) {
+    searchInput.value = q;
+    fetchCollection();
   }
-
-  function renderPills() {
-    pillsEl.innerHTML = '';
-    for (const [key, label] of config.getSelected()) {
-      const pill = document.createElement('span');
-      pill.className = 'selected-pill';
-      pill.innerHTML = `${label} <span class="remove-pill">&times;</span>`;
-      pill.querySelector('.remove-pill').addEventListener('click', () => {
-        config.remove(key);
-        renderPills();
-        renderDropdown(searchEl.value);
-        (config.onChange || refilterAndRender)();
-      });
-      pillsEl.appendChild(pill);
-    }
-  }
-
-  searchEl.addEventListener('focus', () => {
-    renderDropdown(searchEl.value);
-    dropdownEl.classList.add('open');
-  });
-  searchEl.addEventListener('input', () => {
-    renderDropdown(searchEl.value);
-    dropdownEl.classList.add('open');
-  });
-  searchEl.addEventListener('blur', () => {
-    setTimeout(() => dropdownEl.classList.remove('open'), 150);
-  });
-
-  return { renderPills, renderDropdown };
-}
-
-// Set multi-select
-const setMultiSelect = initMultiSelect({
-  searchId: 'set-search',
-  dropdownId: 'set-dropdown',
-  pillsId: 'set-pills',
-  getOptions: () => allSetOptions,
-  getLabel: (item) => `${item.name} (${item.code.toUpperCase()})`,
-  getKey: (item) => item.code,
-  isSelected: (key) => selectedSets.has(key),
-  toggle: (key, item) => {
-    if (selectedSets.has(key)) selectedSets.delete(key);
-    else selectedSets.set(key, item.name);
-  },
-  remove: (key) => selectedSets.delete(key),
-  getSelected: () => Array.from(selectedSets.entries()).map(([k, v]) => [k, `${v} (${k.toUpperCase()})`]),
-  onChange: () => includeUnowned ? fetchCollection() : refilterAndRender(),
-});
-
-// Subtype multi-select
-const subtypeMultiSelect = initMultiSelect({
-  searchId: 'subtype-search',
-  dropdownId: 'subtype-dropdown',
-  pillsId: 'subtype-pills',
-  getOptions: () => allSubtypeOptions,
-  getLabel: (item) => item,
-  getKey: (item) => item,
-  isSelected: (key) => selectedSubtypes.has(key),
-  toggle: (key) => {
-    if (selectedSubtypes.has(key)) selectedSubtypes.delete(key);
-    else selectedSubtypes.add(key);
-  },
-  remove: (key) => selectedSubtypes.delete(key),
-  getSelected: () => Array.from(selectedSubtypes).map(s => [s, s]),
-});
-
-// --- Filterable click helpers ---
-function applyFilter(type, value) {
-  switch (type) {
-    case 'name':
-      searchInput.value = value;
-      break;
-    case 'set': {
-      const opt = allSetOptions.find(s => s.code === value);
-      if (opt && !selectedSets.has(value)) {
-        selectedSets.set(value, opt.name);
-        setMultiSelect.renderPills();
-      }
-      break;
-    }
-    case 'rarity': {
-      const cb = document.getElementById(`rf-${value}`);
-      if (cb) cb.checked = true;
-      break;
-    }
-    case 'type': {
-      const cb = document.getElementById(`tf-${value.toLowerCase()}`);
-      if (cb) cb.checked = true;
-      break;
-    }
-    case 'subtype':
-      if (!selectedSubtypes.has(value)) {
-        selectedSubtypes.add(value);
-        subtypeMultiSelect.renderPills();
-      }
-      break;
-    case 'cmc':
-      cmcMinEl.value = value;
-      cmcMaxEl.value = value;
-      break;
-    case 'finish': {
-      const cb = document.getElementById(`ff-${value}`);
-      if (cb) cb.checked = true;
-      break;
-    }
-    case 'badge': {
-      const cb = document.getElementById(`bf-${value}`);
-      if (cb) cb.checked = true;
-      break;
-    }
-    case 'date_added':
-      dateMinEl.value = value;
-      dateMaxEl.value = value;
-      break;
-  }
-  // Name search changes the query — needs a fetch. All others are client-side.
-  if (type === 'name') fetchCollection();
-  else refilterAndRender();
 }
 
 // --- View toggle ---
-viewTableBtn.addEventListener('click', () => { currentView = 'table'; groupByOrder = false; updateViewButtons(); render(); serializeFiltersToURL(); });
-viewGridBtn.addEventListener('click', () => { currentView = 'grid'; groupByOrder = false; updateViewButtons(); render(); serializeFiltersToURL(); });
-viewOrdersBtn.addEventListener('click', () => { groupByOrder = !groupByOrder; if (groupByOrder) currentView = 'orders'; else currentView = 'table'; updateViewButtons(); render(); serializeFiltersToURL(); });
+viewTableBtn.addEventListener('click', () => { currentView = 'table'; updateViewButtons(); render(); serializeFiltersToURL(); });
+viewGridBtn.addEventListener('click', () => { currentView = 'grid'; updateViewButtons(); render(); serializeFiltersToURL(); });
 
 function updateViewButtons() {
   viewTableBtn.classList.toggle('active', currentView === 'table');
   viewGridBtn.classList.toggle('active', currentView === 'grid');
-  viewOrdersBtn.classList.toggle('active', currentView === 'orders');
   gridSizeWrap.style.display = currentView === 'grid' ? '' : 'none';
   if (currentView !== 'table') toggleColDrawer(false);
 }
 updateViewButtons();
-
-function updateOrdersBtn() {
-  const hasOrders = allCardsUnfiltered.some(c => c.status === 'ordered');
-  const group = document.getElementById('view-toggle-group');
-  group.classList.toggle('no-orders', !hasOrders);
-  viewOrdersBtn.style.display = hasOrders ? '' : 'none';
-  // If orders view was active but no more orders, switch back to table
-  if (!hasOrders && currentView === 'orders') {
-    currentView = 'table';
-    groupByOrder = false;
-    updateViewButtons();
-  }
-}
-
-// --- Sidebar toggle (slide-in panel) ---
-const sidebarBackdrop = document.getElementById('sidebar-backdrop');
-function toggleSidebar(open) {
-  if (open === undefined) open = !sidebar.classList.contains('open');
-  sidebar.classList.toggle('open', open);
-  sidebarBackdrop.classList.toggle('active', open);
-  sidebarToggleBtn.classList.toggle('active', open);
-}
-sidebarToggleBtn.addEventListener('click', () => toggleSidebar());
-sidebarBackdrop.addEventListener('click', () => toggleSidebar(false));
-
-// --- Include Unowned toggle (cycles: '' -> 'base' -> 'full' -> '') ---
-const UNOWNED_CYCLE = ['', 'base', 'full'];
-const UNOWNED_LABELS = { '': '+ Unowned', 'base': '+ Unowned', 'full': '+ Full Set' };
-
-includeUnownedBtn.addEventListener('click', () => {
-  if (!hasAnyFilter()) return;
-  const idx = UNOWNED_CYCLE.indexOf(includeUnowned);
-  includeUnowned = UNOWNED_CYCLE[(idx + 1) % UNOWNED_CYCLE.length];
-  updateUnownedBtn();
-  moreMenuDropdown.classList.remove('open');
-  fetchCollection();
-});
-
-function updateUnownedBtn() {
-  const canEnable = hasAnyFilter();
-  includeUnownedBtn.disabled = !canEnable;
-  if (!canEnable && includeUnowned) {
-    includeUnowned = '';
-  }
-  includeUnownedBtn.classList.toggle('active', !!includeUnowned);
-  includeUnownedBtn.textContent = UNOWNED_LABELS[includeUnowned] || '+ Unowned';
-  document.getElementById('buy-missing-menu-section').style.display = includeUnowned ? '' : 'none';
-}
 
 // --- Fetch ---
 function getFetchParams() {
@@ -3074,177 +2546,10 @@ function getFetchParams() {
   }
   const q = searchInput.value.trim();
   if (q) params.set('q', q);
-  const oq = oracleSearchInput.value.trim();
-  if (oq) params.set('oracle_text', oq);
-  if (includeUnowned && hasAnyFilter()) {
-    params.set('include_unowned', includeUnowned);
-    // Send selected sets for server-side caching (ensure_set_cached)
-    for (const code of selectedSets.keys()) {
-      params.append('filter_set', code);
-    }
-  }
-  // Disposition statuses need server re-fetch with status=all
-  const dispositionStatuses = ['sold', 'traded', 'gifted', 'lost'];
-  const hasDisposition = dispositionStatuses.some(s => document.getElementById('sf-' + s)?.checked);
-  if (hasDisposition) {
-    params.set('status', 'all');
-  }
   if (multiSelectMode) {
     params.set('expand', 'copies');
   }
   return params.toString();
-}
-
-function hasAnyFilter() {
-  if (_sharedCards) return true;
-  if (searchInput.value.trim()) return true;
-  if (oracleSearchInput.value.trim()) return true;
-  if (selectedSets.size) return true;
-  if (document.querySelectorAll('#color-filters input:checked').length) return true;
-  if (document.querySelectorAll('#rarity-filters input:checked').length) return true;
-  if (document.querySelectorAll('#type-filters input:checked').length) return true;
-  if (selectedSubtypes.size) return true;
-  if (document.querySelectorAll('#finish-filters input:checked').length) return true;
-  if (document.querySelectorAll('#badge-filters input:checked').length) return true;
-  if (document.querySelectorAll('#status-filters input:checked').length) return true;
-  if (cmcMinEl.value || cmcMaxEl.value) return true;
-  if (dateMinEl.value || dateMaxEl.value) return true;
-  return false;
-}
-
-function applyAllClientFilters(cards) {
-  // Container (deck/binder/unassigned)
-  const container = document.getElementById('container-filter').value;
-  if (container === 'unassigned') {
-    cards = cards.filter(c => !c.deck_id && !c.binder_id);
-  } else if (container.startsWith('deck:')) {
-    const did = parseInt(container.split(':')[1]);
-    cards = cards.filter(c => c.deck_id === did);
-  } else if (container.startsWith('binder:')) {
-    const bid = parseInt(container.split(':')[1]);
-    cards = cards.filter(c => c.binder_id === bid);
-  }
-  // Color
-  const colors = Array.from(document.querySelectorAll('#color-filters input:checked')).map(cb => cb.value);
-  if (colors.length) {
-    cards = cards.filter(c => {
-      let cardColors;
-      try { cardColors = JSON.parse(c.colors || '[]'); } catch { cardColors = []; }
-      return colors.every(col =>
-        col === 'C' ? cardColors.length === 0 : cardColors.includes(col)
-      );
-    });
-  }
-
-  // Rarity
-  const rarities = Array.from(document.querySelectorAll('#rarity-filters input:checked')).map(cb => cb.value);
-  if (rarities.length) {
-    cards = cards.filter(c => rarities.includes(c.rarity));
-  }
-
-  // Set
-  if (selectedSets.size) {
-    cards = cards.filter(c => selectedSets.has(c.set_code));
-  }
-
-  // Type
-  const types = Array.from(document.querySelectorAll('#type-filters input:checked')).map(cb => cb.value);
-  if (types.length) {
-    cards = cards.filter(c => types.some(t => (c.type_line || '').includes(t)));
-  }
-
-  // Subtype
-  if (selectedSubtypes.size) {
-    cards = cards.filter(c => {
-      const tl = c.type_line || '';
-      return Array.from(selectedSubtypes).some(st => tl.includes(st));
-    });
-  }
-
-  // Finish
-  const finishes = Array.from(document.querySelectorAll('#finish-filters input:checked')).map(cb => cb.value);
-  if (finishes.length) {
-    cards = cards.filter(c => finishes.includes(c.finish));
-  }
-
-  // Badge / Treatment
-  const badges = Array.from(document.querySelectorAll('#badge-filters input:checked')).map(cb => cb.value);
-  if (badges.length) {
-    cards = cards.filter(c => {
-      let fe;
-      try { fe = JSON.parse(c.frame_effects || '[]'); } catch { fe = []; }
-      return badges.some(b => {
-        if (b === 'borderless') return c.border_color === 'borderless';
-        if (b === 'showcase') return fe.includes('showcase');
-        if (b === 'extendedart') return fe.includes('extendedart');
-        if (b === 'fullart') return c.full_art;
-        if (b === 'promo') return c.promo;
-        return false;
-      });
-    });
-  }
-
-  // CMC range
-  const cmcMin = parseFloat(cmcMinEl.value);
-  const cmcMax = parseFloat(cmcMaxEl.value);
-  if (!isNaN(cmcMin) || !isNaN(cmcMax)) {
-    cards = cards.filter(c => {
-      const cmc = c.cmc || 0;
-      if (!isNaN(cmcMin) && cmc < cmcMin) return false;
-      if (!isNaN(cmcMax) && cmc > cmcMax) return false;
-      return true;
-    });
-  }
-
-  // Date range
-  const dateMin = dateMinEl.value;
-  const dateMax = dateMaxEl.value;
-  if (dateMin || dateMax) {
-    cards = cards.filter(c => {
-      const d = c.acquired_at || '';
-      if (dateMin && d < dateMin) return false;
-      if (dateMax && d > dateMax + 'Z') return false;
-      return true;
-    });
-  }
-
-  // Collector number range
-  const cnMin = parseInt(cnMinEl.value);
-  const cnMax = parseInt(cnMaxEl.value);
-  if (!isNaN(cnMin) || !isNaN(cnMax)) {
-    cards = cards.filter(c => {
-      const cn = parseInt(c.collector_number) || 0;
-      if (!isNaN(cnMin) && cn < cnMin) return false;
-      if (!isNaN(cnMax) && cn > cnMax) return false;
-      return true;
-    });
-  }
-
-  // Price range
-  const pMin = parseFloat(priceMinEl.value);
-  const pMax = parseFloat(priceMaxEl.value);
-  if (!isNaN(pMin) || !isNaN(pMax)) {
-    cards = cards.filter(c => {
-      const price = parseFloat(c.tcg_price) || 0;
-      if (!isNaN(pMin) && price < pMin) return false;
-      if (!isNaN(pMax) && price > pMax) return false;
-      return true;
-    });
-  }
-
-  // Status filters
-  const statusChecked = Array.from(document.querySelectorAll('#status-filters input:checked')).map(cb => cb.value);
-  if (statusChecked.length) {
-    cards = cards.filter(c => {
-      for (const sv of statusChecked) {
-        if (sv === 'wanted' && isCardWanted(c)) return true;
-        if (sv !== 'wanted' && c.status === sv) return true;
-      }
-      return false;
-    });
-  }
-
-  return cards;
 }
 
 function applyClientSort(cards) {
@@ -3285,8 +2590,7 @@ function applyClientSort(cards) {
 }
 
 function refilterAndRender() {
-  updateUnownedBtn();
-  allCards = applyClientSort(applyAllClientFilters([...allCardsUnfiltered]));
+  allCards = applyClientSort([...allCardsUnfiltered]);
   updateStatusText();
   render();
   serializeFiltersToURL();
@@ -3296,228 +2600,48 @@ function updateStatusText() {
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
   const priceField = sources[0] === 'ck' ? 'ck_price' : 'tcg_price';
   const priceLabel = sources[0] === 'ck' ? 'CK' : 'TCG';
-  const floor = parseFloat(_settings.price_floor) || 0;
-  if (includeUnowned) {
-    const ownedCards = allCards.filter(c => c.owned);
-    const missingCards = allCards.filter(c => !c.owned);
-    const ownedValue = ownedCards.reduce((s, c) => {
-      const p = parseFloat(c[priceField]) || 0;
-      return s + (floor > 0 && p < floor ? 0 : p * c.qty);
-    }, 0);
-    const totalValue = allCards.reduce((s, c) => {
-      const p = parseFloat(c[priceField]) || 0;
-      const effectiveQty = c.owned ? c.qty : 1;
-      return s + (floor > 0 && p < floor ? 0 : p * effectiveQty);
-    }, 0);
-    const modeLabel = includeUnowned === 'full' ? 'full' : 'base';
-    statusEl.textContent = `${ownedCards.length} owned, ${missingCards.length} missing (${modeLabel}) \u2014 ${priceLabel} $${ownedValue.toFixed(2)} owned / $${totalValue.toFixed(2)} total`;
-  } else {
-    const totalQty = allCards.reduce((s, c) => s + c.qty, 0);
-    const totalValue = allCards.reduce((s, c) => {
-      const p = parseFloat(c[priceField]) || 0;
-      return s + (floor > 0 && p < floor ? 0 : p * c.qty);
-    }, 0);
-    statusEl.textContent = `${allCards.length} entries, ${totalQty} cards \u2014 ${priceLabel} $${totalValue.toFixed(2)}`;
-  }
+  const totalQty = allCards.reduce((s, c) => s + (c.qty || 0), 0);
+  const totalValue = allCards.reduce((s, c) => {
+    const p = parseFloat(c[priceField]) || 0;
+    return s + p * (c.qty || 0);
+  }, 0);
+  statusEl.textContent = `${allCards.length} entries, ${totalQty} cards \u2014 ${priceLabel} $${totalValue.toFixed(2)}`;
 }
 
 async function fetchCollection() {
-  updateUnownedBtn();
-  const q = searchInput.value.trim();
-  const advanced = isAdvancedQuery(q);
-
-  // Update visual indicators
-  searchInput.classList.toggle('advanced-active', advanced);
-  searchModeBadge.classList.toggle('visible', advanced);
   searchErrorEl.textContent = '';
-
   statusEl.textContent = 'Loading...';
 
-  let res;
-  if (advanced && q) {
-    // Use Scryfall-style search endpoint
-    const params = new URLSearchParams();
-    params.set('q', q);
-    if (includeUnowned && hasAnyFilter()) params.set('include_unowned', includeUnowned);
-    const dispositionStatuses = ['sold', 'traded', 'gifted', 'lost'];
-    const hasDisposition = dispositionStatuses.some(s => document.getElementById('sf-' + s)?.checked);
-    if (hasDisposition) params.set('status', 'all');
-    res = await fetch(`/api/search?${params}`);
-    const data = await res.json();
-    if (!res.ok) {
-      searchErrorEl.textContent = data.error || 'Search error';
-      allCardsUnfiltered = [];
-    } else {
-      searchErrorEl.textContent = '';
-      allCardsUnfiltered = data;
-    }
+  const params = getFetchParams();
+  const res = await fetch(`/api/collection?${params}`);
+  const data = await res.json();
+
+  if (data.error) {
+    searchErrorEl.textContent = data.error;
+    statusEl.textContent = `Search error: ${data.error}`;
+    allCardsUnfiltered = [];
   } else {
-    // Use standard collection endpoint
-    const params = getFetchParams();
-    res = await fetch(`/api/collection?${params}`);
-    allCardsUnfiltered = await res.json();
+    allCardsUnfiltered = Array.isArray(data) ? data : [];
   }
 
   selectedCards.clear();
   lastSelectedIdx = null;
   updateSelectionBar();
 
-  // Populate set/subtype options from unfiltered data
-  populateSetOptions();
-  populateSubtypeOptions();
-  updateOrdersBtn();
-
-  // All filtering + sorting happens client-side
-  allCards = applyClientSort(applyAllClientFilters([...allCardsUnfiltered]));
+  allCards = applyClientSort([...allCardsUnfiltered]);
   updateStatusText();
   render();
   serializeFiltersToURL();
 }
 
-function populateSetOptions() {
-  const sets = new Map();
-  // Include all cached sets so users can browse sets they don't own cards from
-  for (const s of cachedSets) {
-    sets.set(s.code, s.name);
-  }
-  // Overlay with sets from current data (ensures owned sets always appear)
-  for (const card of allCardsUnfiltered) {
-    if (!sets.has(card.set_code)) {
-      sets.set(card.set_code, card.set_name);
-    }
-  }
-  allSetOptions = Array.from(sets.entries())
-    .map(([code, name]) => ({ code, name }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function populateSubtypeOptions() {
-  const subtypes = new Set();
-  for (const card of allCardsUnfiltered) {
-    const tl = card.type_line || '';
-    const dashIdx = tl.indexOf(' \u2014 ');
-    if (dashIdx !== -1) {
-      const sub = tl.substring(dashIdx + 3);
-      for (const s of sub.split(/\s+/)) {
-        if (s) subtypes.add(s);
-      }
-    }
-  }
-  allSubtypeOptions = Array.from(subtypes).sort();
-}
-
 // --- Render ---
-function isOrderedOnlyFilter() {
-  return document.getElementById('sf-ordered').checked && !document.getElementById('sf-wanted').checked;
-}
-
 function render() {
   // Clean up virtual scroll when switching away from grid
-  if (_gridScrollCleanup && (groupByOrder || currentView === 'table' || isOrderedOnlyFilter())) {
+  if (_gridScrollCleanup && currentView === 'table') {
     _gridScrollCleanup(); _gridScrollCleanup = null;
   }
-  if (groupByOrder) renderOrderGrouped();
-  else if (currentView === 'table') renderTable();
-  else if (isOrderedOnlyFilter()) renderOrderGrouped();
+  if (currentView === 'table') renderTable();
   else renderGrid();
-  renderOrderedBanner();
-}
-
-function renderOrderedBanner() {
-  const existing = document.getElementById('ordered-banner');
-  if (existing) existing.remove();
-  if (isOrderedOnlyFilter()) return; // already showing ordered view
-  const orderedCount = allCardsUnfiltered.filter(c => c.status === 'ordered').length;
-  if (orderedCount === 0) return;
-  const banner = document.createElement('div');
-  banner.id = 'ordered-banner';
-  banner.className = 'ordered-banner';
-  banner.innerHTML = `<span>${orderedCount} card${orderedCount !== 1 ? 's' : ''} awaiting delivery</span><button id="view-ordered-btn">View Ordered</button>`;
-  main.insertBefore(banner, main.firstChild);
-  document.getElementById('view-ordered-btn').addEventListener('click', () => {
-    document.getElementById('sf-ordered').checked = true;
-    document.getElementById('sf-wanted').checked = false;
-    refilterAndRender();
-  });
-}
-
-function renderOrderGrouped() {
-  if (allCards.length === 0) {
-    main.innerHTML = '<div class="empty-state">No ordered cards found</div>';
-    return;
-  }
-  // Group by order_id
-  const groups = new Map();
-  for (const card of allCards) {
-    const key = card.order_id || 0;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(card);
-  }
-
-  const container = document.createElement('div');
-
-  for (const [orderId, cards] of groups) {
-    const first = cards[0];
-    const orderedInGroup = cards.filter(c => c.status === 'ordered').length;
-    const header = document.createElement('div');
-    header.className = 'order-group-header';
-
-    if (orderId) {
-      const seller = first.order_seller || 'Unknown';
-      const orderNum = first.order_number || '';
-      const orderDate = first.order_date || '';
-      header.innerHTML = `
-        <div class="order-group-info">
-          <span class="seller">${seller}</span>
-          ${orderNum ? `<span class="order-num">#${orderNum}</span>` : ''}
-          ${orderDate ? `<span>${orderDate}</span>` : ''}
-          <span class="order-count">${cards.length} card${cards.length !== 1 ? 's' : ''}${orderedInGroup > 0 ? ` (${orderedInGroup} ordered)` : ''}</span>
-          <a href="/edit-order?id=${orderId}" style="color:#e94560;font-size:0.8rem;text-decoration:none;margin-left:8px">Edit</a>
-        </div>
-        ${orderedInGroup > 0 ? `<button class="receive-all-btn" data-order-id="${orderId}">Receive All (${orderedInGroup})</button>` : '<span class="receive-all-btn received" style="pointer-events:none">Received</span>'}
-      `;
-    } else {
-      header.innerHTML = `<div class="order-group-info"><span class="seller">Other</span><span class="order-count">${cards.length} card${cards.length !== 1 ? 's' : ''}</span></div>`;
-    }
-    container.appendChild(header);
-
-    const grid = document.createElement('div');
-    grid.className = 'card-grid';
-    const gap = 10;
-    const viewportWidth = main.clientWidth || window.innerWidth;
-    const cardWidth = Math.floor((viewportWidth - (gridCols - 1) * gap) / gridCols);
-    for (const card of cards) {
-      const isOrdered = card.status === 'ordered';
-      const cardEl = document.createElement('div');
-      cardEl.className = 'sheet-card' + (isOrdered ? ' ordered' : '');
-      cardEl.style.width = cardWidth + 'px';
-      const rarityColor = getRarityColor(card.rarity);
-      const foilClass = (card.finish === 'foil' || card.finish === 'etched') ? ' foil' : '';
-      const qtyBadge = card.qty > 1 ? `<span class="qty-badge">${card.qty}x</span>` : '';
-      const orderedBadge = isOrdered ? '<span class="ordered-badge" title="Ordered"></span>' : '';
-      cardEl.innerHTML = `<div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:#111"><img src="${card.image_uri || ''}" alt="${card.name}" loading="lazy">${qtyBadge}${orderedBadge}</div>`;
-      cardEl.addEventListener('click', () => showCardModal(card));
-      grid.appendChild(cardEl);
-    }
-    container.appendChild(grid);
-  }
-
-  // Wire receive-all buttons
-  container.querySelectorAll('.receive-all-btn[data-order-id]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      btn.textContent = '...';
-      const oid = btn.dataset.orderId;
-      const res = await fetch(`/api/orders/${oid}/receive`, { method: 'POST' });
-      const result = await res.json();
-      btn.textContent = `Received ${result.received}`;
-      btn.classList.add('received');
-      fetchCollection();
-    });
-  });
-
-  main.innerHTML = '';
-  main.appendChild(container);
 }
 
 function renderTable() {
@@ -3549,7 +2673,7 @@ function renderTable() {
     const helpers = prepareCardHelpers(card, { isWanted: isCardWanted });
 
     const isSelected = selectedCards.has(idx);
-    const isUnowned = !card.owned;
+    const isUnowned = card.owned === false;
     const isWanted = isCardWanted(card);
     const isOrdered = card.status === 'ordered';
     const trClasses = [isSelected ? 'selected' : '', isUnowned ? 'unowned' : '', isUnowned && isWanted ? 'wanted' : '', isOrdered ? 'ordered' : ''].filter(Boolean).join(' ');
@@ -3598,7 +2722,7 @@ function renderTable() {
     const filterEl = e.target.closest('[data-filter-type]');
     if (filterEl) {
       e.stopPropagation();
-      applyFilter(filterEl.dataset.filterType, filterEl.dataset.filterValue);
+      applyFilterViaSearch(filterEl.dataset.filterType, filterEl.dataset.filterValue);
       return;
     }
     // Row click -> modal
@@ -3625,7 +2749,7 @@ function renderTable() {
 let _gridScrollCleanup = null;
 
 function _buildCardHtml(card, idx) {
-  const isUnowned = !card.owned;
+  const isUnowned = card.owned === false;
   const isWanted = isUnowned && isCardWanted(card);
   const isOrdered = card.status === 'ordered';
   const cls = 'sheet-card' + (isUnowned ? ' unowned' : '') + (isWanted ? ' wanted' : '') + (isOrdered ? ' ordered' : '');
@@ -3731,66 +2855,233 @@ function renderGrid() {
 }
 
 // --- Event listeners ---
-// Search input is the only filter that triggers a backend fetch
+// Search input triggers server fetch
 searchInput.addEventListener('input', () => {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(fetchCollection, 300);
-});
-oracleSearchInput.addEventListener('input', () => {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(fetchCollection, 300);
+  acUpdate();
 });
 
-// All other filters are client-side — instant refilter, no fetch
-document.querySelectorAll('#color-filters input, #rarity-filters input, #finish-filters input, #badge-filters input, #type-filters input').forEach(cb => {
-  cb.addEventListener('change', refilterAndRender);
-});
-// Status filters: disposition statuses (sold/traded/gifted/lost) need server re-fetch
-const _dispositionValues = new Set(['sold', 'traded', 'gifted', 'lost']);
-document.querySelectorAll('#status-filters input').forEach(cb => {
-  cb.addEventListener('change', () => {
-    if (_dispositionValues.has(cb.value)) {
-      fetchCollection();
-    } else {
-      refilterAndRender();
-    }
-  });
-});
+// ---------------------------------------------------------------------------
+// Autocomplete
+// ---------------------------------------------------------------------------
+const acDropdown = document.getElementById('ac-dropdown');
+let acIdx = -1;
+let acItems = [];
+// Dynamic data loaded once on first focus
+let acSets = null;   // [{code, name}]
+let acDecks = null;  // [{id, name}]
+let acBinders = null; // [{id, name}]
 
-const debouncedRefilter = () => {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(refilterAndRender, 150);
+const AC_KEYWORDS = [
+  {k:'c:',    label:'c:',    hint:'Color',          cat:'card'},
+  {k:'id:',   label:'id:',   hint:'Color identity', cat:'card'},
+  {k:'t:',    label:'t:',    hint:'Type',            cat:'card'},
+  {k:'o:',    label:'o:',    hint:'Oracle text',     cat:'card'},
+  {k:'mv',    label:'mv',    hint:'Mana value',      cat:'card'},
+  {k:'pow',   label:'pow',   hint:'Power',           cat:'card'},
+  {k:'tou',   label:'tou',   hint:'Toughness',       cat:'card'},
+  {k:'r:',    label:'r:',    hint:'Rarity',          cat:'card'},
+  {k:'s:',    label:'s:',    hint:'Set',             cat:'card'},
+  {k:'a:',    label:'a:',    hint:'Artist',          cat:'card'},
+  {k:'ft:',   label:'ft:',   hint:'Flavor text',     cat:'card'},
+  {k:'kw:',   label:'kw:',   hint:'Keyword ability', cat:'card'},
+  {k:'f:',    label:'f:',    hint:'Format legality',  cat:'card'},
+  {k:'cn',    label:'cn',    hint:'Collector number', cat:'card'},
+  {k:'year',  label:'year',  hint:'Release year',    cat:'card'},
+  {k:'m:',    label:'m:',    hint:'Mana cost',       cat:'card'},
+  {k:'is:',   label:'is:',   hint:'Flag',            cat:'card'},
+  {k:'has:',  label:'has:',  hint:'Has property',    cat:'card'},
+  {k:'layout:', label:'layout:', hint:'Card layout', cat:'card'},
+  {k:'status:', label:'status:', hint:'Collection status', cat:'collection'},
+  {k:'added', label:'added', hint:'Date added',      cat:'collection'},
+  {k:'price', label:'price', hint:'Market price',    cat:'collection'},
+  {k:'deck:', label:'deck:', hint:'In deck',         cat:'collection'},
+  {k:'binder:', label:'binder:', hint:'In binder',   cat:'collection'},
+  {k:'order:', label:'order:', hint:'Sort by',        cat:'modifier'},
+  {k:'direction:', label:'direction:', hint:'Sort direction', cat:'modifier'},
+];
+
+const AC_VALUES = {
+  'c:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya','orzhov','izzet','golgari','boros','simic','esper','grixis','jund','naya','bant','abzan','jeskai','sultai','mardu','temur'],
+  'id:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya'],
+  'r:': ['common','uncommon','rare','mythic'],
+  't:': ['creature','instant','sorcery','enchantment','artifact','planeswalker','land','battle','legendary','token','elf','goblin','human','merfolk','dragon','wizard','angel','demon'],
+  'is:': ['foil','nonfoil','etched','fullart','borderless','showcase','extendedart','promo','reprint','reserved','firstprint','commander','vanilla','split','transform','mdfc','adventure','saga','unassigned','decked','bindered','wanted'],
+  'has:': ['watermark','flavor','power','toughness','loyalty'],
+  'f:': ['standard','modern','legacy','vintage','commander','pioneer','pauper'],
+  'status:': ['owned','ordered','sold','traded','gifted','lost'],
+  'order:': ['name','cmc','rarity','set','color','power','toughness','artist','collector_number','price','added'],
+  'direction:': ['asc','desc'],
+  'layout:': ['normal','split','flip','transform','modal_dfc','adventure','meld','leveler','class','saga','battle','prototype'],
 };
-cnMinEl.addEventListener('input', debouncedRefilter);
-cnMaxEl.addEventListener('input', debouncedRefilter);
-cmcMinEl.addEventListener('input', debouncedRefilter);
-cmcMaxEl.addEventListener('input', debouncedRefilter);
-priceMinEl.addEventListener('input', debouncedRefilter);
-priceMaxEl.addEventListener('input', debouncedRefilter);
-dateMinEl.addEventListener('input', debouncedRefilter);
-dateMaxEl.addEventListener('input', debouncedRefilter);
 
-clearFiltersBtn.addEventListener('click', () => {
-  document.querySelectorAll('#color-filters input, #rarity-filters input, #finish-filters input, #badge-filters input, #type-filters input, #status-filters input').forEach(cb => {
-    cb.checked = false;
-  });
-  selectedSets.clear();
-  selectedSubtypes.clear();
-  includeUnowned = '';
-  updateUnownedBtn();
-  setMultiSelect.renderPills();
-  subtypeMultiSelect.renderPills();
-  searchInput.value = '';
-  cnMinEl.value = '';
-  cnMaxEl.value = '';
-  cmcMinEl.value = '';
-  cmcMaxEl.value = '';
-  priceMinEl.value = '';
-  priceMaxEl.value = '';
-  dateMinEl.value = '';
-  dateMaxEl.value = '';
-  fetchCollection();
+function acLoadDynamic() {
+  if (acSets) return;
+  acSets = []; acDecks = []; acBinders = [];
+  fetch('/api/cached-sets').then(r=>r.json()).then(d => { acSets = d; }).catch(()=>{});
+  fetch('/api/decks').then(r=>r.json()).then(d => { acDecks = d; }).catch(()=>{});
+  fetch('/api/binders').then(r=>r.json()).then(d => { acBinders = d; }).catch(()=>{});
+}
+
+function acGetCurrentToken() {
+  const val = searchInput.value;
+  const pos = searchInput.selectionStart || val.length;
+  // Walk backward from cursor to find token start
+  let start = pos;
+  while (start > 0 && val[start-1] !== ' ') start--;
+  const token = val.substring(start, pos);
+  return {token, start, end: pos};
+}
+
+function acUpdate() {
+  const {token} = acGetCurrentToken();
+  if (!token) { acHide(); return; }
+
+  acItems = [];
+  const lower = token.toLowerCase();
+
+  // Check if we're after a keyword prefix (e.g. "s:" or "is:")
+  const colonIdx = token.indexOf(':');
+  if (colonIdx >= 0) {
+    const prefix = token.substring(0, colonIdx + 1).toLowerCase();
+    const valPart = token.substring(colonIdx + 1).toLowerCase();
+
+    // Static value completions
+    let pool = AC_VALUES[prefix];
+    if (pool) {
+      for (const v of pool) {
+        if (v.startsWith(valPart) && v !== valPart) {
+          acItems.push({text: prefix + v, label: v, hint: '', cat: ''});
+        }
+      }
+    }
+    // Dynamic: set codes
+    if (prefix === 's:' && acSets) {
+      for (const s of acSets) {
+        const code = s.code.toLowerCase();
+        const name = (s.name||'').toLowerCase();
+        if ((code.startsWith(valPart) || name.includes(valPart)) && code !== valPart) {
+          acItems.push({text: 's:' + code, label: code.toUpperCase(), hint: s.name, cat: ''});
+        }
+        if (acItems.length >= 12) break;
+      }
+    }
+    // Dynamic: deck names
+    if (prefix === 'deck:' && acDecks) {
+      acItems.push({text: 'deck:*', label: '*', hint: 'Any deck', cat: ''});
+      for (const d of acDecks) {
+        const name = (d.name||'');
+        if (name.toLowerCase().includes(valPart)) {
+          const q = name.includes(' ') ? `deck:"${name}"` : `deck:${name}`;
+          acItems.push({text: q, label: name, hint: '', cat: ''});
+        }
+        if (acItems.length >= 12) break;
+      }
+    }
+    // Dynamic: binder names
+    if (prefix === 'binder:' && acBinders) {
+      acItems.push({text: 'binder:*', label: '*', hint: 'Any binder', cat: ''});
+      for (const b of acBinders) {
+        const name = (b.name||'');
+        if (name.toLowerCase().includes(valPart)) {
+          const q = name.includes(' ') ? `binder:"${name}"` : `binder:${name}`;
+          acItems.push({text: q, label: name, hint: '', cat: ''});
+        }
+        if (acItems.length >= 12) break;
+      }
+    }
+  } else {
+    // Keyword suggestions
+    for (const kw of AC_KEYWORDS) {
+      if (kw.k.startsWith(lower) && kw.k !== lower) {
+        acItems.push({text: kw.k, label: kw.label, hint: kw.hint, cat: kw.cat});
+      }
+    }
+    // Also suggest negation
+    if (lower === '-') {
+      acItems.push({text: '-', label: '-...', hint: 'Negate next term', cat: ''});
+    }
+  }
+
+  if (acItems.length > 15) acItems.length = 15;
+  if (acItems.length === 0) { acHide(); return; }
+  acIdx = -1;
+  acRender();
+}
+
+function acRender() {
+  acDropdown.innerHTML = acItems.map((item, i) =>
+    `<div class="ac-item${i===acIdx?' active':''}" data-i="${i}">` +
+    `<span class="ac-label">${esc(item.label)}</span>` +
+    (item.hint ? `<span class="ac-hint">${esc(item.hint)}</span>` : '') +
+    (item.cat ? `<span class="ac-cat">${esc(item.cat)}</span>` : '') +
+    `</div>`
+  ).join('');
+  acDropdown.classList.add('open');
+}
+
+function acHide() {
+  acDropdown.classList.remove('open');
+  acItems = [];
+  acIdx = -1;
+}
+
+function acAccept(idx) {
+  const item = acItems[idx >= 0 ? idx : 0];
+  if (!item) return;
+  const {start, end} = acGetCurrentToken();
+  const val = searchInput.value;
+  const before = val.substring(0, start);
+  const after = val.substring(end);
+  // Add trailing space unless the completion ends with : (expecting value)
+  const suffix = item.text.endsWith(':') ? '' : ' ';
+  searchInput.value = before + item.text + suffix + after;
+  const newPos = start + item.text.length + suffix.length;
+  searchInput.setSelectionRange(newPos, newPos);
+  searchInput.focus();
+  acHide();
+  // If we inserted a full keyword:value, trigger fetch
+  if (suffix === ' ') {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(fetchCollection, 300);
+  } else {
+    acUpdate();
+  }
+}
+
+searchInput.addEventListener('keydown', (e) => {
+  if (!acDropdown.classList.contains('open')) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    acIdx = Math.min(acIdx + 1, acItems.length - 1);
+    acRender();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    acIdx = Math.max(acIdx - 1, -1);
+    acRender();
+  } else if (e.key === 'Tab' || e.key === 'Enter') {
+    if (acIdx >= 0) {
+      e.preventDefault();
+      acAccept(acIdx);
+    } else if (acItems.length > 0 && e.key === 'Tab') {
+      e.preventDefault();
+      acAccept(0);
+    }
+    // Enter with no selection: let it fall through to default (fetch)
+  } else if (e.key === 'Escape') {
+    acHide();
+  }
 });
+
+acDropdown.addEventListener('mousedown', (e) => {
+  e.preventDefault(); // Don't blur search input
+  const item = e.target.closest('.ac-item');
+  if (item) acAccept(parseInt(item.dataset.i));
+});
+
+searchInput.addEventListener('focus', () => { acLoadDynamic(); acUpdate(); });
+searchInput.addEventListener('blur', () => { setTimeout(acHide, 150); });
 
 function applySettings() {
   const style = document.getElementById('dynamic-settings-style');
@@ -3804,9 +3095,6 @@ function applySettings() {
   document.querySelectorAll('#image-display-pills .pill').forEach(p => {
     p.classList.toggle('active', p.dataset.value === _settings.image_display);
   });
-  // Sync price floor input
-  const floorInput = document.getElementById('price-floor-input');
-  if (floorInput) floorInput.value = _settings.price_floor || '';
 }
 
 // --- Wishlist state ---
@@ -3921,29 +3209,6 @@ document.getElementById('wl-clear-all').addEventListener('click', async () => {
   renderWishlistPanel();
 });
 
-// --- Buy Missing ---
-function getUnownedCards() {
-  // If multi-select active with selections, use only selected unowned cards
-  if (multiSelectMode && selectedCards.size > 0) {
-    return Array.from(selectedCards).map(i => allCards[i]).filter(c => !c.owned);
-  }
-  return allCards.filter(c => !c.owned);
-}
-
-document.getElementById('buy-missing-ck').addEventListener('click', () => {
-  moreMenuDropdown.classList.remove('open');
-  const cards = getUnownedCards();
-  if (!cards.length) { alert('No unowned cards in current view'); return; }
-  copyAndOpen(buildCKList(cards), 'https://www.cardkingdom.com/builder');
-});
-
-document.getElementById('buy-missing-tcg').addEventListener('click', () => {
-  moreMenuDropdown.classList.remove('open');
-  const cards = getUnownedCards();
-  if (!cards.length) { alert('No unowned cards in current view'); return; }
-  copyAndOpen(buildTCGList(cards), 'https://www.tcgplayer.com/massentry');
-});
-
 // --- Cart text builders ---
 function buildCKList(cards) {
   return cards.map(c => `1 ${(c.name || '').split(' // ')[0]}`).join('\n');
@@ -3976,36 +3241,7 @@ async function loadContainerData() {
   allDecks = await decksRes.json();
   allBinders = await bindersRes.json();
   allViews = await viewsRes.json();
-  populateContainerFilter();
   populateViewSelect();
-}
-
-function populateContainerFilter() {
-  const sel = document.getElementById('container-filter');
-  // Keep first two options (All / Unassigned)
-  while (sel.options.length > 2) sel.remove(2);
-  if (allDecks.length) {
-    const grp1 = document.createElement('optgroup');
-    grp1.label = 'Decks';
-    allDecks.forEach(d => {
-      const opt = document.createElement('option');
-      opt.value = `deck:${d.id}`;
-      opt.textContent = `${d.name} (${d.card_count})`;
-      grp1.appendChild(opt);
-    });
-    sel.appendChild(grp1);
-  }
-  if (allBinders.length) {
-    const grp2 = document.createElement('optgroup');
-    grp2.label = 'Binders';
-    allBinders.forEach(b => {
-      const opt = document.createElement('option');
-      opt.value = `binder:${b.id}`;
-      opt.textContent = `${b.name} (${b.card_count})`;
-      grp2.appendChild(opt);
-    });
-    sel.appendChild(grp2);
-  }
 }
 
 function populateViewSelect() {
@@ -4019,10 +3255,6 @@ function populateViewSelect() {
   });
 }
 
-document.getElementById('container-filter').addEventListener('change', function() {
-  refilterAndRender();
-});
-
 document.getElementById('view-select').addEventListener('change', async function() {
   const vid = this.value;
   if (!vid) return;
@@ -4031,7 +3263,6 @@ document.getElementById('view-select').addEventListener('change', async function
   if (view.filters_json) {
     try {
       const f = typeof view.filters_json === 'string' ? JSON.parse(view.filters_json) : view.filters_json;
-      if (f.container) document.getElementById('container-filter').value = f.container;
       searchInput.value = f.q || '';
       fetchCollection();
     } catch {}
@@ -4041,7 +3272,7 @@ document.getElementById('view-select').addEventListener('change', async function
 async function saveCurrentView() {
   const name = prompt('Name for this view:');
   if (!name) return;
-  const filters = { container: document.getElementById('container-filter').value, q: searchInput.value };
+  const filters = { q: searchInput.value };
   await fetch('/api/views', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -4162,41 +3393,6 @@ function serializeFiltersToURL() {
   const q = searchInput.value.trim();
   if (q) params.set('q', q);
 
-  const colors = Array.from(document.querySelectorAll('#color-filters input:checked')).map(cb => cb.value);
-  if (colors.length) params.set('colors', colors.join(','));
-
-  const rarities = Array.from(document.querySelectorAll('#rarity-filters input:checked')).map(cb => cb.value);
-  if (rarities.length) params.set('rarities', rarities.join(','));
-
-  const types = Array.from(document.querySelectorAll('#type-filters input:checked')).map(cb => cb.value);
-  if (types.length) params.set('types', types.join(','));
-
-  const finishes = Array.from(document.querySelectorAll('#finish-filters input:checked')).map(cb => cb.value);
-  if (finishes.length) params.set('finishes', finishes.join(','));
-
-  const badges = Array.from(document.querySelectorAll('#badge-filters input:checked')).map(cb => cb.value);
-  if (badges.length) params.set('badges', badges.join(','));
-
-  const statuses = Array.from(document.querySelectorAll('#status-filters input:checked')).map(cb => cb.value);
-  if (statuses.length) params.set('statuses', statuses.join(','));
-
-  if (selectedSets.size) params.set('sets', Array.from(selectedSets.keys()).join(','));
-  if (selectedSubtypes.size) params.set('subtypes', Array.from(selectedSubtypes).join(','));
-
-  const container = document.getElementById('container-filter').value;
-  if (container) params.set('container', container);
-
-  if (cnMinEl.value) params.set('cn_min', cnMinEl.value);
-  if (cnMaxEl.value) params.set('cn_max', cnMaxEl.value);
-  if (cmcMinEl.value) params.set('cmc_min', cmcMinEl.value);
-  if (cmcMaxEl.value) params.set('cmc_max', cmcMaxEl.value);
-  if (priceMinEl.value) params.set('price_min', priceMinEl.value);
-  if (priceMaxEl.value) params.set('price_max', priceMaxEl.value);
-  if (dateMinEl.value) params.set('date_min', dateMinEl.value);
-  if (dateMaxEl.value) params.set('date_max', dateMaxEl.value);
-
-  if (includeUnowned) params.set('unowned', includeUnowned);
-
   if (sortColumn !== 'name') params.set('sort', sortColumn);
   if (sortOrder !== 'asc') params.set('sort_dir', sortOrder);
   if (currentView !== 'table') params.set('view', currentView);
@@ -4205,7 +3401,6 @@ function serializeFiltersToURL() {
   history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname);
 }
 
-let _pendingContainerValue = '';
 let _sharedCards = '';  // ?cards=set:cn,set:cn,... for shareable links
 
 function restoreFiltersFromURL() {
@@ -4216,73 +3411,13 @@ function restoreFiltersFromURL() {
   const cards = params.get('cards');
   if (cards) {
     _sharedCards = cards;
-    includeUnowned = 'base';
     currentView = 'grid';
     updateViewButtons();
   }
 
-  // Search
+  // Search query
   const q = params.get('q');
   if (q) searchInput.value = q;
-
-  // Checkboxes
-  const colorMap = { 'W': 'cf-W', 'U': 'cf-U', 'B': 'cf-B', 'R': 'cf-R', 'G': 'cf-G', 'C': 'cf-C' };
-  (params.get('colors') || '').split(',').filter(Boolean).forEach(v => {
-    const el = document.getElementById(colorMap[v]);
-    if (el) el.checked = true;
-  });
-
-  (params.get('rarities') || '').split(',').filter(Boolean).forEach(v => {
-    const el = document.getElementById('rf-' + v);
-    if (el) el.checked = true;
-  });
-
-  (params.get('types') || '').split(',').filter(Boolean).forEach(v => {
-    const el = document.getElementById('tf-' + v.toLowerCase());
-    if (el) el.checked = true;
-  });
-
-  (params.get('finishes') || '').split(',').filter(Boolean).forEach(v => {
-    const el = document.getElementById('ff-' + v);
-    if (el) el.checked = true;
-  });
-
-  (params.get('badges') || '').split(',').filter(Boolean).forEach(v => {
-    const el = document.getElementById('bf-' + v);
-    if (el) el.checked = true;
-  });
-
-  (params.get('statuses') || '').split(',').filter(Boolean).forEach(v => {
-    const el = document.getElementById('sf-' + v);
-    if (el) el.checked = true;
-  });
-
-  // Multi-selects: sets (codes only — names resolved after cachedSets loads)
-  (params.get('sets') || '').split(',').filter(Boolean).forEach(code => {
-    selectedSets.set(code, code.toUpperCase());
-  });
-
-  (params.get('subtypes') || '').split(',').filter(Boolean).forEach(v => {
-    selectedSubtypes.add(v);
-  });
-
-  // Container — defer to after loadContainerData populates options
-  const container = params.get('container');
-  if (container) _pendingContainerValue = container;
-
-  // Range inputs
-  if (params.get('cn_min')) cnMinEl.value = params.get('cn_min');
-  if (params.get('cn_max')) cnMaxEl.value = params.get('cn_max');
-  if (params.get('cmc_min')) cmcMinEl.value = params.get('cmc_min');
-  if (params.get('cmc_max')) cmcMaxEl.value = params.get('cmc_max');
-  if (params.get('price_min')) priceMinEl.value = params.get('price_min');
-  if (params.get('price_max')) priceMaxEl.value = params.get('price_max');
-  if (params.get('date_min')) dateMinEl.value = params.get('date_min');
-  if (params.get('date_max')) dateMaxEl.value = params.get('date_max');
-
-  // Include unowned
-  const unowned = params.get('unowned');
-  if (unowned === 'base' || unowned === 'full') includeUnowned = unowned;
 
   // Sort
   if (params.get('sort')) sortColumn = params.get('sort');
@@ -4290,42 +3425,23 @@ function restoreFiltersFromURL() {
 
   // View
   const view = params.get('view');
-  if (view === 'grid' || view === 'orders') {
+  if (view === 'grid') {
     currentView = view;
-    if (view === 'orders') groupByOrder = true;
     updateViewButtons();
   }
 }
 
 // --- Init ---
 (async () => {
-  const [settingsRes, cachedSetsRes, _] = await Promise.all([
+  const [settingsRes, _] = await Promise.all([
     fetch('/api/settings'),
-    fetch('/api/cached-sets'),
     loadWishlist(),
   ]);
   _settings = await settingsRes.json();
-  cachedSets = await cachedSetsRes.json();
   applySettings();
   restoreFiltersFromURL();
-  // Resolve set names from cachedSets for any URL-restored set codes
-  if (selectedSets.size) {
-    const setNameMap = new Map(cachedSets.map(s => [s.code, s.name]));
-    for (const [code] of selectedSets) {
-      const name = setNameMap.get(code);
-      if (name) selectedSets.set(code, name);
-    }
-    setMultiSelect.renderPills();
-  }
-  if (selectedSubtypes.size) subtypeMultiSelect.renderPills();
   fetchCollection();
-  // Load containers, then restore pending container filter value
   await loadContainerData();
-  if (_pendingContainerValue) {
-    document.getElementById('container-filter').value = _pendingContainerValue;
-    _pendingContainerValue = '';
-    refilterAndRender();
-  }
 })();
 </script>
 

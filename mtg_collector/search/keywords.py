@@ -74,6 +74,12 @@ KEYWORD_ALIASES = {
     "order": "order",
     "direction": "direction",
     "unique": "unique",
+    # Collection-specific keywords
+    "status": "status",
+    "added": "added",
+    "price": "price",
+    "deck": "deck",
+    "binder": "binder",
 }
 
 # Color values: single chars, full names, guild/shard/wedge names -> color letter strings
@@ -159,4 +165,9 @@ RARITY_ALIASES = {
     "mythic": "mythic",
     "special": "special",
     "bonus": "bonus",
+}
+
+# Valid status values for status: keyword
+STATUS_VALUES = {
+    "owned", "ordered", "listed", "sold", "removed", "traded", "gifted", "lost",
 }

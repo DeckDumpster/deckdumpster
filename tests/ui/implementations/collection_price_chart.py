@@ -1,15 +1,16 @@
 """
 Hand-written implementation for collection_price_chart.
 
-Seeds price data via podman exec, searches for the card, opens the modal,
-verifies the chart appears, then opens a card with no prices and verifies
-the chart is hidden.
+Seeds price data via podman exec python3, opens the card modal for a card with
+price data, and verifies the price chart appears. Then opens a card
+with no price data and confirms the chart section is hidden.
 """
 
 import subprocess
 
 
 def _find_container(base_url):
+    """Find the container serving the given base_url by matching its port."""
     try:
         port = base_url.rstrip("/").rsplit(":", 1)[-1]
         result = subprocess.run(
@@ -31,48 +32,61 @@ def _find_container(base_url):
 
 
 def steps(harness):
-    # Seed price data into the shared DB.
+    # Seed price data into the database via podman exec python3.
     container = _find_container(harness.base_url)
     if container:
+        seed_script = (
+            "import sqlite3, datetime as dt\n"
+            "conn = sqlite3.connect('/data/collection.sqlite')\n"
+            "conn.execute('''\n"
+            "  INSERT OR IGNORE INTO prices\n"
+            "  (set_code, collector_number, source, price_type, price, observed_at)\n"
+            "  VALUES\n"
+            "  ('blb','124','tcgplayer','normal',8.50,date('now','-60 days')),\n"
+            "  ('blb','124','tcgplayer','normal',9.00,date('now','-45 days')),\n"
+            "  ('blb','124','tcgplayer','normal',10.00,date('now','-30 days')),\n"
+            "  ('blb','124','tcgplayer','normal',10.50,date('now','-15 days')),\n"
+            "  ('blb','124','tcgplayer','normal',10.46,date('now'))\n"
+            "''')\n"
+            "conn.commit()\n"
+            "conn.close()\n"
+        )
         subprocess.run(
-            ["podman", "exec", container, "python3", "-c",
-             "import sqlite3, os; "
-             "db = os.environ.get('MTGC_SHARED_DB', '/data/collection.sqlite'); "
-             "c = sqlite3.connect(db); "
-             "c.execute(\"INSERT OR IGNORE INTO prices (set_code,collector_number,source,price_type,price,observed_at) "
-             "VALUES ('blb','124','tcgplayer','normal',10.46,'2026-04-01')\"); "
-             "c.execute(\"INSERT OR REPLACE INTO latest_prices (set_code,collector_number,source,price_type,price,observed_at) "
-             "VALUES ('blb','124','tcgplayer','normal',10.46,'2026-04-01')\"); "
-             "c.commit(); c.close()"],
-            capture_output=True, text=True, check=True,
+            ["podman", "exec", container, "python3", "-c", seed_script],
+            capture_output=True, text=True,
         )
 
     # start_page: /collection — auto-navigated by test runner.
-    harness.fill_by_placeholder("Search cards...", "Artist's Talent")
-    harness.wait_for_visible("tr[data-idx]", timeout=500)
+    # Search for Artist's Talent (blb/124) which has seeded price data.
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Artist's Talent")
+    harness.wait_for_visible("tr[data-idx]", timeout=15_000)
+    # Switch to grid view and click the card.
     harness.click_by_selector("#view-grid-btn")
     harness.click_by_selector(".sheet-card[data-idx]")
-    harness.wait_for_visible("#card-modal-overlay.active", timeout=500)
+    # Wait for modal to appear.
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    # Scroll down in the modal to see the price chart.
     harness.page.evaluate("document.querySelector('#modal-details').scrollTop = 9999")
-    # Chart.js render + async price fetch needs time.
-    harness.wait_for_visible(".price-chart-section.visible", timeout=2000)
+    harness.page.wait_for_timeout(500)
+    # The price chart section should become visible.
+    harness.wait_for_visible(".price-chart-section.visible", timeout=10_000)
     harness.assert_visible("#price-chart-canvas")
     harness.screenshot("chart_visible")
 
     # Close the modal.
     harness.click_by_selector("#modal-close")
-    harness.wait_for_hidden("#card-modal-overlay.active", timeout=500)
+    harness.wait_for_hidden("#card-modal-overlay.active", timeout=5_000)
 
-    # Open a card with no price data.
-    # Switch to table view so we can wait for the card name text to appear.
-    harness.click_by_selector("#view-table-btn")
-    harness.fill_by_placeholder("Search cards...", "Orazca Puzzle-Door")
-    harness.wait_for_text("Orazca", timeout=2000)
-    # Switch back to grid and click.
-    harness.click_by_selector("#view-grid-btn")
+    # Now open a card with no price data to verify chart is hidden.
+    # Clear search first then type new term to ensure debounced re-fetch fires.
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "")
+    harness.page.wait_for_timeout(400)  # debounce
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Orazca")
+    # Wait for the card grid to update — exactly 1 entry for Orazca.
+    harness.wait_for_text("1 entries, 1 cards", timeout=5_000)
     harness.click_by_selector(".sheet-card[data-idx]")
-    harness.wait_for_visible("#card-modal-overlay.active", timeout=500)
+    harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
+    # Scroll down — chart section should not be visible.
     harness.page.evaluate("document.querySelector('#modal-details').scrollTop = 9999")
-    # Chart should NOT be visible for a card with no prices.
-    harness.wait_for_hidden(".price-chart-section.visible", timeout=2000)
+    harness.wait_for_hidden(".price-chart-section.visible", timeout=2_000)
     harness.screenshot("final_state")

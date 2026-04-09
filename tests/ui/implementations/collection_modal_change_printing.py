@@ -11,7 +11,7 @@ def steps(harness):
     # start_page: /collection
     harness.wait_for_visible(".card-cell", timeout=500)
     # Search for Unstoppable Slasher
-    harness.fill_by_placeholder("Search cards...", "Unstoppable")
+    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Unstoppable")
     harness.press_key("Enter")
     # Wait for search results and click the card
     harness.wait_for_text("Unstoppable Slasher", timeout=500)

@@ -1,0 +1,10 @@
+# Scenario: Search autocomplete suggests keywords and values
+#
+# Related:
+#   issues: []
+#   pull_requests: [243]
+
+description: >
+  When I click the search bar and type "c:", the autocomplete dropdown
+  appears showing color value suggestions. I can select a suggestion
+  to insert it into the query.
