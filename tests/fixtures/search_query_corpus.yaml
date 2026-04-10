@@ -118,6 +118,21 @@
   should_parse: true
   compiler_supported: true
 
+- query: "id:wr"
+  category: color_identity
+  should_parse: true
+  compiler_supported: true
+
+- query: "c:w and c:r"
+  category: color
+  should_parse: true
+  compiler_supported: true
+
+- query: "t:creature and c:r"
+  category: boolean
+  should_parse: true
+  compiler_supported: true
+
 - query: "id:esper"
   category: color_identity
   should_parse: true

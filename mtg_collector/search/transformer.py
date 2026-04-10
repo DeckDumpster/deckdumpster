@@ -66,11 +66,20 @@ class _Parser:
         tok = self.peek()
         return tok is not None and tok[0] == "WORD" and tok[1].lower() == "or"
 
+    def _is_and(self) -> bool:
+        """Check if current token is the AND keyword (a no-op connector)."""
+        tok = self.peek()
+        return tok is not None and tok[0] == "WORD" and tok[1].lower() == "and"
+
     def parse_and(self):
-        """Parse AND expressions (implicit, by adjacency)."""
+        """Parse AND expressions (implicit by adjacency, or explicit `and` keyword)."""
         children = [self.parse_atom()]
 
         while self.peek() is not None and not self._is_or() and self.peek()[0] != "RPAREN":
+            # Skip explicit `and` connectors — adjacency already implies AND.
+            if self._is_and():
+                self.advance()
+                continue
             children.append(self.parse_atom())
 
         if len(children) == 1:
