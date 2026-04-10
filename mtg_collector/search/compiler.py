@@ -361,9 +361,21 @@ def _resolve_color_value(val: str) -> str:
 
 
 def _compile_color(kw: str, op: str, val: str) -> tuple[str, list]:
-    """Compile color/color_identity comparisons."""
+    """Compile color/color_identity comparisons.
+
+    For `c:` (colors), `:` and `>=` mean "card has all of these colors (and
+    possibly more)" — Scryfall's superset semantic.
+
+    For `id:` (color_identity), `:` defaults to `<=` (subset) — "card's
+    color identity fits within these colors", matching Scryfall's commander
+    deckbuilding semantic.
+    """
     col = "card.colors" if kw == "color" else "card.color_identity"
     lower_val = val.lower()
+
+    # Color identity uses subset semantics for `:` by default.
+    if kw == "color_identity" and op == ":":
+        op = "<="
 
     # Numeric color count: c=2, c>=3, etc.
     if val.isdigit():
@@ -411,6 +423,9 @@ def _compile_color(kw: str, op: str, val: str) -> tuple[str, list]:
     if op == "<=":
         # Subset: card only has colors from this set (no others)
         excluded = ALL_COLORS - color_set
+        if not excluded:
+            # All colors allowed — every card matches
+            return "1=1", []
         conditions = []
         params = []
         for c in excluded:
