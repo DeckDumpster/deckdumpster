@@ -949,10 +949,16 @@
     document.getElementById('completeness-summary').textContent =
       `(${data.present.length}/${total} present, ${data.missing.length} missing, ${data.extra.length} extra)`;
 
+    // Remove button for entries that have an expected record (present/missing).
+    // Fires against /expected-cards/remove with oracle_id+zone since the
+    // completeness payload groups by oracle and has no printing_id.
+    const removeExpectedBtn = (c) =>
+      `<button class="expected-remove-btn" data-oracle="${esc(c.oracle_id)}" data-zone="${esc(c.zone)}" title="Remove from expected list">&times;</button>`;
+
     if (data.present.length) {
       html += '<div class="completeness-group"><h4 class="present">Present (' + data.present.length + ')</h4>';
       for (const c of data.present) {
-        html += `<div class="completeness-card"><span class="qty">${c.actual_qty}/${c.expected_qty}</span><span>${esc(c.name)}</span></div>`;
+        html += `<div class="completeness-card"><span class="qty">${c.actual_qty}/${c.expected_qty}</span><span>${esc(c.name)}</span>${removeExpectedBtn(c)}</div>`;
       }
       html += '</div>';
     }
@@ -966,6 +972,7 @@
           const cls = (!loc.deck_name && !loc.binder_name) ? 'location-tag unassigned' : 'location-tag';
           html += ` <span class="${cls}" data-cid="${loc.collection_id}">${esc(label)}</span>`;
         }
+        html += removeExpectedBtn(c);
         html += '</div>';
       }
       html += '</div>';
@@ -996,10 +1003,27 @@
       tag.addEventListener('click', () => reassembleCard(deck.id, parseInt(tag.dataset.cid)));
     });
 
+    // Wire up expected-list remove buttons
+    document.querySelectorAll('.expected-remove-btn').forEach(btn => {
+      btn.addEventListener('click', () =>
+        removeExpectedEntry(deck.id, btn.dataset.oracle, btn.dataset.zone));
+    });
+
     const reassembleBtn = document.getElementById('btn-reassemble-all');
     if (reassembleBtn) {
       reassembleBtn.addEventListener('click', () => reassembleAll(deck.id));
     }
+  }
+
+  async function removeExpectedEntry(deckId, oracleId, zone) {
+    const res = await fetch('/api/decks/' + deckId + '/expected-cards/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oracle_id: oracleId, zone: zone }),
+    });
+    const result = await res.json();
+    if (result.error) { alert(result.error); return; }
+    await loadBuilder(deckId);
   }
 
   function toggleCompleteness() {

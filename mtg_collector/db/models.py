@@ -2283,6 +2283,23 @@ class DeckRepository:
         )
         return cursor.rowcount
 
+    def remove_expected_cards_by_oracle(self, deck_id: int, oracle_id: str,
+                                        zone: str) -> int:
+        """Remove all expected entries for a given oracle_id+zone.
+
+        Completeness reports group by oracle_id, so the UI only has an
+        oracle_id when asking to drop a missing/present/extra entry. This
+        sweeps every printing of that card from the expected list.
+        """
+        cursor = self.conn.execute(
+            "DELETE FROM deck_expected_cards "
+            "WHERE deck_id = ? AND zone = ? AND printing_id IN ("
+            "  SELECT printing_id FROM printings WHERE oracle_id = ?"
+            ")",
+            (deck_id, zone, oracle_id),
+        )
+        return cursor.rowcount
+
     def add_cards(self, deck_id: int, collection_ids: List[int],
                   zone: str = "mainboard") -> int:
         if not collection_ids:
