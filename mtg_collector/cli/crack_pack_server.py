@@ -5398,20 +5398,32 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"ok": True, "count": count})
 
     def _api_deck_expected_remove(self, deck_id: int, data: dict):
-        """Remove a card from an idea/ready deck's expected list by printing_id."""
+        """Remove entries from a deck's expected list.
+
+        Accepts either a specific printing_id, or an oracle_id + zone to
+        drop every printing of that card in the given zone (used by the
+        completeness UI, which groups by oracle_id).
+        """
         printing_id = data.get("printing_id")
-        if not printing_id:
-            self._send_json({"error": "printing_id is required"}, 400)
+        oracle_id = data.get("oracle_id")
+        zone = data.get("zone", "mainboard")
+        if not printing_id and not oracle_id:
+            self._send_json(
+                {"error": "printing_id or oracle_id is required"}, 400)
             return
         conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         try:
-            count = repo.remove_expected_cards(deck_id, [printing_id])
+            if printing_id:
+                count = repo.remove_expected_cards(deck_id, [printing_id])
+            else:
+                count = repo.remove_expected_cards_by_oracle(
+                    deck_id, oracle_id, zone)
             conn.commit()
         finally:
             conn.close()
-        self._send_json({"ok": True})
+        self._send_json({"ok": True, "removed": count})
 
     def _api_printings_by_oracle(self, oracle_id: str):
         """Return all printings for an oracle_id with set name and owned count."""

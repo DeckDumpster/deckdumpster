@@ -360,7 +360,7 @@
   align-items: center;
   gap: 2px;
   margin-left: auto;
-
+  flex-shrink: 0;
 }
 .card-row .qty-btn {
   background: none;
@@ -376,14 +376,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 .card-row .qty-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
 .card-row .qty-btn[data-delta="-1"]:hover { color: var(--accent); border-color: var(--accent); }
 .card-row .qty-count {
   font-size: 0.75rem;
-  min-width: 16px;
+  min-width: 22px;
   text-align: center;
   color: var(--text-secondary);
+  flex-shrink: 0;
 }
 
 .card-row .swap-btn {
@@ -505,6 +507,27 @@
 }
 .location-tag:hover { background: var(--accent); }
 .location-tag.unassigned { background: #27ae60; }
+
+.expected-remove-btn {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.expected-remove-btn:hover {
+  color: #e74c3c;
+  border-color: #e74c3c;
+}
 
 .btn-scryfall-link {
   display: inline-block;

@@ -237,6 +237,116 @@ class TestDeckCards:
 
 
 # =============================================================================
+# Expected list management
+# =============================================================================
+
+
+class TestExpectedListRemoval:
+    """Removing entries from a constructed deck's expected list.
+
+    Repros the /decks/31 scenario: a card sits in deck_expected_cards but
+    not in deck_cards, so it only surfaces in the completeness "missing"
+    block at the bottom of the page with no editable handle. The UI only
+    knows the oracle_id (completeness groups by oracle), so the remove
+    endpoint must accept oracle_id + zone, not just printing_id.
+    """
+
+    def _pick_printing(self, api):
+        status, data = api.get("/api/collection?limit=5")
+        assert status == 200
+        cards = data if isinstance(data, list) else data.get("cards", [])
+        assert cards, "No cards in collection — cannot run expected-list test"
+        card = cards[0]
+        return card["printing_id"], card["oracle_id"], card["name"]
+
+    def test_remove_missing_expected_card_by_oracle(self, api):
+        """Reproduce the Infernal Vessel bug: expected card with no matching
+        deck_cards entry should be removable from the completeness view,
+        where only oracle_id is known."""
+        printing_id, oracle_id, name = self._pick_printing(api)
+
+        _, deck = api.post("/api/decks", {
+            "name": "Expected Removal Test",
+            "state": "constructed",
+        })
+        deck_id = deck["id"]
+
+        try:
+            status, result = api.post(
+                f"/api/decks/{deck_id}/expected-cards/add",
+                {"printing_ids": [printing_id], "zone": "mainboard"},
+            )
+            assert status == 200
+            assert result["count"] == 1
+
+            status, completeness = api.get(
+                f"/api/decks/{deck_id}/completeness")
+            assert status == 200
+            missing_oracles = {m["oracle_id"] for m in completeness["missing"]}
+            assert oracle_id in missing_oracles, (
+                f"Expected {name} to appear as missing, got "
+                f"{completeness}")
+
+            # The UI only has oracle_id from the completeness payload.
+            # Remove by oracle_id + zone — this is the path the fix enables.
+            status, result = api.post(
+                f"/api/decks/{deck_id}/expected-cards/remove",
+                {"oracle_id": oracle_id, "zone": "mainboard"},
+            )
+            assert status == 200, f"Remove failed: {result}"
+            assert result["removed"] == 1
+
+            status, completeness = api.get(
+                f"/api/decks/{deck_id}/completeness")
+            assert status == 200
+            missing_oracles = {m["oracle_id"] for m in completeness["missing"]}
+            assert oracle_id not in missing_oracles, (
+                f"{name} should be gone from missing, got {completeness}")
+        finally:
+            api.delete(f"/api/decks/{deck_id}")
+
+    def test_remove_expected_by_printing_still_works(self, api):
+        """Existing printing_id path should keep working for callers that
+        have it (the swap flow already relies on it)."""
+        printing_id, _, _ = self._pick_printing(api)
+
+        _, deck = api.post("/api/decks", {
+            "name": "Expected Removal Printing Test",
+            "state": "constructed",
+        })
+        deck_id = deck["id"]
+
+        try:
+            api.post(
+                f"/api/decks/{deck_id}/expected-cards/add",
+                {"printing_ids": [printing_id], "zone": "mainboard"},
+            )
+            status, result = api.post(
+                f"/api/decks/{deck_id}/expected-cards/remove",
+                {"printing_id": printing_id},
+            )
+            assert status == 200
+            assert result["removed"] == 1
+        finally:
+            api.delete(f"/api/decks/{deck_id}")
+
+    def test_remove_expected_requires_identifier(self, api):
+        _, deck = api.post("/api/decks", {
+            "name": "Expected Removal Validation Test",
+            "state": "constructed",
+        })
+        deck_id = deck["id"]
+        try:
+            status, result = api.post(
+                f"/api/decks/{deck_id}/expected-cards/remove", {})
+            assert status == 400
+            assert "printing_id" in result["error"] or \
+                "oracle_id" in result["error"]
+        finally:
+            api.delete(f"/api/decks/{deck_id}")
+
+
+# =============================================================================
 # Binder CRUD
 # =============================================================================
 
@@ -661,3 +771,37 @@ class TestCollectionDeckBinderFilters:
                 assert card.get("binder_id") == binder["id"]
         finally:
             api.delete(f"/api/binders/{binder['id']}")
+
+
+# =============================================================================
+# Vendored static assets
+# =============================================================================
+
+
+class TestVendoredFonts:
+    """The mana-font CSS references `url("fonts/mana.woff")` — this test
+    pins the resolved font URL so a future vendor update that shifts the
+    path (the CSS previously shipped with `../fonts/...`, which 404'd) is
+    caught immediately.
+
+    Broken mana-font also causes visible layout shifts in the deck list
+    as the browser falls back to a substitute font after the 404. When
+    the fallback font's metrics differ, CSS multi-column layouts can
+    rebalance mid-render, which is what a user reported seeing as
+    "qty controls flash and then disappear" for a 10-swamp land row."""
+
+    def test_mana_woff_loads(self, api):
+        status, _ = api.get_raw(
+            "/static/vendor/mana-font/fonts/mana.woff")
+        assert status == 200
+
+    def test_mana_css_references_resolve(self, api):
+        status, css = api.get_raw("/static/vendor/mana-font/mana.min.css")
+        assert status == 200
+        text = css.decode("utf-8", errors="replace")
+        # The CSS is relative to /static/vendor/mana-font/, so any
+        # url("fonts/...") resolves to /static/vendor/mana-font/fonts/...
+        assert 'url("fonts/mana.woff' in text, \
+            "mana.min.css must reference fonts/ relative to its own dir"
+        assert 'url("../fonts/' not in text, \
+            "mana.min.css must not use the broken ../fonts/ path"

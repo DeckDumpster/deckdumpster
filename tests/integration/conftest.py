@@ -116,6 +116,17 @@ class APIClient:
             body = json.loads(e.read())
             return e.code, body
 
+    def get_raw(self, path: str) -> tuple:
+        """GET request returning raw bytes — used for non-JSON assets
+        like CSS, fonts, images. Returns (status_code, body_bytes)."""
+        url = f"{self.base_url}{path}"
+        req = urllib.request.Request(url)
+        try:
+            resp = urllib.request.urlopen(req, context=self._ctx, timeout=30)
+            return resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
     def post(self, path: str, data: dict, timeout: int = 30) -> tuple:
         """POST JSON request. Returns (status_code, parsed_json)."""
         return self._json_request("POST", path, data, timeout=timeout)
