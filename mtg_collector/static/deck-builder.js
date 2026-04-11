@@ -134,11 +134,11 @@
     const cardsRes = await fetch('/api/decks/' + id + '/cards');
     window._deckCards = await cardsRes.json();
 
-    // Default view: list. Editing lives in list view (qty +/-, swap,
-    // remove), so landing users there by default means the common path
-    // doesn't leave them stuck in a non-editable grid.
+    // Default view: grid for small decks, list for large
+    let totalCards = 0;
+    for (const g of Object.values(data.groups)) for (const c of g) totalCards += (c.quantity || 1);
     if (!localStorage.getItem('deckDetailView')) {
-      currentView = 'list';
+      currentView = totalCards < 25 ? 'grid' : 'list';
     }
 
     renderBuilder(data);
