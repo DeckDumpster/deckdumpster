@@ -1,0 +1,11 @@
+# Scenario: Brand logo in collection header navigates back to homepage
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I am on the Collection page, I can see a small card-stack logo
+  at the left end of the search row. Clicking the logo takes me back
+  to the homepage, giving me a consistent way out of the collection
+  view now that the standalone "Collection" title row has been removed.
