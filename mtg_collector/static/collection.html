@@ -22,12 +22,15 @@ body {
 
 header {
   background: #16213e;
-  padding: 12px 24px;
+  padding: 10px 24px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 10px;
+  gap: 8px;
   border-bottom: 2px solid #0f3460;
+  position: sticky;
+  top: 0;
+  z-index: 50;
 }
 
 .header-row {
@@ -39,6 +42,14 @@ header {
 .header-row-search {
   gap: 12px;
   flex-wrap: nowrap;
+}
+.header-row-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .brand-logo {
@@ -60,7 +71,6 @@ header {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
   padding: 6px 12px;
   border: 1px solid #0f3460;
   border-radius: 6px;
@@ -164,7 +174,9 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 #status {
   font-size: 0.85rem;
   color: #888;
-  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Layout */
@@ -1169,9 +1181,11 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
       </div>
     </div>
     <div class="col-controls" id="grid-size-wrap" style="display:none"><button class="col-btn" id="col-minus">&minus;</button><div class="col-count" id="col-count"></div><button class="col-btn" id="col-plus">+</button></div>
-    <a href="/search-help" target="_blank" class="syntax-help-link" title="Search syntax help"><span aria-hidden="true">?</span> Syntax</a>
+    <div class="header-row-right">
+      <div id="status"></div>
+      <a href="/search-help" target="_blank" class="syntax-help-link" title="Search syntax help"><span aria-hidden="true">?</span> Syntax</a>
+    </div>
   </div>
-  <div id="status"></div>
 </header>
 
 <div class="selection-bar" id="selection-bar">

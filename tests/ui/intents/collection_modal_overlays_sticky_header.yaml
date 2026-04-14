@@ -1,0 +1,13 @@
+# Scenario: Card detail modal visually covers the pinned header
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I click a card on the Collection page, the card detail modal
+  opens and its dark backdrop fully covers the page — including the
+  now-sticky header at the top. I cannot see the search bar or layout
+  controls bleeding through the modal, because the modal's z-index
+  sits above the header's. This preserves the pre-sticky feeling that
+  the modal is a true "on top of everything" overlay.

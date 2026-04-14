@@ -1,0 +1,16 @@
+start_page: /collection
+involves:
+  - 'any card row in the table (first tbody tr)'
+  - 'card detail modal overlay (#card-modal-overlay.active) at z-index 100'
+  - 'sticky <header> element at z-index 50'
+  - 'document.elementFromPoint at a point inside the header region returns an element inside #card-modal-overlay after the modal opens'
+notes: >
+  Start on /collection. Wait for the table to render. Click the first
+  card row to open the modal. Wait for #card-modal-overlay to become
+  visible with the .active class. Then use harness.page.evaluate with
+  document.elementFromPoint(window.innerWidth / 2, 20) — at y=20 we're
+  well inside the header region. If the modal's z-index stack is
+  correct, the returned element will be inside #card-modal-overlay.
+  If someone later bumps header's z-index above 100 (or drops the
+  modal's below 50), the returned element will be the header or one
+  of its children, and the test catches it.
