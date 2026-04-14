@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orders - MTG Collection</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+header {
+  background: #16213e;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid #0f3460;
+}
+header h1 { font-size: 1.1rem; color: #e94560; }
+header a { color: #888; text-decoration: none; font-size: 0.8rem; }
+header a:hover { color: #e94560; }
+button {
+  padding: 6px 14px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+button:hover { background: #c73651; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.receive-btn { background: #f0a030; border-color: #f0a030; }
+button.receive-btn:hover { background: #e89520; }
+button.receive-btn.received { background: #4caf50; border-color: #4caf50; cursor: default; }
+
+.filter-bar {
+  display: flex;
+  gap: 4px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.filter-bar .pill {
+  padding: 5px 14px;
+  border: 1px solid #0f3460;
+  border-radius: 16px;
+  background: transparent;
+  color: #888;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.filter-bar .pill:hover { border-color: #e94560; color: #e0e0e0; }
+.filter-bar .pill.active { background: #e94560; border-color: #e94560; color: #fff; }
+.filter-bar .summary {
+  margin-left: auto;
+  color: #888;
+  font-size: 0.8rem;
+}
+.filter-bar .summary b { color: #f0a030; }
+
+#list-view { padding: 12px; }
+.order-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.order-card {
+  background: #16213e;
+  border: 2px solid #0f3460;
+  border-radius: 10px;
+  padding: 14px 16px;
+  transition: border-color 0.15s, background 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.order-card:hover { border-color: #e94560; background: #1a1a3e; }
+.order-card.has-pending { border-color: #f0a030; }
+.order-card.has-pending:hover { border-color: #e94560; }
+.order-card a.order-link {
+  color: inherit;
+  text-decoration: none;
+  display: block;
+}
+.order-card a.order-link:hover .seller { color: #e94560; }
+.order-card .seller {
+  font-weight: 600;
+  font-size: 1rem;
+  transition: color 0.15s;
+}
+.order-card .meta {
+  color: #888;
+  font-size: 0.8rem;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.order-card .meta .order-num::before { content: '#'; }
+.order-card .counts {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+.order-card .count-cards { color: #e0e0e0; }
+.order-card .count-pending {
+  background: #f0a030;
+  color: #1a1a2e;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+.order-card .count-total {
+  margin-left: auto;
+  color: #4caf50;
+  font-weight: 600;
+}
+.order-card .actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.order-card .actions a.view-link {
+  flex: 1;
+  text-align: center;
+  padding: 6px 14px;
+  border: 1px solid #555;
+  border-radius: 6px;
+  background: #333;
+  color: #e0e0e0;
+  text-decoration: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.order-card .actions a.view-link:hover { background: #444; color: #fff; }
+.order-card .actions button.receive-btn { flex: 1; }
+.empty-state {
+  text-align: center;
+  padding: 60px 24px;
+  color: #666;
+}
+
+#messages {
+  padding: 0 12px;
+}
+.success-msg {
+  margin: 8px 0;
+  padding: 10px 14px;
+  background: #1b3e1b;
+  border: 1px solid #4caf50;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: #4caf50;
+}
+.error-msg {
+  margin: 8px 0;
+  padding: 10px 14px;
+  background: #5e1b1b;
+  border: 1px solid #e94560;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: #e94560;
+}
+
+@media (max-width: 768px) {
+  .order-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Orders</h1>
+  <a href="/">Home</a>
+  <a href="/collection">Collection</a>
+  <a href="/batches">Batches</a>
+  <a href="/ingestor-order">Import Order</a>
+</header>
+
+<div class="filter-bar" id="status-filter">
+  <span class="pill active" data-status="all">All</span>
+  <span class="pill" data-status="pending">Pending</span>
+  <span class="pill" data-status="received">Received</span>
+  <span class="summary" id="summary"></span>
+</div>
+
+<div id="messages"></div>
+<div id="list-view"></div>
+
+<script>
+let orders = [];
+let currentFilter = 'all';
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : s;
+  return d.innerHTML;
+}
+
+function fmtMoney(v) {
+  if (v == null || v === '') return '';
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  if (isNaN(n)) return '';
+  return '$' + n.toFixed(2);
+}
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  // orders.order_date is stored as YYYY-MM-DD; created_at is ISO timestamp
+  if (iso.length === 10) return iso;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return esc(iso);
+  return d.toLocaleDateString();
+}
+
+async function loadOrders() {
+  const resp = await fetch('/api/orders');
+  orders = await resp.json();
+  render();
+}
+
+function filteredOrders() {
+  if (currentFilter === 'pending') return orders.filter(o => (o.ordered_count || 0) > 0);
+  if (currentFilter === 'received') return orders.filter(o => (o.ordered_count || 0) === 0);
+  return orders;
+}
+
+function render() {
+  const view = document.getElementById('list-view');
+  const list = filteredOrders();
+
+  // Summary in the filter bar
+  const totalPending = orders.reduce((sum, o) => sum + (o.ordered_count || 0), 0);
+  const summaryEl = document.getElementById('summary');
+  if (totalPending > 0) {
+    summaryEl.innerHTML = `<b>${totalPending}</b> card${totalPending !== 1 ? 's' : ''} awaiting delivery`;
+  } else {
+    summaryEl.textContent = '';
+  }
+
+  if (list.length === 0) {
+    if (orders.length === 0) {
+      view.innerHTML = '<div class="empty-state">No orders yet. Import from TCGPlayer or Card Kingdom via <a href="/ingestor-order" style="color:#e94560">Import Order</a>.</div>';
+    } else {
+      view.innerHTML = `<div class="empty-state">No orders match the "${currentFilter}" filter.</div>`;
+    }
+    return;
+  }
+
+  let html = '<div class="order-grid">';
+  for (const o of list) {
+    const seller = o.seller_name || 'Unknown seller';
+    const orderNum = o.order_number || '';
+    const date = fmtDate(o.order_date || o.created_at);
+    const cardCount = o.card_count || 0;
+    const pendingCount = o.ordered_count || 0;
+    const total = fmtMoney(o.total);
+    const hasPending = pendingCount > 0;
+
+    html += `
+      <div class="order-card${hasPending ? ' has-pending' : ''}">
+        <a class="order-link" href="/orders/${o.id}">
+          <div class="seller">${esc(seller)}</div>
+          <div class="meta">
+            ${orderNum ? `<span class="order-num">${esc(orderNum)}</span>` : ''}
+            ${date ? `<span class="date">${esc(date)}</span>` : ''}
+          </div>
+        </a>
+        <div class="counts">
+          <span class="count-cards">${cardCount} card${cardCount !== 1 ? 's' : ''}</span>
+          ${hasPending ? `<span class="count-pending">${pendingCount} pending</span>` : ''}
+          ${total ? `<span class="count-total">${total}</span>` : ''}
+        </div>
+        <div class="actions">
+          <a class="view-link" href="/orders/${o.id}">View</a>
+          ${hasPending
+            ? `<button class="receive-btn" data-order-id="${o.id}" data-count="${pendingCount}">Receive All (${pendingCount})</button>`
+            : `<button class="receive-btn received" disabled>All Received</button>`}
+        </div>
+      </div>`;
+  }
+  html += '</div>';
+  view.innerHTML = html;
+
+  // Wire receive-all buttons
+  view.querySelectorAll('.receive-btn[data-order-id]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const oid = btn.dataset.orderId;
+      btn.disabled = true;
+      btn.textContent = 'Receiving...';
+      try {
+        const resp = await fetch(`/api/orders/${oid}/receive`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok) {
+          showError(data.error || 'Receive failed');
+          btn.disabled = false;
+          btn.textContent = `Receive All (${btn.dataset.count})`;
+          return;
+        }
+        showSuccess(`Received ${data.received} card${data.received !== 1 ? 's' : ''}`);
+        loadOrders();
+      } catch (err) {
+        showError('Network error: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = `Receive All (${btn.dataset.count})`;
+      }
+    });
+  });
+}
+
+document.querySelectorAll('#status-filter .pill').forEach(pill => {
+  pill.addEventListener('click', () => {
+    document.querySelectorAll('#status-filter .pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    currentFilter = pill.dataset.status;
+    render();
+  });
+});
+
+function showSuccess(msg) {
+  const el = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'success-msg';
+  div.textContent = msg;
+  el.appendChild(div);
+  setTimeout(() => div.remove(), 6000);
+}
+
+function showError(msg) {
+  const el = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'error-msg';
+  div.textContent = msg;
+  el.appendChild(div);
+  setTimeout(() => div.remove(), 10000);
+}
+
+loadOrders();
+</script>
+</body>
+</html>

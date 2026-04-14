@@ -1,4 +1,4 @@
-start_page: /edit-order?id=1
+start_page: /orders/1
 involves:
   - 'seller name input (#meta-seller)'
   - 'source dropdown (#meta-source) with options: TCGPlayer, Card Kingdom, Other'
@@ -10,7 +10,7 @@ fixture_data:
   new_source: "cardkingdom"
   new_shipping: "5.99"
 notes: >
-  Navigate to /edit-order?id=1. Clear and type "Test Seller" in the seller
+  Navigate to /orders/1. Clear and type "Test Seller" in the seller
   name input. Select "Card Kingdom" from the source dropdown. Clear and type
   "5.99" in shipping. Click "Save Order Details". Wait for the green "Saved"
   message. Reload the page and verify the seller name is "Test Seller",

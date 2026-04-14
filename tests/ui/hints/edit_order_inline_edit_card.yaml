@@ -1,4 +1,4 @@
-start_page: /edit-order?id=1
+start_page: /orders/1
 involves:
   - 'condition dropdown (select[data-field="condition"]) on a card row'
   - 'finish dropdown (select[data-field="finish"]) on a card row'
@@ -9,7 +9,7 @@ fixture_data:
   new_condition: "Lightly Played"
   new_finish: "foil"
 notes: >
-  Navigate to /edit-order?id=1. Wait for card rows to load. Find the
+  Navigate to /orders/1. Wait for card rows to load. Find the
   condition dropdown for card ID 39 (Cathar Commando) and select
   "Lightly Played". Find the finish dropdown for the same card and
   select "foil". Reload the page and verify both values persisted.

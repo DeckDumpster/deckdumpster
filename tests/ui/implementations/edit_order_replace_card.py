@@ -7,7 +7,7 @@ a result, and verifies the original card is replaced.
 
 
 def steps(harness):
-    # start_page: /edit-order?id=1 — auto-navigated by test runner.
+    # start_page: /orders/1 — auto-navigated by test runner.
     harness.wait_for_visible(".card-row", timeout=500)
     # Note the original card name in the last row.
     harness.assert_text_present("Witness Protection")

@@ -2859,6 +2859,9 @@ class BatchRepository:
         return dict(row) if row else None
 
     def list_all(self, batch_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        # Order batches are represented as a peer top-level resource at
+        # /orders, so they're excluded from the generic batches list. If a
+        # caller explicitly asks for batch_type='order' we still honor it.
         if batch_type:
             cursor = self.conn.execute(
                 """SELECT b.*, d.name as deck_name,
@@ -2877,6 +2880,7 @@ class BatchRepository:
                    FROM batches b
                    LEFT JOIN decks d ON b.deck_id = d.id
                    LEFT JOIN orders o ON b.order_id = o.id
+                   WHERE b.batch_type != 'order'
                    ORDER BY b.created_at DESC"""
             )
         return [dict(row) for row in cursor]

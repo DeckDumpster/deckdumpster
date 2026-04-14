@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batch Detail - MTG Collection</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+header {
+  background: #16213e;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid #0f3460;
+}
+header h1 { font-size: 1.1rem; color: #e94560; }
+header a { color: #888; text-decoration: none; font-size: 0.8rem; }
+header a:hover { color: #e94560; }
+button {
+  padding: 8px 16px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+button:hover { background: #c73651; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.secondary { background: #333; border-color: #555; }
+button.secondary:hover { background: #444; }
+select, input {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+select:focus, input:focus { outline: 2px solid #e94560; }
+
+#detail-view { padding: 12px; }
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.detail-header h2 { color: #e94560; font-size: 1.1rem; }
+.detail-meta { color: #888; font-size: 0.85rem; }
+
+.detail-info {
+  margin: 12px 0;
+  padding: 12px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+.detail-info .info-item { color: #888; }
+.detail-info .info-item b { color: #e0e0e0; }
+
+.assign-section {
+  margin: 12px 0;
+  padding: 12px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+}
+.assign-section label {
+  font-size: 0.85rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.assign-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.assign-status {
+  color: #4caf50;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.card-item {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  overflow: hidden;
+  text-align: center;
+}
+.card-item img {
+  width: 100%;
+  aspect-ratio: 5/7;
+  object-fit: cover;
+  display: block;
+}
+.card-item .card-info {
+  padding: 6px 8px;
+  font-size: 0.75rem;
+}
+.card-item .card-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-item .card-set { color: #888; }
+
+.success-msg {
+  margin: 8px 0;
+  padding: 12px 16px;
+  background: #1b3e1b;
+  border: 1px solid #4caf50;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #4caf50;
+}
+.error-msg {
+  margin: 8px 0;
+  padding: 12px 16px;
+  background: #5e1b1b;
+  border: 1px solid #e94560;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #e94560;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 24px;
+  color: #666;
+}
+
+@media (max-width: 768px) {
+  .cards-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Batch</h1>
+  <a href="/">Home</a>
+  <a href="/batches">All Batches</a>
+  <a href="/collection">Collection</a>
+</header>
+
+<div id="detail-view">
+  <div class="empty-state">Loading...</div>
+</div>
+
+<script>
+// URL shape: /batches/:id
+const pathMatch = location.pathname.match(/^\/batches\/(\d+)$/);
+const batchId = pathMatch ? pathMatch[1] : null;
+
+let currentBatch = null;
+let currentCards = [];
+let decks = [];
+
+const TYPE_LABELS = {
+  corner: 'Corner',
+  ocr: 'OCR',
+  csv_import: 'CSV',
+  manual_id: 'Manual',
+};
+const TYPE_COLORS = {
+  corner: '#e94560',
+  ocr: '#88c0d0',
+  csv_import: '#a3be8c',
+  manual_id: '#d08770',
+};
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : s;
+  return d.innerHTML;
+}
+
+async function load() {
+  if (!batchId) {
+    document.getElementById('detail-view').innerHTML = '<div class="error-msg">Invalid batch URL. Expected /batches/:id</div>';
+    return;
+  }
+  const [batchRes, decksRes] = await Promise.all([
+    fetch(`/api/batches/${batchId}/cards`),
+    fetch('/api/decks'),
+  ]);
+  if (!batchRes.ok) {
+    document.getElementById('detail-view').innerHTML = '<div class="error-msg">Batch not found</div>';
+    return;
+  }
+  const data = await batchRes.json();
+  currentBatch = data.batch;
+  currentCards = data.cards;
+  decks = await decksRes.json();
+  render();
+}
+
+function render() {
+  const view = document.getElementById('detail-view');
+  const b = currentBatch;
+  const date = b.created_at ? new Date(b.created_at).toLocaleString() : 'Unknown';
+  const name = b.name || `Batch #${b.id}`;
+  const typeLabel = TYPE_LABELS[b.batch_type] || b.batch_type;
+  const typeColor = TYPE_COLORS[b.batch_type] || '#888';
+
+  document.title = `${name} - MTG Collection`;
+
+  let infoItems = [];
+  infoItems.push(`<span class="info-item">Type: <b><span style="color:${typeColor}">${esc(typeLabel)}</span></b></span>`);
+  if (b.product_type) infoItems.push(`<span class="info-item">Product: <b>${esc(b.product_type.replace(/_/g, ' '))}</b></span>`);
+  if (b.set_code) infoItems.push(`<span class="info-item">Set: <b>${esc(b.set_code.toUpperCase())}</b></span>`);
+  if (b.notes) infoItems.push(`<span class="info-item">Notes: <b>${esc(b.notes)}</b></span>`);
+
+  let assignHtml = '';
+  if (b.deck_id) {
+    const deck = decks.find(d => d.id === b.deck_id);
+    const deckName = deck ? deck.name : `Deck #${b.deck_id}`;
+    assignHtml = `<div class="assign-status">Assigned to: ${esc(deckName)} (${esc(b.deck_zone || 'mainboard')})</div>`;
+  } else {
+    let deckOptions = '<option value="">Select a deck...</option>';
+    for (const d of decks) {
+      deckOptions += `<option value="${d.id}">${esc(d.name)}${d.format ? ` (${esc(d.format)})` : ''}</option>`;
+    }
+    assignHtml = `
+      <label>Assign to Deck</label>
+      <div class="assign-row">
+        <select id="assign-deck-select">${deckOptions}</select>
+        <select id="assign-zone-select">
+          <option value="mainboard">Mainboard</option>
+          <option value="sideboard">Sideboard</option>
+          <option value="commander">Commander</option>
+        </select>
+        <button onclick="assignDeck()">Assign</button>
+      </div>`;
+  }
+
+  let cardsHtml = '';
+  for (const c of currentCards) {
+    const img = c.image_uri || '/static/card_back.jpeg';
+    cardsHtml += `
+      <div class="card-item">
+        <img src="${esc(img)}" alt="${esc(c.name)}" loading="lazy">
+        <div class="card-info">
+          <div class="card-name" title="${esc(c.name)}">${esc(c.name)}</div>
+          <div class="card-set">${esc((c.set_code || '').toUpperCase())} #${esc(c.collector_number || '')}</div>
+        </div>
+      </div>`;
+  }
+
+  view.innerHTML = `
+    <div class="detail-header">
+      <a href="/batches" style="text-decoration:none"><button class="secondary" style="padding:4px 12px;font-size:0.8rem;">&larr; Back</button></a>
+      <h2>${esc(name)}</h2>
+      <span class="detail-meta">${esc(date)} &mdash; ${currentCards.length} card(s)</span>
+    </div>
+    <div class="detail-info">${infoItems.join('')}</div>
+    <div class="assign-section">${assignHtml}</div>
+    <div id="detail-messages"></div>
+    <div class="cards-grid">${cardsHtml}</div>`;
+}
+
+async function assignDeck() {
+  const deckId = document.getElementById('assign-deck-select').value;
+  const zone = document.getElementById('assign-zone-select').value;
+  if (!deckId) return;
+
+  try {
+    const resp = await fetch(`/api/batches/${currentBatch.id}/assign-deck`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: parseInt(deckId), deck_zone: zone }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showError(data.error || 'Assignment failed');
+      return;
+    }
+    currentBatch.deck_id = parseInt(deckId);
+    currentBatch.deck_zone = zone;
+    showSuccess(`Assigned ${data.assigned} card(s) to deck`);
+    render();
+  } catch (e) {
+    showError('Network error: ' + e.message);
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById('detail-messages');
+  const div = document.createElement('div');
+  div.className = 'error-msg';
+  div.textContent = msg;
+  el.appendChild(div);
+  setTimeout(() => div.remove(), 10000);
+}
+
+function showSuccess(msg) {
+  const el = document.getElementById('detail-messages');
+  const div = document.createElement('div');
+  div.className = 'success-msg';
+  div.textContent = msg;
+  el.appendChild(div);
+  setTimeout(() => div.remove(), 10000);
+}
+
+load();
+</script>
+</body>
+</html>

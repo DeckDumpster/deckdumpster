@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Edit Order - MTG Collection</title>
+<title>Order Detail - MTG Collection</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -22,9 +22,39 @@ header {
   padding: 16px 24px;
   background: #16213e;
   border-bottom: 1px solid #0f3460;
+  flex-wrap: wrap;
 }
 header a { color: #e94560; text-decoration: none; font-weight: 600; }
+header a.nav-link { color: #888; font-weight: normal; font-size: 0.85rem; }
+header a.nav-link:hover { color: #e94560; }
 header h1 { font-size: 1.2rem; color: #e0e0e0; }
+header .header-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+header .pending-badge {
+  background: #f0a030;
+  color: #1a1a2e;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+header button.receive-all-btn {
+  background: #f0a030;
+  border: 1px solid #f0a030;
+  color: #1a1a2e;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+header button.receive-all-btn:hover { background: #e89520; }
+header button.receive-all-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+header button.receive-all-btn.received {
+  background: #4caf50;
+  border-color: #4caf50;
+  color: #fff;
+  cursor: default;
+}
 .container {
   display: flex;
   flex: 1;
@@ -313,7 +343,9 @@ header h1 { font-size: 1.2rem; color: #e0e0e0; }
 <body>
 <header>
   <a href="/">MTG Collection</a>
-  <h1>Edit Order</h1>
+  <a href="/orders" class="nav-link">&larr; All Orders</a>
+  <h1 id="page-title">Order</h1>
+  <div class="header-actions" id="header-actions"></div>
 </header>
 
 <div class="container">
@@ -336,10 +368,11 @@ header h1 { font-size: 1.2rem; color: #e0e0e0; }
 </div>
 
 <script>
-const params = new URLSearchParams(location.search);
-const orderId = params.get('id');
+// URL shape: /orders/:id
+const pathMatch = location.pathname.match(/^\/orders\/(\d+)$/);
+const orderId = pathMatch ? pathMatch[1] : null;
 if (!orderId) {
-  document.getElementById('meta-panel').innerHTML = '<div class="status-msg error">No order ID specified. Use ?id=N</div>';
+  document.getElementById('meta-panel').innerHTML = '<div class="status-msg error">No order ID specified. URL must be /orders/:id</div>';
   document.getElementById('cards-panel').innerHTML = '';
 }
 
@@ -360,8 +393,54 @@ async function loadOrder() {
   }
   orderData = await orderRes.json();
   orderCards = await cardsRes.json();
+  renderTitle();
+  renderHeaderActions();
   renderMeta();
   renderCards();
+}
+
+function renderTitle() {
+  const title = document.getElementById('page-title');
+  const parts = [];
+  if (orderData.seller_name) parts.push(orderData.seller_name);
+  if (orderData.order_number) parts.push('#' + orderData.order_number);
+  title.textContent = parts.length ? parts.join(' ') : `Order #${orderId}`;
+  document.title = `${title.textContent} - MTG Collection`;
+}
+
+function renderHeaderActions() {
+  const el = document.getElementById('header-actions');
+  const pending = orderCards.filter(c => c.status === 'ordered').length;
+  if (pending > 0) {
+    el.innerHTML = `
+      <span class="pending-badge">${pending} pending</span>
+      <button class="receive-all-btn" id="receive-all-btn">Receive All</button>
+    `;
+    document.getElementById('receive-all-btn').addEventListener('click', receiveAll);
+  } else if (orderCards.some(c => c.status === 'owned')) {
+    el.innerHTML = '<button class="receive-all-btn received" disabled>All Received</button>';
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+async function receiveAll() {
+  const btn = document.getElementById('receive-all-btn');
+  btn.disabled = true;
+  btn.textContent = 'Receiving...';
+  try {
+    const res = await fetch(`/api/orders/${orderId}/receive`, { method: 'POST' });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Receive failed');
+    }
+    await refreshCards();
+    renderHeaderActions();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Receive All';
+    alert('Receive failed: ' + err.message);
+  }
 }
 
 function renderMeta() {
@@ -607,6 +686,7 @@ async function selectCandidate(printingId) {
 async function refreshCards() {
   const res = await fetch(`/api/orders/${orderId}/cards`);
   orderCards = await res.json();
+  renderHeaderActions();
   renderCards();
 }
 
