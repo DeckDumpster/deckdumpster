@@ -21,9 +21,9 @@ def steps(harness):
     # Click the Assign button (use selector to avoid matching "Assign to Deck" label)
     harness.click_by_selector(".assign-row button")
 
-    # After assign, loadBatches() re-renders the list view showing the
-    # deck label on the batch card. Verify on the list view.
-    harness.wait_for_text("Deck: Eldrazi Ramp")
+    # After assign, batch_detail.html re-renders in place and the
+    # assign-status div replaces the form with "Assigned to: X (zone)".
+    harness.wait_for_text("Assigned to: Eldrazi Ramp")
     harness.assert_text_present("Eldrazi Ramp")
 
     harness.screenshot("final_state")

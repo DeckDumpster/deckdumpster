@@ -1069,6 +1069,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("ingest_corners.html")
         elif path in ("/batches", "/corner-batches"):
             self._serve_static("batches.html")
+        elif path.startswith("/batches/"):
+            # /batches/:id → batch detail page (JS reads pathname)
+            self._serve_static("batch_detail.html")
         elif path in ("/api/batches", "/api/corner-batches"):
             self._api_batches_list(params)
         elif (path.startswith("/api/batches/") or path.startswith("/api/corner-batches/")) and path.endswith("/cards"):
@@ -1084,8 +1087,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("ingest_order.html")
         elif path == "/import-csv":
             self._serve_static("import_csv.html")
-        elif path == "/edit-order":
-            self._serve_static("edit_order.html")
+        elif path == "/orders":
+            self._serve_static("orders.html")
+        elif path.startswith("/orders/"):
+            # /orders/:id → order detail page (JS reads pathname)
+            self._serve_static("order_detail.html")
         elif path == "/api/orders":
             self._api_orders_list()
         elif path.startswith("/api/orders/") and path.endswith("/cards"):

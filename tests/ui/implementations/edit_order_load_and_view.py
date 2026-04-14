@@ -7,7 +7,7 @@ and card row elements are present.
 
 
 def steps(harness):
-    # start_page: /edit-order?id=1 — auto-navigated by test runner.
+    # start_page: /orders/1 — auto-navigated by test runner.
     harness.wait_for_visible("#save-meta-btn", timeout=500)
     # Verify seller name is pre-filled.
     harness.assert_visible("#meta-seller")

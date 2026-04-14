@@ -78,12 +78,15 @@ select:focus, input:focus { outline: 2px solid #e94560; }
   gap: 12px;
 }
 .batch-card {
+  display: block;
   background: #16213e;
   border: 2px solid #0f3460;
   border-radius: 10px;
   padding: 16px;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
+  color: inherit;
+  text-decoration: none;
 }
 .batch-card:hover {
   border-color: #e94560;
@@ -109,112 +112,8 @@ select:focus, input:focus { outline: 2px solid #e94560; }
   color: #666;
 }
 
-/* Detail view */
-#detail-view { display: none; padding: 12px; }
-.detail-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-.detail-header h2 { color: #e94560; font-size: 1.1rem; }
-.detail-meta { color: #888; font-size: 0.85rem; }
-
-.detail-info {
-  margin: 12px 0;
-  padding: 12px;
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  display: flex;
-  gap: 24px;
-  flex-wrap: wrap;
-  font-size: 0.85rem;
-}
-.detail-info .info-item { color: #888; }
-.detail-info .info-item b { color: #e0e0e0; }
-
-.assign-section {
-  margin: 12px 0;
-  padding: 12px;
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-}
-.assign-section label {
-  font-size: 0.85rem;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
-}
-.assign-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  flex-wrap: wrap;
-}
-.assign-status {
-  color: #4caf50;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.cards-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
-  margin-top: 12px;
-}
-.card-item {
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  overflow: hidden;
-  text-align: center;
-}
-.card-item img {
-  width: 100%;
-  aspect-ratio: 5/7;
-  object-fit: cover;
-  display: block;
-}
-.card-item .card-info {
-  padding: 6px 8px;
-  font-size: 0.75rem;
-}
-.card-item .card-name {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.card-item .card-set { color: #888; }
-
-.success-msg {
-  margin: 8px 0;
-  padding: 12px 16px;
-  background: #1b3e1b;
-  border: 1px solid #4caf50;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  color: #4caf50;
-}
-.error-msg {
-  margin: 8px 0;
-  padding: 12px 16px;
-  background: #5e1b1b;
-  border: 1px solid #e94560;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  color: #e94560;
-}
-
 @media (max-width: 768px) {
   .batch-grid { grid-template-columns: 1fr; }
-  .cards-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
 }
 </style>
 </head>
@@ -224,6 +123,7 @@ select:focus, input:focus { outline: 2px solid #e94560; }
   <h1>Batches</h1>
   <a href="/">Home</a>
   <a href="/collection">Collection</a>
+  <a href="/orders">Orders</a>
 </header>
 
 <div class="filter-bar" id="type-filter">
@@ -232,18 +132,13 @@ select:focus, input:focus { outline: 2px solid #e94560; }
   <span class="pill" data-type="ocr">OCR</span>
   <span class="pill" data-type="csv_import">CSV Import</span>
   <span class="pill" data-type="manual_id">Manual ID</span>
-  <span class="pill" data-type="order">Orders</span>
 </div>
 
 <div id="list-view"></div>
-<div id="detail-view"></div>
 <div id="messages"></div>
 
 <script>
 let batches = [];
-let currentBatch = null;
-let currentCards = [];
-let decks = [];
 let currentFilter = '';
 
 const TYPE_LABELS = {
@@ -251,17 +146,14 @@ const TYPE_LABELS = {
   ocr: 'OCR',
   csv_import: 'CSV',
   manual_id: 'Manual',
-  order: 'Order',
 };
 const TYPE_COLORS = {
   corner: '#e94560',
   ocr: '#88c0d0',
   csv_import: '#a3be8c',
   manual_id: '#d08770',
-  order: '#b48ead',
 };
 
-// Filter bar
 document.querySelectorAll('#type-filter .pill').forEach(pill => {
   pill.addEventListener('click', () => {
     document.querySelectorAll('#type-filter .pill').forEach(p => p.classList.remove('active'));
@@ -280,11 +172,9 @@ async function loadBatches() {
 
 function renderList() {
   const view = document.getElementById('list-view');
-  document.getElementById('detail-view').style.display = 'none';
-  view.style.display = 'block';
 
   if (batches.length === 0) {
-    view.innerHTML = '<div class="empty-state">No batches yet. Import cards via CSV, corners, or orders to create batches.</div>';
+    view.innerHTML = '<div class="empty-state">No batches yet. Import cards via CSV, corners, or manual ID to create batches.</div>';
     return;
   }
 
@@ -299,157 +189,23 @@ function renderList() {
     let metaParts = [];
     if (b.product_type) metaParts.push(b.product_type.replace(/_/g, ' '));
     if (b.set_code) metaParts.push(b.set_code.toUpperCase());
-    if (b.order_number) metaParts.push(`#${b.order_number}`);
-    if (b.seller_name) metaParts.push(b.seller_name);
 
     html += `
-      <div class="batch-card" onclick="showBatch(${b.id})">
+      <a class="batch-card" href="/batches/${b.id}">
         <div class="batch-name">${esc(name)}<span class="batch-type-badge" style="background:${typeColor}33;color:${typeColor}">${typeLabel}</span></div>
         <div class="batch-date">${esc(date)}</div>
         <div class="batch-count">${b.card_count} card(s)</div>
         ${metaParts.length ? `<div class="batch-meta">${esc(metaParts.join(' / '))}</div>` : ''}
         ${deckLabel ? `<div class="batch-deck">${esc(deckLabel)}</div>` : ''}
-      </div>`;
+      </a>`;
   }
   html += '</div>';
   view.innerHTML = html;
 }
 
-async function showBatch(batchId) {
-  const resp = await fetch(`/api/batches/${batchId}/cards`);
-  const data = await resp.json();
-  currentBatch = data.batch;
-  currentCards = data.cards;
-
-  // Load decks for assignment
-  const dresp = await fetch('/api/decks');
-  decks = await dresp.json();
-
-  renderDetail();
-}
-
-function renderDetail() {
-  const view = document.getElementById('detail-view');
-  document.getElementById('list-view').style.display = 'none';
-  view.style.display = 'block';
-
-  const b = currentBatch;
-  const date = b.created_at ? new Date(b.created_at).toLocaleString() : 'Unknown';
-  const name = b.name || `Batch #${b.id}`;
-  const typeLabel = TYPE_LABELS[b.batch_type] || b.batch_type;
-  const typeColor = TYPE_COLORS[b.batch_type] || '#888';
-
-  // Info section
-  let infoItems = [];
-  infoItems.push(`<span class="info-item">Type: <b><span style="color:${typeColor}">${typeLabel}</span></b></span>`);
-  if (b.product_type) infoItems.push(`<span class="info-item">Product: <b>${esc(b.product_type.replace(/_/g, ' '))}</b></span>`);
-  if (b.set_code) infoItems.push(`<span class="info-item">Set: <b>${esc(b.set_code.toUpperCase())}</b></span>`);
-  if (b.notes) infoItems.push(`<span class="info-item">Notes: <b>${esc(b.notes)}</b></span>`);
-  if (b.order_id) {
-    let orderInfo = `Order #${b.order_id}`;
-    infoItems.push(`<span class="info-item">${esc(orderInfo)}</span>`);
-  }
-
-  let assignHtml = '';
-  if (b.deck_id) {
-    const deck = decks.find(d => d.id === b.deck_id);
-    const deckName = deck ? deck.name : `Deck #${b.deck_id}`;
-    assignHtml = `<div class="assign-status">Assigned to: ${esc(deckName)} (${esc(b.deck_zone || 'mainboard')})</div>`;
-  } else {
-    let deckOptions = '<option value="">Select a deck...</option>';
-    for (const d of decks) {
-      deckOptions += `<option value="${d.id}">${esc(d.name)}${d.format ? ` (${d.format})` : ''}</option>`;
-    }
-    assignHtml = `
-      <label>Assign to Deck</label>
-      <div class="assign-row">
-        <select id="assign-deck-select">${deckOptions}</select>
-        <select id="assign-zone-select">
-          <option value="mainboard">Mainboard</option>
-          <option value="sideboard">Sideboard</option>
-          <option value="commander">Commander</option>
-        </select>
-        <button onclick="assignDeck()">Assign</button>
-      </div>`;
-  }
-
-  let cardsHtml = '';
-  for (const c of currentCards) {
-    const img = c.image_uri || '/static/card_back.jpeg';
-    cardsHtml += `
-      <div class="card-item">
-        <img src="${img}" alt="${esc(c.name)}" loading="lazy">
-        <div class="card-info">
-          <div class="card-name" title="${esc(c.name)}">${esc(c.name)}</div>
-          <div class="card-set">${(c.set_code || '').toUpperCase()} #${c.collector_number || ''}</div>
-        </div>
-      </div>`;
-  }
-
-  view.innerHTML = `
-    <div class="detail-header">
-      <button class="secondary" onclick="backToList()" style="padding:4px 12px;font-size:0.8rem;">Back</button>
-      <h2>${esc(name)}</h2>
-      <span class="detail-meta">${esc(date)} — ${currentCards.length} card(s)</span>
-    </div>
-    <div class="detail-info">${infoItems.join('')}</div>
-    <div class="assign-section">${assignHtml}</div>
-    <div id="detail-messages"></div>
-    <div class="cards-grid">${cardsHtml}</div>`;
-}
-
-async function assignDeck() {
-  const deckId = document.getElementById('assign-deck-select').value;
-  const zone = document.getElementById('assign-zone-select').value;
-  if (!deckId) return;
-
-  try {
-    const resp = await fetch(`/api/batches/${currentBatch.id}/assign-deck`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deck_id: parseInt(deckId), deck_zone: zone }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      showDetailError(data.error || 'Assignment failed');
-      return;
-    }
-    currentBatch.deck_id = parseInt(deckId);
-    currentBatch.deck_zone = zone;
-    showDetailSuccess(`Assigned ${data.assigned} card(s) to deck`);
-    renderDetail();
-    loadBatches();
-  } catch (e) {
-    showDetailError('Network error: ' + e.message);
-  }
-}
-
-function backToList() {
-  document.getElementById('detail-view').style.display = 'none';
-  document.getElementById('list-view').style.display = 'block';
-}
-
-function showDetailError(msg) {
-  const el = document.getElementById('detail-messages');
-  const div = document.createElement('div');
-  div.className = 'error-msg';
-  div.textContent = msg;
-  el.appendChild(div);
-  setTimeout(() => div.remove(), 10000);
-}
-
-function showDetailSuccess(msg) {
-  const el = document.getElementById('detail-messages');
-  const div = document.createElement('div');
-  div.className = 'success-msg';
-  div.textContent = msg;
-  el.appendChild(div);
-  setTimeout(() => div.remove(), 10000);
-}
-
 function esc(s) {
   const d = document.createElement('div');
-  d.textContent = s;
+  d.textContent = s == null ? '' : s;
   return d.innerHTML;
 }
 

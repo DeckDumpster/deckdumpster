@@ -1,0 +1,17 @@
+start_page: /orders
+involves:
+  - 'active "Receive All (5)" button for order 2 (button.receive-btn[data-order-id="2"])'
+  - 'POST /api/orders/2/receive called on click'
+  - 'success toast .success-msg with text "Received 5 cards"'
+  - 'list reloads — "5 pending" badge disappears, "All Received" appears for order 2'
+  - 'filter-bar summary "5 cards awaiting delivery" disappears'
+fixture_data:
+  order_id: 2
+  pending_before: 5
+  pending_after: 0
+notes: >
+  Start on /orders. Wait for the Receive All (5) button on the Card
+  Kingdom row. Click it. Wait for the success toast "Received 5 cards".
+  After the list re-renders, assert "5 pending" is no longer on the page
+  and "5 cards awaiting delivery" is also gone. Assert the receive
+  button for order 2 is now disabled and shows "All Received".

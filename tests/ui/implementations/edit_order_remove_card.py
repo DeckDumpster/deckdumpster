@@ -7,7 +7,7 @@ Browser confirm() dialogs are auto-accepted.
 
 
 def steps(harness):
-    # start_page: /edit-order?id=1 — auto-navigated by test runner.
+    # start_page: /orders/1 — auto-navigated by test runner.
     harness.wait_for_visible(".summary-bar", timeout=500)
     harness.wait_for_visible(".card-row", timeout=500)
     # Verify initial card count.

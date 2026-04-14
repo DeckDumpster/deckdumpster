@@ -7,7 +7,7 @@ persistence.
 
 
 def steps(harness):
-    # start_page: /edit-order?id=1 — auto-navigated by test runner.
+    # start_page: /orders/1 — auto-navigated by test runner.
     harness.wait_for_visible("#save-meta-btn", timeout=500)
     # Change seller name.
     harness.fill_by_selector("#meta-seller", "Test Seller")
@@ -21,7 +21,7 @@ def steps(harness):
     harness.wait_for_visible(".status-msg.success", timeout=500)
     harness.assert_text_present("Saved")
     # Reload and verify persistence.
-    harness.navigate("/edit-order?id=1")
+    harness.navigate("/orders/1")
     harness.wait_for_visible("#save-meta-btn", timeout=500)
     # Seller name is inside an <input> element, so we verify via input_value
     # rather than wait_for_text (which only finds visible text content).

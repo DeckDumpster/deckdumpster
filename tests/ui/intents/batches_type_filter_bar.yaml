@@ -6,6 +6,7 @@
 
 description: >
   I can navigate to the Batches page and see a row of filter pills
-  (All, Corner, OCR, CSV Import, Manual ID, Orders). When I click the
-  "Corner" pill, the list filters to show only corner-type batches.
-  Clicking "All" resets the filter to show every batch.
+  (All, Corner, OCR, CSV Import, Manual ID). Orders are now a peer
+  resource at /orders, so there is no "Orders" pill on the batches
+  filter bar. When I click the "Corner" pill, the list filters to
+  show only corner-type batches. Clicking "All" resets the filter.

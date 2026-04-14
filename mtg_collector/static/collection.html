@@ -1962,7 +1962,7 @@ function showCardModal(card) {
           const statusLabel = copy.status === 'ordered' ? 'Ordered' : 'Owned';
           const sellerName = copy.order_seller || copy.seller_name;
           const seller = sellerName
-            ? ` &middot; <a href="/edit-order?id=${copy.order_id}" style="color:#e94560;font-size:0.8rem">${sellerName}</a>`
+            ? ` &middot; <a href="/orders/${copy.order_id}" style="color:#e94560;font-size:0.8rem">${sellerName}</a>`
             : '';
           const price = copy.purchase_price ? ` &middot; $${parseFloat(copy.purchase_price).toFixed(2)}` : '';
           const source = copy.source && copy.source !== 'manual' ? ` &middot; ${copy.source}` : '';
@@ -2415,7 +2415,7 @@ function renderCopySection(copy) {
 
   let orderHtml = '';
   if (copy.order_id) {
-    orderHtml = `<div class="modal-row"><span class="label">Order</span><span class="value"><a href="/edit-order?id=${copy.order_id}" style="color:#e94560">${copy.seller_name || ''} #${copy.order_number || ''}${copy.order_date ? ' (' + copy.order_date + ')' : ''}</a></span></div>`;
+    orderHtml = `<div class="modal-row"><span class="label">Order</span><span class="value"><a href="/orders/${copy.order_id}" style="color:#e94560">${copy.seller_name || ''} #${copy.order_number || ''}${copy.order_date ? ' (' + copy.order_date + ')' : ''}</a></span></div>`;
   }
 
   let lineageHtml = '';

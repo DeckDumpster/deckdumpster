@@ -1,4 +1,4 @@
-start_page: /edit-order?id=1
+start_page: /orders/1
 involves:
   - 'summary bar (.summary-bar) showing card count (.count)'
   - 'remove button (.btn-icon.danger) with X icon on each card row'
@@ -8,7 +8,7 @@ fixture_data:
   initial_card_count: 5
   expected_card_count_after: 4
 notes: >
-  Navigate to /edit-order?id=1. Wait for card rows. Verify summary bar
+  Navigate to /orders/1. Wait for card rows. Verify summary bar
   shows "5 cards". Click the remove button (X icon, .btn-icon.danger) on
   the first card row. The confirm dialog is auto-accepted. Wait for the
   card list to refresh. Verify the summary bar now shows "4 cards".

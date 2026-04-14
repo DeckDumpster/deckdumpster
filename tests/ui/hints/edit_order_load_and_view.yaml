@@ -1,4 +1,4 @@
-start_page: /edit-order?id=1
+start_page: /orders/1
 involves:
   - 'left panel with seller name input (#meta-seller), order number (#meta-order-num), date (#meta-date), source dropdown (#meta-source)'
   - 'financial fields: subtotal (#meta-subtotal), shipping (#meta-shipping), tax (#meta-tax), total (#meta-total)'
@@ -13,7 +13,7 @@ fixture_data:
   source: "tcgplayer"
   card_count: 5
 notes: >
-  Navigate to /edit-order?id=1. Wait for the order to load. Verify the
+  Navigate to /orders/1. Wait for the order to load. Verify the
   seller name is "CardHaus Gaming", order number is "DEMO-TCG-001", source
   is "tcgplayer". Verify the summary bar shows "5 cards". Verify at least
   one card row is visible with all expected controls.

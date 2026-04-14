@@ -1,4 +1,4 @@
-start_page: /edit-order?id=1
+start_page: /orders/1
 involves:
   - 'replace button (.btn-icon with swap icon &#x21C4;) on each card row'
   - 'search overlay (#search-overlay) opens with class "active"'
@@ -9,7 +9,7 @@ fixture_data:
   original_card: "Witness Protection"
   search_query: "Lightning Bolt"
 notes: >
-  Navigate to /edit-order?id=1. Wait for cards to load. Note the last
+  Navigate to /orders/1. Wait for cards to load. Note the last
   card name. Click the replace button on the last card row. Wait for the
   search overlay to become active. Type a card name in the search input.
   Wait for results. Click the first result. Verify the overlay closes

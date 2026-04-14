@@ -1,0 +1,18 @@
+start_page: /orders
+involves:
+  - 'header summary text "5 cards awaiting delivery" in #summary'
+  - 'Card Kingdom order card (seller text "Card Kingdom") with "5 pending" badge (span.count-pending)'
+  - 'active "Receive All (5)" button (button.receive-btn[data-order-id="2"])'
+  - 'CardHaus Gaming order card with disabled "All Received" button (button.receive-btn.received)'
+fixture_data:
+  order_1_seller: "CardHaus Gaming"
+  order_1_pending: 0
+  order_2_seller: "Card Kingdom"
+  order_2_pending: 5
+notes: >
+  Start on /orders. Wait for the order cards to render. Assert the
+  summary "5 cards awaiting delivery" is present in the filter bar.
+  Assert both seller names are visible. Assert "5 pending" badge is
+  visible (matches Card Kingdom row). Assert the active "Receive All (5)"
+  button exists. Assert the "All Received" text is present (CardHaus
+  row's disabled state).
