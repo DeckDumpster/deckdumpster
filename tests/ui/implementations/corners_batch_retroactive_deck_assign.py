@@ -20,7 +20,7 @@ def steps(harness):
     harness.select_by_label("#assign-zone-select", "Mainboard")
     # Click the "Assign" button.
     harness.click_by_text("Assign", exact=True)
-    # After assignment, loadBatches() switches back to list view.
-    # Wait for the batch card to show the deck assignment.
-    harness.wait_for_text("Deck: Bolt Tribal", timeout=500)
+    # After assignment, batch_detail.html re-renders in place and the
+    # assign-status div replaces the form with "Assigned to: X (zone)".
+    harness.wait_for_text("Assigned to: Bolt Tribal", timeout=500)
     harness.screenshot("final_state")
