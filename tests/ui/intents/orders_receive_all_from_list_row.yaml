@@ -1,0 +1,12 @@
+# Scenario: Receive All from the orders list marks all ordered cards as owned
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I click "Receive All (5)" on the Card Kingdom row from /orders,
+  the 5 ordered cards are bulk-flipped to owned without me having to
+  open the order detail page. The pending badge disappears from the
+  row, the "5 cards awaiting delivery" summary goes away, and the
+  button is replaced with a disabled "All Received" state.

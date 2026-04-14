@@ -10,13 +10,19 @@ def steps(harness):
     harness.navigate("/batches")
     # Wait for the batch list to load
     harness.wait_for_text("Wednesday evening scan")
-    # Verify the "All" pill is active by default
-    harness.assert_text_present("All")
-    harness.assert_text_present("Corner")
-    harness.assert_text_present("OCR")
-    harness.assert_text_present("CSV Import")
-    harness.assert_text_present("Manual ID")
-    harness.assert_text_present("Orders")
+
+    # The 5 expected filter pills are present in the filter bar.
+    # Assert directly against the filter-bar scope so a stray "Orders"
+    # link elsewhere on the page can't make this test silently pass.
+    harness.assert_element_count("#type-filter .pill", 5)
+    harness.assert_visible("#type-filter .pill[data-type='']")
+    harness.assert_visible("#type-filter .pill[data-type='corner']")
+    harness.assert_visible("#type-filter .pill[data-type='ocr']")
+    harness.assert_visible("#type-filter .pill[data-type='csv_import']")
+    harness.assert_visible("#type-filter .pill[data-type='manual_id']")
+    # Orders are a peer resource at /orders — no filter pill for them.
+    harness.assert_element_count("#type-filter .pill[data-type='order']", 0)
+
     # Click the "Corner" filter pill
     harness.click_by_text("Corner")
     # Verify corner batches are still visible (demo data is all corner type)

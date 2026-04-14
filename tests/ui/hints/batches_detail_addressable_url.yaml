@@ -1,0 +1,22 @@
+start_page: /batches/1
+involves:
+  - 'page h2 / detail-header with text "Wednesday evening scan"'
+  - 'type indicator "Type: Corner" in .detail-info'
+  - 'assignment status text "Assigned to: Bolt Tribal (sideboard)" in .assign-status'
+  - 'card grid (.cards-grid) containing the three cards'
+  - '"Back" button/link returning to /batches'
+fixture_data:
+  batch_id: 1
+  batch_name: "Wednesday evening scan"
+  batch_type: "corner"
+  deck_name: "Bolt Tribal"
+  deck_zone: "sideboard"
+  card_count: 3
+  first_card_name: "Condemn"
+notes: >
+  Start on /batches/1 directly — no prior navigation through the list.
+  Wait for the cards-grid to appear, which happens only after the
+  pathname-based fetch resolves. Assert the batch name heading, the
+  Corner type, the Bolt Tribal / sideboard assignment status, and
+  that "Condemn" (one of the three cards) is rendered. The presence
+  of the Back link is a structural check.

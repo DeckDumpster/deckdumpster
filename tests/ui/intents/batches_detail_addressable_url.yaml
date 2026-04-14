@@ -1,0 +1,12 @@
+# Scenario: Batch detail is reachable at its own URL
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I navigate directly to /batches/:id for a specific batch, I see
+  a standalone, bookmarkable detail page — not an in-SPA modal. The
+  page shows the batch name as the heading, its type indicator, the
+  deck assignment status when present, and a grid of its cards, with
+  a Back link returning me to the batches list.

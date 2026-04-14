@@ -1,0 +1,13 @@
+# Scenario: Orders list surfaces pending deliveries
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I navigate to /orders I can see at a glance how many cards are
+  awaiting delivery. The header shows a "5 cards awaiting delivery"
+  summary, the Card Kingdom order card shows a "5 pending" badge
+  alongside an active "Receive All (5)" button, and the CardHaus order
+  on the same page instead shows a disabled "All Received" button with
+  no pending badge.
