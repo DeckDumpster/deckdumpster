@@ -1,0 +1,15 @@
+start_page: /collection
+involves:
+  - 'sticky <header> element (position: sticky; top: 0; z-index: 50)'
+  - 'brand logo (a.brand-logo), search input (#search-input), and syntax help pill (a.syntax-help-link) inside the header'
+  - 'window scrollY > 0 after scrolling'
+  - 'header.getBoundingClientRect().top stays at 0 after scrolling'
+notes: >
+  Start on /collection. Wait for the card list (.layout #main) to
+  finish rendering. Use harness.scroll("down") several times to drive
+  window.scrollY meaningfully positive. Then read window.scrollY and
+  the header's bounding rect via harness.page.evaluate. Assert
+  scrollY is > 100 (proving we actually scrolled) and that the
+  header's top is at 0 (proving sticky held). Also spot-check that
+  the brand logo and search input are still visible so the test's
+  intent is obvious from the assertion log.
