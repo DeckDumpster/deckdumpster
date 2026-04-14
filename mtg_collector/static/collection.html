@@ -22,20 +22,54 @@ body {
 
 header {
   background: #16213e;
-  padding: 16px 24px;
+  padding: 12px 24px;
   display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   border-bottom: 2px solid #0f3460;
 }
 
-header h1 {
-  font-size: 1.3rem;
-  color: #e94560;
-  margin-right: 16px;
-  white-space: nowrap;
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
+.header-row-search {
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.brand-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #e94560;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.brand-logo:hover { background: rgba(233,69,96,0.12); }
+.brand-logo svg { display: block; }
+
+.syntax-help-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 6px 12px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #1a1a2e;
+  color: #888;
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+.syntax-help-link:hover { color: #e94560; border-color: #e94560; }
 
 .controls {
   display: flex;
@@ -93,12 +127,18 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   position: relative;
 }
 
-#search-input { flex: 1; min-width: 280px; }
+#search-input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  font-size: 1rem;
+  padding: 11px 16px;
+}
 #search-error { color: #e94560; font-size: 11px; position: absolute; top: 100%; left: 0; white-space: nowrap; z-index: 10; }
-.search-wrap { position: relative; }
+.search-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
 /* Autocomplete dropdown */
 .ac-dropdown {
-  display: none; position: absolute; top: 100%; left: 0; right: 40px;
+  display: none; position: absolute; top: 100%; left: 0; right: 0;
   background: #16213e; border: 1px solid #0f3460; border-top: none;
   border-radius: 0 0 6px 6px; max-height: 260px; overflow-y: auto;
   z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
@@ -1076,9 +1116,10 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 #sel-delete-btn:hover { background: #7a2a2a; color: #fff; }
 
 @media (max-width: 768px) {
-  #search-input { width: 100%; }
-  .search-wrap { width: 100%; order: -1; }
-  .controls { flex-wrap: wrap; }
+  header { padding: 10px 12px; }
+  .header-row-search { gap: 8px; }
+  .brand-logo { width: 40px; height: 40px; }
+  #search-input { font-size: 1rem; padding: 10px 14px; }
   .wishlist-panel { width: 280px; right: -300px; }
 }
 </style>
@@ -1087,14 +1128,20 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 <body>
 
 <header>
-  <h1><a href="/" style="color:inherit;text-decoration:none">Collection</a></h1>
-  <div class="controls">
-    <div class="search-wrap" style="flex:1;display:flex;align-items:center;gap:4px">
+  <div class="header-row header-row-search">
+    <a href="/" class="brand-logo" title="Home" aria-label="Home">
+      <svg viewBox="0 0 32 32" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round">
+        <rect x="5" y="6" width="14" height="20" rx="2" transform="rotate(-9 12 16)"/>
+        <rect x="13" y="6" width="14" height="20" rx="2" transform="rotate(9 20 16)"/>
+      </svg>
+    </a>
+    <div class="search-wrap">
       <input type="text" id="search-input" placeholder="Search (e.g. t:creature c:r mv>=3)" autocomplete="off">
-      <a href="/search-help" target="_blank" title="Search syntax help" style="color:#888;font-size:0.8rem;text-decoration:none">?</a>
       <div id="search-error"></div>
       <div class="ac-dropdown" id="ac-dropdown"></div>
     </div>
+  </div>
+  <div class="header-row">
     <div class="view-toggle-group" id="view-toggle-group">
       <button class="secondary" id="view-table-btn" title="Table view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2" width="14" height="2" rx=".5"/><rect x="1" y="7" width="14" height="2" rx=".5"/><rect x="1" y="12" width="14" height="2" rx=".5"/></svg></button>
       <button class="secondary" id="view-grid-btn" title="Grid view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1"/><rect x="9" y="1" width="6" height="6" rx="1"/><rect x="1" y="9" width="6" height="6" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
@@ -1122,6 +1169,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
       </div>
     </div>
     <div class="col-controls" id="grid-size-wrap" style="display:none"><button class="col-btn" id="col-minus">&minus;</button><div class="col-count" id="col-count"></div><button class="col-btn" id="col-plus">+</button></div>
+    <a href="/search-help" target="_blank" class="syntax-help-link" title="Search syntax help"><span aria-hidden="true">?</span> Syntax</a>
   </div>
   <div id="status"></div>
 </header>

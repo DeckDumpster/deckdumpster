@@ -1,0 +1,13 @@
+start_page: /collection
+involves:
+  - 'syntax help pill (a.syntax-help-link) on the second header row'
+  - 'pill text "Syntax" with leading "?" glyph'
+  - 'pill href points to /search-help and opens in a new tab'
+notes: >
+  Start on /collection. Wait for the search input to be ready, then
+  assert the syntax help pill (a.syntax-help-link) is visible. Verify
+  the visible "Syntax" text is on the page (the leading "?" glyph is
+  aria-hidden so we don't assert on it). Verify the link's href and
+  target attributes via an attribute selector. We don't actually click
+  the link because target="_blank" opens a new tab; coverage of the
+  destination page itself lives in collection_search_help_page.

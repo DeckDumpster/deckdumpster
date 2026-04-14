@@ -1,0 +1,12 @@
+# Scenario: Visible "? Syntax" pill in collection header is discoverable
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I am on the Collection page, I can see a clearly bordered
+  "? Syntax" pill at the right end of the second header row. The pill
+  is much easier to find and tap than the previous tiny "?" icon, and
+  it links to the search syntax help page so I can look up query
+  operators without hunting for a hidden link.

@@ -1,0 +1,10 @@
+start_page: /collection
+involves:
+  - 'brand logo link (a.brand-logo) immediately left of the search input'
+  - 'card-stack SVG icon inside the brand logo'
+  - 'homepage h1 "MTG Collection Tools" as the navigation target marker'
+notes: >
+  Start on /collection. Wait for the search input to be ready, then
+  assert the brand logo (a.brand-logo) is visible. Click it. The
+  browser should navigate to the homepage; wait for the "MTG Collection
+  Tools" h1 text to confirm we landed there.

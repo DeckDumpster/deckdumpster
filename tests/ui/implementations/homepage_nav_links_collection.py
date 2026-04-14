@@ -9,9 +9,10 @@ def steps(harness):
     # start_page: / — auto-navigated by test runner.
 
     # Click Cards link and verify navigation.
-    # The h1 on /collection says "Collection" (title is "Collection Browser").
+    # The collection page no longer has a "Collection" h1; wait for the
+    # search input which is the most stable marker on the new layout.
     harness.click_by_selector("a[href='/collection']")
-    harness.wait_for_text("Collection")
+    harness.wait_for_visible("#search-input")
     harness.navigate("/")
 
     # Click Decks link and verify navigation
