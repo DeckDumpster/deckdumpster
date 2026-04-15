@@ -613,13 +613,15 @@ a.lineage-link {
   display: none;
   position: absolute;
   top: 100%;
-  right: 0;
+  left: 0;
+  right: auto;
   background: #16213e;
   border: 1px solid #0f3460;
   border-radius: 6px;
   padding: 6px 0;
   z-index: 60;
-  min-width: 160px;
+  min-width: 200px;
+  max-width: calc(100vw - 24px);
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
 .col-config-dropdown.open { display: block; }
@@ -2969,7 +2971,7 @@ const AC_VALUES = {
   'id:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya'],
   'r:': ['common','uncommon','rare','mythic'],
   't:': ['creature','instant','sorcery','enchantment','artifact','planeswalker','land','battle','legendary','token','elf','goblin','human','merfolk','dragon','wizard','angel','demon'],
-  'is:': ['foil','nonfoil','etched','fullart','borderless','showcase','extendedart','promo','reprint','reserved','firstprint','commander','vanilla','split','transform','mdfc','adventure','saga','unassigned','decked','bindered','wanted'],
+  'is:': ['foil','nonfoil','etched','fullart','borderless','showcase','extendedart','promo','reprint','reserved','firstprint','commander','vanilla','split','transform','mdfc','adventure','saga','unassigned','decked','bindered','wanted','unowned'],
   'has:': ['watermark','flavor','power','toughness','loyalty'],
   'f:': ['standard','modern','legacy','vintage','commander','pioneer','pauper'],
   'status:': ['owned','ordered','sold','traded','gifted','lost'],

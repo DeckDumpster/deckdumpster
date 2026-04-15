@@ -290,6 +290,12 @@ class TestCollectionKeywords:
         assert "NOT" in c.where_sql
         assert "_wl.id IS NOT NULL" in c.where_sql
 
+    def test_is_unowned(self):
+        c = _compile("is:unowned")
+        assert c.include_unowned
+        assert c.has_status_filter
+        assert "c.id IS NULL" in c.where_sql
+
 
 class TestSQLValidity:
     """Test that compiled queries produce valid SQL by executing against an in-memory DB."""

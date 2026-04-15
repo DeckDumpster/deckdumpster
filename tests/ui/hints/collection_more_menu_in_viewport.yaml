@@ -1,0 +1,14 @@
+start_page: /collection
+involves:
+  - 'vertical-ellipsis More button (#more-menu-btn)'
+  - 'dropdown panel (#more-menu-dropdown, toggled open via .col-config-dropdown.open)'
+  - 'menu items: Wishlist, Toggle Multi-Select, Image Display, Saved Views'
+fixture_data: {}
+notes: >
+  The panel is positioned absolutely relative to the col-config-wrap
+  container with left:0 and max-width:calc(100vw - 24px). When the
+  More button is clicked, #more-menu-dropdown receives the "open"
+  class which sets display:block. The test should open the menu and
+  verify the Wishlist, Toggle Multi-Select, Image Display, and Saved
+  Views labels are visible on the page (the CSS fix ensures the panel
+  is not clipped off the left edge of the viewport).
