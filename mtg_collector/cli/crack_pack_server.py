@@ -2001,9 +2001,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e), "position": e.position}, 400)
                 return
 
+        # is:unowned flips to the LEFT-JOIN template so cards not in the
+        # collection can appear in results.
+        include_unowned = bool(compiled and compiled.include_unowned)
+
         # Status default: owned (unless query has explicit status: filter)
         has_status = compiled and compiled.has_status_filter
-        if not has_status and not card_pairs:
+        if not has_status and not card_pairs and not include_unowned:
             if where_sql == "1=1":
                 where_sql = "c.status IN ('owned', 'ordered')"
             else:
@@ -2067,8 +2071,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 )
             return "\n                ".join(joins)
 
-        if card_pairs:
-            # Shared card links: LEFT JOIN so unowned cards appear
+        if card_pairs or include_unowned:
+            # LEFT JOIN template: shared-link cards or is:unowned queries
             query = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
@@ -2189,7 +2193,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         cursor = conn.execute(query, sql_params)
         rows = cursor.fetchall()
 
-        include_unowned = bool(card_pairs)
+        include_unowned = bool(card_pairs) or include_unowned
         results = []
         for row in rows:
             mana_cost = row["mana_cost"]

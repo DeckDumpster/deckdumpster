@@ -23,7 +23,7 @@ class CompiledQuery:
     __slots__ = (
         "where_sql", "params", "needs_fts", "order_by", "order_dir",
         "needs_deck_join", "needs_price_join", "needs_wishlist_join",
-        "has_status_filter",
+        "has_status_filter", "include_unowned",
     )
 
     def __init__(self):
@@ -36,6 +36,7 @@ class CompiledQuery:
         self.needs_price_join: bool = False
         self.needs_wishlist_join: bool = False
         self.has_status_filter: bool = False
+        self.include_unowned: bool = False
 
 
 class CompileError(Exception):
@@ -667,6 +668,11 @@ def _compile_is_flag(val: str, ctx: CompiledQuery | None = None) -> tuple[str, l
         if ctx:
             ctx.needs_wishlist_join = True
         return "_wl.id IS NOT NULL", []
+    if lower == "unowned":
+        if ctx:
+            ctx.include_unowned = True
+            ctx.has_status_filter = True
+        return "c.id IS NULL", []
 
     sql = _IS_FLAG_MAP.get(lower)
     if sql:

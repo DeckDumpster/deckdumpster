@@ -1,0 +1,20 @@
+start_page: /collection
+involves:
+  - 'search input (#search-input) with placeholder "Search (e.g. t:creature c:r mv>=3)"'
+  - 'status text (#status) showing entry/card counts'
+  - 'collection table (.collection-table)'
+fixture_data:
+  owned_lotus_cards: 0
+  unowned_lotus_printings: 3
+  unowned_lotus_names:
+    - "Gilded Lotus"
+    - "Lotus Bloom"
+    - "Lotus Petal"
+notes: >
+  The test fixture contains 0 collection rows matching "lotus". Three
+  printings exist in the card database that match: Gilded Lotus,
+  Lotus Bloom, Lotus Petal. Searching "lotus" alone returns "0
+  entries". Searching "is:unowned lotus" triggers the LEFT-JOIN
+  template in _api_collection and surfaces all three printings, each
+  rendered with the .unowned class (dimmed opacity) and the status
+  bar shows "3 entries, 0 cards" (qty=0 because they're not owned).

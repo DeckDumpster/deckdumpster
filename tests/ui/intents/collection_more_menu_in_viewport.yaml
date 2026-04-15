@@ -1,0 +1,12 @@
+# Scenario: More menu on the collection page renders within the viewport
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I click the vertical-ellipsis More button in the collection
+  header, the dropdown panel opens below the button and its items are
+  fully readable — Wishlist, Toggle Multi-Select, Image Display, and
+  Saved Views. The panel is not clipped off the left edge of the
+  screen.

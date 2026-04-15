@@ -146,7 +146,7 @@ Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-
 
 ### Collection page filtering
 
-All filtering uses a single Scryfall-style query bar (`?q=...`). Standard Scryfall syntax plus collection extensions: `status:`, `added:`, `price:`, `deck:`, `binder:`, `is:unassigned`, `is:decked`, `is:bindered`, `is:wanted`, `order:price`. Default filter: `status:owned OR status:ordered` (when no explicit `status:` in query). Autocomplete suggests keywords and values. Help page at `/search-help`.
+All filtering uses a single Scryfall-style query bar (`?q=...`). Standard Scryfall syntax plus collection extensions: `status:`, `added:`, `price:`, `deck:`, `binder:`, `is:unassigned`, `is:decked`, `is:bindered`, `is:wanted`, `is:unowned`, `order:price`. Default filter: `status:owned OR status:ordered` (when no explicit `status:` in query). `is:unowned` flips the query to a LEFT JOIN against `printings` so cards not yet in the collection appear (useful for adding a card from its modal/detail page). Autocomplete suggests keywords and values. Help page at `/search-help`.
 
 ### Card data access policy
 

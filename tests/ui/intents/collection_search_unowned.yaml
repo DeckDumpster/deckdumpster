@@ -1,0 +1,14 @@
+# Scenario: is:unowned query surfaces cards not in the collection
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I search the collection for "lotus" with the default filter,
+  no results appear because I don't own any lotus cards. When I
+  prepend "is:unowned" to the same query, the collection list shows
+  lotus printings from the local card database that I don't yet own,
+  dimmed to indicate they aren't part of my collection. This lets me
+  find and add a card I want to buy from its row in the collection
+  view.
