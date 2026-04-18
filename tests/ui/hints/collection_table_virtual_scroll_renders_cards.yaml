@@ -1,0 +1,13 @@
+start_page: /collection
+involves:
+  - "collection table .collection-table"
+  - "virtual scroll tbody #vtbody"
+  - "data rows #vtbody tr[data-idx]"
+  - "column headers .collection-table thead th[data-col]"
+  - "card name cells .card-name"
+fixture_data: {}
+notes: >
+  Navigate to /collection. Wait for .collection-table and #vtbody tr[data-idx]
+  to appear (up to 5s for API response). Verify column headers are visible.
+  Verify card rows with names are rendered. The table uses virtual scrolling
+  so only ~20 rows exist in the DOM even if the collection has more cards.

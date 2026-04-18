@@ -1,0 +1,15 @@
+start_page: /collection
+involves:
+  - "collection table .collection-table"
+  - "virtual scroll tbody #vtbody"
+  - "data rows #vtbody tr[data-idx]"
+  - "card name cells .card-name"
+  - "scroll spacers .vscroll-spacer"
+fixture_data: {}
+notes: >
+  Navigate to /collection. Wait for table data rows. Screenshot the initial
+  state showing top cards (e.g. "Acrobatic Cheerleader"). Scroll down to reveal
+  more cards. Screenshot again. The visible card names should differ from the
+  initial view, confirming virtual scroll updated the rendered rows. With demo
+  data (~43 cards sorted by name), scrolling to the bottom should show cards
+  like "Witness Protection" instead of the initial "Acrobatic Cheerleader".
