@@ -2093,15 +2093,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     o.seller_name as order_seller,
                     o.order_number as order_number,
                     o.order_date as order_date,
-                    c.purchase_price,
-                    GROUP_CONCAT(DISTINCT ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at) as ingest_lineage_raw
+                    c.purchase_price
                 FROM printings p
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 LEFT JOIN collection c ON p.printing_id = c.printing_id
                 LEFT JOIN orders o ON c.order_id = o.id
-                LEFT JOIN ingest_lineage il ON il.collection_id = c.id
-                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
                 {_build_extra_joins(has_deck_binder_joins=False)}
                 WHERE {where_sql}
                 GROUP BY p.printing_id
@@ -2132,8 +2129,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
-                    b.name as binder_name,
-                    ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at as ingest_lineage_raw
+                    b.name as binder_name
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2142,8 +2138,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN deck_cards dc ON dc.collection_id = c.id
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
-                LEFT JOIN ingest_lineage il ON il.collection_id = c.id
-                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
                 {_build_extra_joins(has_deck_binder_joins=True)}
                 WHERE {where_sql}
                 ORDER BY {sort_col} {order_dir}, card.name ASC
@@ -2172,8 +2166,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
-                    b.name as binder_name,
-                    GROUP_CONCAT(DISTINCT ii.id || '|' || il.card_index || '|' || ii.filename || '|' || ii.created_at) as ingest_lineage_raw
+                    b.name as binder_name
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2182,8 +2175,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN deck_cards dc ON dc.collection_id = c.id
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
-                LEFT JOIN ingest_lineage il ON il.collection_id = c.id
-                LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
                 {_build_extra_joins(has_deck_binder_joins=True)}
                 WHERE {where_sql}
                 GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
@@ -2250,22 +2241,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 card["order_number"] = row["order_number"]
                 card["order_date"] = row["order_date"]
                 card["purchase_price"] = row["purchase_price"]
-            # Ingest lineage (for "Correct" link)
-            raw = row["ingest_lineage_raw"] if "ingest_lineage_raw" in row.keys() else None
-            if raw:
-                lineage = []
-                for entry in raw.split(","):
-                    parts = entry.split("|", 3)
-                    lineage.append({
-                        "image_id": int(parts[0]),
-                        "card_idx": int(parts[1]),
-                        "filename": parts[2],
-                        "created_at": parts[3],
-                    })
-                card["ingest_lineage"] = lineage
-                # Keep first entry for backwards compat
-                card["ingest_image_id"] = lineage[0]["image_id"]
-                card["ingest_card_idx"] = lineage[0]["card_idx"]
             card["tcg_price"] = None
             card["ck_price"] = None
             card["ck_url"] = ""
