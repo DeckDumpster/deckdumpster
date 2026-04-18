@@ -283,6 +283,23 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 
 .collection-table tr:hover { background: rgba(15, 52, 96, 0.2); }
 .collection-table tr { cursor: pointer; }
+.collection-table .vscroll-spacer { pointer-events: none; cursor: default; }
+.collection-table .vscroll-spacer:hover { background: none; }
+
+.skeleton-row td { padding: 6px 12px; }
+.skeleton-cell {
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(15,52,96,0.15) 25%, rgba(15,52,96,0.3) 50%, rgba(15,52,96,0.15) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+.skeleton-cell.wide { width: 60%; }
+.skeleton-cell.narrow { width: 30%; }
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 
 /* Cell-component styles moved to shared-card-table.css */
 
@@ -2672,9 +2689,27 @@ function updateStatusText() {
   statusEl.textContent = `${allCards.length} entries, ${totalQty} cards \u2014 ${priceLabel} $${totalValue.toFixed(2)}`;
 }
 
+function renderSkeleton() {
+  const visCols = getVisibleColumns();
+  const colIcon = `<svg viewBox="0 0 16 16"><path d="M1 1h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 6h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 11h4v4H1zm5 0h4v4H6zm5 0h4v4H11z"/></svg>`;
+  let html = '<table class="collection-table"><thead><tr>';
+  html += `<th class="col-config-th">${colIcon}</th>`;
+  for (const col of visCols) html += `<th>${col.label}</th>`;
+  html += '</tr></thead><tbody>';
+  const widths = visCols.map(c => c.key === 'name' ? 'wide' : 'narrow');
+  for (let i = 0; i < 20; i++) {
+    html += '<tr class="skeleton-row"><td></td>';
+    for (let j = 0; j < visCols.length; j++) html += `<td><div class="skeleton-cell ${widths[j]}"></div></td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  main.innerHTML = html;
+}
+
 async function fetchCollection() {
   searchErrorEl.textContent = '';
   statusEl.textContent = 'Loading...';
+  if (allCardsUnfiltered.length === 0 && currentView === 'table') renderSkeleton();
 
   const params = getFetchParams();
   const res = await fetch(`/api/collection?${params}`);
@@ -2700,8 +2735,10 @@ async function fetchCollection() {
 
 // --- Render ---
 function render() {
-  // Clean up virtual scroll when switching away from grid
-  if (_gridScrollCleanup && currentView === 'table') {
+  if (_tableScrollCleanup && currentView !== 'table') {
+    _tableScrollCleanup(); _tableScrollCleanup = null;
+  }
+  if (_gridScrollCleanup && currentView !== 'grid') {
     _gridScrollCleanup(); _gridScrollCleanup = null;
   }
   if (currentView === 'table') renderTable();
@@ -2709,56 +2746,98 @@ function render() {
 }
 
 function renderTable() {
+  if (_tableScrollCleanup) { _tableScrollCleanup(); _tableScrollCleanup = null; }
+
   if (allCards.length === 0) {
     main.innerHTML = '<div class="empty-state">No cards found</div>';
     return;
   }
 
   const visCols = getVisibleColumns();
+  const ROW_HEIGHT = 49;
+  const bufferRows = 5;
+  const totalRows = allCards.length;
+  const colCount = visCols.length + 1 + (multiSelectMode ? 1 : 0);
 
   const drawerOpen = colDrawer.classList.contains('open');
   const colIcon = `<svg viewBox="0 0 16 16"><path d="M1 1h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 6h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 11h4v4H1zm5 0h4v4H6zm5 0h4v4H11z"/></svg>`;
-  let html = '<table class="collection-table"><thead><tr>';
-  html += `<th class="col-config-th${drawerOpen ? ' active' : ''}" id="col-config-th" title="Configure columns">${colIcon}</th>`;
+  let theadHtml = '<tr>';
+  theadHtml += `<th class="col-config-th${drawerOpen ? ' active' : ''}" id="col-config-th" title="Configure columns">${colIcon}</th>`;
   if (multiSelectMode) {
     const allChecked = selectedCards.size === allCards.length && allCards.length > 0;
-    html += `<th class="select-col"><input type="checkbox" class="sel-all-cb" ${allChecked ? 'checked' : ''}></th>`;
+    theadHtml += `<th class="select-col"><input type="checkbox" class="sel-all-cb" ${allChecked ? 'checked' : ''}></th>`;
   }
   for (const col of visCols) {
     const isActive = col.key === sortColumn;
     const arrow = isActive ? `<span class="sort-arrow">${sortOrder === 'asc' ? '\u25B2' : '\u25BC'}</span>` : '';
-    html += `<th class="${isActive ? 'sorted' : ''}" data-col="${col.key}">${col.label}${arrow}</th>`;
+    theadHtml += `<th class="${isActive ? 'sorted' : ''}" data-col="${col.key}">${col.label}${arrow}</th>`;
   }
-  html += '</tr></thead><tbody>';
+  theadHtml += '</tr>';
 
-  const _cellOpts = { priceSources: _settings.price_sources };
-  for (let idx = 0; idx < allCards.length; idx++) {
-    const card = allCards[idx];
-    const helpers = prepareCardHelpers(card, { isWanted: isCardWanted });
+  main.innerHTML = `<table class="collection-table"><thead>${theadHtml}</thead><tbody id="vtbody"></tbody></table>`;
 
-    const isSelected = selectedCards.has(idx);
-    const isUnowned = card.owned === false;
-    const isWanted = isCardWanted(card);
-    const isOrdered = card.status === 'ordered';
-    const trClasses = [isSelected ? 'selected' : '', isUnowned ? 'unowned' : '', isUnowned && isWanted ? 'wanted' : '', isOrdered ? 'ordered' : ''].filter(Boolean).join(' ');
-    html += `<tr data-idx="${idx}"${trClasses ? ` class="${trClasses}"` : ''}>`;
-    html += '<td></td>'; // spacer for col-config column
-    if (multiSelectMode) {
-      html += `<td class="select-col"><input type="checkbox" class="row-sel-cb" data-idx="${idx}" ${isSelected ? 'checked' : ''}></td>`;
+  const table = main.querySelector('.collection-table');
+  const tbody = document.getElementById('vtbody');
+  let renderedRange = [-1, -1];
+
+  function renderVisibleRows() {
+    const tableRect = table.getBoundingClientRect();
+    const theadEl = table.querySelector('thead');
+    const theadHeight = theadEl ? theadEl.offsetHeight : 0;
+    const offset = -(tableRect.top - theadHeight);
+    const viewportHeight = window.innerHeight;
+
+    const firstRow = Math.max(0, Math.floor(offset / ROW_HEIGHT) - bufferRows);
+    const lastRow = Math.min(totalRows - 1, Math.ceil((offset + viewportHeight) / ROW_HEIGHT) + bufferRows);
+
+    if (firstRow === renderedRange[0] && lastRow === renderedRange[1]) return;
+    renderedRange = [firstRow, lastRow];
+
+    const _cellOpts = { priceSources: _settings.price_sources };
+    let html = '';
+    if (firstRow > 0) {
+      html += `<tr class="vscroll-spacer"><td colspan="${colCount}" style="height:${firstRow * ROW_HEIGHT}px;padding:0;border:none"></td></tr>`;
     }
-    for (const col of visCols) {
-      const cls = col.key === 'price' || col.key === 'ck_price' || col.key === 'tcg_price' ? ' class="price-cell"' : '';
-      html += `<td${cls}>${renderCellContent(col.key, card, helpers, _cellOpts)}</td>`;
+    for (let idx = firstRow; idx <= lastRow; idx++) {
+      const card = allCards[idx];
+      const helpers = prepareCardHelpers(card, { isWanted: isCardWanted });
+      const isSelected = selectedCards.has(idx);
+      const isUnowned = card.owned === false;
+      const isWanted = isCardWanted(card);
+      const isOrdered = card.status === 'ordered';
+      const trClasses = [isSelected ? 'selected' : '', isUnowned ? 'unowned' : '', isUnowned && isWanted ? 'wanted' : '', isOrdered ? 'ordered' : ''].filter(Boolean).join(' ');
+      html += `<tr data-idx="${idx}"${trClasses ? ` class="${trClasses}"` : ''}>`;
+      html += '<td></td>';
+      if (multiSelectMode) {
+        html += `<td class="select-col"><input type="checkbox" class="row-sel-cb" data-idx="${idx}" ${isSelected ? 'checked' : ''}></td>`;
+      }
+      for (const col of visCols) {
+        const cls = col.key === 'price' || col.key === 'ck_price' || col.key === 'tcg_price' ? ' class="price-cell"' : '';
+        html += `<td${cls}>${renderCellContent(col.key, card, helpers, _cellOpts)}</td>`;
+      }
+      html += '</tr>';
     }
-    html += '</tr>';
+    const bottomRows = totalRows - lastRow - 1;
+    if (bottomRows > 0) {
+      html += `<tr class="vscroll-spacer"><td colspan="${colCount}" style="height:${bottomRows * ROW_HEIGHT}px;padding:0;border:none"></td></tr>`;
+    }
+    tbody.innerHTML = html;
   }
 
-  html += '</tbody></table>';
-  main.innerHTML = html;
+  renderVisibleRows();
+
+  let ticking = false;
+  function onScroll() {
+    if (!ticking) {
+      ticking = true;
+      requestAnimationFrame(() => { renderVisibleRows(); ticking = false; });
+    }
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  _tableScrollCleanup = () => window.removeEventListener('scroll', onScroll);
 
   // Delegated click handler for checkboxes, filterable elements and row->modal
-  main.querySelector('.collection-table').addEventListener('click', (e) => {
-    // Select-all checkbox
+  table.addEventListener('click', (e) => {
     if (e.target.classList.contains('sel-all-cb')) {
       if (e.target.checked) {
         for (let i = 0; i < allCards.length; i++) selectedCards.add(i);
@@ -2769,32 +2848,26 @@ function renderTable() {
       render();
       return;
     }
-    // Per-row checkbox
     if (e.target.classList.contains('row-sel-cb')) {
       const idx = parseInt(e.target.dataset.idx);
       toggleCardSelection(idx, e.shiftKey);
       if (e.shiftKey) { render(); return; }
       e.target.closest('tr').classList.toggle('selected', selectedCards.has(idx));
-      // Update select-all checkbox state
       const allCb = main.querySelector('.sel-all-cb');
       if (allCb) allCb.checked = selectedCards.size === allCards.length;
       return;
     }
-    // External links pass through
     if (e.target.closest('a')) return;
-    // Filterable element click
     const filterEl = e.target.closest('[data-filter-type]');
     if (filterEl) {
       e.stopPropagation();
       applyFilterViaSearch(filterEl.dataset.filterType, filterEl.dataset.filterValue);
       return;
     }
-    // Row click -> modal
     const tr = e.target.closest('tr[data-idx]');
     if (tr) showCardModal(allCards[parseInt(tr.dataset.idx)]);
   });
 
-  // Column config icon
   const colTh = document.getElementById('col-config-th');
   if (colTh) {
     colTh.addEventListener('click', (e) => {
@@ -2803,13 +2876,13 @@ function renderTable() {
     });
   }
 
-  // Column header click sorting
   main.querySelectorAll('.collection-table th[data-col]').forEach(th => {
     th.addEventListener('click', () => handleSortClick(th.dataset.col));
   });
 }
 
-// Virtual-scroll state for grid view
+// Virtual-scroll state
+let _tableScrollCleanup = null;
 let _gridScrollCleanup = null;
 
 function _buildCardHtml(card, idx) {
