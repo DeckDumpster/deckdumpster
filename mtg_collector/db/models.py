@@ -535,10 +535,9 @@ class PrintingRepository:
              watermark, digital, reserved, reprint, produced_mana, games)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(printing_id) DO UPDATE SET
+            ON CONFLICT(set_code, collector_number) DO UPDATE SET
+                printing_id = excluded.printing_id,
                 oracle_id = excluded.oracle_id,
-                set_code = excluded.set_code,
-                collector_number = excluded.collector_number,
                 rarity = excluded.rarity,
                 frame_effects = excluded.frame_effects,
                 border_color = excluded.border_color,
