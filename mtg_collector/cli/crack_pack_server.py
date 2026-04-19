@@ -2081,10 +2081,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     p.printing_id, p.image_uri, p.artist,
                     p.frame_effects, p.border_color, p.full_art, p.promo,
                     p.promo_types, p.finishes,
-                    COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
-                    json_extract(p.raw_json, '$.layout') as layout,
-                    json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
-                    json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana,
+                    p.flavor_name,
+                    p.layout,
+                    p.face0_mana_cost as face0_mana,
+                    p.face1_mana_cost as face1_mana,
                     c.finish, c.condition, c.status,
                     COALESCE(COUNT(DISTINCT c.id), 0) as qty,
                     MAX(c.acquired_at) as acquired_at,
@@ -2114,10 +2114,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     p.printing_id, p.image_uri, p.artist,
                     p.frame_effects, p.border_color, p.full_art, p.promo,
                     p.promo_types, p.finishes,
-                    COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
-                    json_extract(p.raw_json, '$.layout') as layout,
-                    json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
-                    json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana,
+                    p.flavor_name,
+                    p.layout,
+                    p.face0_mana_cost as face0_mana,
+                    p.face1_mana_cost as face1_mana,
                     c.finish, c.condition, c.status,
                     c.id as collection_id,
                     1 as qty,
@@ -2152,10 +2152,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     p.printing_id, p.image_uri, p.artist,
                     p.frame_effects, p.border_color, p.full_art, p.promo,
                     p.promo_types, p.finishes,
-                    COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
-                    json_extract(p.raw_json, '$.layout') as layout,
-                    json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
-                    json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana,
+                    p.flavor_name,
+                    p.layout,
+                    p.face0_mana_cost as face0_mana,
+                    p.face1_mana_cost as face1_mana,
                     c.finish, c.condition, c.status,
                     COUNT(DISTINCT c.id) as qty,
                     MAX(c.acquired_at) as acquired_at,
@@ -2303,10 +2303,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 p.printing_id, p.image_uri, p.artist,
                 p.frame_effects, p.border_color, p.full_art, p.promo,
                 p.promo_types, p.finishes,
-                COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
-                json_extract(p.raw_json, '$.layout') as layout,
-                json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
-                json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana
+                p.flavor_name,
+                p.layout,
+                p.face0_mana_cost as face0_mana,
+                p.face1_mana_cost as face1_mana
             FROM printings p
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
@@ -2384,10 +2384,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 p.printing_id, p.image_uri, p.artist,
                 p.frame_effects, p.border_color, p.full_art, p.promo,
                 p.promo_types, p.finishes,
-                COALESCE(json_extract(p.raw_json, '$.flavor_name'), json_extract(p.raw_json, '$.card_faces[0].flavor_name')) as flavor_name,
-                json_extract(p.raw_json, '$.layout') as layout,
-                json_extract(p.raw_json, '$.card_faces[0].mana_cost') as face0_mana,
-                json_extract(p.raw_json, '$.card_faces[1].mana_cost') as face1_mana
+                p.flavor_name,
+                p.layout,
+                p.face0_mana_cost as face0_mana,
+                p.face1_mana_cost as face1_mana
             FROM printings p
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
@@ -5964,7 +5964,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             """Find best printing (prefer owned) for an oracle_id."""
             p = conn.execute(
                 """SELECT p.set_code, p.collector_number, p.printing_id,
-                          json_extract(p.raw_json, '$.flavor_name') as flavor_name
+                          p.flavor_name
                    FROM collection col
                    JOIN printings p ON col.printing_id = p.printing_id
                    WHERE p.oracle_id = ? AND col.status = 'owned'
@@ -5974,7 +5974,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if not p:
                 p = conn.execute(
                     """SELECT p.set_code, p.collector_number, p.printing_id,
-                              json_extract(p.raw_json, '$.flavor_name') as flavor_name
+                              p.flavor_name
                        FROM printings p
                        JOIN sets s ON s.set_code = p.set_code
                        WHERE p.oracle_id = ? AND s.digital = 0
@@ -6010,7 +6010,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                           c.oracle_text, c.colors, c.color_identity, c.cmc
                    FROM printings p
                    JOIN cards c ON c.oracle_id = p.oracle_id
-                   WHERE json_extract(p.raw_json, '$.flavor_name') = ?
+                   WHERE p.flavor_name = ?
                    LIMIT 1""",
                 (name,),
             ).fetchone()
@@ -6038,7 +6038,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                FROM cards c
                LEFT JOIN printings p ON p.oracle_id = c.oracle_id
                LEFT JOIN sets s ON s.set_code = p.set_code
-               WHERE (c.name LIKE ? OR json_extract(p.raw_json, '$.flavor_name') LIKE ?)
+               WHERE (c.name LIKE ? OR p.flavor_name LIKE ?)
                  AND (s.digital = 0 AND s.set_type NOT IN ('token', 'memorabilia'))
                GROUP BY c.oracle_id
                LIMIT 50""",
@@ -6111,7 +6111,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             theme_pat = f"%{data['theme']}%"
             conditions.append(
                 "(c.oracle_text LIKE ? OR c.type_line LIKE ? OR c.name LIKE ?"
-                " OR json_extract(p.raw_json, '$.flavor_name') LIKE ?)"
+                " OR p.flavor_name LIKE ?)"
             )
             params.extend([theme_pat] * 4)
 
@@ -6130,7 +6130,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         query = f"""
             SELECT c.name as oracle_name, c.mana_cost, c.type_line, c.cmc,
                    p.rarity, c.oracle_text, c.oracle_id, c.colors, c.color_identity,
-                   COALESCE(json_extract(p.raw_json, '$.flavor_name'), c.name) as name,
+                   COALESCE(p.flavor_name, c.name) as name,
                    p.set_code, p.collector_number,
                    json_extract(p.raw_json, '$.power') as power,
                    json_extract(p.raw_json, '$.toughness') as toughness,
@@ -6174,7 +6174,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 FROM collection col
                 JOIN printings p ON p.printing_id = col.printing_id
                 JOIN cards c ON c.oracle_id = p.oracle_id
-                WHERE (c.name = ? OR json_extract(p.raw_json, '$.flavor_name') = ?)
+                WHERE (c.name = ? OR p.flavor_name = ?)
                     AND col.status = 'owned'
                 LIMIT 1
             """, (name, name)).fetchone()
@@ -6184,7 +6184,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     FROM printings p
                     JOIN cards c ON c.oracle_id = p.oracle_id
                     JOIN sets s ON s.set_code = p.set_code
-                    WHERE (c.name = ? OR json_extract(p.raw_json, '$.flavor_name') = ?)
+                    WHERE (c.name = ? OR p.flavor_name = ?)
                         AND s.digital = 0
                     ORDER BY s.released_at DESC LIMIT 1
                 """, (name, name)).fetchone()
@@ -6295,7 +6295,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                        JOIN cards c ON p.oracle_id = c.oracle_id
                        JOIN sets s ON p.set_code = s.set_code
                        WHERE (c.name = ?
-                              OR json_extract(p.raw_json, '$.flavor_name') = ?)
+                              OR p.flavor_name = ?)
                          AND col.status = 'owned'
                          AND s.set_type NOT IN ('token', 'memorabilia')
                        ORDER BY s.released_at DESC LIMIT 1""",
@@ -6309,7 +6309,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                        JOIN cards c ON p.oracle_id = c.oracle_id
                        JOIN sets s ON p.set_code = s.set_code
                        WHERE (c.name = ?
-                              OR json_extract(p.raw_json, '$.flavor_name') = ?)
+                              OR p.flavor_name = ?)
                          AND s.digital = 0
                          AND s.set_type NOT IN ('token', 'memorabilia')
                        ORDER BY s.released_at DESC LIMIT 1""",
@@ -6327,7 +6327,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     oracle = conn.execute(
                         """SELECT c.oracle_id FROM printings p
                            JOIN cards c ON c.oracle_id = p.oracle_id
-                           WHERE json_extract(p.raw_json, '$.flavor_name') = ?
+                           WHERE p.flavor_name = ?
                            LIMIT 1""",
                         (name,),
                     ).fetchone()

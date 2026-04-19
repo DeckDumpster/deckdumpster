@@ -278,13 +278,15 @@ class ScryfallBulkClient:
             loyalty=_pfield("loyalty"),
             layout=data.get("layout"),
             flavor_text=_pfield("flavor_text"),
-            flavor_name=data.get("flavor_name"),
+            flavor_name=data.get("flavor_name") or face0.get("flavor_name"),
             watermark=_pfield("watermark"),
             digital=data.get("digital", False),
             reserved=data.get("reserved", False),
             reprint=data.get("reprint", False),
             produced_mana=data.get("produced_mana", []),
             games=data.get("games", []),
+            face0_mana_cost=faces[0].get("mana_cost") if faces else None,
+            face1_mana_cost=faces[1].get("mana_cost") if len(faces) > 1 else None,
         )
 
 
