@@ -286,7 +286,7 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
 .collection-table .vscroll-spacer { pointer-events: none; cursor: default; }
 .collection-table .vscroll-spacer:hover { background: none; }
 
-.skeleton-row td { padding: 6px 12px; }
+.skeleton-row td { padding: 2px 12px; vertical-align: middle; }
 .skeleton-cell {
   height: 12px;
   border-radius: 4px;
@@ -294,7 +294,8 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
-.skeleton-cell.wide { width: 60%; }
+.skeleton-cell.thumb { width: 146px; height: 44px; display: inline-block; vertical-align: middle; margin-right: 10px; }
+.skeleton-cell.wide { width: 40%; display: inline-block; vertical-align: middle; }
 .skeleton-cell.narrow { width: 30%; }
 @keyframes shimmer {
   0% { background-position: 200% 0; }
@@ -2696,10 +2697,12 @@ function renderSkeleton() {
   html += `<th class="col-config-th">${colIcon}</th>`;
   for (const col of visCols) html += `<th>${col.label}</th>`;
   html += '</tr></thead><tbody>';
-  const widths = visCols.map(c => c.key === 'name' ? 'wide' : 'narrow');
   for (let i = 0; i < 20; i++) {
     html += '<tr class="skeleton-row"><td></td>';
-    for (let j = 0; j < visCols.length; j++) html += `<td><div class="skeleton-cell ${widths[j]}"></div></td>`;
+    for (const col of visCols) {
+      if (col.key === 'name') html += '<td><div class="skeleton-cell thumb"></div><div class="skeleton-cell wide"></div></td>';
+      else html += '<td><div class="skeleton-cell narrow"></div></td>';
+    }
     html += '</tr>';
   }
   html += '</tbody></table>';
@@ -2754,10 +2757,11 @@ function renderTable() {
   }
 
   const visCols = getVisibleColumns();
-  const ROW_HEIGHT = 49;
+  let rowHeight = 49; // initial estimate, measured after first render
   const bufferRows = 5;
   const totalRows = allCards.length;
   const colCount = visCols.length + 1 + (multiSelectMode ? 1 : 0);
+  const _cellOpts = { priceSources: _settings.price_sources };
 
   const drawerOpen = colDrawer.classList.contains('open');
   const colIcon = `<svg viewBox="0 0 16 16"><path d="M1 1h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 6h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 11h4v4H1zm5 0h4v4H6zm5 0h4v4H11z"/></svg>`;
@@ -2774,11 +2778,40 @@ function renderTable() {
   }
   theadHtml += '</tr>';
 
-  main.innerHTML = `<table class="collection-table"><thead>${theadHtml}</thead><tbody id="vtbody"></tbody></table>`;
+  main.innerHTML = `<table class="collection-table"><thead>${theadHtml}</thead><tbody id="vtbody"><tr id="vscroll-top" class="vscroll-spacer"><td colspan="${colCount}" style="height:0;padding:0;border:none"></td></tr><tr id="vscroll-bottom" class="vscroll-spacer"><td colspan="${colCount}" style="height:${totalRows * rowHeight}px;padding:0;border:none"></td></tr></tbody></table>`;
 
   const table = main.querySelector('.collection-table');
   const tbody = document.getElementById('vtbody');
+  const topSpacer = document.getElementById('vscroll-top');
+  const bottomSpacer = document.getElementById('vscroll-bottom');
   let renderedRange = [-1, -1];
+
+  function buildRowHtml(idx) {
+    const card = allCards[idx];
+    const helpers = prepareCardHelpers(card, { isWanted: isCardWanted });
+    const isSelected = selectedCards.has(idx);
+    const isUnowned = card.owned === false;
+    const isWanted = isCardWanted(card);
+    const isOrdered = card.status === 'ordered';
+    const trClasses = [isSelected ? 'selected' : '', isUnowned ? 'unowned' : '', isUnowned && isWanted ? 'wanted' : '', isOrdered ? 'ordered' : ''].filter(Boolean).join(' ');
+    let h = `<tr data-idx="${idx}"${trClasses ? ` class="${trClasses}"` : ''}>`;
+    h += '<td></td>';
+    if (multiSelectMode) {
+      h += `<td class="select-col"><input type="checkbox" class="row-sel-cb" data-idx="${idx}" ${isSelected ? 'checked' : ''}></td>`;
+    }
+    for (const col of visCols) {
+      const cls = col.key === 'price' || col.key === 'ck_price' || col.key === 'tcg_price' ? ' class="price-cell"' : '';
+      h += `<td${cls}>${renderCellContent(col.key, card, helpers, _cellOpts)}</td>`;
+    }
+    h += '</tr>';
+    return h;
+  }
+
+  function htmlToRows(html) {
+    const t = document.createElement('table');
+    t.innerHTML = '<tbody>' + html + '</tbody>';
+    return t.querySelector('tbody').children;
+  }
 
   function renderVisibleRows() {
     const tableRect = table.getBoundingClientRect();
@@ -2787,41 +2820,54 @@ function renderTable() {
     const offset = -(tableRect.top - theadHeight);
     const viewportHeight = window.innerHeight;
 
-    const firstRow = Math.max(0, Math.floor(offset / ROW_HEIGHT) - bufferRows);
-    const lastRow = Math.min(totalRows - 1, Math.ceil((offset + viewportHeight) / ROW_HEIGHT) + bufferRows);
+    const firstRow = Math.max(0, Math.floor(offset / rowHeight) - bufferRows);
+    const lastRow = Math.min(totalRows - 1, Math.ceil((offset + viewportHeight) / rowHeight) + bufferRows);
 
     if (firstRow === renderedRange[0] && lastRow === renderedRange[1]) return;
+    const [pf, pl] = renderedRange;
     renderedRange = [firstRow, lastRow];
 
-    const _cellOpts = { priceSources: _settings.price_sources };
-    let html = '';
-    if (firstRow > 0) {
-      html += `<tr class="vscroll-spacer"><td colspan="${colCount}" style="height:${firstRow * ROW_HEIGHT}px;padding:0;border:none"></td></tr>`;
-    }
-    for (let idx = firstRow; idx <= lastRow; idx++) {
-      const card = allCards[idx];
-      const helpers = prepareCardHelpers(card, { isWanted: isCardWanted });
-      const isSelected = selectedCards.has(idx);
-      const isUnowned = card.owned === false;
-      const isWanted = isCardWanted(card);
-      const isOrdered = card.status === 'ordered';
-      const trClasses = [isSelected ? 'selected' : '', isUnowned ? 'unowned' : '', isUnowned && isWanted ? 'wanted' : '', isOrdered ? 'ordered' : ''].filter(Boolean).join(' ');
-      html += `<tr data-idx="${idx}"${trClasses ? ` class="${trClasses}"` : ''}>`;
-      html += '<td></td>';
-      if (multiSelectMode) {
-        html += `<td class="select-col"><input type="checkbox" class="row-sel-cb" data-idx="${idx}" ${isSelected ? 'checked' : ''}></td>`;
+    // First render or non-overlapping range: full rebuild
+    if (pf === -1 || firstRow > pl || lastRow < pf) {
+      let html = '';
+      for (let i = firstRow; i <= lastRow; i++) html += buildRowHtml(i);
+      const rows = htmlToRows(html);
+      // Remove old data rows
+      for (const tr of [...tbody.querySelectorAll('tr[data-idx]')]) tr.remove();
+      // Insert new rows before bottom spacer
+      while (rows.length) tbody.insertBefore(rows[0], bottomSpacer);
+    } else {
+      // Incremental: remove rows outside new range
+      for (const tr of [...tbody.querySelectorAll('tr[data-idx]')]) {
+        const idx = +tr.dataset.idx;
+        if (idx < firstRow || idx > lastRow) tr.remove();
       }
-      for (const col of visCols) {
-        const cls = col.key === 'price' || col.key === 'ck_price' || col.key === 'tcg_price' ? ' class="price-cell"' : '';
-        html += `<td${cls}>${renderCellContent(col.key, card, helpers, _cellOpts)}</td>`;
+      // Add new rows at top (scrolled up)
+      if (firstRow < pf) {
+        let html = '';
+        for (let i = firstRow; i < pf; i++) html += buildRowHtml(i);
+        const rows = htmlToRows(html);
+        const ref = tbody.querySelector('tr[data-idx]') || bottomSpacer;
+        while (rows.length) tbody.insertBefore(rows[0], ref);
       }
-      html += '</tr>';
+      // Add new rows at bottom (scrolled down)
+      if (lastRow > pl) {
+        let html = '';
+        for (let i = pl + 1; i <= lastRow; i++) html += buildRowHtml(i);
+        const rows = htmlToRows(html);
+        while (rows.length) tbody.insertBefore(rows[0], bottomSpacer);
+      }
     }
-    const bottomRows = totalRows - lastRow - 1;
-    if (bottomRows > 0) {
-      html += `<tr class="vscroll-spacer"><td colspan="${colCount}" style="height:${bottomRows * ROW_HEIGHT}px;padding:0;border:none"></td></tr>`;
+
+    // Update spacer heights
+    topSpacer.firstChild.style.height = firstRow * rowHeight + 'px';
+    bottomSpacer.firstChild.style.height = Math.max(0, (totalRows - lastRow - 1) * rowHeight) + 'px';
+
+    // Measure actual row height after first render
+    if (pf === -1) {
+      const sample = tbody.querySelector('tr[data-idx]');
+      if (sample) rowHeight = sample.offsetHeight || rowHeight;
     }
-    tbody.innerHTML = html;
   }
 
   renderVisibleRows();
