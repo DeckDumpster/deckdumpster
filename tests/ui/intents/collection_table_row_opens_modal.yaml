@@ -1,0 +1,9 @@
+# Scenario: Clicking a card row in table view opens the detail modal
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I click a card row in the collection table view, the card detail modal
+  opens showing the card's image, name, and metadata. This works correctly
+  even though the table uses virtual scrolling with dynamically created rows.

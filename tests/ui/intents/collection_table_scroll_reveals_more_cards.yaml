@@ -1,0 +1,9 @@
+# Scenario: Scrolling the collection table reveals different cards
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I scroll down in the collection table view, different card names appear
+  as the virtual scroll renders new rows. The cards I saw at the top are no
+  longer visible, replaced by cards further down the sorted list.

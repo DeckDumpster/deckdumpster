@@ -1,0 +1,13 @@
+start_page: /collection
+involves:
+  - "collection table .collection-table"
+  - "data rows #vtbody tr[data-idx]"
+  - "card name cells .card-name"
+  - "card modal overlay #card-modal-overlay"
+  - "modal close button #modal-close"
+fixture_data: {}
+notes: >
+  Navigate to /collection. Wait for data rows in #vtbody. Click a card name
+  cell (.card-name) inside a data row. The card modal (#card-modal-overlay)
+  should become active (gains .active class). Verify the modal shows card
+  details. Close with #modal-close or Escape. Verify modal is hidden.

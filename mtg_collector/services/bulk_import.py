@@ -199,10 +199,14 @@ class ScryfallBulkClient:
                 return val
             return face0.get(key, default)
 
-        # Name: use face[0] if top-level contains "//" (DFC combined name)
         name = data.get("name", "")
+        # Reversible cards duplicate the same name ("Death Baron // Death Baron");
+        # collapse to a single face name.  True DFC cards keep the combined name
+        # ("Front // Back") so the JS flip feature can split on " // ".
         if "//" in name and face0.get("name"):
-            name = face0["name"]
+            face_names = [f.get("name", "") for f in faces]
+            if len(set(face_names)) == 1:
+                name = face0["name"]
 
         # Mana cost: combine faces with " // " (existing behavior)
         mana_cost = data.get("mana_cost")
@@ -278,13 +282,15 @@ class ScryfallBulkClient:
             loyalty=_pfield("loyalty"),
             layout=data.get("layout"),
             flavor_text=_pfield("flavor_text"),
-            flavor_name=data.get("flavor_name"),
+            flavor_name=data.get("flavor_name") or face0.get("flavor_name"),
             watermark=_pfield("watermark"),
             digital=data.get("digital", False),
             reserved=data.get("reserved", False),
             reprint=data.get("reprint", False),
             produced_mana=data.get("produced_mana", []),
             games=data.get("games", []),
+            face0_mana_cost=faces[0].get("mana_cost") if faces else None,
+            face1_mana_cost=faces[1].get("mana_cost") if len(faces) > 1 else None,
         )
 
 

@@ -1,0 +1,9 @@
+# Scenario: Collection page shows skeleton table while loading
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I first load the collection page, I briefly see a skeleton table with
+  real column headers and shimmer placeholder rows before the actual card data
+  appears. This gives immediate visual feedback that content is loading.

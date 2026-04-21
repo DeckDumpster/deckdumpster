@@ -1,0 +1,13 @@
+start_page: /collection
+involves:
+  - "skeleton rows .skeleton-row"
+  - "shimmer cells .skeleton-cell"
+  - "collection table .collection-table"
+  - "column headers in skeleton thead th"
+fixture_data: {}
+notes: >
+  The skeleton appears briefly before the API response arrives. To capture it
+  in a test, intercept the /api/collection request with a delay. Then verify
+  .skeleton-row elements exist in the DOM with .skeleton-cell children, and
+  that the table has a thead with column header text. After the API responds,
+  the skeleton is replaced by real data rows.

@@ -63,6 +63,8 @@ class Printing:
     reprint: bool = False
     produced_mana: List[str] = field(default_factory=list)
     games: List[str] = field(default_factory=list)
+    face0_mana_cost: Optional[str] = None
+    face1_mana_cost: Optional[str] = None
 
     def get_card_data(self) -> Optional[Dict]:
         """Parse and return the full card data as a dict."""
@@ -532,9 +534,10 @@ class PrintingRepository:
              frame_effects, border_color, full_art, promo, promo_types,
              finishes, artist, image_uri, raw_json,
              power, toughness, loyalty, layout, flavor_text, flavor_name,
-             watermark, digital, reserved, reprint, produced_mana, games)
+             watermark, digital, reserved, reprint, produced_mana, games,
+             face0_mana_cost, face1_mana_cost)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(set_code, collector_number) DO UPDATE SET
                 printing_id = excluded.printing_id,
                 oracle_id = excluded.oracle_id,
@@ -559,7 +562,9 @@ class PrintingRepository:
                 reserved = excluded.reserved,
                 reprint = excluded.reprint,
                 produced_mana = excluded.produced_mana,
-                games = excluded.games
+                games = excluded.games,
+                face0_mana_cost = excluded.face0_mana_cost,
+                face1_mana_cost = excluded.face1_mana_cost
             """,
             (
                 p.printing_id,
@@ -588,6 +593,8 @@ class PrintingRepository:
                 1 if p.reprint else 0,
                 to_json_array(p.produced_mana),
                 to_json_array(p.games),
+                p.face0_mana_cost,
+                p.face1_mana_cost,
             ),
         )
 
@@ -627,13 +634,13 @@ class PrintingRepository:
         if set_code:
             cursor = self.conn.execute(
                 "SELECT * FROM printings"
-                " WHERE set_code = ? AND json_extract(raw_json, '$.flavor_name') = ? COLLATE NOCASE",
+                " WHERE set_code = ? AND flavor_name = ? COLLATE NOCASE",
                 (set_code, name),
             )
         else:
             cursor = self.conn.execute(
                 "SELECT * FROM printings"
-                " WHERE json_extract(raw_json, '$.flavor_name') = ? COLLATE NOCASE"
+                " WHERE flavor_name = ? COLLATE NOCASE"
                 " LIMIT 1",
                 (name,),
             )
@@ -2090,7 +2097,7 @@ class DeckRepository:
                    p.promo, p.promo_types, p.finishes,
                    card.name, card.type_line, card.mana_cost, card.cmc,
                    card.colors, card.color_identity, p.oracle_id,
-                   json_extract(p.raw_json, '$.layout') as layout,
+                   p.layout,
                    s.set_name
             FROM deck_cards dc
             JOIN printings p ON dc.printing_id = p.printing_id
@@ -2243,7 +2250,7 @@ class DeckRepository:
                    p.promo, p.promo_types, p.finishes,
                    card.name, card.type_line, card.mana_cost, card.cmc,
                    card.colors, card.color_identity, p.oracle_id,
-                   json_extract(p.raw_json, '$.layout') as layout,
+                   p.layout,
                    s.set_name
             FROM deck_expected_cards e
             JOIN printings p ON e.printing_id = p.printing_id
@@ -2441,7 +2448,7 @@ class DeckRepository:
                       p.rarity, p.artist, p.image_uri,
                       p.frame_effects, p.border_color, p.full_art,
                       p.promo, p.promo_types, p.finishes,
-                      json_extract(p.raw_json, '$.layout') as layout,
+                      p.layout,
                       s.set_name
                FROM deck_expected_cards e
                JOIN printings p ON e.printing_id = p.printing_id

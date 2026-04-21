@@ -2,7 +2,7 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 
 # Tables whose data can be served from an ATTACHed shared DB via temp views.
 SHARED_TABLES = [
@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS printings (
     reprint INTEGER DEFAULT 0,
     produced_mana TEXT,    -- JSON array
     games TEXT,            -- JSON array: ["paper", "mtgo", "arena"]
+    face0_mana_cost TEXT,
+    face1_mana_cost TEXT,
     UNIQUE(set_code, collector_number)
 );
 
@@ -733,6 +735,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v40_to_v41(conn)
         if current < 42:
             _migrate_v41_to_v42(conn)
+        if current < 43:
+            _migrate_v42_to_v43(conn)
 
     # Record schema version
     conn.execute(
@@ -2648,6 +2652,26 @@ def _migrate_v41_to_v42(conn: sqlite3.Connection):
             )
         """)
         conn.execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild')")
+
+
+def _migrate_v42_to_v43(conn: sqlite3.Connection):
+    """Add face mana cost columns and fix flavor_name face fallback."""
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(printings)").fetchall()}
+    for col_name in ("face0_mana_cost", "face1_mana_cost"):
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE printings ADD COLUMN {col_name} TEXT")
+
+    if "raw_json" in existing:
+        conn.execute("""
+            UPDATE printings SET
+                face0_mana_cost = json_extract(raw_json, '$.card_faces[0].mana_cost'),
+                face1_mana_cost = json_extract(raw_json, '$.card_faces[1].mana_cost'),
+                flavor_name = COALESCE(
+                    json_extract(raw_json, '$.flavor_name'),
+                    json_extract(raw_json, '$.card_faces[0].flavor_name')
+                )
+            WHERE raw_json IS NOT NULL
+        """)
 
 
 def rebuild_fts(conn):
