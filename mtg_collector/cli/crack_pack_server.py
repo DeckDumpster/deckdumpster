@@ -970,6 +970,22 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 class CrackPackHandler(BaseHTTPRequestHandler):
     """HTTP handler for crack-a-pack web UI."""
 
+    # HTTP/1.1 keep-alive: reuses one TCP+TLS connection for the whole page's
+    # assets instead of a fresh handshake per request. Requires Content-Length
+    # on every response, which all handlers already set.
+    protocol_version = "HTTP/1.1"
+
+    # Gzippable content types for static responses.
+    _GZIPPABLE = frozenset({
+        "text/html; charset=utf-8",
+        "text/css",
+        "text/javascript; charset=utf-8",
+        "application/javascript",
+        "application/json",
+        "image/svg+xml",
+        "font/ttf",
+    })
+
     def __init__(self, generator: PackGenerator, static_dir: Path, db_path: str, *args, **kwargs):
         self.generator = generator
         self.static_dir = static_dir
@@ -1748,6 +1764,23 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _serve_homepage(self):
         self._serve_static("index.html")
 
+    def _write_static_response(self, content: bytes, content_type: str,
+                                cache_control: str | None = None):
+        encoding = None
+        if content_type in self._GZIPPABLE and len(content) > 1024 \
+                and "gzip" in self.headers.get("Accept-Encoding", ""):
+            content = gzip.compress(content)
+            encoding = "gzip"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(content)))
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
+        self.end_headers()
+        self.wfile.write(content)
+
     def _serve_static(self, filename: str):
         filepath = self.static_dir / filename
         if not filepath.resolve().is_relative_to(self.static_dir.resolve()):
@@ -1758,12 +1791,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         content = filepath.read_bytes()
         content_type = self._CONTENT_TYPES.get(filepath.suffix, "application/octet-stream")
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "public, max-age=300")
-        self.end_headers()
-        self.wfile.write(content)
+        self._write_static_response(content, content_type, "public, max-age=86400")
 
     def _serve_static_with_data(self, filename: str, data_fn):
         """Serve a static HTML file with /*INIT_DATA*/ replaced by JSON."""
@@ -1777,12 +1805,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         html = filepath.read_text(encoding="utf-8")
         html = html.replace("/*INIT_DATA*/", _json.dumps(data_fn()))
-        content = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
+        self._write_static_response(html.encode("utf-8"), "text/html; charset=utf-8")
 
     def _decks_init_data(self):
         from mtg_collector.db.models import DeckRepository
