@@ -2778,7 +2778,7 @@ function renderTable() {
   }
   theadHtml += '</tr>';
 
-  main.innerHTML = `<table class="collection-table"><thead>${theadHtml}</thead><tbody id="vtbody"><tr id="vscroll-top" class="vscroll-spacer"><td colspan="${colCount}" style="height:0;padding:0;border:none"></td></tr><tr id="vscroll-bottom" class="vscroll-spacer"><td colspan="${colCount}" style="height:${totalRows * rowHeight}px;padding:0;border:none"></td></tr></tbody></table>`;
+  main.innerHTML = `<table class="collection-table"><thead>${theadHtml}<tr id="vscroll-top" class="vscroll-spacer"><td colspan="${colCount}" style="height:0;padding:0;border:none"></td></tr></thead><tbody id="vtbody"></tbody><tfoot><tr id="vscroll-bottom" class="vscroll-spacer"><td colspan="${colCount}" style="height:${totalRows * rowHeight}px;padding:0;border:none"></td></tr></tfoot></table>`;
 
   const table = main.querySelector('.collection-table');
   const tbody = document.getElementById('vtbody');
@@ -2832,13 +2832,11 @@ function renderTable() {
       let html = '';
       for (let i = firstRow; i <= lastRow; i++) html += buildRowHtml(i);
       const rows = htmlToRows(html);
-      // Remove old data rows
-      for (const tr of [...tbody.querySelectorAll('tr[data-idx]')]) tr.remove();
-      // Insert new rows before bottom spacer
-      while (rows.length) tbody.insertBefore(rows[0], bottomSpacer);
+      tbody.innerHTML = '';
+      while (rows.length) tbody.appendChild(rows[0]);
     } else {
       // Incremental: remove rows outside new range
-      for (const tr of [...tbody.querySelectorAll('tr[data-idx]')]) {
+      for (const tr of [...tbody.children]) {
         const idx = +tr.dataset.idx;
         if (idx < firstRow || idx > lastRow) tr.remove();
       }
@@ -2847,7 +2845,7 @@ function renderTable() {
         let html = '';
         for (let i = firstRow; i < pf; i++) html += buildRowHtml(i);
         const rows = htmlToRows(html);
-        const ref = tbody.querySelector('tr[data-idx]') || bottomSpacer;
+        const ref = tbody.firstChild;
         while (rows.length) tbody.insertBefore(rows[0], ref);
       }
       // Add new rows at bottom (scrolled down)
@@ -2855,7 +2853,7 @@ function renderTable() {
         let html = '';
         for (let i = pl + 1; i <= lastRow; i++) html += buildRowHtml(i);
         const rows = htmlToRows(html);
-        while (rows.length) tbody.insertBefore(rows[0], bottomSpacer);
+        while (rows.length) tbody.appendChild(rows[0]);
       }
     }
 
