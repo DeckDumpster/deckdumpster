@@ -259,7 +259,9 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
+  table-layout: fixed;
 }
+.collection-table td { overflow: hidden; text-overflow: ellipsis; }
 
 .collection-table th {
   text-align: left;
@@ -1374,17 +1376,17 @@ applyGridCols();
 
 // --- Column definitions ---
 const ALL_COLUMNS = [
-  { key: 'qty', label: 'Qty', sort: 'qty', defaultOn: true },
-  { key: 'name', label: 'Card', sort: 'name', defaultOn: true },
-  { key: 'type', label: 'Type', sort: 'name', defaultOn: true },
-  { key: 'mana', label: 'Cost', sort: 'cmc', defaultOn: true },
-  { key: 'set', label: 'Set', sort: 'set', defaultOn: true },
-  { key: 'collector_number', label: '#', sort: 'collector_number', defaultOn: true },
-  { key: 'price', label: 'Price', sort: 'price', defaultOn: true },
-  { key: 'condition', label: 'Cond.', sort: 'name', defaultOn: false },
-  { key: 'date_added', label: 'Added', sort: 'date_added', defaultOn: false },
-  { key: 'ck_price', label: 'CK Buy $', sort: 'ck_price', defaultOn: false },
-  { key: 'tcg_price', label: 'TCG $', sort: 'tcg_price', defaultOn: false },
+  { key: 'qty', label: 'Qty', sort: 'qty', width: '50px', defaultOn: true },
+  { key: 'name', label: 'Card', sort: 'name', width: '280px', defaultOn: true },
+  { key: 'type', label: 'Type', sort: 'name', width: '200px', defaultOn: true },
+  { key: 'mana', label: 'Cost', sort: 'cmc', width: '120px', defaultOn: true },
+  { key: 'set', label: 'Set', sort: 'set', width: '80px', defaultOn: true },
+  { key: 'collector_number', label: '#', sort: 'collector_number', width: '70px', defaultOn: true },
+  { key: 'price', label: 'Price', sort: 'price', width: '80px', defaultOn: true },
+  { key: 'condition', label: 'Cond.', sort: 'name', width: '70px', defaultOn: false },
+  { key: 'date_added', label: 'Added', sort: 'date_added', width: '100px', defaultOn: false },
+  { key: 'ck_price', label: 'CK Buy $', sort: 'ck_price', width: '90px', defaultOn: false },
+  { key: 'tcg_price', label: 'TCG $', sort: 'tcg_price', width: '90px', defaultOn: false },
 ];
 
 const DEFAULT_COLS = ALL_COLUMNS.filter(c => c.defaultOn).map(c => c.key);
@@ -2693,7 +2695,10 @@ function updateStatusText() {
 function renderSkeleton() {
   const visCols = getVisibleColumns();
   const colIcon = `<svg viewBox="0 0 16 16"><path d="M1 1h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 6h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 11h4v4H1zm5 0h4v4H6zm5 0h4v4H11z"/></svg>`;
-  let html = '<table class="collection-table"><thead><tr>';
+  let html = '<table class="collection-table"><colgroup>';
+  html += '<col style="width:36px">';
+  for (const col of visCols) html += `<col style="width:${col.width}">`;
+  html += '</colgroup><thead><tr>';
   html += `<th class="col-config-th">${colIcon}</th>`;
   for (const col of visCols) html += `<th>${col.label}</th>`;
   html += '</tr></thead><tbody>';
@@ -2751,7 +2756,7 @@ function render() {
 function renderTable() {
   if (_tableScrollCleanup) { _tableScrollCleanup(); _tableScrollCleanup = null; }
 
-  const savedScrollX = window.scrollX;
+  const savedScrollLeft = main.scrollLeft;
 
   if (allCards.length === 0) {
     main.innerHTML = '<div class="empty-state">No cards found</div>';
@@ -2780,7 +2785,12 @@ function renderTable() {
   }
   theadHtml += '</tr>';
 
-  main.innerHTML = `<table class="collection-table"><thead>${theadHtml}<tr id="vscroll-top" class="vscroll-spacer"><td colspan="${colCount}" style="height:0;padding:0;border:none"></td></tr></thead><tbody id="vtbody"></tbody><tfoot><tr id="vscroll-bottom" class="vscroll-spacer"><td colspan="${colCount}" style="height:${totalRows * rowHeight}px;padding:0;border:none"></td></tr></tfoot></table>`;
+  let colgroupHtml = '<colgroup><col style="width:36px">';
+  if (multiSelectMode) colgroupHtml += '<col style="width:32px">';
+  for (const col of visCols) colgroupHtml += `<col style="width:${col.width}">`;
+  colgroupHtml += '</colgroup>';
+
+  main.innerHTML = `<table class="collection-table">${colgroupHtml}<thead>${theadHtml}<tr id="vscroll-top" class="vscroll-spacer"><td colspan="${colCount}" style="height:0;padding:0;border:none"></td></tr></thead><tbody id="vtbody"></tbody><tfoot><tr id="vscroll-bottom" class="vscroll-spacer"><td colspan="${colCount}" style="height:${totalRows * rowHeight}px;padding:0;border:none"></td></tr></tfoot></table>`;
 
   const table = main.querySelector('.collection-table');
   const tbody = document.getElementById('vtbody');
@@ -2872,7 +2882,7 @@ function renderTable() {
 
   renderVisibleRows();
 
-  if (savedScrollX) window.scrollTo(savedScrollX, window.scrollY);
+  if (savedScrollLeft) main.scrollLeft = savedScrollLeft;
 
   let ticking = false;
   function onScroll() {
