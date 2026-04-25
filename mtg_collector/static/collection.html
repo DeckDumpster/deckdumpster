@@ -2751,6 +2751,8 @@ function render() {
 function renderTable() {
   if (_tableScrollCleanup) { _tableScrollCleanup(); _tableScrollCleanup = null; }
 
+  const savedScrollX = window.scrollX;
+
   if (allCards.length === 0) {
     main.innerHTML = '<div class="empty-state">No cards found</div>';
     return;
@@ -2815,9 +2817,9 @@ function renderTable() {
 
   function renderVisibleRows() {
     const tableRect = table.getBoundingClientRect();
-    const theadEl = table.querySelector('thead');
-    const theadHeight = theadEl ? theadEl.offsetHeight : 0;
-    const offset = -(tableRect.top - theadHeight);
+    const headerRow = table.querySelector('thead > tr:not(.vscroll-spacer)');
+    const headerHeight = headerRow ? headerRow.offsetHeight : 0;
+    const offset = -(tableRect.top - headerHeight);
     const viewportHeight = window.innerHeight;
 
     const firstRow = Math.max(0, Math.floor(offset / rowHeight) - bufferRows);
@@ -2869,6 +2871,8 @@ function renderTable() {
   }
 
   renderVisibleRows();
+
+  if (savedScrollX) window.scrollTo(savedScrollX, window.scrollY);
 
   let ticking = false;
   function onScroll() {
