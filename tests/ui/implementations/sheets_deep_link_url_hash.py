@@ -9,8 +9,11 @@ the page auto-populates set, product, and sheet content.
 def steps(harness):
     # start_page: /sheets#set=blb&product=play — auto-navigated by test runner.
 
-    # Wait for sheet sections to render (proves data loaded)
-    harness.wait_for_visible(".section-header", timeout=500)
+    # Wait for the status text to settle on the final sheet count.
+    # explore_sheets.html updates #status only after the section-render
+    # loop completes, so waiting on .section-header alone races the
+    # status update on slower runners.
+    harness.wait_for_text("8 sheets", timeout=5_000)
 
     # Verify the set input auto-filled with Bloomburrow (input value, not text)
     val = harness.page.input_value("#set-input")
@@ -18,9 +21,6 @@ def steps(harness):
 
     # Verify the play product is shown and sheets loaded
     harness.assert_text_present("play")
-
-    # Verify status text shows the expected sheet count
-    harness.assert_text_present("8 sheets")
 
     # Verify Common sheet exists (unique to play product)
     harness.assert_text_present("Common")
