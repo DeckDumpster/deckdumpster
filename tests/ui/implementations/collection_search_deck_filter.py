@@ -16,7 +16,7 @@ def steps(harness):
     )
 
     # Wait for filtered results (11 cards in Bolt Tribal)
-    harness.wait_for_text("11 entries")
+    harness.wait_for_text("11 cards")
 
     # Verify a known card from the deck appears
     harness.wait_for_text("Beast-Kin Ranger")

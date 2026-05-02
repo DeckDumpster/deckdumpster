@@ -177,7 +177,13 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+  user-select: none;
 }
+#status:hover { color: #e0e0e0; }
+#status:focus-visible { outline: 1px solid #7ec8e3; outline-offset: 2px; border-radius: 2px; }
+#status.empty { cursor: default; }
+#status.empty:hover { color: #888; }
 
 /* Layout */
 .layout {
@@ -624,6 +630,75 @@ a.lineage-link {
   .card-flip-front img, .card-flip-back img { height: auto; width: 70vw; }
   .card-modal-details { width: auto; }
 }
+
+/* Result-stats modal */
+#stats-modal-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.8);
+  z-index: 100;
+  justify-content: center;
+  align-items: center;
+}
+#stats-modal-overlay.active { display: flex; }
+.stats-modal {
+  position: relative;
+  background: #16213e;
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.8);
+  padding: 24px;
+  width: 420px;
+  max-width: 92vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.stats-modal h2 {
+  font-size: 1.1rem;
+  color: #fff;
+  margin: 0 0 4px;
+  padding-right: 32px;
+}
+.stats-modal .stats-subtitle {
+  font-size: 0.75rem;
+  color: #888;
+  margin-bottom: 12px;
+}
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 24px;
+  font-size: 0.85rem;
+}
+.stats-grid .label { color: #888; }
+.stats-grid .value { color: #e0e0e0; font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+.stats-section-tag {
+  font-size: 0.65rem;
+  color: #888;
+  margin-left: 6px;
+  font-weight: normal;
+  letter-spacing: 0.05em;
+  text-transform: none;
+}
+.stats-rarity-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+}
+.stats-rarity-pill {
+  padding: 3px 9px;
+  border-radius: 10px;
+  background: #0f3460;
+  color: #ccc;
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.stats-rarity-pill .rar-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+.stats-rarity-pill strong { color: #e0e0e0; font-weight: 600; }
 
 /* Column config dropdown */
 .col-config-wrap { position: relative; }
@@ -1202,7 +1277,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
     </div>
     <div class="col-controls" id="grid-size-wrap" style="display:none"><button class="col-btn" id="col-minus">&minus;</button><div class="col-count" id="col-count"></div><button class="col-btn" id="col-plus">+</button></div>
     <div class="header-row-right">
-      <div id="status"></div>
+      <div id="status" role="button" tabindex="0" title="Show result stats"></div>
       <a href="/search-help" target="_blank" class="syntax-help-link" title="Search syntax help"><span aria-hidden="true">?</span> Syntax</a>
     </div>
   </div>
@@ -1244,6 +1319,13 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
       <button class="flip-btn" id="modal-flip-btn" title="Flip card">&#x21BB;</button>
     </div>
     <div class="card-modal-details" id="modal-details"></div>
+  </div>
+</div>
+
+<div id="stats-modal-overlay">
+  <div class="stats-modal">
+    <button class="modal-close" id="stats-modal-close">&times;</button>
+    <div id="stats-modal-content"></div>
   </div>
 </div>
 
@@ -1651,6 +1733,140 @@ modalDetails.addEventListener('click', (e) => {
     modalOverlay.classList.remove('active');
     applyFilterViaSearch(filterEl.dataset.filterType, filterEl.dataset.filterValue);
   }
+});
+
+// --- Result-stats modal ---
+const statsModalOverlay = document.getElementById('stats-modal-overlay');
+const statsModalContent = document.getElementById('stats-modal-content');
+const statsModalClose = document.getElementById('stats-modal-close');
+
+function _percentile(sorted, p) {
+  if (!sorted.length) return 0;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * p)));
+  return sorted[idx];
+}
+
+function _priceStats(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const total = sorted.reduce((s, v) => s + v, 0);
+  return {
+    count: sorted.length,
+    total,
+    mean: total / sorted.length,
+    median: _percentile(sorted, 0.5),
+    p99: _percentile(sorted, 0.99),
+    max: sorted[sorted.length - 1],
+  };
+}
+
+function computeResultStats(cards) {
+  const oracleIds = new Set();
+  const printingIds = new Set();
+  const tcgValues = [];
+  const ckValues = [];
+  const rarityCounts = {};
+  let totalQty = 0;
+  for (const c of cards) {
+    const qty = c.qty || 0;
+    totalQty += qty;
+    if (c.oracle_id) oracleIds.add(c.oracle_id);
+    if (c.printing_id) printingIds.add(c.printing_id);
+    const tcg = parseFloat(c.tcg_price);
+    const ck = parseFloat(c.ck_price);
+    for (let i = 0; i < qty; i++) {
+      if (!isNaN(tcg)) tcgValues.push(tcg);
+      if (!isNaN(ck)) ckValues.push(ck);
+    }
+    const r = c.rarity || 'unknown';
+    rarityCounts[r] = (rarityCounts[r] || 0) + qty;
+  }
+  return {
+    entries: cards.length,
+    totalQty,
+    distinctCards: oracleIds.size,
+    distinctPrintings: printingIds.size,
+    tcg: _priceStats(tcgValues),
+    ck: _priceStats(ckValues),
+    rarityCounts,
+  };
+}
+
+const _RARITY_ORDER = ['common', 'uncommon', 'rare', 'mythic', 'special', 'bonus'];
+
+function _renderPriceBlock(label, stats) {
+  if (!stats) {
+    return `
+      <div class="modal-section">
+        <div class="modal-section-title">${label}</div>
+        <div class="stats-grid"><span class="label">No prices available</span><span class="value">—</span></div>
+      </div>`;
+  }
+  return `
+    <div class="modal-section">
+      <div class="modal-section-title">${label}<span class="stats-section-tag">${stats.count.toLocaleString()} priced</span></div>
+      <div class="stats-grid">
+        <span class="label">Total</span><span class="value">$${stats.total.toFixed(2)}</span>
+        <span class="label">Mean</span><span class="value">$${stats.mean.toFixed(2)}</span>
+        <span class="label">Median</span><span class="value">$${stats.median.toFixed(2)}</span>
+        <span class="label">99th pct</span><span class="value">$${stats.p99.toFixed(2)}</span>
+        <span class="label">Max</span><span class="value">$${stats.max.toFixed(2)}</span>
+      </div>
+    </div>`;
+}
+
+function _renderRarityBlock(counts) {
+  const keys = Object.keys(counts).sort((a, b) => {
+    const ai = _RARITY_ORDER.indexOf(a);
+    const bi = _RARITY_ORDER.indexOf(b);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+  if (!keys.length) return '';
+  return `
+    <div class="modal-section">
+      <div class="modal-section-title">By rarity</div>
+      <div class="stats-rarity-row">
+        ${keys.map(k => `<span class="stats-rarity-pill"><span class="rar-dot" style="background:${getRarityColor(k)}"></span>${esc(k)} <strong>${counts[k].toLocaleString()}</strong></span>`).join('')}
+      </div>
+    </div>`;
+}
+
+function openStatsModal() {
+  if (!allCards.length) return;
+  const s = computeResultStats(allCards);
+  const sources = (_settings.price_sources || 'tcg,ck').split(',');
+  const primary = sources[0] === 'ck' ? 'Card Kingdom' : 'TCGplayer';
+  statsModalContent.innerHTML = `
+    <h2>Result statistics</h2>
+    <div class="stats-subtitle">Default price source: ${primary}</div>
+    <div class="modal-section">
+      <div class="modal-section-title">Counts</div>
+      <div class="stats-grid">
+        <span class="label">Entries (rows)</span><span class="value">${s.entries.toLocaleString()}</span>
+        <span class="label">Cards (with quantity)</span><span class="value">${s.totalQty.toLocaleString()}</span>
+        <span class="label">Distinct printings</span><span class="value">${s.distinctPrintings.toLocaleString()}</span>
+        <span class="label">Distinct cards</span><span class="value">${s.distinctCards.toLocaleString()}</span>
+      </div>
+    </div>
+    ${_renderPriceBlock('TCGplayer', s.tcg)}
+    ${_renderPriceBlock('Card Kingdom', s.ck)}
+    ${_renderRarityBlock(s.rarityCounts)}
+  `;
+  statsModalOverlay.classList.add('active');
+}
+
+function closeStatsModal() { statsModalOverlay.classList.remove('active'); }
+
+statusEl.addEventListener('click', openStatsModal);
+statusEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openStatsModal(); }
+});
+statsModalOverlay.addEventListener('click', (e) => {
+  if (e.target === statsModalOverlay) closeStatsModal();
+});
+statsModalClose.addEventListener('click', closeStatsModal);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && statsModalOverlay.classList.contains('active')) closeStatsModal();
 });
 
 const DFC_LAYOUTS = ['transform', 'modal_dfc', 'reversible_card', 'double_faced_token', 'art_series'];
@@ -2681,13 +2897,19 @@ function refilterAndRender() {
 function updateStatusText() {
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
   const priceField = sources[0] === 'ck' ? 'ck_price' : 'tcg_price';
-  const priceLabel = sources[0] === 'ck' ? 'CK' : 'TCG';
   const totalQty = allCards.reduce((s, c) => s + (c.qty || 0), 0);
   const totalValue = allCards.reduce((s, c) => {
     const p = parseFloat(c[priceField]) || 0;
     return s + p * (c.qty || 0);
   }, 0);
-  statusEl.textContent = `${allCards.length} entries, ${totalQty} cards \u2014 ${priceLabel} $${totalValue.toFixed(2)}`;
+  // Owned queries: count by qty ("45 cards"). Unowned queries: count by row
+  // ("3 results") since qty is always 0 for cards not in the collection.
+  const useQty = totalQty > 0;
+  const count = useQty ? totalQty : allCards.length;
+  const noun = useQty ? (count === 1 ? 'card' : 'cards') : (count === 1 ? 'result' : 'results');
+  const valueSuffix = totalValue > 0 ? `, $${totalValue.toFixed(2)}` : '';
+  statusEl.textContent = `${count.toLocaleString()} ${noun}${valueSuffix}`;
+  statusEl.classList.toggle('empty', allCards.length === 0);
 }
 
 function renderSkeleton() {

@@ -1,0 +1,13 @@
+# Scenario: Result-stats modal shows full breakdown
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I'm on the collection page, the result count next to the search
+  bar (e.g. "45 cards, $10.46") is clickable. Clicking it opens a
+  "Result statistics" modal showing counts (entries, cards, distinct
+  printings, distinct cards), a TCGplayer price block (total / mean /
+  median / 99th percentile / max) and a Card Kingdom price block, plus
+  a by-rarity breakdown. I can dismiss it with the close button.

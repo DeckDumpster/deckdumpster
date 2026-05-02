@@ -1,0 +1,12 @@
+# Scenario: Result-stats modal reflects the active search filter
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I narrow the collection with a search query like "rarity:rare",
+  the inline result count updates to the filtered subset and the stats
+  modal I open from it shows counts that match — not the unfiltered
+  collection. This proves the modal is computed from the currently
+  visible results.

@@ -1,0 +1,19 @@
+start_page: /collection
+involves:
+  - "search input #search-input"
+  - "result count text in header (#status)"
+  - "stats modal overlay #stats-modal-overlay"
+  - "stats modal content #stats-modal-content"
+fixture_data:
+  unfiltered_cards: 45
+  rare_entries: 13
+  rare_cards: 15
+notes: >
+  Navigate to /collection. Wait for the table and for the inline status
+  to read "45 cards, $10.46". Fill the search input (placeholder
+  "Search (e.g. t:creature c:r mv>=3)") with "rarity:rare". The query
+  is debounced (300ms) so wait for #status to update to "15 cards"
+  (13 rare entries × varying qty = 15 cards). Click #status to open
+  the stats modal. Wait for #stats-modal-overlay.active. Verify the
+  modal counts match the filtered subset: 13 entries / 15 cards.
+  The pre-filter "Cards (with quantity) 45" should NOT appear.
