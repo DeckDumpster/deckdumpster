@@ -24,7 +24,7 @@ def steps(harness):
     # Click delete (confirm dialog auto-accepted)
     harness.click_by_selector("#sel-delete-btn")
 
-    # Wait for card to be removed
-    harness.wait_for_text("0 cards")
+    # Wait for card to be removed (status switches to "results" noun when totalQty=0)
+    harness.wait_for_text("0 results")
 
     harness.screenshot("final_state")

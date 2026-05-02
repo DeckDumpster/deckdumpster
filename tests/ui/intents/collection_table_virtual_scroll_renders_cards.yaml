@@ -5,6 +5,6 @@
 
 description: >
   When I navigate to the collection page in table view, I see column headers
-  (Qty, Card, Type, Cost, Set, #, Price) and card rows rendered in the table.
+  (Card, Type, Cost, Set, #, Price) and card rows rendered in the table.
   The page uses virtual scrolling so only visible rows are in the DOM, but the
   table looks and behaves like a normal full table to me.

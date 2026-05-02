@@ -67,19 +67,41 @@ header {
 .brand-logo:hover { background: rgba(233,69,96,0.12); }
 .brand-logo svg { display: block; }
 
-.syntax-help-link {
+.syntax-help-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  border: 1px solid #0f3460;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  background: #1a1a2e;
+  color: #e94560;
+  border: 1px solid #e94560;
   border-radius: 6px;
+  font-weight: 600;
+  font-size: 1rem;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+.syntax-help-btn:hover { background: #e94560; color: #fff; }
+
+.cols-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
   background: #1a1a2e;
   color: #888;
-  text-decoration: none;
-  font-size: 0.85rem;
+  border: 1px solid #555;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
 }
-.syntax-help-link:hover { color: #e94560; border-color: #e94560; }
+.cols-btn:hover { color: #e94560; border-color: #e94560; }
+.cols-btn.active { color: #e94560; border-color: #e94560; }
+.cols-btn svg { width: 16px; height: 16px; fill: currentColor; }
 
 .controls {
   display: flex;
@@ -719,18 +741,14 @@ a.lineage-link {
 }
 .col-config-dropdown.open { display: block; }
 
-/* Column config icon in table header */
-.col-config-th {
-  width: 28px;
-  padding: 8px 4px !important;
-  text-align: center !important;
-  cursor: pointer;
-  color: #666;
-  font-size: 0.9rem;
+/* Narrow Qty column: card quantities are almost always single digits */
+.collection-table th[data-col="qty"],
+.collection-table td[data-col="qty"] {
+  width: 40px;
+  text-align: center;
+  padding-left: 4px;
+  padding-right: 4px;
 }
-.col-config-th:hover { color: #e94560 !important; }
-.col-config-th.active { color: #e94560 !important; }
-.col-config-th svg { width: 16px; height: 16px; vertical-align: middle; fill: currentColor; }
 
 /* Sort arrow */
 .sort-arrow { font-size: 0.7rem; margin-left: 2px; }
@@ -1247,6 +1265,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
       <div id="search-error"></div>
       <div class="ac-dropdown" id="ac-dropdown"></div>
     </div>
+    <a href="/search-help" target="_blank" class="syntax-help-btn" id="syntax-help-btn" title="Search syntax help" aria-label="Search syntax help">?</a>
   </div>
   <div class="header-row">
     <div class="view-toggle-group" id="view-toggle-group">
@@ -1278,7 +1297,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
     <div class="col-controls" id="grid-size-wrap" style="display:none"><button class="col-btn" id="col-minus">&minus;</button><div class="col-count" id="col-count"></div><button class="col-btn" id="col-plus">+</button></div>
     <div class="header-row-right">
       <div id="status" role="button" tabindex="0" title="Show result stats"></div>
-      <a href="/search-help" target="_blank" class="syntax-help-link" title="Search syntax help"><span aria-hidden="true">?</span> Syntax</a>
+      <button class="cols-btn" id="cols-btn" title="Configure columns" aria-label="Configure columns"><svg viewBox="0 0 16 16"><path d="M1 1h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 6h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 11h4v4H1zm5 0h4v4H6zm5 0h4v4H11z"/></svg></button>
     </div>
   </div>
 </header>
@@ -1456,7 +1475,7 @@ applyGridCols();
 
 // --- Column definitions ---
 const ALL_COLUMNS = [
-  { key: 'qty', label: 'Qty', sort: 'qty', defaultOn: true },
+  { key: 'qty', label: 'Qty', sort: 'qty', defaultOn: false },
   { key: 'name', label: 'Card', sort: 'name', defaultOn: true },
   { key: 'type', label: 'Type', sort: 'name', defaultOn: true },
   { key: 'mana', label: 'Cost', sort: 'cmc', defaultOn: true },
@@ -1512,9 +1531,14 @@ function toggleColDrawer(open) {
   if (open === undefined) open = !colDrawer.classList.contains('open');
   colDrawer.classList.toggle('open', open);
   colDrawerBackdrop.classList.toggle('active', open);
-  const th = document.getElementById('col-config-th');
-  if (th) th.classList.toggle('active', open);
+  const btn = document.getElementById('cols-btn');
+  if (btn) btn.classList.toggle('active', open);
 }
+
+document.getElementById('cols-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleColDrawer();
+});
 
 colDrawerBackdrop.addEventListener('click', () => toggleColDrawer(false));
 
@@ -2914,13 +2938,11 @@ function updateStatusText() {
 
 function renderSkeleton() {
   const visCols = getVisibleColumns();
-  const colIcon = `<svg viewBox="0 0 16 16"><path d="M1 1h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 6h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 11h4v4H1zm5 0h4v4H6zm5 0h4v4H11z"/></svg>`;
   let html = '<table class="collection-table"><thead><tr>';
-  html += `<th class="col-config-th">${colIcon}</th>`;
   for (const col of visCols) html += `<th>${col.label}</th>`;
   html += '</tr></thead><tbody>';
   for (let i = 0; i < 20; i++) {
-    html += '<tr class="skeleton-row"><td></td>';
+    html += '<tr class="skeleton-row">';
     for (const col of visCols) {
       if (col.key === 'name') html += '<td><div class="skeleton-cell thumb"></div><div class="skeleton-cell wide"></div></td>';
       else html += '<td><div class="skeleton-cell narrow"></div></td>';
@@ -2982,13 +3004,10 @@ function renderTable() {
   let rowHeight = 49; // initial estimate, measured after first render
   const bufferRows = 5;
   const totalRows = allCards.length;
-  const colCount = visCols.length + 1 + (multiSelectMode ? 1 : 0);
+  const colCount = visCols.length + (multiSelectMode ? 1 : 0);
   const _cellOpts = { priceSources: _settings.price_sources };
 
-  const drawerOpen = colDrawer.classList.contains('open');
-  const colIcon = `<svg viewBox="0 0 16 16"><path d="M1 1h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 6h4v4H1zm5 0h4v4H6zm5 0h4v4H11zM1 11h4v4H1zm5 0h4v4H6zm5 0h4v4H11z"/></svg>`;
   let theadHtml = '<tr>';
-  theadHtml += `<th class="col-config-th${drawerOpen ? ' active' : ''}" id="col-config-th" title="Configure columns">${colIcon}</th>`;
   if (multiSelectMode) {
     const allChecked = selectedCards.size === allCards.length && allCards.length > 0;
     theadHtml += `<th class="select-col"><input type="checkbox" class="sel-all-cb" ${allChecked ? 'checked' : ''}></th>`;
@@ -3017,13 +3036,12 @@ function renderTable() {
     const isOrdered = card.status === 'ordered';
     const trClasses = [isSelected ? 'selected' : '', isUnowned ? 'unowned' : '', isUnowned && isWanted ? 'wanted' : '', isOrdered ? 'ordered' : ''].filter(Boolean).join(' ');
     let h = `<tr data-idx="${idx}"${trClasses ? ` class="${trClasses}"` : ''}>`;
-    h += '<td></td>';
     if (multiSelectMode) {
       h += `<td class="select-col"><input type="checkbox" class="row-sel-cb" data-idx="${idx}" ${isSelected ? 'checked' : ''}></td>`;
     }
     for (const col of visCols) {
       const cls = col.key === 'price' || col.key === 'ck_price' || col.key === 'tcg_price' ? ' class="price-cell"' : '';
-      h += `<td${cls}>${renderCellContent(col.key, card, helpers, _cellOpts)}</td>`;
+      h += `<td${cls} data-col="${col.key}">${renderCellContent(col.key, card, helpers, _cellOpts)}</td>`;
     }
     h += '</tr>';
     return h;
@@ -3133,14 +3151,6 @@ function renderTable() {
     const tr = e.target.closest('tr[data-idx]');
     if (tr) showCardModal(allCards[parseInt(tr.dataset.idx)]);
   });
-
-  const colTh = document.getElementById('col-config-th');
-  if (colTh) {
-    colTh.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleColDrawer();
-    });
-  }
 
   main.querySelectorAll('.collection-table th[data-col]').forEach(th => {
     th.addEventListener('click', () => handleSortClick(th.dataset.col));

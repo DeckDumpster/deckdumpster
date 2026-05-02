@@ -12,8 +12,9 @@ def steps(harness):
     harness.wait_for_visible(".collection-table", timeout=5_000)
     harness.wait_for_visible(".collection-table tbody tr", timeout=5_000)
 
-    # Click a card name cell to open the modal (avoid first cell which may have checkbox)
-    harness.click_by_selector("tr[data-idx] td:nth-child(3)")
+    # Click the card name cell to open the modal (avoids cells with
+    # data-filter-type wrappers like Cost/Set which would intercept the click)
+    harness.click_by_selector("tr[data-idx] .card-cell")
 
     # Wait for modal to appear
     harness.wait_for_visible("#card-modal-overlay.active", timeout=5_000)
