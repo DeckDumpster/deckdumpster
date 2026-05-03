@@ -28,6 +28,6 @@ def steps(harness):
     harness.click_by_selector("#sel-delete-btn")
 
     # Wait for re-fetch — should be 1 copy remaining
-    harness.wait_for_text("1 cards")
+    harness.wait_for_text("1 card")
 
     harness.screenshot("final_state")

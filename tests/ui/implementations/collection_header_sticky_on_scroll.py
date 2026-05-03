@@ -38,6 +38,6 @@ def steps(harness):
     # Sanity: key header elements are still visible to the user after scroll.
     harness.assert_visible("a.brand-logo")
     harness.assert_visible("#search-input")
-    harness.assert_visible("a.syntax-help-link")
+    harness.assert_visible("a.syntax-help-btn")
 
     harness.screenshot("final_state")

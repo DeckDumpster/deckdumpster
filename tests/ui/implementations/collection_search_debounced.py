@@ -18,6 +18,6 @@ def steps(harness):
 
     # Clear the search to restore full view
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "")
-    harness.wait_for_text("43")
+    harness.wait_for_text("45 cards")
 
     harness.screenshot("final_state")

@@ -1,7 +1,7 @@
 start_page: /collection
 involves:
   - 'sticky <header> element (position: sticky; top: 0; z-index: 50)'
-  - 'brand logo (a.brand-logo), search input (#search-input), and syntax help pill (a.syntax-help-link) inside the header'
+  - 'brand logo (a.brand-logo), search input (#search-input), and syntax help button (a.syntax-help-btn) inside the header'
   - 'window scrollY > 0 after scrolling'
   - 'header.getBoundingClientRect().top stays at 0 after scrolling'
 notes: >

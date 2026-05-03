@@ -14,12 +14,12 @@ def steps(harness):
 
     # Default search for "lotus" — no owned lotus cards in the fixture
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "lotus")
-    harness.wait_for_text("0 entries")
+    harness.wait_for_text("0 results")
     harness.screenshot("default_lotus_empty")
 
     # Prepend is:unowned — three printings from the card DB appear
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "is:unowned lotus")
-    harness.wait_for_text("3 entries")
+    harness.wait_for_text("3 results")
 
     # Each of the three printings is named
     harness.assert_text_present("Gilded Lotus")

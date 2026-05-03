@@ -1,0 +1,18 @@
+start_page: /collection
+involves:
+  - "result count text in header (#status)"
+  - "stats modal overlay #stats-modal-overlay"
+  - "stats modal content #stats-modal-content"
+  - "stats modal close button #stats-modal-close"
+fixture_data:
+  total_entries: 43
+  total_cards: 45
+notes: >
+  Navigate to /collection. Wait for .collection-table to load and for
+  #status to display "45 cards, $10.46". Click #status. Wait for
+  #stats-modal-overlay.active. The modal shows "Result statistics" as
+  the heading, sections for COUNTS, TCGPLAYER (with "1 priced" tag),
+  CARD KINGDOM ("No prices available"), and BY RARITY (with rarity
+  pills). Verify "Entries (rows)" appears with value 43 and
+  "Cards (with quantity)" with value 45. Click #stats-modal-close and
+  verify the overlay is hidden.
