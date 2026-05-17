@@ -48,6 +48,14 @@ else
 
     echo "==> Restarting $SERVICE_NAME..."
     systemctl --user restart "$SERVICE_NAME"
+
+    # Reclaim disk from the previous image layers. Each build leaves the
+    # prior `mtgc:latest` content dangling once the tag moves. Without this
+    # the host accumulates ~1 GB per deploy and eventually fills the disk,
+    # which is what historically broke nightly backups (no room to stage
+    # the SQLite snapshot).
+    echo "==> Pruning dangling images..."
+    podman image prune -f >/dev/null
 fi
 # Wait briefly for the container to start, then discover the assigned port
 sleep 2

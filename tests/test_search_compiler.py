@@ -85,7 +85,9 @@ class TestNumericCompilation:
 class TestTextCompilation:
     def test_name_search(self):
         c = _compile("bolt")
-        assert "card.name LIKE" in c.where_sql
+        # Name search is rewritten as a subselect on cards (faster than a
+        # per-printing LIKE) ORed with the printings.flavor_name LIKE.
+        assert "SELECT oracle_id FROM cards WHERE name LIKE" in c.where_sql
         assert "p.flavor_name LIKE" in c.where_sql
         assert "type_line" not in c.where_sql  # type line requires t: prefix
         assert "oracle_text" not in c.where_sql  # oracle text requires o: prefix

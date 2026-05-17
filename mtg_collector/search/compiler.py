@@ -141,10 +141,16 @@ def _compile_name_search(term: str, ctx: CompiledQuery) -> tuple[str, list]:
 
     Matches Scryfall's behavior: bare words match card name and flavor_name
     only. Type line requires t:, oracle text requires o:.
+
+    The card.name half is rewritten as `p.oracle_id IN (subselect)` so the
+    cards table is scanned once (37k rows) instead of via per-printing index
+    lookups during a 112k-row printings scan. The flavor_name half is gated
+    on IS NOT NULL because only ~0.5% of printings have flavor names, which
+    lets SQLite short-circuit the LIKE for the vast majority.
     """
     return (
-        "(card.name LIKE ? COLLATE NOCASE"
-        " OR p.flavor_name LIKE ? COLLATE NOCASE)",
+        "(p.oracle_id IN (SELECT oracle_id FROM cards WHERE name LIKE ? COLLATE NOCASE)"
+        " OR (p.flavor_name IS NOT NULL AND p.flavor_name LIKE ? COLLATE NOCASE))",
         [f"%{term}%", f"%{term}%"],
     )
 
