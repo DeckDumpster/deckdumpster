@@ -1,0 +1,11 @@
+# Scenario: Clear search via the in-input X button
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  After I type a query into the collection search bar and the results filter
+  down, I can click the small × button inside the search input to clear my
+  query in one click. The input empties, the × disappears, and the collection
+  re-fetches the full default view.

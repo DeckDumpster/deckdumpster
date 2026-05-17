@@ -1,0 +1,11 @@
+# Scenario: Clear button appears for URL-driven search queries
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I open a shareable collection link with a query already in the URL
+  (for example /collection?q=Scrawling), the search input is pre-populated
+  for me and the × clear button is already visible without my having to
+  type anything. Clicking it clears the query and brings back the full view.

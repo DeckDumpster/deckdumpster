@@ -164,10 +164,32 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   width: 100%;
   min-width: 0;
   font-size: 1rem;
-  padding: 11px 16px;
+  padding: 11px 36px 11px 16px;
 }
 #search-error { color: #e94560; font-size: 11px; position: absolute; top: 100%; left: 0; white-space: nowrap; z-index: 10; }
 .search-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #333;
+  color: #ccc;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.search-clear:hover { background: #e94560; color: #fff; }
+.search-clear.visible { display: flex; }
 /* Autocomplete dropdown */
 .ac-dropdown {
   display: none; position: absolute; top: 100%; left: 0; right: 0;
@@ -1262,6 +1284,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
     </a>
     <div class="search-wrap">
       <input type="text" id="search-input" placeholder="Search (e.g. t:creature c:r mv>=3)" autocomplete="off">
+      <button type="button" class="search-clear" id="search-clear" title="Clear search" aria-label="Clear search">&times;</button>
       <div id="search-error"></div>
       <div class="ac-dropdown" id="ac-dropdown"></div>
     </div>
@@ -2843,6 +2866,7 @@ function applyFilterViaSearch(type, value) {
   const q = queryMap[type] || '';
   if (q) {
     searchInput.value = q;
+    updateSearchClearVisibility();
     fetchCollection();
   }
 }
@@ -3273,11 +3297,22 @@ function renderGrid() {
 
 // --- Event listeners ---
 // Search input triggers server fetch
+const searchClearBtn = document.getElementById('search-clear');
+function updateSearchClearVisibility() {
+  searchClearBtn.classList.toggle('visible', searchInput.value.length > 0);
+}
 searchInput.addEventListener('input', () => {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(fetchCollection, 300);
   acUpdate();
+  updateSearchClearVisibility();
 });
+searchClearBtn.addEventListener('click', () => {
+  searchInput.value = '';
+  searchInput.focus();
+  searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+});
+updateSearchClearVisibility();
 
 // ---------------------------------------------------------------------------
 // Autocomplete
@@ -3457,6 +3492,7 @@ function acAccept(idx) {
   const newPos = start + item.text.length + suffix.length;
   searchInput.setSelectionRange(newPos, newPos);
   searchInput.focus();
+  updateSearchClearVisibility();
   acHide();
   // If we inserted a full keyword:value, trigger fetch
   if (suffix === ' ') {
@@ -3681,6 +3717,7 @@ document.getElementById('view-select').addEventListener('change', async function
     try {
       const f = typeof view.filters_json === 'string' ? JSON.parse(view.filters_json) : view.filters_json;
       searchInput.value = f.q || '';
+      updateSearchClearVisibility();
       fetchCollection();
     } catch {}
   }
@@ -3834,7 +3871,10 @@ function restoreFiltersFromURL() {
 
   // Search query
   const q = params.get('q');
-  if (q) searchInput.value = q;
+  if (q) {
+    searchInput.value = q;
+    updateSearchClearVisibility();
+  }
 
   // Sort
   if (params.get('sort')) sortColumn = params.get('sort');
