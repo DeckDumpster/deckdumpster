@@ -996,6 +996,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
         if _shared_db_path and os.path.exists(_shared_db_path):
             from mtg_collector.db.connection import attach_shared
             attach_shared(conn, _shared_db_path)
@@ -2072,7 +2073,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Conditional JOINs from the search engine
         # Note: expand_copies and default templates already include dc/d/b joins.
         # Only the shared-links (card_pairs) template needs them dynamically.
-        needs_price_join = compiled and compiled.needs_price_join
+        needs_price_join = (compiled and compiled.needs_price_join) or sort_col == "_lp.price"
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
         def _build_extra_joins(*, has_deck_binder_joins: bool) -> str:

@@ -1,0 +1,11 @@
+# Scenario: Search clear button visibility tracks input content
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  The × clear button inside the collection search input is hidden when the
+  input is empty, appears as soon as I start typing, and disappears again
+  once the input is empty — so I never see a dead X over an empty field
+  and never lose the X when I have a query that needs clearing.
