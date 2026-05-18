@@ -188,6 +188,12 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   align-items: center;
   justify-content: center;
 }
+/* Render the × via a pseudo-element so the button has no DOM text content.
+   The page already contains four other × close buttons (modals, wishlist
+   row remove); putting the glyph here as text would make Playwright's
+   get_by_text("×") locator collide with this button and break the
+   collection_modal_close test. */
+.search-clear::before { content: "\00d7"; }
 .search-clear:hover { background: #e94560; color: #fff; }
 .search-clear.visible { display: flex; }
 /* Autocomplete dropdown */
@@ -1284,7 +1290,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
     </a>
     <div class="search-wrap">
       <input type="text" id="search-input" placeholder="Search (e.g. t:creature c:r mv>=3)" autocomplete="off">
-      <button type="button" class="search-clear" id="search-clear" title="Clear search" aria-label="Clear search">&times;</button>
+      <button type="button" class="search-clear" id="search-clear" title="Clear search" aria-label="Clear search"></button>
       <div id="search-error"></div>
       <div class="ac-dropdown" id="ac-dropdown"></div>
     </div>
