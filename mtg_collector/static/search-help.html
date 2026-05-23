@@ -336,19 +336,44 @@ They filter based on your personal collection data.</p>
 </table>
 
 <h3>Date Added</h3>
-<p>Filter by the date a card was added to your collection. Uses ISO 8601 format (YYYY-MM-DD).</p>
+<p>Filter by the date a card was added to your collection. All comparisons resolve in your browser's local timezone, so <code>added:today</code> matches the cards you added during <em>your</em> calendar day — not the UTC day.</p>
+<p>Accepted forms:</p>
 <table class="keyword-table">
   <thead>
     <tr><th>Query</th><th>Description</th></tr>
   </thead>
   <tbody>
     <tr>
+      <td><code>added:today</code></td>
+      <td>Cards added today (local time)</td>
+    </tr>
+    <tr>
+      <td><code>added:yesterday</code></td>
+      <td>Cards added yesterday (local time)</td>
+    </tr>
+    <tr>
+      <td><code>added>=7d</code></td>
+      <td>Cards added in the last 7 days (also <code>Nw</code>, <code>Nm</code>, <code>Ny</code>)</td>
+    </tr>
+    <tr>
+      <td><code>added:2024</code></td>
+      <td>Cards added at any point in 2024</td>
+    </tr>
+    <tr>
+      <td><code>added:2024-03</code></td>
+      <td>Cards added in March 2024</td>
+    </tr>
+    <tr>
       <td><code>added>=2024-01-01</code></td>
       <td>Cards added on or after January 1, 2024</td>
     </tr>
     <tr>
       <td><code>added<=2025-12-31</code></td>
-      <td>Cards added on or before December 31, 2025</td>
+      <td>Cards added on or before December 31, 2025 (inclusive)</td>
+    </tr>
+    <tr>
+      <td><code>added>2024-01-15</code></td>
+      <td>Cards added strictly after January 15 (i.e. from the 16th onward)</td>
     </tr>
   </tbody>
 </table>
