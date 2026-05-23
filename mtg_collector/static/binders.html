@@ -217,6 +217,11 @@ main { padding: 24px; }
 </div>
 
 <script>
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 let binders = [];
 let currentBinder = null;
 let binderCards = [];
@@ -247,7 +252,7 @@ function renderBinderList() {
       </div>
       <div class="stats">
         <span>${b.card_count} cards</span>
-        ${b.total_value ? `<span>$${Number(b.total_value).toFixed(2)}</span>` : ''}
+        ${b.total_value ? `<span>${formatPrice(b.total_value)}</span>` : ''}
       </div>
     </div>
   `).join('');
@@ -283,7 +288,7 @@ function renderBinderDetail() {
   if (b.storage_location) meta.push(`<span class="label">Location</span><span>${esc(b.storage_location)}</span>`);
   if (b.description) meta.push(`<span class="label">Notes</span><span>${esc(b.description)}</span>`);
   meta.push(`<span class="label">Cards</span><span>${b.card_count}</span>`);
-  if (b.total_value) meta.push(`<span class="label">Value</span><span>$${Number(b.total_value).toFixed(2)}</span>`);
+  if (b.total_value) meta.push(`<span class="label">Value</span><span>${formatPrice(b.total_value)}</span>`);
   document.getElementById('binder-meta').innerHTML = meta.join('');
 }
 

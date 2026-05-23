@@ -536,6 +536,11 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
 </div>
 
 <script>
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 const setInput = document.getElementById('set-input');
 const setDropdown = document.getElementById('set-dropdown');
 const productRadios = document.getElementById('product-radios');
@@ -691,11 +696,11 @@ function buildCardBadges(card, packSetCode) {
   let html = '';
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
   if (sources.includes('tcg') && card.printing_id) {
-    const sfPrice = card.tcg_price ? ` $${parseFloat(card.tcg_price).toFixed(2)}` : '';
+    const sfPrice = card.tcg_price ? ` ${formatPrice(card.tcg_price)}` : '';
     html += `<a class="badge link" href="https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}" target="_blank" rel="noopener" onclick="event.stopPropagation()">SF${sfPrice}</a>`;
   }
   if (sources.includes('ck') && card.ck_url) {
-    const ckPrice = card.ck_price ? ` $${parseFloat(card.ck_price).toFixed(2)}` : '';
+    const ckPrice = card.ck_price ? ` ${formatPrice(card.ck_price)}` : '';
     html += `<a class="badge link" href="${card.ck_url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">CK${ckPrice}</a>`;
   }
   if (card.border_color === 'borderless') html += '<span class="badge treatment">BL</span>';
@@ -942,7 +947,7 @@ async function openPack(seed, hashRevealed) {
     if (sources.includes('ck') && c.ck_price) return sum + parseFloat(c.ck_price);
     return sum;
   }, 0);
-  const totalStr = packTotal > 0 ? ` — $${packTotal.toFixed(2)}` : '';
+  const totalStr = packTotal > 0 ? ` — ${formatPrice(packTotal)}` : '';
   packHeader.textContent = `${setCode} ${product} — ${currentPack.length} cards (variant ${result.variant_index}, ${pct}%)${totalStr}`;
 
   packGrid.innerHTML = '';

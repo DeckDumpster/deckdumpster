@@ -209,11 +209,17 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
 function fmtMoney(v) {
   if (v == null || v === '') return '';
   const n = typeof v === 'number' ? v : parseFloat(v);
   if (isNaN(n)) return '';
-  return '$' + n.toFixed(2);
+  return formatPrice(n);
 }
 
 function fmtDate(iso) {

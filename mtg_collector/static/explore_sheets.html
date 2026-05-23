@@ -443,6 +443,11 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
 <div id="zoom-overlay"><img id="zoom-img" src="" alt=""></div>
 
 <script>
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 const setInput = document.getElementById('set-input');
 const setDropdown = document.getElementById('set-dropdown');
 const productRadios = document.getElementById('product-radios');
@@ -807,11 +812,11 @@ async function loadSheets() {
         let badges = `<span class="badge pull-rate">${pullPct}%</span>`;
         if (sources.includes('tcg') && card.printing_id) {
           const sfUrl = `https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}`;
-          const tcgPrice = card.tcg_price ? ` $${parseFloat(card.tcg_price).toFixed(2)}` : '';
+          const tcgPrice = card.tcg_price ? ` ${formatPrice(card.tcg_price)}` : '';
           badges += `<a class="badge link" href="${sfUrl}" target="_blank" rel="noopener">SF${tcgPrice}</a>`;
         }
         if (sources.includes('ck') && card.ck_url) {
-          const ckPrice = card.ck_price ? ` $${parseFloat(card.ck_price).toFixed(2)}` : '';
+          const ckPrice = card.ck_price ? ` ${formatPrice(card.ck_price)}` : '';
           badges += `<a class="badge link" href="${card.ck_url}" target="_blank" rel="noopener">CK${ckPrice}</a>`;
         }
         if (card.border_color === 'borderless') badges += '<span class="badge treatment">BL</span>';

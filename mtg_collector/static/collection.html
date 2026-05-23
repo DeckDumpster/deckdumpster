@@ -1424,6 +1424,11 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 <script src="/static/shared-card-table.js"></script>
 <script>
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 const searchInput = document.getElementById('search-input');
 const viewTableBtn = document.getElementById('view-table-btn');
 const viewGridBtn = document.getElementById('view-grid-btn');
@@ -1860,11 +1865,11 @@ function _renderPriceBlock(label, stats) {
     <div class="modal-section">
       <div class="modal-section-title">${label}<span class="stats-section-tag">${stats.count.toLocaleString()} priced</span></div>
       <div class="stats-grid">
-        <span class="label">Total</span><span class="value">$${stats.total.toFixed(2)}</span>
-        <span class="label">Mean</span><span class="value">$${stats.mean.toFixed(2)}</span>
-        <span class="label">Median</span><span class="value">$${stats.median.toFixed(2)}</span>
-        <span class="label">99th pct</span><span class="value">$${stats.p99.toFixed(2)}</span>
-        <span class="label">Max</span><span class="value">$${stats.max.toFixed(2)}</span>
+        <span class="label">Total</span><span class="value">${formatPrice(stats.total)}</span>
+        <span class="label">Mean</span><span class="value">${formatPrice(stats.mean)}</span>
+        <span class="label">Median</span><span class="value">${formatPrice(stats.median)}</span>
+        <span class="label">99th pct</span><span class="value">${formatPrice(stats.p99)}</span>
+        <span class="label">Max</span><span class="value">${formatPrice(stats.max)}</span>
       </div>
     </div>`;
 }
@@ -1975,7 +1980,7 @@ const purchaseLinesPlugin = {
       ctx.setLineDash([]);
       ctx.fillStyle = 'rgba(126,232,176,0.7)';
       ctx.font = '9px sans-serif';
-      ctx.fillText('$' + price.toFixed(2), left + 3, y - 3);
+      ctx.fillText(formatPrice(price), left + 3, y - 3);
     }
     ctx.restore();
   }
@@ -2076,7 +2081,7 @@ async function renderPriceChart(card) {
         y: {
           ticks: {
             color: '#666', font: { size: 10 },
-            callback: v => '$' + v.toFixed(2),
+            callback: v => formatPrice(v),
           },
           grid: { color: 'rgba(255,255,255,0.06)' },
         },
@@ -2084,7 +2089,7 @@ async function renderPriceChart(card) {
       plugins: {
         legend: { position: 'top', labels: { color: '#888', font: { size: 10 }, boxWidth: 12 } },
         tooltip: {
-          callbacks: { label: ctx => `${ctx.dataset.label}: $${ctx.parsed.y.toFixed(2)}` },
+          callbacks: { label: ctx => `${ctx.dataset.label}: ${formatPrice(ctx.parsed.y)}` },
         },
         purchaseLines: { prices: purchasePrices },
       },
@@ -2133,8 +2138,8 @@ function showCardModal(card) {
   const finish = card.finish ? card.finish.charAt(0).toUpperCase() + card.finish.slice(1) : 'Nonfoil';
 
   // Prices
-  const tcgPrice = card.tcg_price ? `$${parseFloat(card.tcg_price).toFixed(2)}` : '—';
-  const ckPrice = card.ck_price ? `$${parseFloat(card.ck_price).toFixed(2)}` : '—';
+  const tcgPrice = card.tcg_price ? formatPrice(card.tcg_price) : '—';
+  const ckPrice = card.ck_price ? formatPrice(card.ck_price) : '—';
 
   // Links
   const sfUrl = `https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}`;
@@ -2214,7 +2219,7 @@ function showCardModal(card) {
         const addedDate = wl.added_at ? new Date(wl.added_at).toLocaleDateString() : '';
         return `<div class="modal-section"><span class="modal-section-title" style="color:#7ee8b0">Wishlist</span>
           ${addedDate ? `<div class="modal-row"><span class="label">Added</span><span class="value">${addedDate}</span></div>` : ''}
-          ${wl.max_price ? `<div class="modal-row"><span class="label">Max Price</span><span class="value">$${parseFloat(wl.max_price).toFixed(2)}</span></div>` : ''}
+          ${wl.max_price ? `<div class="modal-row"><span class="label">Max Price</span><span class="value">${formatPrice(wl.max_price)}</span></div>` : ''}
           ${wl.priority ? `<div class="modal-row"><span class="label">Priority</span><span class="value">${wl.priority}</span></div>` : ''}
           ${wl.notes ? `<div class="modal-row"><span class="label">Notes</span><span class="value">${wl.notes}</span></div>` : ''}
           ${wl.source ? `<div class="modal-row"><span class="label">Source</span><span class="value">${wl.source}</span></div>` : ''}
@@ -2268,7 +2273,7 @@ function showCardModal(card) {
           const seller = sellerName
             ? ` &middot; <a href="/orders/${copy.order_id}" style="color:#e94560;font-size:0.8rem">${sellerName}</a>`
             : '';
-          const price = copy.purchase_price ? ` &middot; $${parseFloat(copy.purchase_price).toFixed(2)}` : '';
+          const price = copy.purchase_price ? ` &middot; ${formatPrice(copy.purchase_price)}` : '';
           const source = copy.source && copy.source !== 'manual' ? ` &middot; ${copy.source}` : '';
           const receiveBtn = copy.status === 'ordered'
             ? `<button class="receive-btn" data-collection-id="${copy.id}">Receive</button>`
@@ -2738,10 +2743,10 @@ function renderCopySection(copy) {
 
   let priceHtml = '';
   if (copy.purchase_price) {
-    priceHtml = `<div class="modal-row"><span class="label">Price</span><span class="value">$${parseFloat(copy.purchase_price).toFixed(2)}</span></div>`;
+    priceHtml = `<div class="modal-row"><span class="label">Price</span><span class="value">${formatPrice(copy.purchase_price)}</span></div>`;
   }
   if (copy.sale_price) {
-    priceHtml += `<div class="modal-row"><span class="label">Sale Price</span><span class="value">$${parseFloat(copy.sale_price).toFixed(2)}</span></div>`;
+    priceHtml += `<div class="modal-row"><span class="label">Sale Price</span><span class="value">${formatPrice(copy.sale_price)}</span></div>`;
   }
 
   const changePrintingHtml = isActive
@@ -2831,11 +2836,11 @@ function buildCardBadges(card) {
   let html = '';
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
   if (sources.includes('tcg') && card.printing_id) {
-    const sfPrice = card.tcg_price ? ` $${parseFloat(card.tcg_price).toFixed(2)}` : '';
+    const sfPrice = card.tcg_price ? ` ${formatPrice(card.tcg_price)}` : '';
     html += `<a class="badge link" href="https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}" target="_blank" rel="noopener" onclick="event.stopPropagation()">SF${sfPrice}</a>`;
   }
   if (sources.includes('ck')) {
-    const ckPrice = card.ck_price ? ` $${parseFloat(card.ck_price).toFixed(2)}` : '';
+    const ckPrice = card.ck_price ? ` ${formatPrice(card.ck_price)}` : '';
     html += `<a class="badge link" href="${getCkUrl(card)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">CK${ckPrice}</a>`;
   }
   const fe = parseJsonField(card.frame_effects);
@@ -2974,7 +2979,7 @@ function updateStatusText() {
   const useQty = totalQty > 0;
   const count = useQty ? totalQty : allCards.length;
   const noun = useQty ? (count === 1 ? 'card' : 'cards') : (count === 1 ? 'result' : 'results');
-  const valueSuffix = totalValue > 0 ? `, $${totalValue.toFixed(2)}` : '';
+  const valueSuffix = totalValue > 0 ? `, ${formatPrice(totalValue)}` : '';
   statusEl.textContent = `${count.toLocaleString()} ${noun}${valueSuffix}`;
   statusEl.classList.toggle('empty', allCards.length === 0);
 }

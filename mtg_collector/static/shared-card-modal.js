@@ -67,8 +67,8 @@ function createCardModal() {
     const finish = card.finish ? card.finish.charAt(0).toUpperCase() + card.finish.slice(1) : 'Nonfoil';
 
     // Prices
-    const tcgPrice = card.tcg_price ? `$${parseFloat(card.tcg_price).toFixed(2)}` : '\u2014';
-    const ckPrice = card.ck_price ? `$${parseFloat(card.ck_price).toFixed(2)}` : '\u2014';
+    const tcgPrice = card.tcg_price ? formatPrice(card.tcg_price) : '\u2014';
+    const ckPrice = card.ck_price ? formatPrice(card.ck_price) : '\u2014';
 
     // Links
     const sfUrl = `https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}`;

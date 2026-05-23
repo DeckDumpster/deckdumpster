@@ -776,7 +776,7 @@
     container.innerHTML = cards.map(c => {
       const key = isVirtual ? String(c.printing_id) : String(c.collection_id);
       const cond = c.condition ? ` [${esc(c.condition)}]` : '';
-      const price = c.purchase_price ? ` $${parseFloat(c.purchase_price).toFixed(2)}` : '';
+      const price = c.purchase_price ? ` ${formatPrice(c.purchase_price)}` : '';
       return `<div class="picker-card ${pickerSelected.has(key) ? 'selected' : ''}" data-key="${esc(key)}">
         <span>${esc(c.name)}</span>
         <span style="color:var(--text-secondary);font-size:0.85rem">${esc(c.set_code.toUpperCase())} #${esc(c.collector_number)} · ${esc(c.finish)}${cond}${price}</span>
