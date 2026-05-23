@@ -375,7 +375,7 @@
         </select>
         <input type="number" step="0.01" placeholder="Price" class="dispose-price">
         <input type="text" placeholder="Note" class="dispose-note">
-        <button class="dispose-btn" data-id="${copy.id}">Dispose</button>
+        <button class="dispose-btn" data-id="${copy.id}" disabled>Dispose</button>
         ${isDeleteable ? `<button class="delete-copy-btn" data-id="${copy.id}">Delete</button>` : ''}
       </div>`;
     } else if (isDeleteable) {
@@ -418,6 +418,12 @@
     });
 
     // Dispose
+    container.querySelectorAll('.dispose-select').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const btn = sel.closest('.copy-section').querySelector('.dispose-btn');
+        if (btn) btn.disabled = !sel.value;
+      });
+    });
     container.querySelectorAll('.dispose-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const id = parseInt(btn.dataset.id);
