@@ -299,7 +299,7 @@
 .price-range-pill:hover { background: #163d6f; }
 .price-range-pill.active { background: var(--accent); color: #fff; }
 .price-range-pill.disabled { opacity: 0.3; pointer-events: none; }
-.price-chart-canvas-wrap { height: 180px; position: relative; }
+.price-chart-canvas-wrap { height: 360px; position: relative; }
 
 /* History timeline */
 .history-toggle {
