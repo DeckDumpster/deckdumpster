@@ -1,0 +1,24 @@
+start_page: /collection
+involves:
+  - "#view-grid-btn — switches collection to grid view (more stable click target than table rows, which can collide with header-cell filters)"
+  - ".sheet-card[data-idx='0'] — first card in the grid; clicking it opens the modal"
+  - "#card-modal-overlay — modal container, gains 'active' class when open"
+  - ".dispose-btn — Dispose button inside the modal's Copies section; rendered with disabled attribute"
+  - ".dispose-select — the disposition dropdown (Sold/Traded/Gifted/Lost/Listed)"
+fixture_data:
+  owned_cards: "Standard --test fixture has 45 cards with status='owned'"
+notes: >
+  IMPORTANT: switch to grid view before clicking a card. Clicking
+  tr[data-idx] in table view collides with header-cell filter controls
+  in Playwright (see prior memory).
+
+  1. Navigate to /collection. 2. Click #view-grid-btn. 3. Wait for
+  .sheet-card[data-idx='0'] to be visible. 4. Click .sheet-card[data-idx='0'].
+  5. Wait for #card-modal-overlay.active. The modal lazily loads the
+  copies section. 6. Wait for .dispose-btn to appear (the copies fetch
+  may take a beat). 7. Assert that .dispose-btn is visible and has the
+  disabled attribute (use assert_visible on .dispose-btn[disabled]).
+  8. select_by_label on .dispose-select picking "Sold". 9. The select's
+  change handler enables the button — assert that .dispose-btn no
+  longer has the disabled attribute (use assert_visible on
+  .dispose-btn:not([disabled])). 10. Screenshot.

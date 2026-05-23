@@ -1,0 +1,11 @@
+start_page: /search-help
+involves:
+  - "The 'Date Added' section in the help page body"
+  - "Inline <code> blocks containing 'added:today', 'added:2024', 'added:2024-03'"
+  - "Prose mentioning local timezone resolution"
+fixture_data: {}
+notes: >
+  1. Navigate to /search-help. 2. Assert the text "added:today" appears
+  on the page. 3. Assert "local timezone" appears. 4. Assert
+  "added:2024-03" appears. 5. Assert "7d" appears (relative shortcut
+  documentation). 6. Screenshot.
