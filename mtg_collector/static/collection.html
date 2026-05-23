@@ -3339,10 +3339,6 @@ updateSearchClearVisibility();
 const acDropdown = document.getElementById('ac-dropdown');
 let acIdx = -1;
 let acItems = [];
-// Dynamic data loaded once on first focus
-let acSets = null;   // [{code, name}]
-let acDecks = null;  // [{id, name}]
-let acBinders = null; // [{id, name}]
 
 const AC_KEYWORDS = [
   {k:'c:',    label:'c:',    hint:'Color',          cat:'card'},
@@ -3373,26 +3369,75 @@ const AC_KEYWORDS = [
   {k:'direction:', label:'direction:', hint:'Sort direction', cat:'modifier'},
 ];
 
-const AC_VALUES = {
-  'c:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya','orzhov','izzet','golgari','boros','simic','esper','grixis','jund','naya','bant','abzan','jeskai','sultai','mardu','temur'],
-  'id:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya'],
-  'r:': ['common','uncommon','rare','mythic'],
-  't:': ['creature','instant','sorcery','enchantment','artifact','planeswalker','land','battle','legendary','token','elf','goblin','human','merfolk','dragon','wizard','angel','demon'],
-  'is:': ['foil','nonfoil','etched','fullart','borderless','showcase','extendedart','promo','reprint','reserved','firstprint','commander','vanilla','split','transform','mdfc','adventure','saga','unassigned','decked','bindered','wanted','unowned'],
-  'has:': ['watermark','flavor','power','toughness','loyalty'],
-  'f:': ['standard','modern','legacy','vintage','commander','pioneer','pauper'],
-  'status:': ['owned','ordered','sold','traded','gifted','lost'],
-  'order:': ['name','cmc','rarity','set','color','power','toughness','artist','collector_number','price','added'],
-  'direction:': ['asc','desc'],
-  'layout:': ['normal','split','flip','transform','modal_dfc','adventure','meld','leveler','class','saga','battle','prototype'],
+// Per-keyword AC spec.
+//   ops: operators the keyword accepts (used to generate operator-suggestions
+//        when a bare keyword is typed and to validate the splitter output)
+//   kind: 'enum' (static values) | 'numeric' | 'date' | 'dynamic' | 'text'
+//   values: static value list (for enum/numeric)
+//   source: corpus key for /api/search-suggest (for dynamic kinds)
+//   extra: hard-coded items always shown (e.g. deck:*)
+const _SMALL_INTS = ['0','1','2','3','4','5','6','7','8','9','10'];
+const _LOYALTIES  = ['1','2','3','4','5','6','7','8'];
+const _PRICE_BREAKS = ['0.25','1','5','10','25','50','100','500'];
+const _CMP_OPS = [':','=','!=','>=','<=','>','<'];
+
+const AC_KEYWORD_SPECS = {
+  c:         {ops: _CMP_OPS, kind: 'enum',
+              values: ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya','orzhov','izzet','golgari','boros','simic','esper','grixis','jund','naya','bant','abzan','jeskai','sultai','mardu','temur']},
+  id:        {ops: _CMP_OPS, kind: 'enum',
+              values: ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya']},
+  r:         {ops: _CMP_OPS, kind: 'enum',
+              values: ['common','uncommon','rare','mythic']},
+  t:         {ops: [':','=','!='], kind: 'enum',
+              values: ['creature','instant','sorcery','enchantment','artifact','planeswalker','land','battle','legendary','token','elf','goblin','human','merfolk','dragon','wizard','angel','demon']},
+  is:        {ops: [':'], kind: 'enum',
+              values: ['foil','nonfoil','etched','fullart','borderless','showcase','extendedart','promo','reprint','reserved','firstprint','commander','vanilla','split','transform','mdfc','adventure','saga','unassigned','decked','bindered','wanted','unowned']},
+  has:       {ops: [':'], kind: 'enum',
+              values: ['watermark','flavor','power','toughness','loyalty']},
+  f:         {ops: [':'], kind: 'enum',
+              values: ['standard','modern','legacy','vintage','commander','pioneer','pauper']},
+  status:    {ops: [':','=','!='], kind: 'enum',
+              values: ['owned','ordered','sold','traded','gifted','lost']},
+  order:     {ops: [':'], kind: 'enum',
+              values: ['name','cmc','rarity','set','color','power','toughness','artist','collector_number','price','added']},
+  direction: {ops: [':'], kind: 'enum', values: ['asc','desc']},
+  layout:    {ops: [':','='], kind: 'enum',
+              values: ['normal','split','flip','transform','modal_dfc','adventure','meld','leveler','class','saga','battle','prototype']},
+  // Numeric (operator-driven)
+  mv:        {ops: _CMP_OPS, kind: 'numeric', values: _SMALL_INTS},
+  cmc:       {ops: _CMP_OPS, kind: 'numeric', values: _SMALL_INTS},
+  pow:       {ops: _CMP_OPS, kind: 'numeric', values: _SMALL_INTS},
+  tou:       {ops: _CMP_OPS, kind: 'numeric', values: _SMALL_INTS},
+  loy:       {ops: _CMP_OPS, kind: 'numeric', values: _LOYALTIES},
+  cn:        {ops: [':','=','>=','<=','>','<'], kind: 'numeric',
+              values: ['1','10','50','100','200','500']},
+  year:      {ops: _CMP_OPS, kind: 'numeric',
+              values: ['1993','2000','2010','2015','2020','2024','2025','2026']},
+  price:     {ops: _CMP_OPS, kind: 'numeric', values: _PRICE_BREAKS},
+  // Dynamic (corpus-driven via /api/search-suggest)
+  added:     {ops: _CMP_OPS, kind: 'dynamic', source: 'added'},
+  a:         {ops: [':','=','!='], kind: 'dynamic', source: 'artist'},
+  kw:        {ops: [':'], kind: 'dynamic', source: 'keyword'},
+  s:         {ops: [':','=','!='], kind: 'dynamic', source: 'set'},
+  deck:      {ops: [':','=','!='], kind: 'dynamic', source: 'deck',
+              extra: [{value: '*', label: '*', hint: 'Any deck'}]},
+  binder:    {ops: [':','=','!='], kind: 'dynamic', source: 'binder',
+              extra: [{value: '*', label: '*', hint: 'Any binder'}]},
 };
 
-function acLoadDynamic() {
-  if (acSets) return;
-  acSets = []; acDecks = []; acBinders = [];
-  fetch('/api/cached-sets').then(r=>r.json()).then(d => { acSets = d; }).catch(()=>{});
-  fetch('/api/decks').then(r=>r.json()).then(d => { acDecks = d; }).catch(()=>{});
-  fetch('/api/binders').then(r=>r.json()).then(d => { acBinders = d; }).catch(()=>{});
+const AC_OP_SPLIT_RE = /^(-?[a-zA-Z_][a-zA-Z0-9_]*)(!=|<=|>=|<|>|=|:)(.*)$/;
+const AC_OP_RANK = [':', '>=', '<=', '>', '<', '=', '!='];
+
+// Per-source dynamic suggestion cache: source::prefix -> array.
+const acDynamicCache = {};
+function acFetchDynamic(source, prefix, onReady) {
+  const key = `${source}::${prefix}`;
+  if (acDynamicCache[key]) { onReady(acDynamicCache[key]); return; }
+  acDynamicCache[key] = []; // pending sentinel — avoid duplicate fetches
+  fetch(`/api/search-suggest?key=${encodeURIComponent(source)}&prefix=${encodeURIComponent(prefix)}`)
+    .then(r => r.ok ? r.json() : [])
+    .then(data => { acDynamicCache[key] = data; onReady(data); })
+    .catch(() => onReady([]));
 }
 
 function acGetCurrentToken() {
@@ -3412,64 +3457,35 @@ function acUpdate() {
   acItems = [];
   const lower = token.toLowerCase();
 
-  // Check if we're after a keyword prefix (e.g. "s:" or "is:")
-  const colonIdx = token.indexOf(':');
-  if (colonIdx >= 0) {
-    const prefix = token.substring(0, colonIdx + 1).toLowerCase();
-    const valPart = token.substring(colonIdx + 1).toLowerCase();
-
-    // Static value completions
-    let pool = AC_VALUES[prefix];
-    if (pool) {
-      for (const v of pool) {
-        if (v.startsWith(valPart) && v !== valPart) {
-          acItems.push({text: prefix + v, label: v, hint: '', cat: ''});
-        }
-      }
+  // Try to split as keyword + operator + value. Recognizes : = != >= <= > <
+  // (the same set the search tokenizer accepts).
+  const m = token.match(AC_OP_SPLIT_RE);
+  if (m) {
+    const rawKw = m[1];
+    const op = m[2];
+    const valPart = m[3];
+    const negated = rawKw.startsWith('-');
+    const kwLookup = negated ? rawKw.substring(1).toLowerCase() : rawKw.toLowerCase();
+    const spec = AC_KEYWORD_SPECS[kwLookup];
+    if (spec && spec.ops.includes(op)) {
+      _acAppendValueSuggestions(spec, rawKw, op, valPart);
     }
-    // Dynamic: set codes
-    if (prefix === 's:' && acSets) {
-      for (const s of acSets) {
-        const code = s.code.toLowerCase();
-        const name = (s.name||'').toLowerCase();
-        if ((code.startsWith(valPart) || name.includes(valPart)) && code !== valPart) {
-          acItems.push({text: 's:' + code, label: code.toUpperCase(), hint: s.name, cat: ''});
-        }
-        if (acItems.length >= 12) break;
-      }
-    }
-    // Dynamic: deck names
-    if (prefix === 'deck:' && acDecks) {
-      acItems.push({text: 'deck:*', label: '*', hint: 'Any deck', cat: ''});
-      for (const d of acDecks) {
-        const name = (d.name||'');
-        if (name.toLowerCase().includes(valPart)) {
-          const q = name.includes(' ') ? `deck:"${name}"` : `deck:${name}`;
-          acItems.push({text: q, label: name, hint: '', cat: ''});
-        }
-        if (acItems.length >= 12) break;
-      }
-    }
-    // Dynamic: binder names
-    if (prefix === 'binder:' && acBinders) {
-      acItems.push({text: 'binder:*', label: '*', hint: 'Any binder', cat: ''});
-      for (const b of acBinders) {
-        const name = (b.name||'');
-        if (name.toLowerCase().includes(valPart)) {
-          const q = name.includes(' ') ? `binder:"${name}"` : `binder:${name}`;
-          acItems.push({text: q, label: name, hint: '', cat: ''});
-        }
-        if (acItems.length >= 12) break;
-      }
+  } else if (AC_KEYWORD_SPECS[lower] || AC_KEYWORD_SPECS[lower.replace(/^-/, '')]) {
+    // User typed an exact keyword with no operator yet — suggest operators.
+    const isNeg = lower.startsWith('-');
+    const kwLookup = isNeg ? lower.substring(1) : lower;
+    const spec = AC_KEYWORD_SPECS[kwLookup];
+    const ops = [...spec.ops].sort((a, b) => AC_OP_RANK.indexOf(a) - AC_OP_RANK.indexOf(b));
+    for (const op of ops) {
+      acItems.push({text: token + op, label: token + op, hint: _acOpHint(op), cat: ''});
     }
   } else {
-    // Keyword suggestions
+    // Keyword-name suggestions.
     for (const kw of AC_KEYWORDS) {
       if (kw.k.startsWith(lower) && kw.k !== lower) {
         acItems.push({text: kw.k, label: kw.label, hint: kw.hint, cat: kw.cat});
       }
     }
-    // Also suggest negation
     if (lower === '-') {
       acItems.push({text: '-', label: '-...', hint: 'Negate next term', cat: ''});
     }
@@ -3479,6 +3495,64 @@ function acUpdate() {
   if (acItems.length === 0) { acHide(); return; }
   acIdx = -1;
   acRender();
+}
+
+function _acOpHint(op) {
+  if (op === ':') return 'value';
+  if (op === '=') return 'equals';
+  if (op === '!=') return 'not equal';
+  if (op === '>=') return 'at or after';
+  if (op === '<=') return 'at or before';
+  if (op === '>') return 'after';
+  if (op === '<') return 'before';
+  return '';
+}
+
+function _acAppendValueSuggestions(spec, rawKw, op, valPart) {
+  const valLower = valPart.toLowerCase();
+  const prefix = rawKw + op;
+
+  if (spec.extra) {
+    for (const item of spec.extra) {
+      if (!valPart || item.value.startsWith(valPart)) {
+        acItems.push({text: prefix + item.value, label: item.label, hint: item.hint, cat: ''});
+      }
+    }
+  }
+
+  if (spec.values) {
+    for (const v of spec.values) {
+      if (v.toLowerCase().startsWith(valLower) && v !== valPart) {
+        acItems.push({text: prefix + v, label: v, hint: '', cat: ''});
+      }
+      if (acItems.length >= 15) break;
+    }
+    return;
+  }
+
+  if (spec.kind !== 'dynamic') return;
+
+  // Dynamic: serve from cache synchronously if available; else fetch + re-render.
+  const cacheKey = `${spec.source}::${valPart}`;
+  const cached = acDynamicCache[cacheKey];
+  if (cached && cached.length) {
+    _acRenderDynamic(cached, spec, prefix, valPart);
+  } else {
+    acFetchDynamic(spec.source, valPart, (data) => {
+      // Only re-render if the token is still the same — user may have typed more.
+      const cur = acGetCurrentToken().token;
+      if (cur === rawKw + op + valPart) acUpdate();
+    });
+  }
+}
+
+function _acRenderDynamic(data, spec, prefix, valPart) {
+  for (const item of data) {
+    if (item.value === valPart) continue;
+    acItems.push({text: prefix + item.value, label: item.label || item.value,
+                  hint: item.hint || '', cat: ''});
+    if (acItems.length >= 15) break;
+  }
 }
 
 function acRender() {
@@ -3552,7 +3626,7 @@ acDropdown.addEventListener('mousedown', (e) => {
   if (item) acAccept(parseInt(item.dataset.i));
 });
 
-searchInput.addEventListener('focus', () => { acLoadDynamic(); acUpdate(); });
+searchInput.addEventListener('focus', () => { acUpdate(); });
 searchInput.addEventListener('blur', () => { setTimeout(acHide, 150); });
 
 function applySettings() {

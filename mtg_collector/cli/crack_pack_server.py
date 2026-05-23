@@ -1924,6 +1924,28 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 suggestions.append({"value": code, "label": code.upper(),
                                     "hint": row["set_name"] or ""})
 
+        elif key == "deck":
+            like = f"%{prefix}%"
+            for row in conn.execute(
+                "SELECT id, name FROM decks WHERE name LIKE ? COLLATE NOCASE "
+                "ORDER BY name LIMIT ?",
+                (like, limit),
+            ):
+                name = row["name"] or ""
+                value = f'"{name}"' if " " in name else name
+                suggestions.append({"value": value, "label": name, "hint": "Deck"})
+
+        elif key == "binder":
+            like = f"%{prefix}%"
+            for row in conn.execute(
+                "SELECT id, name FROM binders WHERE name LIKE ? COLLATE NOCASE "
+                "ORDER BY name LIMIT ?",
+                (like, limit),
+            ):
+                name = row["name"] or ""
+                value = f'"{name}"' if " " in name else name
+                suggestions.append({"value": value, "label": name, "hint": "Binder"})
+
         conn.close()
         self._send_json(suggestions[:limit])
 
