@@ -23,10 +23,10 @@ class CompiledQuery:
     __slots__ = (
         "where_sql", "params", "needs_fts", "order_by", "order_dir",
         "needs_deck_join", "needs_price_join", "needs_wishlist_join",
-        "has_status_filter", "include_unowned",
+        "has_status_filter", "include_unowned", "tz",
     )
 
-    def __init__(self):
+    def __init__(self, tz: str | None = None):
         self.where_sql: str = "1=1"
         self.params: list = []
         self.needs_fts: bool = False
@@ -37,15 +37,20 @@ class CompiledQuery:
         self.needs_wishlist_join: bool = False
         self.has_status_filter: bool = False
         self.include_unowned: bool = False
+        self.tz: str = tz or "UTC"
 
 
 class CompileError(Exception):
     """Raised when the AST cannot be compiled to SQL."""
 
 
-def compile_query(ast: ASTNode) -> CompiledQuery:
-    """Compile an AST into a CompiledQuery with WHERE clause and params."""
-    result = CompiledQuery()
+def compile_query(ast: ASTNode, tz: str | None = None) -> CompiledQuery:
+    """Compile an AST into a CompiledQuery with WHERE clause and params.
+
+    ``tz`` is an IANA timezone name used for resolving date-valued keywords
+    like ``added:today`` against the user's local calendar. Defaults to UTC.
+    """
+    result = CompiledQuery(tz=tz)
     # Extract display modifiers before compiling
     ast = _extract_modifiers(ast, result)
     if ast is None:
@@ -311,8 +316,7 @@ def _compile_comparison(node: ComparisonNode, ctx: CompiledQuery) -> tuple[str, 
 
     # --- Collection-specific: added (acquired_at date) ---
     if kw == "added":
-        return _compile_text_like("c.acquired_at", op, val) if op in (":", "=", "!=") \
-            else _compile_date("c.acquired_at", op, val)
+        return _compile_added(op, val, ctx.tz)
 
     # --- Collection-specific: price ---
     if kw == "price":
@@ -514,10 +518,37 @@ def _compile_numeric(expr: str, op: str, val: str,
     return f"({' AND '.join(parts)})", params
 
 
-def _compile_date(column: str, op: str, val: str) -> tuple[str, list]:
-    """Compile a date comparison (ISO 8601 string ordering)."""
-    sql_op = _SAFE_OPS.get(op, "=")
-    return f"(SUBSTR({column}, 1, 10) {sql_op} ?)", [val]
+def _compile_added(op: str, val: str, tz: str) -> tuple[str, list]:
+    """Compile an ``added`` (acquired_at) comparison.
+
+    Resolves ``val`` to a UTC ``[start, end)`` range in the user's local
+    timezone (so ``added:today`` matches their local calendar day, not the
+    UTC day). Compares against ``SUBSTR(c.acquired_at, 1, 19)`` — a fixed
+    19-char prefix that sidesteps lex ordering issues from trailing ``Z``
+    and fractional seconds.
+    """
+    from .dates import ACQUIRED_AT_PREFIX_LEN, parse_date_value
+
+    rng = parse_date_value(val, tz)
+    if rng is None:
+        return "1=0 /* invalid date */", []
+
+    start, end = rng
+    col = f"SUBSTR(c.acquired_at, 1, {ACQUIRED_AT_PREFIX_LEN})"
+
+    if op in (":", "="):
+        return f"({col} >= ? AND {col} < ?)", [start, end]
+    if op == "!=":
+        return f"NOT ({col} >= ? AND {col} < ?)", [start, end]
+    if op == ">=":
+        return f"{col} >= ?", [start]
+    if op == "<":
+        return f"{col} < ?", [start]
+    if op == ">":
+        return f"{col} >= ?", [end]
+    if op == "<=":
+        return f"{col} < ?", [end]
+    return "1=1", []
 
 
 def _compile_stat(column: str, op: str, val: str) -> tuple[str, list]:
