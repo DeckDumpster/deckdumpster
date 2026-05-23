@@ -2908,6 +2908,12 @@ function getFetchParams() {
   if (multiSelectMode) {
     params.set('expand', 'copies');
   }
+  // Pass the browser's IANA timezone so `added:today` and friends resolve
+  // in the user's local calendar rather than UTC.
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) params.set('tz', tz);
+  } catch {}
   return params.toString();
 }
 

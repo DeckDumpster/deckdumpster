@@ -1907,7 +1907,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         # Compile
         t0 = _time.monotonic()
-        compiled = compile_query(ast)
+        tz = params.get("tz", [""])[0] or None
+        compiled = compile_query(ast, tz=tz)
         timings["compile_ms"] = round((_time.monotonic() - t0) * 1000, 1)
 
         # Execute
@@ -2012,13 +2013,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = self._get_conn()
 
         # Parse and compile the Scryfall query
+        tz = params.get("tz", [""])[0] or None
         where_sql = "1=1"
         sql_params: list = []
         compiled = None
         if q:
             try:
                 ast = parse_query(q)
-                compiled = compile_query(ast)
+                compiled = compile_query(ast, tz=tz)
                 where_sql = compiled.where_sql
                 sql_params = list(compiled.params)
             except SearchError as e:
