@@ -2853,6 +2853,30 @@ async function loadModalCopies(card) {
       });
     });
 
+    // Change finish
+    container.querySelectorAll('.change-finish-select').forEach(sel => {
+      const original = sel.value;
+      sel.addEventListener('change', async () => {
+        const copyId = sel.dataset.copyId;
+        const newFinish = sel.value;
+        sel.disabled = true;
+        const r = await fetch(`/api/collection/${copyId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ finish: newFinish }),
+        });
+        if (r.ok) {
+          await loadModalCopies(card);
+          fetchCollection();
+        } else {
+          const err = await r.json().catch(() => ({}));
+          alert(err.error || 'Change finish failed');
+          sel.value = original;
+          sel.disabled = false;
+        }
+      });
+    });
+
     // Change printing
     container.querySelectorAll('.change-printing-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -2949,6 +2973,16 @@ function renderCopySection(copy) {
       <div class="printing-picker" id="printing-picker-${copy.id}" style="display:none;"></div>`
     : '';
 
+  // Editable finish row — only when active and the printing supports >1 finish.
+  const availableFinishes = parseJsonField(copy.available_finishes);
+  const changeFinishHtml = isActive && availableFinishes.length > 1
+    ? `<div class="modal-row"><span class="label">Finish</span><span class="value">
+        <select class="change-finish-select" data-copy-id="${copy.id}" style="padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+          ${availableFinishes.map(f => `<option value="${f}"${f === copy.finish ? ' selected' : ''}>${f.charAt(0).toUpperCase() + f.slice(1)}</option>`).join('')}
+        </select>
+      </span></div>`
+    : '';
+
   // Deck/binder assignment row
   let assignHtml = '';
   if (isActive) {
@@ -3012,7 +3046,7 @@ function renderCopySection(copy) {
       <span class="copy-id">#${copy.id}</span>
     </div>
     ${statusBadge ? `<div style="margin-bottom:6px;">${statusBadge}</div>` : ''}
-    ${orderHtml}${priceHtml}${lineageHtml}${changePrintingHtml}${assignHtml}
+    ${orderHtml}${priceHtml}${lineageHtml}${changePrintingHtml}${changeFinishHtml}${assignHtml}
     ${controlsHtml}
   </div>`;
 }
