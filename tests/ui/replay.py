@@ -15,6 +15,14 @@ from .harness import EXTRACT_ELEMENTS_JS
 
 log = logging.getLogger(__name__)
 
+# Per-action Playwright timeout. Generous enough to absorb the latency a
+# self-hosted CI runner sees when the full UI suite is hammering the test
+# container in parallel (the harness used to default to 500 ms, which was
+# fine on an idle dev box but flaked the deck/jumpstart/sheets tests under
+# load — the Playwright assertion returns as soon as the condition is met,
+# so raising the cap is free for passing tests).
+DEFAULT_TIMEOUT_MS = 5_000
+
 
 @dataclass
 class ReplayStep:
@@ -70,31 +78,31 @@ class ReplayHarness:
 
     def click_by_text(self, text: str, *, exact: bool = False):
         self._record("click_by_text", text)
-        self.page.get_by_text(text, exact=exact).first.click(timeout=500)
+        self.page.get_by_text(text, exact=exact).first.click(timeout=DEFAULT_TIMEOUT_MS)
         self._settle()
         self._snap()
 
     def click_by_selector(self, selector: str):
         self._record("click_by_selector", selector)
-        self.page.click(selector, timeout=500)
+        self.page.click(selector, timeout=DEFAULT_TIMEOUT_MS)
         self._settle()
         self._snap()
 
     def click_by_test_id(self, test_id: str):
         self._record("click_by_test_id", test_id)
-        self.page.get_by_test_id(test_id).click(timeout=500)
+        self.page.get_by_test_id(test_id).click(timeout=DEFAULT_TIMEOUT_MS)
         self._settle()
         self._snap()
 
     def fill_by_placeholder(self, placeholder: str, value: str):
         self._record("fill_by_placeholder", f"{placeholder}={value}")
-        self.page.get_by_placeholder(placeholder).fill(value, timeout=500)
+        self.page.get_by_placeholder(placeholder).fill(value, timeout=DEFAULT_TIMEOUT_MS)
         self._settle()
         self._snap()
 
     def fill_by_selector(self, selector: str, value: str):
         self._record("fill_by_selector", f"{selector}={value}")
-        self.page.fill(selector, value, timeout=500)
+        self.page.fill(selector, value, timeout=DEFAULT_TIMEOUT_MS)
         self._settle()
         self._snap()
 
@@ -103,7 +111,7 @@ class ReplayHarness:
         target = selector or "active element"
         self._record("press_key", f"{key} on {target}")
         if selector:
-            self.page.press(selector, key, timeout=500)
+            self.page.press(selector, key, timeout=DEFAULT_TIMEOUT_MS)
         else:
             self.page.keyboard.press(key)
         self._settle()
@@ -111,13 +119,13 @@ class ReplayHarness:
 
     def set_input_files(self, selector: str, file_path: str):
         self._record("set_input_files", f"{selector} <- {file_path}")
-        self.page.set_input_files(selector, file_path, timeout=500)
+        self.page.set_input_files(selector, file_path, timeout=DEFAULT_TIMEOUT_MS)
         self._settle()
         self._snap()
 
     def select_by_label(self, selector: str, label: str):
         self._record("select_by_label", f"{selector}={label}")
-        self.page.select_option(selector, label=label, timeout=500)
+        self.page.select_option(selector, label=label, timeout=DEFAULT_TIMEOUT_MS)
         self._settle()
         self._snap()
 
@@ -130,17 +138,17 @@ class ReplayHarness:
 
     # ── Waiting ────────────────────────────────────────────────────────
 
-    def wait_for_visible(self, selector: str, timeout: int = 500):
+    def wait_for_visible(self, selector: str, timeout: int = DEFAULT_TIMEOUT_MS):
         self._record("wait_for_visible", selector)
         self.page.wait_for_selector(selector, state="visible", timeout=timeout)
         self._snap()
 
-    def wait_for_hidden(self, selector: str, timeout: int = 500):
+    def wait_for_hidden(self, selector: str, timeout: int = DEFAULT_TIMEOUT_MS):
         self._record("wait_for_hidden", selector)
         self.page.wait_for_selector(selector, state="hidden", timeout=timeout)
         self._snap()
 
-    def wait_for_text(self, text: str, timeout: int = 500):
+    def wait_for_text(self, text: str, timeout: int = DEFAULT_TIMEOUT_MS):
         self._record("wait_for_text", text)
         self.page.get_by_text(text).first.wait_for(state="visible", timeout=timeout)
         self._snap()
@@ -149,14 +157,14 @@ class ReplayHarness:
 
     def assert_visible(self, selector: str):
         self._record("assert_visible", selector)
-        visible = self.page.is_visible(selector, timeout=500)
+        visible = self.page.is_visible(selector, timeout=DEFAULT_TIMEOUT_MS)
         if not visible:
             self._fail(f"Expected visible: {selector}")
         self._snap()
 
     def assert_hidden(self, selector: str):
         self._record("assert_hidden", selector)
-        hidden = self.page.is_hidden(selector, timeout=500)
+        hidden = self.page.is_hidden(selector, timeout=DEFAULT_TIMEOUT_MS)
         if not hidden:
             self._fail(f"Expected hidden: {selector}")
         self._snap()
@@ -225,18 +233,38 @@ class ReplayHarness:
         )
 
     def _snap(self):
-        """Auto-snapshot after every action."""
+        """Auto-snapshot after every action.
+
+        The DOM snapshot can hit "Execution context was destroyed" when the
+        preceding interaction triggered a navigation that is still in
+        flight. That's the classic Playwright race and it shouldn't fail
+        the test — the screenshot is the evidence that matters; the DOM
+        dump is best-effort. Swallow the error and leave dom_snapshot None
+        for that step.
+        """
         step = self._steps[-1]
         name = f"{self.scenario_name}_{self._step:02d}_{step.action}.png"
         path = self.screenshot_dir / name
         self.page.screenshot(path=str(path))
         step.screenshot = str(path)
 
-        elements = self.page.evaluate(EXTRACT_ELEMENTS_JS)
-        step.dom_snapshot = elements
+        try:
+            step.dom_snapshot = self.page.evaluate(EXTRACT_ELEMENTS_JS)
+        except Exception as e:
+            log.debug(
+                "[%s] DOM snapshot skipped after step %d (%s): %s",
+                self.scenario_name, self._step, step.action, e,
+            )
+            step.dom_snapshot = None
 
     def _settle(self):
-        """Wait for async page updates: one animation frame + networkidle."""
+        """Wait for async page updates: one animation frame + networkidle.
+
+        The networkidle wait is best-effort — some pages (SSE, long-poll)
+        never reach idle. Keep this short so we don't add seconds to every
+        interaction on those pages; the per-call timeouts on the next
+        action will still cover any genuine slow load.
+        """
         self.page.wait_for_timeout(50)
         try:
             self.page.wait_for_load_state("networkidle", timeout=500)
