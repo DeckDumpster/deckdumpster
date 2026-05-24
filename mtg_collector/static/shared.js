@@ -1,6 +1,14 @@
 /* shared.js — Common utility functions for all pages.
    New pages should import this. Existing pages are untouched. */
 
+/** Format a numeric value as USD with thousands separators (e.g. 3667.51 → "$3,667.51").
+    Returns "$0.00" for null/undefined/NaN inputs. */
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
 /** HTML-escape a string. */
 function esc(s) {
   if (s == null) return '';

@@ -76,8 +76,8 @@
   const rarity = card.rarity ? card.rarity.charAt(0).toUpperCase() + card.rarity.slice(1) : '';
 
   // Prices
-  const tcgPrice = card.tcg_price ? `$${parseFloat(card.tcg_price).toFixed(2)}` : '';
-  const ckPrice = card.ck_price ? `$${parseFloat(card.ck_price).toFixed(2)}` : '';
+  const tcgPrice = card.tcg_price ? formatPrice(card.tcg_price) : '';
+  const ckPrice = card.ck_price ? formatPrice(card.ck_price) : '';
   const sfUrl = `https://scryfall.com/card/${sc}/${card.collector_number}`;
   const ckUrl = getCkUrl(card);
 
@@ -308,10 +308,10 @@
 
     let priceHtml = '';
     if (copy.purchase_price) {
-      priceHtml = `<div class="detail-row"><span class="label">Price</span><span class="value">$${parseFloat(copy.purchase_price).toFixed(2)}</span></div>`;
+      priceHtml = `<div class="detail-row"><span class="label">Price</span><span class="value">${formatPrice(copy.purchase_price)}</span></div>`;
     }
     if (copy.sale_price) {
-      priceHtml += `<div class="detail-row"><span class="label">Sale Price</span><span class="value">$${parseFloat(copy.sale_price).toFixed(2)}</span></div>`;
+      priceHtml += `<div class="detail-row"><span class="label">Sale Price</span><span class="value">${formatPrice(copy.sale_price)}</span></div>`;
     }
 
     const changePrintingHtml = isActive
@@ -375,7 +375,7 @@
         </select>
         <input type="number" step="0.01" placeholder="Price" class="dispose-price">
         <input type="text" placeholder="Note" class="dispose-note">
-        <button class="dispose-btn" data-id="${copy.id}">Dispose</button>
+        <button class="dispose-btn" data-id="${copy.id}" disabled>Dispose</button>
         ${isDeleteable ? `<button class="delete-copy-btn" data-id="${copy.id}">Delete</button>` : ''}
       </div>`;
     } else if (isDeleteable) {
@@ -418,6 +418,12 @@
     });
 
     // Dispose
+    container.querySelectorAll('.dispose-select').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const btn = sel.closest('.copy-section').querySelector('.dispose-btn');
+        if (btn) btn.disabled = !sel.value;
+      });
+    });
     container.querySelectorAll('.dispose-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const id = parseInt(btn.dataset.id);
@@ -819,7 +825,7 @@
         ctx.setLineDash([]);
         ctx.fillStyle = 'rgba(126,232,176,0.7)';
         ctx.font = '9px sans-serif';
-        ctx.fillText('$' + price.toFixed(2), left + 3, y - 3);
+        ctx.fillText(formatPrice(price), left + 3, y - 3);
       }
       ctx.restore();
     }
@@ -919,7 +925,7 @@
           y: {
             ticks: {
               color: '#666', font: { size: 10 },
-              callback: v => '$' + v.toFixed(2),
+              callback: v => formatPrice(v),
             },
             grid: { color: 'rgba(255,255,255,0.06)' },
           },
@@ -927,7 +933,7 @@
         plugins: {
           legend: { position: 'top', labels: { color: '#888', font: { size: 10 }, boxWidth: 12 } },
           tooltip: {
-            callbacks: { label: ctx => `${ctx.dataset.label}: $${ctx.parsed.y.toFixed(2)}` },
+            callbacks: { label: ctx => `${ctx.dataset.label}: ${formatPrice(ctx.parsed.y)}` },
           },
           purchaseLines: { prices: purchasePrices },
         },

@@ -85,7 +85,9 @@ class TestNumericCompilation:
 class TestTextCompilation:
     def test_name_search(self):
         c = _compile("bolt")
-        assert "card.name LIKE" in c.where_sql
+        # Name search is rewritten as a subselect on cards (faster than a
+        # per-printing LIKE) ORed with the printings.flavor_name LIKE.
+        assert "SELECT oracle_id FROM cards WHERE name LIKE" in c.where_sql
         assert "p.flavor_name LIKE" in c.where_sql
         assert "type_line" not in c.where_sql  # type line requires t: prefix
         assert "oracle_text" not in c.where_sql  # oracle text requires o: prefix
@@ -229,11 +231,62 @@ class TestCollectionKeywords:
     def test_added_gte(self):
         c = _compile("added>=2024-01-01")
         assert "acquired_at" in c.where_sql
-        assert "2024-01-01" in c.params
+        # UTC-default tz → start of local day = start of UTC day.
+        assert c.params == ["2024-01-01T00:00:00"]
 
     def test_added_lte(self):
+        # ``<=`` is inclusive: must include the entire 2025-12-31.
         c = _compile("added<=2025-12-31")
         assert "acquired_at" in c.where_sql
+        assert c.params == ["2026-01-01T00:00:00"]
+
+    def test_added_gt_excludes_target_day(self):
+        # ``>2024-01-15`` means "after that day," i.e. from the 16th onward.
+        c = _compile("added>2024-01-15")
+        assert c.params == ["2024-01-16T00:00:00"]
+
+    def test_added_eq_uses_day_range(self):
+        c = _compile("added:2024-03-15")
+        assert c.params == ["2024-03-15T00:00:00", "2024-03-16T00:00:00"]
+
+    def test_added_month_precision(self):
+        c = _compile("added:2024-03")
+        assert c.params == ["2024-03-01T00:00:00", "2024-04-01T00:00:00"]
+
+    def test_added_year_precision(self):
+        c = _compile("added:2024")
+        assert c.params == ["2024-01-01T00:00:00", "2025-01-01T00:00:00"]
+
+    def test_added_invalid_value(self):
+        c = _compile("added:lolwut")
+        assert "1=0" in c.where_sql
+
+    def test_added_today_in_local_tz(self):
+        # In Asia/Tokyo (UTC+9), "today" should resolve to a UTC range
+        # that begins 9h before midnight UTC of the same nominal day.
+        # We don't pin a specific date; we just assert the offset shape.
+        from mtg_collector.search import compile_query, parse_query
+        c = compile_query(parse_query("added:today"), tz="Asia/Tokyo")
+        assert len(c.params) == 2
+        start, end = c.params
+        # End-start should be exactly 24h.
+        from datetime import datetime
+        d_start = datetime.fromisoformat(start)
+        d_end = datetime.fromisoformat(end)
+        assert (d_end - d_start).total_seconds() == 86400
+        # UTC start should be 15:00 (24-9 = 15h after UTC midnight of prior day).
+        assert d_start.hour == 15
+
+    def test_added_relative_days_ago(self):
+        c = _compile("added>=7d")
+        assert len(c.params) == 1
+        # Param is a valid ISO prefix.
+        from datetime import datetime
+        datetime.fromisoformat(c.params[0])
+
+    def test_added_yesterday(self):
+        c = _compile("added:yesterday")
+        assert len(c.params) == 2
 
     def test_price_gte(self):
         c = _compile("price>=5.00")

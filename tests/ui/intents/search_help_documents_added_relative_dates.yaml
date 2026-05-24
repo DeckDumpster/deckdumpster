@@ -1,0 +1,11 @@
+# Scenario: Search help documents `added` date shortcuts and local-tz semantics
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I visit the search help page, the Date Added section explains
+  that "added:today" matches my local calendar day (not UTC) and lists
+  the new accepted forms — relative shortcuts like "7d" plus partial
+  ISO dates like "added:2024" and "added:2024-03". This gives me a
+  durable reference for the timezone-aware behavior.

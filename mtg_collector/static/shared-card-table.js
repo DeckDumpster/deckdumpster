@@ -66,11 +66,11 @@ function buildPriceBadges(card, opts) {
   let html = '';
   const sources = (opts.priceSources || 'tcg,ck').split(',');
   if (sources.includes('tcg')) {
-    const sfPrice = card.tcg_price ? ` $${parseFloat(card.tcg_price).toFixed(2)}` : '';
+    const sfPrice = card.tcg_price ? ` ${formatPrice(card.tcg_price)}` : '';
     html += `<a class="badge link" href="https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}" target="_blank" rel="noopener" onclick="event.stopPropagation()">SF${sfPrice}</a>`;
   }
   if (sources.includes('ck')) {
-    const ckPrice = card.ck_price ? ` $${parseFloat(card.ck_price).toFixed(2)}` : '';
+    const ckPrice = card.ck_price ? ` ${formatPrice(card.ck_price)}` : '';
     html += `<a class="badge link" href="${getCkUrl(card)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">CK${ckPrice}</a>`;
   }
   return html;
@@ -145,11 +145,11 @@ function renderCellContent(colKey, card, helpers, opts) {
       return `<span data-filter-type="date_added" data-filter-value="${isoDate}">${dateStr}</span>`;
     }
     case 'ck_price': {
-      const p = card.ck_price ? `$${parseFloat(card.ck_price).toFixed(2)}` : '';
+      const p = card.ck_price ? formatPrice(card.ck_price) : '';
       return p ? `<a class="badge link" href="${getCkUrl(card)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${p}</a>` : '';
     }
     case 'tcg_price': {
-      const p = card.tcg_price ? `$${parseFloat(card.tcg_price).toFixed(2)}` : '';
+      const p = card.tcg_price ? formatPrice(card.tcg_price) : '';
       return p ? `<a class="badge link" href="https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${p}</a>` : '';
     }
     default: return '';

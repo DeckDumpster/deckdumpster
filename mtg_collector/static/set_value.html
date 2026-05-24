@@ -435,6 +435,11 @@ header h1 {
 </div>
 
 <script>
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 // State
 let allSets = [];
 let selectedSets = new Map(); // code -> name
@@ -861,7 +866,7 @@ function updateSummary(cards) {
 
   document.getElementById('stat-total').textContent = total;
   document.getElementById('stat-priced').textContent = priced.length;
-  document.getElementById('stat-median').textContent = '$' + median.toFixed(2);
+  document.getElementById('stat-median').textContent = formatPrice(median);
   document.getElementById('stat-chaff').textContent = pct(prices.filter(p => p < 0.40).length);
   document.getElementById('stat-modest').textContent = pct(prices.filter(p => p >= 0.40 && p < 2).length);
   document.getElementById('stat-high').textContent = pct(prices.filter(p => p >= 2 && p < 10).length);
@@ -886,7 +891,7 @@ function updateTopCards(cards) {
       <td>${c.rarity ? c.rarity[0].toUpperCase() : ''}</td>
       <td>${getTreatmentTags(c)}</td>
       <td>${ownedHtml}</td>
-      <td>$${parseFloat(c.price).toFixed(2)}</td>`;
+      <td>${formatPrice(c.price)}</td>`;
     tbody.appendChild(tr);
   });
 }

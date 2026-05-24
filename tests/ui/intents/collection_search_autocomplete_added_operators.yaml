@@ -1,0 +1,10 @@
+# Scenario: Autocomplete suggests operators for the `added` keyword
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I type "added" into the search bar on the collection page, the
+  autocomplete dropdown shows me the comparison operators I can pair
+  with that keyword — "added:", "added>=", "added<=", and so on — so I
+  can discover the valid query shapes without leaving the field.

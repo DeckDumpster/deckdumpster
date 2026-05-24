@@ -164,10 +164,38 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   width: 100%;
   min-width: 0;
   font-size: 1rem;
-  padding: 11px 16px;
+  padding: 11px 36px 11px 16px;
 }
 #search-error { color: #e94560; font-size: 11px; position: absolute; top: 100%; left: 0; white-space: nowrap; z-index: 10; }
 .search-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: #333;
+  color: #ccc;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+/* Render the × via a pseudo-element so the button has no DOM text content.
+   The page already contains four other × close buttons (modals, wishlist
+   row remove); putting the glyph here as text would make Playwright's
+   get_by_text("×") locator collide with this button and break the
+   collection_modal_close test. */
+.search-clear::before { content: "\00d7"; }
+.search-clear:hover { background: #e94560; color: #fff; }
+.search-clear.visible { display: flex; }
 /* Autocomplete dropdown */
 .ac-dropdown {
   display: none; position: absolute; top: 100%; left: 0; right: 0;
@@ -616,7 +644,7 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
 .price-range-pill:hover { background: #163d6f; }
 .price-range-pill.active { background: #e94560; color: #fff; }
 .price-range-pill.disabled { opacity: 0.3; pointer-events: none; }
-.price-chart-canvas-wrap { height: 150px; position: relative; }
+.price-chart-canvas-wrap { height: 300px; position: relative; }
 
 a.lineage-link {
   display: block;
@@ -1203,7 +1231,8 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
   cursor: pointer;
   font-weight: 600;
 }
-.dispose-btn:hover { background: #1a4a7a; }
+.dispose-btn:hover:not(:disabled) { background: #1a4a7a; }
+.dispose-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .delete-copy-btn {
   padding: 4px 10px;
   font-size: 0.8rem;
@@ -1262,6 +1291,7 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
     </a>
     <div class="search-wrap">
       <input type="text" id="search-input" placeholder="Search (e.g. t:creature c:r mv>=3)" autocomplete="off">
+      <button type="button" class="search-clear" id="search-clear" title="Clear search" aria-label="Clear search"></button>
       <div id="search-error"></div>
       <div class="ac-dropdown" id="ac-dropdown"></div>
     </div>
@@ -1394,6 +1424,11 @@ tr.ordered td:first-child { border-left: 3px solid #f0a030; }
 <script src="/static/shared-card-table.js"></script>
 <script>
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 const searchInput = document.getElementById('search-input');
 const viewTableBtn = document.getElementById('view-table-btn');
 const viewGridBtn = document.getElementById('view-grid-btn');
@@ -1830,11 +1865,11 @@ function _renderPriceBlock(label, stats) {
     <div class="modal-section">
       <div class="modal-section-title">${label}<span class="stats-section-tag">${stats.count.toLocaleString()} priced</span></div>
       <div class="stats-grid">
-        <span class="label">Total</span><span class="value">$${stats.total.toFixed(2)}</span>
-        <span class="label">Mean</span><span class="value">$${stats.mean.toFixed(2)}</span>
-        <span class="label">Median</span><span class="value">$${stats.median.toFixed(2)}</span>
-        <span class="label">99th pct</span><span class="value">$${stats.p99.toFixed(2)}</span>
-        <span class="label">Max</span><span class="value">$${stats.max.toFixed(2)}</span>
+        <span class="label">Total</span><span class="value">${formatPrice(stats.total)}</span>
+        <span class="label">Mean</span><span class="value">${formatPrice(stats.mean)}</span>
+        <span class="label">Median</span><span class="value">${formatPrice(stats.median)}</span>
+        <span class="label">99th pct</span><span class="value">${formatPrice(stats.p99)}</span>
+        <span class="label">Max</span><span class="value">${formatPrice(stats.max)}</span>
       </div>
     </div>`;
 }
@@ -1945,7 +1980,7 @@ const purchaseLinesPlugin = {
       ctx.setLineDash([]);
       ctx.fillStyle = 'rgba(126,232,176,0.7)';
       ctx.font = '9px sans-serif';
-      ctx.fillText('$' + price.toFixed(2), left + 3, y - 3);
+      ctx.fillText(formatPrice(price), left + 3, y - 3);
     }
     ctx.restore();
   }
@@ -2046,7 +2081,7 @@ async function renderPriceChart(card) {
         y: {
           ticks: {
             color: '#666', font: { size: 10 },
-            callback: v => '$' + v.toFixed(2),
+            callback: v => formatPrice(v),
           },
           grid: { color: 'rgba(255,255,255,0.06)' },
         },
@@ -2054,7 +2089,7 @@ async function renderPriceChart(card) {
       plugins: {
         legend: { position: 'top', labels: { color: '#888', font: { size: 10 }, boxWidth: 12 } },
         tooltip: {
-          callbacks: { label: ctx => `${ctx.dataset.label}: $${ctx.parsed.y.toFixed(2)}` },
+          callbacks: { label: ctx => `${ctx.dataset.label}: ${formatPrice(ctx.parsed.y)}` },
         },
         purchaseLines: { prices: purchasePrices },
       },
@@ -2103,8 +2138,8 @@ function showCardModal(card) {
   const finish = card.finish ? card.finish.charAt(0).toUpperCase() + card.finish.slice(1) : 'Nonfoil';
 
   // Prices
-  const tcgPrice = card.tcg_price ? `$${parseFloat(card.tcg_price).toFixed(2)}` : '—';
-  const ckPrice = card.ck_price ? `$${parseFloat(card.ck_price).toFixed(2)}` : '—';
+  const tcgPrice = card.tcg_price ? formatPrice(card.tcg_price) : '—';
+  const ckPrice = card.ck_price ? formatPrice(card.ck_price) : '—';
 
   // Links
   const sfUrl = `https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}`;
@@ -2184,7 +2219,7 @@ function showCardModal(card) {
         const addedDate = wl.added_at ? new Date(wl.added_at).toLocaleDateString() : '';
         return `<div class="modal-section"><span class="modal-section-title" style="color:#7ee8b0">Wishlist</span>
           ${addedDate ? `<div class="modal-row"><span class="label">Added</span><span class="value">${addedDate}</span></div>` : ''}
-          ${wl.max_price ? `<div class="modal-row"><span class="label">Max Price</span><span class="value">$${parseFloat(wl.max_price).toFixed(2)}</span></div>` : ''}
+          ${wl.max_price ? `<div class="modal-row"><span class="label">Max Price</span><span class="value">${formatPrice(wl.max_price)}</span></div>` : ''}
           ${wl.priority ? `<div class="modal-row"><span class="label">Priority</span><span class="value">${wl.priority}</span></div>` : ''}
           ${wl.notes ? `<div class="modal-row"><span class="label">Notes</span><span class="value">${wl.notes}</span></div>` : ''}
           ${wl.source ? `<div class="modal-row"><span class="label">Source</span><span class="value">${wl.source}</span></div>` : ''}
@@ -2238,7 +2273,7 @@ function showCardModal(card) {
           const seller = sellerName
             ? ` &middot; <a href="/orders/${copy.order_id}" style="color:#e94560;font-size:0.8rem">${sellerName}</a>`
             : '';
-          const price = copy.purchase_price ? ` &middot; $${parseFloat(copy.purchase_price).toFixed(2)}` : '';
+          const price = copy.purchase_price ? ` &middot; ${formatPrice(copy.purchase_price)}` : '';
           const source = copy.source && copy.source !== 'manual' ? ` &middot; ${copy.source}` : '';
           const receiveBtn = copy.status === 'ordered'
             ? `<button class="receive-btn" data-collection-id="${copy.id}">Receive</button>`
@@ -2400,6 +2435,12 @@ async function loadModalCopies(card) {
     container.innerHTML = `<div class="modal-section"><span class="modal-section-title">Copies (${copies.length})</span></div>` +
       copies.map(copy => renderCopySection(copy)).join('');
     // Wire up dispose/delete handlers
+    container.querySelectorAll('.dispose-select').forEach(sel => {
+      sel.addEventListener('change', () => {
+        const btn = sel.closest('.copy-section').querySelector('.dispose-btn');
+        if (btn) btn.disabled = !sel.value;
+      });
+    });
     container.querySelectorAll('.dispose-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         const id = parseInt(btn.dataset.id);
@@ -2702,10 +2743,10 @@ function renderCopySection(copy) {
 
   let priceHtml = '';
   if (copy.purchase_price) {
-    priceHtml = `<div class="modal-row"><span class="label">Price</span><span class="value">$${parseFloat(copy.purchase_price).toFixed(2)}</span></div>`;
+    priceHtml = `<div class="modal-row"><span class="label">Price</span><span class="value">${formatPrice(copy.purchase_price)}</span></div>`;
   }
   if (copy.sale_price) {
-    priceHtml += `<div class="modal-row"><span class="label">Sale Price</span><span class="value">$${parseFloat(copy.sale_price).toFixed(2)}</span></div>`;
+    priceHtml += `<div class="modal-row"><span class="label">Sale Price</span><span class="value">${formatPrice(copy.sale_price)}</span></div>`;
   }
 
   const changePrintingHtml = isActive
@@ -2763,7 +2804,7 @@ function renderCopySection(copy) {
       </select>
       <input type="number" step="0.01" placeholder="Price" class="dispose-price">
       <input type="text" placeholder="Note" class="dispose-note">
-      <button class="dispose-btn" data-id="${copy.id}">Dispose</button>
+      <button class="dispose-btn" data-id="${copy.id}" disabled>Dispose</button>
       ${isDeleteable ? `<button class="delete-copy-btn" data-id="${copy.id}">Delete</button>` : ''}
     </div>`;
   } else if (isDeleteable) {
@@ -2795,11 +2836,11 @@ function buildCardBadges(card) {
   let html = '';
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
   if (sources.includes('tcg') && card.printing_id) {
-    const sfPrice = card.tcg_price ? ` $${parseFloat(card.tcg_price).toFixed(2)}` : '';
+    const sfPrice = card.tcg_price ? ` ${formatPrice(card.tcg_price)}` : '';
     html += `<a class="badge link" href="https://scryfall.com/card/${card.set_code.toLowerCase()}/${card.collector_number}" target="_blank" rel="noopener" onclick="event.stopPropagation()">SF${sfPrice}</a>`;
   }
   if (sources.includes('ck')) {
-    const ckPrice = card.ck_price ? ` $${parseFloat(card.ck_price).toFixed(2)}` : '';
+    const ckPrice = card.ck_price ? ` ${formatPrice(card.ck_price)}` : '';
     html += `<a class="badge link" href="${getCkUrl(card)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">CK${ckPrice}</a>`;
   }
   const fe = parseJsonField(card.frame_effects);
@@ -2843,6 +2884,7 @@ function applyFilterViaSearch(type, value) {
   const q = queryMap[type] || '';
   if (q) {
     searchInput.value = q;
+    updateSearchClearVisibility();
     fetchCollection();
   }
 }
@@ -2871,6 +2913,12 @@ function getFetchParams() {
   if (multiSelectMode) {
     params.set('expand', 'copies');
   }
+  // Pass the browser's IANA timezone so `added:today` and friends resolve
+  // in the user's local calendar rather than UTC.
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) params.set('tz', tz);
+  } catch {}
   return params.toString();
 }
 
@@ -2931,7 +2979,7 @@ function updateStatusText() {
   const useQty = totalQty > 0;
   const count = useQty ? totalQty : allCards.length;
   const noun = useQty ? (count === 1 ? 'card' : 'cards') : (count === 1 ? 'result' : 'results');
-  const valueSuffix = totalValue > 0 ? `, $${totalValue.toFixed(2)}` : '';
+  const valueSuffix = totalValue > 0 ? `, ${formatPrice(totalValue)}` : '';
   statusEl.textContent = `${count.toLocaleString()} ${noun}${valueSuffix}`;
   statusEl.classList.toggle('empty', allCards.length === 0);
 }
@@ -3273,11 +3321,22 @@ function renderGrid() {
 
 // --- Event listeners ---
 // Search input triggers server fetch
+const searchClearBtn = document.getElementById('search-clear');
+function updateSearchClearVisibility() {
+  searchClearBtn.classList.toggle('visible', searchInput.value.length > 0);
+}
 searchInput.addEventListener('input', () => {
   clearTimeout(debounceTimer);
   debounceTimer = setTimeout(fetchCollection, 300);
   acUpdate();
+  updateSearchClearVisibility();
 });
+searchClearBtn.addEventListener('click', () => {
+  searchInput.value = '';
+  searchInput.focus();
+  searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+});
+updateSearchClearVisibility();
 
 // ---------------------------------------------------------------------------
 // Autocomplete
@@ -3285,10 +3344,6 @@ searchInput.addEventListener('input', () => {
 const acDropdown = document.getElementById('ac-dropdown');
 let acIdx = -1;
 let acItems = [];
-// Dynamic data loaded once on first focus
-let acSets = null;   // [{code, name}]
-let acDecks = null;  // [{id, name}]
-let acBinders = null; // [{id, name}]
 
 const AC_KEYWORDS = [
   {k:'c:',    label:'c:',    hint:'Color',          cat:'card'},
@@ -3319,26 +3374,75 @@ const AC_KEYWORDS = [
   {k:'direction:', label:'direction:', hint:'Sort direction', cat:'modifier'},
 ];
 
-const AC_VALUES = {
-  'c:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya','orzhov','izzet','golgari','boros','simic','esper','grixis','jund','naya','bant','abzan','jeskai','sultai','mardu','temur'],
-  'id:': ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya'],
-  'r:': ['common','uncommon','rare','mythic'],
-  't:': ['creature','instant','sorcery','enchantment','artifact','planeswalker','land','battle','legendary','token','elf','goblin','human','merfolk','dragon','wizard','angel','demon'],
-  'is:': ['foil','nonfoil','etched','fullart','borderless','showcase','extendedart','promo','reprint','reserved','firstprint','commander','vanilla','split','transform','mdfc','adventure','saga','unassigned','decked','bindered','wanted','unowned'],
-  'has:': ['watermark','flavor','power','toughness','loyalty'],
-  'f:': ['standard','modern','legacy','vintage','commander','pioneer','pauper'],
-  'status:': ['owned','ordered','sold','traded','gifted','lost'],
-  'order:': ['name','cmc','rarity','set','color','power','toughness','artist','collector_number','price','added'],
-  'direction:': ['asc','desc'],
-  'layout:': ['normal','split','flip','transform','modal_dfc','adventure','meld','leveler','class','saga','battle','prototype'],
+// Per-keyword AC spec.
+//   ops: operators the keyword accepts (used to generate operator-suggestions
+//        when a bare keyword is typed and to validate the splitter output)
+//   kind: 'enum' (static values) | 'numeric' | 'date' | 'dynamic' | 'text'
+//   values: static value list (for enum/numeric)
+//   source: corpus key for /api/search-suggest (for dynamic kinds)
+//   extra: hard-coded items always shown (e.g. deck:*)
+const _SMALL_INTS = ['0','1','2','3','4','5','6','7','8','9','10'];
+const _LOYALTIES  = ['1','2','3','4','5','6','7','8'];
+const _PRICE_BREAKS = ['0.25','1','5','10','25','50','100','500'];
+const _CMP_OPS = [':','=','!=','>=','<=','>','<'];
+
+const AC_KEYWORD_SPECS = {
+  c:         {ops: _CMP_OPS, kind: 'enum',
+              values: ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya','orzhov','izzet','golgari','boros','simic','esper','grixis','jund','naya','bant','abzan','jeskai','sultai','mardu','temur']},
+  id:        {ops: _CMP_OPS, kind: 'enum',
+              values: ['w','u','b','r','g','c','m','azorius','dimir','rakdos','gruul','selesnya']},
+  r:         {ops: _CMP_OPS, kind: 'enum',
+              values: ['common','uncommon','rare','mythic']},
+  t:         {ops: [':','=','!='], kind: 'enum',
+              values: ['creature','instant','sorcery','enchantment','artifact','planeswalker','land','battle','legendary','token','elf','goblin','human','merfolk','dragon','wizard','angel','demon']},
+  is:        {ops: [':'], kind: 'enum',
+              values: ['foil','nonfoil','etched','fullart','borderless','showcase','extendedart','promo','reprint','reserved','firstprint','commander','vanilla','split','transform','mdfc','adventure','saga','unassigned','decked','bindered','wanted','unowned']},
+  has:       {ops: [':'], kind: 'enum',
+              values: ['watermark','flavor','power','toughness','loyalty']},
+  f:         {ops: [':'], kind: 'enum',
+              values: ['standard','modern','legacy','vintage','commander','pioneer','pauper']},
+  status:    {ops: [':','=','!='], kind: 'enum',
+              values: ['owned','ordered','sold','traded','gifted','lost']},
+  order:     {ops: [':'], kind: 'enum',
+              values: ['name','cmc','rarity','set','color','power','toughness','artist','collector_number','price','added']},
+  direction: {ops: [':'], kind: 'enum', values: ['asc','desc']},
+  layout:    {ops: [':','='], kind: 'enum',
+              values: ['normal','split','flip','transform','modal_dfc','adventure','meld','leveler','class','saga','battle','prototype']},
+  // Numeric (operator-driven)
+  mv:        {ops: _CMP_OPS, kind: 'numeric', values: _SMALL_INTS},
+  cmc:       {ops: _CMP_OPS, kind: 'numeric', values: _SMALL_INTS},
+  pow:       {ops: _CMP_OPS, kind: 'numeric', values: _SMALL_INTS},
+  tou:       {ops: _CMP_OPS, kind: 'numeric', values: _SMALL_INTS},
+  loy:       {ops: _CMP_OPS, kind: 'numeric', values: _LOYALTIES},
+  cn:        {ops: [':','=','>=','<=','>','<'], kind: 'numeric',
+              values: ['1','10','50','100','200','500']},
+  year:      {ops: _CMP_OPS, kind: 'numeric',
+              values: ['1993','2000','2010','2015','2020','2024','2025','2026']},
+  price:     {ops: _CMP_OPS, kind: 'numeric', values: _PRICE_BREAKS},
+  // Dynamic (corpus-driven via /api/search-suggest)
+  added:     {ops: _CMP_OPS, kind: 'dynamic', source: 'added'},
+  a:         {ops: [':','=','!='], kind: 'dynamic', source: 'artist'},
+  kw:        {ops: [':'], kind: 'dynamic', source: 'keyword'},
+  s:         {ops: [':','=','!='], kind: 'dynamic', source: 'set'},
+  deck:      {ops: [':','=','!='], kind: 'dynamic', source: 'deck',
+              extra: [{value: '*', label: '*', hint: 'Any deck'}]},
+  binder:    {ops: [':','=','!='], kind: 'dynamic', source: 'binder',
+              extra: [{value: '*', label: '*', hint: 'Any binder'}]},
 };
 
-function acLoadDynamic() {
-  if (acSets) return;
-  acSets = []; acDecks = []; acBinders = [];
-  fetch('/api/cached-sets').then(r=>r.json()).then(d => { acSets = d; }).catch(()=>{});
-  fetch('/api/decks').then(r=>r.json()).then(d => { acDecks = d; }).catch(()=>{});
-  fetch('/api/binders').then(r=>r.json()).then(d => { acBinders = d; }).catch(()=>{});
+const AC_OP_SPLIT_RE = /^(-?[a-zA-Z_][a-zA-Z0-9_]*)(!=|<=|>=|<|>|=|:)(.*)$/;
+const AC_OP_RANK = [':', '>=', '<=', '>', '<', '=', '!='];
+
+// Per-source dynamic suggestion cache: source::prefix -> array.
+const acDynamicCache = {};
+function acFetchDynamic(source, prefix, onReady) {
+  const key = `${source}::${prefix}`;
+  if (acDynamicCache[key]) { onReady(acDynamicCache[key]); return; }
+  acDynamicCache[key] = []; // pending sentinel — avoid duplicate fetches
+  fetch(`/api/search-suggest?key=${encodeURIComponent(source)}&prefix=${encodeURIComponent(prefix)}`)
+    .then(r => r.ok ? r.json() : [])
+    .then(data => { acDynamicCache[key] = data; onReady(data); })
+    .catch(() => onReady([]));
 }
 
 function acGetCurrentToken() {
@@ -3358,64 +3462,35 @@ function acUpdate() {
   acItems = [];
   const lower = token.toLowerCase();
 
-  // Check if we're after a keyword prefix (e.g. "s:" or "is:")
-  const colonIdx = token.indexOf(':');
-  if (colonIdx >= 0) {
-    const prefix = token.substring(0, colonIdx + 1).toLowerCase();
-    const valPart = token.substring(colonIdx + 1).toLowerCase();
-
-    // Static value completions
-    let pool = AC_VALUES[prefix];
-    if (pool) {
-      for (const v of pool) {
-        if (v.startsWith(valPart) && v !== valPart) {
-          acItems.push({text: prefix + v, label: v, hint: '', cat: ''});
-        }
-      }
+  // Try to split as keyword + operator + value. Recognizes : = != >= <= > <
+  // (the same set the search tokenizer accepts).
+  const m = token.match(AC_OP_SPLIT_RE);
+  if (m) {
+    const rawKw = m[1];
+    const op = m[2];
+    const valPart = m[3];
+    const negated = rawKw.startsWith('-');
+    const kwLookup = negated ? rawKw.substring(1).toLowerCase() : rawKw.toLowerCase();
+    const spec = AC_KEYWORD_SPECS[kwLookup];
+    if (spec && spec.ops.includes(op)) {
+      _acAppendValueSuggestions(spec, rawKw, op, valPart);
     }
-    // Dynamic: set codes
-    if (prefix === 's:' && acSets) {
-      for (const s of acSets) {
-        const code = s.code.toLowerCase();
-        const name = (s.name||'').toLowerCase();
-        if ((code.startsWith(valPart) || name.includes(valPart)) && code !== valPart) {
-          acItems.push({text: 's:' + code, label: code.toUpperCase(), hint: s.name, cat: ''});
-        }
-        if (acItems.length >= 12) break;
-      }
-    }
-    // Dynamic: deck names
-    if (prefix === 'deck:' && acDecks) {
-      acItems.push({text: 'deck:*', label: '*', hint: 'Any deck', cat: ''});
-      for (const d of acDecks) {
-        const name = (d.name||'');
-        if (name.toLowerCase().includes(valPart)) {
-          const q = name.includes(' ') ? `deck:"${name}"` : `deck:${name}`;
-          acItems.push({text: q, label: name, hint: '', cat: ''});
-        }
-        if (acItems.length >= 12) break;
-      }
-    }
-    // Dynamic: binder names
-    if (prefix === 'binder:' && acBinders) {
-      acItems.push({text: 'binder:*', label: '*', hint: 'Any binder', cat: ''});
-      for (const b of acBinders) {
-        const name = (b.name||'');
-        if (name.toLowerCase().includes(valPart)) {
-          const q = name.includes(' ') ? `binder:"${name}"` : `binder:${name}`;
-          acItems.push({text: q, label: name, hint: '', cat: ''});
-        }
-        if (acItems.length >= 12) break;
-      }
+  } else if (AC_KEYWORD_SPECS[lower] || AC_KEYWORD_SPECS[lower.replace(/^-/, '')]) {
+    // User typed an exact keyword with no operator yet — suggest operators.
+    const isNeg = lower.startsWith('-');
+    const kwLookup = isNeg ? lower.substring(1) : lower;
+    const spec = AC_KEYWORD_SPECS[kwLookup];
+    const ops = [...spec.ops].sort((a, b) => AC_OP_RANK.indexOf(a) - AC_OP_RANK.indexOf(b));
+    for (const op of ops) {
+      acItems.push({text: token + op, label: token + op, hint: _acOpHint(op), cat: ''});
     }
   } else {
-    // Keyword suggestions
+    // Keyword-name suggestions.
     for (const kw of AC_KEYWORDS) {
       if (kw.k.startsWith(lower) && kw.k !== lower) {
         acItems.push({text: kw.k, label: kw.label, hint: kw.hint, cat: kw.cat});
       }
     }
-    // Also suggest negation
     if (lower === '-') {
       acItems.push({text: '-', label: '-...', hint: 'Negate next term', cat: ''});
     }
@@ -3425,6 +3500,64 @@ function acUpdate() {
   if (acItems.length === 0) { acHide(); return; }
   acIdx = -1;
   acRender();
+}
+
+function _acOpHint(op) {
+  if (op === ':') return 'value';
+  if (op === '=') return 'equals';
+  if (op === '!=') return 'not equal';
+  if (op === '>=') return 'at or after';
+  if (op === '<=') return 'at or before';
+  if (op === '>') return 'after';
+  if (op === '<') return 'before';
+  return '';
+}
+
+function _acAppendValueSuggestions(spec, rawKw, op, valPart) {
+  const valLower = valPart.toLowerCase();
+  const prefix = rawKw + op;
+
+  if (spec.extra) {
+    for (const item of spec.extra) {
+      if (!valPart || item.value.startsWith(valPart)) {
+        acItems.push({text: prefix + item.value, label: item.label, hint: item.hint, cat: ''});
+      }
+    }
+  }
+
+  if (spec.values) {
+    for (const v of spec.values) {
+      if (v.toLowerCase().startsWith(valLower) && v !== valPart) {
+        acItems.push({text: prefix + v, label: v, hint: '', cat: ''});
+      }
+      if (acItems.length >= 15) break;
+    }
+    return;
+  }
+
+  if (spec.kind !== 'dynamic') return;
+
+  // Dynamic: serve from cache synchronously if available; else fetch + re-render.
+  const cacheKey = `${spec.source}::${valPart}`;
+  const cached = acDynamicCache[cacheKey];
+  if (cached && cached.length) {
+    _acRenderDynamic(cached, spec, prefix, valPart);
+  } else {
+    acFetchDynamic(spec.source, valPart, (data) => {
+      // Only re-render if the token is still the same — user may have typed more.
+      const cur = acGetCurrentToken().token;
+      if (cur === rawKw + op + valPart) acUpdate();
+    });
+  }
+}
+
+function _acRenderDynamic(data, spec, prefix, valPart) {
+  for (const item of data) {
+    if (item.value === valPart) continue;
+    acItems.push({text: prefix + item.value, label: item.label || item.value,
+                  hint: item.hint || '', cat: ''});
+    if (acItems.length >= 15) break;
+  }
 }
 
 function acRender() {
@@ -3457,6 +3590,7 @@ function acAccept(idx) {
   const newPos = start + item.text.length + suffix.length;
   searchInput.setSelectionRange(newPos, newPos);
   searchInput.focus();
+  updateSearchClearVisibility();
   acHide();
   // If we inserted a full keyword:value, trigger fetch
   if (suffix === ' ') {
@@ -3497,7 +3631,7 @@ acDropdown.addEventListener('mousedown', (e) => {
   if (item) acAccept(parseInt(item.dataset.i));
 });
 
-searchInput.addEventListener('focus', () => { acLoadDynamic(); acUpdate(); });
+searchInput.addEventListener('focus', () => { acUpdate(); });
 searchInput.addEventListener('blur', () => { setTimeout(acHide, 150); });
 
 function applySettings() {
@@ -3681,6 +3815,7 @@ document.getElementById('view-select').addEventListener('change', async function
     try {
       const f = typeof view.filters_json === 'string' ? JSON.parse(view.filters_json) : view.filters_json;
       searchInput.value = f.q || '';
+      updateSearchClearVisibility();
       fetchCollection();
     } catch {}
   }
@@ -3834,7 +3969,10 @@ function restoreFiltersFromURL() {
 
   // Search query
   const q = params.get('q');
-  if (q) searchInput.value = q;
+  if (q) {
+    searchInput.value = q;
+    updateSearchClearVisibility();
+  }
 
   // Sort
   if (params.get('sort')) sortColumn = params.get('sort');

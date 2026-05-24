@@ -297,6 +297,11 @@ header h1 { font-size: 1.2rem; color: #e0e0e0; }
 </div>
 
 <script>
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 const orderText = document.getElementById('order-text');
 const fileInput = document.getElementById('file-input');
 const fileDrop = document.getElementById('file-drop');
@@ -410,7 +415,7 @@ function renderResolved() {
 
   for (const order of resolvedOrders) {
     const seller = order.seller_name || 'Unknown Seller';
-    const totalStr = order.total != null ? `$${order.total.toFixed(2)}` : '';
+    const totalStr = order.total != null ? formatPrice(order.total) : '';
     const itemCount = order.items.reduce((s, i) => s + i.quantity, 0);
 
     html += `<div class="order-group">
@@ -434,7 +439,7 @@ function renderResolved() {
       const foilTag = item.foil ? '<span class="foil-tag">Foil</span>' : '';
       const name = item.card_name || item.parsed_name;
       const setInfo = resolved ? `${(item.set_code || '').toUpperCase()} #${item.collector_number || ''}` : (item.set_hint || '');
-      const price = item.price != null ? `$${item.price.toFixed(2)}` : '';
+      const price = item.price != null ? formatPrice(item.price) : '';
       const errorInfo = !resolved ? `<div class="error-tag">${item.error || 'Not resolved'}</div>` : '';
 
       html += `<tr${rowClass}>

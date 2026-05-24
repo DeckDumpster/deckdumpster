@@ -1,0 +1,19 @@
+start_page: /collection?q=Scrawling
+involves:
+  - "search input #search-input pre-populated from the URL"
+  - "clear button #search-clear inside the search input"
+  - "collection table .collection-table"
+fixture_data:
+  url_query: "Scrawling"
+  search_match: "Scrawling Crawler"
+  total_cards_label: "45 cards"
+notes: >
+  Navigate directly to /collection?q=Scrawling. The page's
+  restoreFiltersFromURL() runs during init and assigns
+  searchInput.value = "Scrawling", then calls
+  updateSearchClearVisibility() so the X should be visible without any
+  user typing.
+  Wait for "Scrawling Crawler" to confirm the URL-driven query rendered.
+  Assert #search-clear is visible.
+  Click #search-clear. Wait for "45 cards" status text to confirm the
+  full collection is back. Assert #search-clear is hidden.

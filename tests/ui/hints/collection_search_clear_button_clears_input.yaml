@@ -1,0 +1,20 @@
+start_page: /collection
+involves:
+  - "search input #search-input with placeholder 'Search (e.g. t:creature c:r mv>=3)'"
+  - "clear button #search-clear (× character) inside the search input"
+  - "collection table .collection-table with card rows"
+  - "status text #status showing card count"
+fixture_data:
+  search_term: "Scrawling"
+  search_match: "Scrawling Crawler"
+  total_cards_label: "45 cards"
+notes: >
+  Navigate to /collection. Wait for .collection-table.
+  Type "Scrawling" into the search input via fill_by_placeholder.
+  Wait for "Scrawling Crawler" text to confirm the filtered fetch finished.
+  Assert #search-clear is visible (it has CSS .search-clear { display: none }
+  by default and gains class .visible -> display: flex when input has content).
+  Click #search-clear. The handler clears the input value, focuses it, and
+  dispatches an input event so the existing debounced fetch fires.
+  Wait for "45 cards" status text to confirm the full default collection is
+  back. Assert #search-clear is hidden again.

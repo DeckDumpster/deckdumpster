@@ -76,8 +76,9 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     db_dir.mkdir(parents=True, exist_ok=True)
 
     # Create new connection
-    _connection = sqlite3.connect(path)
+    _connection = sqlite3.connect(path, timeout=10.0)
     _connection.row_factory = sqlite3.Row
+    _connection.execute("PRAGMA journal_mode = WAL")
     # FK enforcement is deferred until after potential ATTACH — see below
     _db_path = path
     _attached = False

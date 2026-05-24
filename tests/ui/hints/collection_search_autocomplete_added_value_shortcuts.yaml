@@ -1,0 +1,16 @@
+start_page: /collection
+involves:
+  - "#search-input — the search bar at the top of the collection page"
+  - "#ac-dropdown — the autocomplete dropdown"
+  - ".ac-item .ac-label — primary label per suggestion"
+  - ".ac-item .ac-hint — secondary hint text (e.g. 'Today (local)', '7 days ago')"
+fixture_data:
+  collection_size: "Standard --test fixture (45 cards added on the fixture-build date)"
+notes: >
+  1. Navigate to /collection. 2. Fill the #search-input with "added:".
+  The colon triggers the dynamic value branch; the page makes an async
+  fetch to /api/search-suggest?key=added which returns the relative
+  shortcuts plus the years/months in the corpus. 3. Wait for the
+  dropdown to populate (the async fetch takes ~100-300ms in practice;
+  use a wait_for_text on the literal "today" to gate). 4. Assert that
+  "today", "yesterday", "7d", and "30d" all appear. 5. Screenshot.

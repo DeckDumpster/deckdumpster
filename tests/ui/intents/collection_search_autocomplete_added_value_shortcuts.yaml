@@ -1,0 +1,11 @@
+# Scenario: Autocomplete suggests date shortcuts after `added:`
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  After typing "added:" into the search bar on the collection page, the
+  autocomplete dropdown shows me convenient date shortcuts — "today",
+  "yesterday", "7d", "30d" — alongside the years and months actually
+  present in my collection, so I can quickly filter without having to
+  remember an exact ISO date.

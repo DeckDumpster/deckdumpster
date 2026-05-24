@@ -368,6 +368,11 @@ header button.receive-all-btn.received {
 </div>
 
 <script>
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 // URL shape: /orders/:id
 const pathMatch = location.pathname.match(/^\/orders\/(\d+)$/);
 const orderId = pathMatch ? pathMatch[1] : null;
@@ -536,7 +541,7 @@ function renderCards() {
   let html = `
     <div class="summary-bar">
       <span><span class="count">${orderCards.length}</span> card${orderCards.length !== 1 ? 's' : ''}</span>
-      <span>Total value: <span class="count">$${totalValue.toFixed(2)}</span></span>
+      <span>Total value: <span class="count">${formatPrice(totalValue)}</span></span>
       <span style="margin-left:auto"><button class="btn-secondary" id="add-card-btn">+ Add Card</button></span>
     </div>
     <div class="card-list">

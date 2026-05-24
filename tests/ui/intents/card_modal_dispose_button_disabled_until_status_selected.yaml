@@ -1,0 +1,11 @@
+# Scenario: Dispose button is disabled until a disposition is selected
+#
+# Related:
+#   pull_requests: []
+
+description: >
+  When I open a card's modal on the collection page, the Dispose button
+  in the copy controls is visibly disabled until I pick a disposition
+  (Sold, Traded, Gifted, etc.) from the dropdown. As soon as I select a
+  status the button becomes clickable, so I can never click an empty
+  Dispose action by accident.

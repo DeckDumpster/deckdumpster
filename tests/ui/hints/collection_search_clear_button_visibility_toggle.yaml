@@ -1,0 +1,20 @@
+start_page: /collection
+involves:
+  - "search input #search-input"
+  - "clear button #search-clear inside the search input"
+  - "collection table .collection-table"
+fixture_data:
+  search_term: "Scrawling"
+  search_match: "Scrawling Crawler"
+  total_cards_label: "45 cards"
+notes: >
+  Navigate to /collection and wait for .collection-table.
+  Initial state: input is empty, so #search-clear should be hidden
+  (display: none — assert_hidden works because the element lacks the
+  .visible class).
+  Type "Scrawling" via fill_by_placeholder. Wait for "Scrawling Crawler"
+  to confirm the input event ran and the debounced fetch completed.
+  Assert #search-clear is now visible.
+  Clear by filling the placeholder with empty string "". Wait for
+  "45 cards" to confirm the empty-query fetch completed.
+  Assert #search-clear is hidden again.

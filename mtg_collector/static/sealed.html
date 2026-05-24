@@ -1153,6 +1153,11 @@ tr.selected { background: rgba(233, 69, 96, 0.12) !important; }
 </div>
 
 <script>
+function formatPrice(value) {
+  const n = parseFloat(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
 // ─── State ───────────────────────────────────────────────────────────────────
 let allEntries = [];
 let allEntriesFiltered = [];
@@ -1288,13 +1293,13 @@ async function fetchSets() {
 
 function updateStats(stats) {
   const parts = [`${stats.total_entries} entries`, `${stats.total_quantity} items`];
-  if (stats.total_cost > 0) parts.push(`$${stats.total_cost.toFixed(2)} invested`);
+  if (stats.total_cost > 0) parts.push(`${formatPrice(stats.total_cost)} invested`);
   if (stats.market_value > 0) {
-    parts.push(`$${stats.market_value.toFixed(2)} market value`);
+    parts.push(`${formatPrice(stats.market_value)} market value`);
     const gl = stats.gain_loss;
     const sign = gl >= 0 ? '+' : '';
     const cls = gl >= 0 ? 'gain' : 'loss';
-    parts.push(`<span class="${cls}">${sign}$${gl.toFixed(2)}</span>`);
+    parts.push(`<span class="${cls}">${sign}${formatPrice(Math.abs(gl))}</span>`);
   }
   statusEl.innerHTML = parts.join(' · ') + ' ' + pricesStatus.outerHTML;
   // Re-acquire ref after innerHTML replacement
@@ -1882,8 +1887,8 @@ function renderGrid() {
 
     const qtyBadge = product.total_quantity > 1 ? `<span class="qty-badge">${product.total_quantity}x</span>` : '';
     const statusBadge = `<span class="status-badge ${product.primary_status}">${product.primary_status}</span>`;
-    const costText = product.min_cost != null ? `$${product.min_cost.toFixed(2)}` : '';
-    const marketText = product.market_total != null ? `$${product.market_total.toFixed(2)}` : '';
+    const costText = product.min_cost != null ? formatPrice(product.min_cost) : '';
+    const marketText = product.market_total != null ? formatPrice(product.market_total) : '';
     const selectable = selectionMode ? ' selectable' : '';
     const selected = selectionMode && isProductSelected(product) ? ' selected' : '';
     const checkboxHtml = selectionMode ? `<input type="checkbox" class="select-checkbox" ${isProductSelected(product) ? 'checked' : ''}>` : '';
@@ -1929,10 +1934,10 @@ function renderTable() {
   html += '</tr></thead><tbody>';
 
   aggregatedProducts.forEach(product => {
-    const minCost = product.min_cost != null ? `$${product.min_cost.toFixed(2)}` : '';
-    const maxCost = product.max_cost != null ? `$${product.max_cost.toFixed(2)}` : '';
-    const avgCost = product.avg_cost != null ? `$${product.avg_cost.toFixed(2)}` : '';
-    const market = product.market_total != null ? `$${product.market_total.toFixed(2)}` : '';
+    const minCost = product.min_cost != null ? formatPrice(product.min_cost) : '';
+    const maxCost = product.max_cost != null ? formatPrice(product.max_cost) : '';
+    const avgCost = product.avg_cost != null ? formatPrice(product.avg_cost) : '';
+    const market = product.market_total != null ? formatPrice(product.market_total) : '';
     const added = product.added_at ? product.added_at.slice(0, 10) : '';
 
     const rowSelected = selectionMode && isProductSelected(product) ? ' selected' : '';
@@ -1977,7 +1982,7 @@ function openDetailModal(product) {
   }
 
   const fmtCat = c => c ? c.replace(/_/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase()) : '—';
-  const fmtPrice = v => v != null ? `$${v.toFixed(2)}` : '—';
+  const fmtPrice = v => v != null ? formatPrice(v) : '—';
 
   let html = `<h2>${esc(product.name || 'Unknown Product')}</h2>`;
 
@@ -2044,7 +2049,7 @@ function openDetailModal(product) {
     <div class="modal-section-title">Entries (${product.entries.length})</div>`;
   product.entries.forEach((entry, idx) => {
     const transitions = VALID_TRANSITIONS[entry.status] || [];
-    const costStr = entry.purchase_price != null ? `${entry.quantity} × $${entry.purchase_price.toFixed(2)}` : `${entry.quantity}x`;
+    const costStr = entry.purchase_price != null ? `${entry.quantity} × ${formatPrice(entry.purchase_price)}` : `${entry.quantity}x`;
     const dateStr = entry.purchase_date || (entry.added_at ? entry.added_at.slice(0, 10) : '');
     const sourceStr = [entry.source, entry.seller_name].filter(Boolean).join(' / ');
 
@@ -2073,7 +2078,7 @@ function openDetailModal(product) {
         <div class="modal-edit-row"><span class="label">Source</span><input type="text" class="ee-source" value="${esc(entry.source || '')}" placeholder="e.g. TCGPlayer, LGS"></div>
         <div class="modal-edit-row"><span class="label">Seller</span><input type="text" class="ee-seller" value="${esc(entry.seller_name || '')}" placeholder="Store name"></div>
         <div class="modal-edit-row"><span class="label">Notes</span><textarea class="ee-notes" rows="2" placeholder="Optional notes">${esc(entry.notes || '')}</textarea></div>
-        ${entry.sale_price != null ? `<div class="modal-row"><span class="label">Sale Price</span><span class="value">$${entry.sale_price.toFixed(2)}</span></div>` : ''}
+        ${entry.sale_price != null ? `<div class="modal-row"><span class="label">Sale Price</span><span class="value">${formatPrice(entry.sale_price)}</span></div>` : ''}
         <div class="entry-edit-actions">
           <button class="entry-save-btn" data-entry-id="${entry.id}" data-idx="${idx}">Save</button>
           ${transitions.length > 0 ? `
@@ -2109,7 +2114,7 @@ function openDetailModal(product) {
         if (!section || !body || !prices.length) return;
         let tbl = '<table class="price-history-table"><thead><tr><th>Date</th><th>Low</th><th>Mid</th><th>Market</th><th>High</th></tr></thead><tbody>';
         prices.forEach(p => {
-          const fmt = v => v != null ? `$${v.toFixed(2)}` : '—';
+          const fmt = v => v != null ? formatPrice(v) : '—';
           tbl += `<tr><td>${p.observed_at}</td><td>${fmt(p.low_price)}</td><td>${fmt(p.mid_price)}</td><td>${fmt(p.market_price)}</td><td>${fmt(p.high_price)}</td></tr>`;
         });
         tbl += '</tbody></table>';

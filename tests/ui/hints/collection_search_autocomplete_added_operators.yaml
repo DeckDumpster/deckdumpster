@@ -1,0 +1,15 @@
+start_page: /collection
+involves:
+  - "#search-input — the search bar at the top of the collection page"
+  - "#ac-dropdown — the autocomplete dropdown, gets class 'open' when populated"
+  - ".ac-item .ac-label — each suggestion row's primary label"
+fixture_data:
+  collection_size: "Standard --test fixture (45 cards)"
+notes: >
+  1. Navigate to /collection. 2. Fill the #search-input with the text
+  "added" (no operator). The page's input handler fires synchronously
+  and populates #ac-dropdown with operator suggestions. 3. Wait for
+  #ac-dropdown to become visible. 4. Assert that the suggestions
+  "added:", "added>=", "added<=", and "added>" all appear in the
+  dropdown. These four are the most important operators; the regex
+  splitter must recognize each. 5. Take a final-state screenshot.

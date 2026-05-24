@@ -256,7 +256,8 @@
   cursor: pointer;
   font-weight: 600;
 }
-.dispose-btn:hover { background: #1a4a7a; }
+.dispose-btn:hover:not(:disabled) { background: #1a4a7a; }
+.dispose-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .delete-copy-btn {
   padding: 4px 10px;
@@ -298,7 +299,7 @@
 .price-range-pill:hover { background: #163d6f; }
 .price-range-pill.active { background: var(--accent); color: #fff; }
 .price-range-pill.disabled { opacity: 0.3; pointer-events: none; }
-.price-chart-canvas-wrap { height: 180px; position: relative; }
+.price-chart-canvas-wrap { height: 360px; position: relative; }
 
 /* History timeline */
 .history-toggle {

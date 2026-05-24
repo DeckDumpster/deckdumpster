@@ -45,9 +45,22 @@ _BACKUP_CMD = (
     f"exec('if os.path.exists(p):\\n s=sqlite3.connect(p)\\n d=sqlite3.connect(b)\\n s.backup(d)\\n s.close()\\n d.close()')"
     '"'
 )
+# Restore via sqlite3.backup() in reverse rather than ``cp``: under WAL
+# mode the live ``.sqlite`` file is only one of three (.sqlite, .sqlite-wal,
+# .sqlite-shm). A plain ``cp`` over the main file leaves the WAL sidecar
+# in place and the server's open connections keep reading via the stale
+# WAL frame index — earlier tests' writes survive the "restore" and
+# pollute later tests. sqlite3.backup() copies pages through SQLite's
+# locking protocol; the server's next read sees the restored state.
 _RESTORE_CMD = (
-    f"cp {_CONTAINER_DB_BACKUP} {_CONTAINER_DB}"
-    f" && {{ [ -f {_CONTAINER_SHARED_DB_BACKUP} ] && cp {_CONTAINER_SHARED_DB_BACKUP} {_CONTAINER_SHARED_DB}; true; }}"
+    f'python3 -c "import sqlite3, os; '
+    f"s=sqlite3.connect('{_CONTAINER_DB_BACKUP}'); "
+    f"d=sqlite3.connect('{_CONTAINER_DB}'); "
+    f"s.backup(d); s.close(); d.close(); "
+    f"p='{_CONTAINER_SHARED_DB_BACKUP}'; "
+    f"q='{_CONTAINER_SHARED_DB}'; "
+    f"exec('if os.path.exists(p):\\n s=sqlite3.connect(p)\\n d=sqlite3.connect(q)\\n s.backup(d)\\n s.close()\\n d.close()')"
+    '"'
 )
 
 

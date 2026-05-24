@@ -996,6 +996,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
         if _shared_db_path and os.path.exists(_shared_db_path):
             from mtg_collector.db.connection import attach_shared
             attach_shared(conn, _shared_db_path)
@@ -1049,6 +1050,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._api_sets()
         elif path == "/api/cached-sets":
             self._api_cached_sets()
+        elif path == "/api/search-suggest":
+            self._api_search_suggest(params)
         elif path == "/api/products":
             set_code = params.get("set", [""])[0]
             self._api_products(set_code)
@@ -1831,6 +1834,121 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.close()
         self._send_json(result)
 
+    def _api_search_suggest(self, params: dict):
+        """Return autocomplete suggestions for a search keyword's value.
+
+        Restricted to the user's actual collection corpus — suggestions only
+        include values present on printings the user owns. Free-text keys
+        (oracle, flavor) aren't supported because suggesting substrings
+        from those isn't useful.
+        """
+        key = params.get("key", [""])[0].lower().strip()
+        prefix = params.get("prefix", [""])[0].strip()
+        limit = 12
+
+        conn = self._get_conn()
+        suggestions: list = []
+
+        if key == "added":
+            aliases = [
+                ("today",     "today",     "Today (local)"),
+                ("yesterday", "yesterday", "Yesterday (local)"),
+                ("7d",        "7d",        "7 days ago"),
+                ("30d",       "30d",       "30 days ago"),
+                ("90d",       "90d",       "90 days ago"),
+                ("1y",        "1y",        "1 year ago"),
+            ]
+            plow = prefix.lower()
+            for value, label, hint in aliases:
+                if not prefix or value.startswith(plow):
+                    suggestions.append({"value": value, "label": label, "hint": hint})
+            for row in conn.execute(
+                "SELECT DISTINCT SUBSTR(acquired_at, 1, 4) AS y FROM collection "
+                "WHERE acquired_at IS NOT NULL ORDER BY y DESC"
+            ):
+                y = row["y"]
+                if y and (not prefix or y.startswith(prefix)):
+                    suggestions.append({"value": y, "label": y, "hint": "Year"})
+            for row in conn.execute(
+                "SELECT DISTINCT SUBSTR(acquired_at, 1, 7) AS ym FROM collection "
+                "WHERE acquired_at IS NOT NULL ORDER BY ym DESC LIMIT 36"
+            ):
+                ym = row["ym"]
+                if ym and (not prefix or ym.startswith(prefix)):
+                    suggestions.append({"value": ym, "label": ym, "hint": "Month"})
+
+        elif key in ("artist", "a"):
+            like = f"%{prefix}%"
+            for row in conn.execute(
+                "SELECT DISTINCT p.artist FROM printings p "
+                "INNER JOIN collection c ON c.printing_id = p.printing_id "
+                "WHERE p.artist IS NOT NULL AND p.artist LIKE ? COLLATE NOCASE "
+                "ORDER BY p.artist LIMIT ?",
+                (like, limit),
+            ):
+                artist = row[0]
+                # Wrap in quotes if the artist name has whitespace.
+                value = f'"{artist}"' if " " in artist else artist
+                suggestions.append({"value": value, "label": artist, "hint": "Artist"})
+
+        elif key in ("keyword", "kw"):
+            like = f"%{prefix}%"
+            for row in conn.execute(
+                "SELECT DISTINCT je.value AS kw FROM cards card "
+                "INNER JOIN printings p ON p.oracle_id = card.oracle_id "
+                "INNER JOIN collection c ON c.printing_id = p.printing_id, "
+                "json_each(card.keywords) je "
+                "WHERE card.keywords IS NOT NULL AND card.keywords != '[]' "
+                "AND je.value LIKE ? COLLATE NOCASE "
+                "ORDER BY kw LIMIT ?",
+                (like, limit),
+            ):
+                kw = row["kw"]
+                value = f'"{kw}"' if " " in kw else kw
+                suggestions.append({"value": value, "label": kw, "hint": "Keyword"})
+
+        elif key == "set":
+            like = f"%{prefix}%"
+            plow = prefix.lower()
+            for row in conn.execute(
+                "SELECT DISTINCT p.set_code, s.set_name FROM printings p "
+                "INNER JOIN collection c ON c.printing_id = p.printing_id "
+                "LEFT JOIN sets s ON s.set_code = p.set_code "
+                "WHERE p.set_code LIKE ? OR s.set_name LIKE ? COLLATE NOCASE "
+                "ORDER BY s.set_name LIMIT ?",
+                (like, like, limit),
+            ):
+                code = (row["set_code"] or "").lower()
+                if not code or (prefix and not code.startswith(plow) and plow not in (row["set_name"] or "").lower()):
+                    continue
+                suggestions.append({"value": code, "label": code.upper(),
+                                    "hint": row["set_name"] or ""})
+
+        elif key == "deck":
+            like = f"%{prefix}%"
+            for row in conn.execute(
+                "SELECT id, name FROM decks WHERE name LIKE ? COLLATE NOCASE "
+                "ORDER BY name LIMIT ?",
+                (like, limit),
+            ):
+                name = row["name"] or ""
+                value = f'"{name}"' if " " in name else name
+                suggestions.append({"value": value, "label": name, "hint": "Deck"})
+
+        elif key == "binder":
+            like = f"%{prefix}%"
+            for row in conn.execute(
+                "SELECT id, name FROM binders WHERE name LIKE ? COLLATE NOCASE "
+                "ORDER BY name LIMIT ?",
+                (like, limit),
+            ):
+                name = row["name"] or ""
+                value = f'"{name}"' if " " in name else name
+                suggestions.append({"value": value, "label": name, "hint": "Binder"})
+
+        conn.close()
+        self._send_json(suggestions[:limit])
+
     def _api_products(self, set_code: str):
         if not self.generator:
             self._send_json({"error": "AllPrintings.json not loaded — run: mtg data fetch"}, 503)
@@ -1906,7 +2024,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         # Compile
         t0 = _time.monotonic()
-        compiled = compile_query(ast)
+        tz = params.get("tz", [""])[0] or None
+        compiled = compile_query(ast, tz=tz)
         timings["compile_ms"] = round((_time.monotonic() - t0) * 1000, 1)
 
         # Execute
@@ -2011,13 +2130,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = self._get_conn()
 
         # Parse and compile the Scryfall query
+        tz = params.get("tz", [""])[0] or None
         where_sql = "1=1"
         sql_params: list = []
         compiled = None
         if q:
             try:
                 ast = parse_query(q)
-                compiled = compile_query(ast)
+                compiled = compile_query(ast, tz=tz)
                 where_sql = compiled.where_sql
                 sql_params = list(compiled.params)
             except SearchError as e:
@@ -2072,7 +2192,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Conditional JOINs from the search engine
         # Note: expand_copies and default templates already include dc/d/b joins.
         # Only the shared-links (card_pairs) template needs them dynamically.
-        needs_price_join = compiled and compiled.needs_price_join
+        needs_price_join = (compiled and compiled.needs_price_join) or sort_col == "_lp.price"
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
         def _build_extra_joins(*, has_deck_binder_joins: bool) -> str:
