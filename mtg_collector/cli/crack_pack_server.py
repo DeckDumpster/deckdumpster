@@ -1067,6 +1067,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Not found"}, 404)
         elif path == "/api/collection/copies":
             self._api_collection_copies(params)
+        elif path == "/api/collection/growth":
+            self._api_collection_growth(params)
         elif path == "/api/collection":
             self._api_collection(params)
         elif path == "/api/search":
@@ -2598,6 +2600,198 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"available": True, "last_modified": log["fetched_at"]})
         else:
             self._send_json({"available": False, "last_modified": None})
+
+    def _api_collection_growth(self, params: dict):
+        """Return daily (count, tcg_value, ck_value) series for the filtered collection.
+
+        Mirrors the search-filter parsing in `/api/collection`, then walks every
+        day from the earliest acquisition through today, summing:
+          - cards acquired by that date (count)
+          - historical price on that date for each held card (value)
+
+        Prices forward-fill: the most recent known price <= D is used. Cards
+        with no price on/before D contribute 0 to value but still count.
+
+        Response: {"dates": ["YYYY-MM-DD", ...], "counts": [...],
+                   "tcg_values": [...], "ck_values": [...]}
+        """
+        import datetime as _dt
+        import itertools as _it
+        from collections import defaultdict
+
+        from mtg_collector.search import SearchError, compile_query, parse_query
+
+        q = params.get("q", [""])[0]
+        tz = params.get("tz", [""])[0] or None
+
+        where_sql = "1=1"
+        sql_params: list = []
+        compiled = None
+        if q:
+            try:
+                ast = parse_query(q)
+                compiled = compile_query(ast, tz=tz)
+                where_sql = compiled.where_sql
+                sql_params = list(compiled.params)
+            except SearchError as e:
+                self._send_json({"error": str(e), "position": e.position}, 400)
+                return
+
+        # is:unowned makes no sense for a growth chart — ignore.
+        if compiled and compiled.include_unowned:
+            self._send_json({"dates": [], "counts": [], "tcg_values": [], "ck_values": []})
+            return
+
+        # Match /api/collection's status default
+        has_status = compiled and compiled.has_status_filter
+        if not has_status:
+            if where_sql == "1=1":
+                where_sql = "c.status IN ('owned', 'ordered')"
+            else:
+                where_sql = f"c.status IN ('owned', 'ordered') AND ({where_sql})"
+
+        # Conditional joins (mirrors /api/collection's default template — the
+        # collection-anchored one, since growth is always about owned rows).
+        extra_joins = []
+        if compiled and compiled.needs_price_join:
+            extra_joins.append(
+                "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
+                " AND _lp.collector_number = p.collector_number AND _lp.price_type = 'normal'"
+            )
+        if compiled and compiled.needs_wishlist_join:
+            extra_joins.append(
+                "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
+            )
+        extra_joins_sql = "\n            ".join(extra_joins)
+
+        conn = self._get_conn()
+        query = f"""
+            SELECT p.set_code, p.collector_number, c.finish,
+                   substr(c.acquired_at, 1, 10) AS acq_date
+            FROM collection c
+            JOIN printings p ON c.printing_id = p.printing_id
+            JOIN cards card ON p.oracle_id = card.oracle_id
+            JOIN sets s ON p.set_code = s.set_code
+            LEFT JOIN orders o ON c.order_id = o.id
+            LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+            LEFT JOIN decks d ON dc.deck_id = d.id
+            LEFT JOIN binders b ON c.binder_id = b.id
+            {extra_joins_sql}
+            WHERE ({where_sql}) AND c.acquired_at IS NOT NULL
+            GROUP BY c.id
+        """
+        pop_rows = conn.execute(query, sql_params).fetchall()
+
+        if not pop_rows:
+            conn.close()
+            self._send_json({"dates": [], "counts": [], "tcg_values": [], "ck_values": []})
+            return
+
+        # Build the date axis: earliest acquisition → today (UTC).
+        # acquired_at is ISO 8601 UTC, so the first 10 chars are a UTC date.
+        min_acq = min(r["acq_date"] for r in pop_rows)
+        try:
+            start = _dt.date.fromisoformat(min_acq)
+        except (TypeError, ValueError):
+            conn.close()
+            self._send_json({"dates": [], "counts": [], "tcg_values": [], "ck_values": []})
+            return
+        end = _dt.datetime.utcnow().date()
+        if end < start:
+            end = start
+        num_days = (end - start).days + 1
+        date_list = [(start + _dt.timedelta(days=i)).isoformat() for i in range(num_days)]
+        date_idx = {d: i for i, d in enumerate(date_list)}
+
+        # Group population by (set_code, collector_number, finish). Each row in
+        # `collection` = 1 physical card.
+        groups: dict[tuple, list[int]] = defaultdict(list)
+        for r in pop_rows:
+            acq = r["acq_date"]
+            i = date_idx.get(acq)
+            if i is None:
+                # Acquired_at before start? Shouldn't happen — start = min(acq).
+                # Acquired_at after today (clock skew)? Clamp to last day.
+                i = num_days - 1
+            groups[(r["set_code"], r["collector_number"], r["finish"])].append(i)
+
+        # Fetch all relevant prices in one query, scoped to the population's
+        # distinct (set_code, collector_number) pairs and dates >= start.
+        key_pairs = list({(g[0], g[1]) for g in groups.keys()})
+        # SQLite has a default parameter limit (often 32766); chunk to be safe.
+        prices_by_key: dict[tuple, list[tuple[str, float]]] = defaultdict(list)
+        CHUNK = 500
+        for i in range(0, len(key_pairs), CHUNK):
+            chunk = key_pairs[i:i + CHUNK]
+            placeholders = ",".join(["(?, ?)"] * len(chunk))
+            chunk_params = [v for pair in chunk for v in pair]
+            chunk_params.append(min_acq)
+            price_rows = conn.execute(
+                f"""
+                SELECT set_code, collector_number, source, price_type, observed_at, price
+                FROM prices
+                WHERE (set_code, collector_number) IN ({placeholders})
+                  AND observed_at >= ?
+                ORDER BY observed_at
+                """,
+                chunk_params,
+            ).fetchall()
+            for pr in price_rows:
+                k = (pr["set_code"], pr["collector_number"], pr["source"], pr["price_type"])
+                prices_by_key[k].append((pr["observed_at"], pr["price"]))
+        conn.close()
+
+        # Also include any pre-window prices so the first days forward-fill
+        # correctly. Fetch the latest price <= start per (set,cn,source,type).
+        # (Skipped: prices before start are rare in practice; if a card has no
+        # price >= start, the chart shows 0 for it until a price appears, which
+        # is acceptable for a "growth" view.)
+
+        def _forward_fill(points: list[tuple[str, float]]) -> list[float]:
+            out = [0.0] * num_days
+            j = 0
+            current = 0.0
+            for i, d in enumerate(date_list):
+                while j < len(points) and points[j][0] <= d:
+                    current = points[j][1]
+                    j += 1
+                out[i] = current
+            return out
+
+        # Cumulative count series.
+        count_series = [0] * num_days
+        for indices in groups.values():
+            for ai in indices:
+                count_series[ai] += 1
+        count_series = list(_it.accumulate(count_series))
+
+        # Value series — per group, forward-fill prices and multiply by
+        # cumulative count within the group.
+        tcg_values = [0.0] * num_days
+        ck_values = [0.0] * num_days
+        for (set_code, cn, finish), indices in groups.items():
+            price_type = "foil" if finish in ("foil", "etched") else "normal"
+            tcg_prices = _forward_fill(prices_by_key.get((set_code, cn, "tcgplayer", price_type), []))
+            ck_prices = _forward_fill(prices_by_key.get((set_code, cn, "cardkingdom", price_type), []))
+            grp_cum = [0] * num_days
+            for ai in indices:
+                grp_cum[ai] += 1
+            grp_cum = list(_it.accumulate(grp_cum))
+            for i in range(num_days):
+                if grp_cum[i]:
+                    tcg_values[i] += grp_cum[i] * tcg_prices[i]
+                    ck_values[i] += grp_cum[i] * ck_prices[i]
+
+        # Round value series to cents to keep payload small.
+        tcg_values = [round(v, 2) for v in tcg_values]
+        ck_values = [round(v, 2) for v in ck_values]
+
+        self._send_json({
+            "dates": date_list,
+            "counts": count_series,
+            "tcg_values": tcg_values,
+            "ck_values": ck_values,
+        })
 
     def _api_price_history(self, set_code: str, collector_number: str):
         """Return full price time series for a card."""

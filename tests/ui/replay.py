@@ -225,15 +225,29 @@ class ReplayHarness:
         )
 
     def _snap(self):
-        """Auto-snapshot after every action."""
+        """Auto-snapshot after every action.
+
+        The DOM evaluate races with navigation: if the preceding action
+        triggered a page load that's still in flight, page.evaluate raises
+        "Execution context was destroyed, most likely because of a
+        navigation". That's the harness collecting evidence, not the test
+        failing — swallow the error so the screenshot still lands and the
+        test proceeds; the next action will run against the new page.
+        """
         step = self._steps[-1]
         name = f"{self.scenario_name}_{self._step:02d}_{step.action}.png"
         path = self.screenshot_dir / name
         self.page.screenshot(path=str(path))
         step.screenshot = str(path)
 
-        elements = self.page.evaluate(EXTRACT_ELEMENTS_JS)
-        step.dom_snapshot = elements
+        try:
+            step.dom_snapshot = self.page.evaluate(EXTRACT_ELEMENTS_JS)
+        except Exception as e:
+            log.debug(
+                "[%s] DOM snapshot skipped after step %d (%s): %s",
+                self.scenario_name, self._step, step.action, e,
+            )
+            step.dom_snapshot = None
 
     def _settle(self):
         """Wait for async page updates: one animation frame + networkidle."""

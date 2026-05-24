@@ -322,6 +322,16 @@
         <div class="printing-picker" id="printing-picker-${copy.id}" style="display:none;"></div>`
       : '';
 
+    // Editable finish row — only when active and the printing supports >1 finish.
+    const availableFinishes = parseJsonField(card.finishes) || [];
+    const changeFinishHtml = isActive && availableFinishes.length > 1
+      ? `<div class="detail-row"><span class="label">Finish</span><span class="value">
+          <select class="change-finish-select" data-copy-id="${copy.id}" style="padding:2px 6px;font-size:0.8rem;background:#1a1a2e;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;">
+            ${availableFinishes.map(f => `<option value="${esc(f)}"${f === copy.finish ? ' selected' : ''}>${esc(f.charAt(0).toUpperCase() + f.slice(1))}</option>`).join('')}
+          </select>
+        </span></div>`
+      : '';
+
     // Deck/binder assignment row
     let assignHtml = '';
     if (isActive) {
@@ -390,7 +400,7 @@
         <span class="copy-id">#${copy.id}</span>
       </div>
       ${statusBadge ? `<div style="margin-bottom:6px;">${statusBadge}</div>` : ''}
-      ${orderHtml}${priceHtml}${lineageHtml}${changePrintingHtml}${assignHtml}
+      ${orderHtml}${priceHtml}${lineageHtml}${changePrintingHtml}${changeFinishHtml}${assignHtml}
       ${controlsHtml}
       <button class="history-toggle" data-copy-id="${copy.id}">History &#x25BE;</button>
       <div class="history-container" id="history-${copy.id}"></div>
@@ -665,6 +675,29 @@
         }
         btn.innerHTML = 'History &#x25B4;';
         loadHistory(copyId, histContainer);
+      });
+    });
+
+    // Change finish
+    container.querySelectorAll('.change-finish-select').forEach(sel => {
+      const original = sel.value;
+      sel.addEventListener('change', async () => {
+        const copyId = sel.dataset.copyId;
+        const newFinish = sel.value;
+        sel.disabled = true;
+        const r = await fetch(`/api/collection/${copyId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ finish: newFinish }),
+        });
+        if (r.ok) {
+          window.location.reload();
+        } else {
+          const err = await r.json().catch(() => ({}));
+          alert(err.error || 'Change finish failed');
+          sel.value = original;
+          sel.disabled = false;
+        }
       });
     });
 

@@ -1,294 +1,135 @@
 # MTG Collection Builder
 
-A CLI + web UI tool for managing Magic: The Gathering card collections. Add cards by reading their corner info from photos (Claude Vision), full card photos (local OCR + Claude), manual ID entry, or importing purchase orders from TCGPlayer and Card Kingdom. Your collection is stored locally in SQLite and can be exported to Moxfield, Archidekt, or Deckbox. Includes a web UI for browsing your collection, cracking virtual booster packs, image-based card ingestion, and order import.
+A web app (with CLI fallback) for managing a Magic: The Gathering collection. Cards land in a local SQLite database via photo, OCR, manual entry, or order import; the web UI is where you actually live with them — browse, search, organise into decks and binders, track sealed product, and watch prices over time.
 
-## Features
+All runtime lookups hit the local DB. No internet calls during normal use. Scryfall, MTGJSON, and TCGPlayer/CardKingdom data are pulled once into the DB during setup and refreshed in the background.
 
-- **Corner photo ingestion**: Photograph card corners and Claude Vision extracts rarity, collector number, set code, and foil status
-- **Full card photo ingestion**: Upload full card images via the web UI — local OCR + Claude identifies card names
-- **Manual ID entry**: Add cards directly by rarity/collector-number/set (no API key needed)
-- **Order ingestion**: Import purchase orders from TCGPlayer (HTML or text) and Card Kingdom (text) with treatment-aware card matching
-- **Order tracking**: Track orders by seller with per-card pricing, batch-receive when orders arrive
-- **Bulk Scryfall caching**: Download all card data from Scryfall in 3 API calls for offline browsing
-- **Web UI**: Browse collection, crack virtual booster packs, explore sheet layouts, ingest cards from images or orders
-- **Card lifecycle tracking**: Track card status (owned → ordered → listed → sold → removed) with audit log
-- **Wishlist**: Track cards you want, with priority and price alerts
-- **Local caching**: Scryfall data cached in SQLite to minimize API calls
-- **Decks & binders**: Organize cards into named decks (with format, zones) and binders — exclusivity enforced (one container per card)
-- **Saved views**: Save and load collection filter configurations
-- **Multi-platform import/export**: Moxfield, Archidekt, Deckbox CSV formats
-- **Price data**: TCGplayer and CardKingdom prices via MTGJSON
+## What's in the web UI
 
-## Quick Start
+Start the server and open `http://localhost:8080`. The site is the primary interface; the CLI exists for bulk ingest and scripting.
+
+### Collection (`/collection`)
+- Scryfall-style search bar — colours, types, oracle text, mana value, rarity, set, artist, keywords, format legality, plus collection-only filters (`status:`, `added:`, `price:`, `deck:`, `binder:`, `is:foil`, `is:unowned`, `is:wanted`, `order:price`, …). Autocomplete suggests both keywords and values; `added:today` resolves in the browser's local timezone. Full syntax at `/search-help`.
+- Switch between table and image-grid views; saved views remember your filter and column layout.
+- Click any card → modal with copies, prices, lineage, deck/binder assignment, dispose-to-sold/traded/gifted/lost workflow, and a "Full page" link to `/card/:set/:cn`.
+- `is:unowned` flips the query against the full printings catalogue so you can add cards you don't yet own from the same surface.
+
+### Card detail (`/card/:set/:cn`)
+- Standalone page for one printing — front/back faces (flips for DFC), all printings of the same oracle card, copies you own, price history chart with purchase-price reference lines, full status/movement audit trail.
+
+### Decks (`/decks`, `/deck-builder/:id`)
+- Create decks with format, sleeve colour, deck box, and storage location.
+- Builder shows mainboard / sideboard / commander zones; switch between a type-grouped list and a rarity-bordered grid.
+- Import an expected card list (precon / Jumpstart contents) to track deck completeness.
+- Move a card between decks or out to a binder atomically — a card lives in exactly one container.
+
+### Binders (`/binders`)
+- Named binders with colour and type. Cards move freely between binders and decks; assignment is mutually exclusive.
+
+### Sealed (`/sealed`)
+- Booster boxes, bundles, packs, precons, prerelease kits — anything MTGJSON tracks as a sealed product.
+- Add to inventory with cost; mark opened and route the contained cards into the main collection; bulk-dispose unopened stock; chart sealed-product price history.
+
+### Orders (`/orders`, `/orders/:id`)
+- Imported orders from TCGPlayer or Card Kingdom, with per-card pricing and totals. Receive an order in one click to flip everything from `ordered` → `owned`.
+
+### Ingestion surfaces
+- `/upload` — drag photos in; the server runs OCR + Claude vision in a background pipeline (`/recent` shows progress, `/disambiguate` resolves ambiguous matches).
+- `/ingest-corners` — corner-only photos for fast bulk ID without identifying the card name.
+- `/ingestor-ids` — type rarity / collector number / set when you have the cards in hand.
+- `/ingestor-order` — paste a TCGPlayer or Card Kingdom order (HTML or text) and the server resolves treatments to specific printings.
+- `/import-csv` — Moxfield, Archidekt, or Deckbox CSV.
+
+### Other
+- `/crack` — virtual booster cracker with live prices for whatever the sheets produce.
+- `/sheets`, `/set-value` — explore booster sheet layouts and per-set price totals.
+- `/search-help` — full search syntax reference.
+
+## Search syntax (quick reference)
+
+Standard Scryfall keywords: `c`/`color`, `id`/`identity`, `t`/`type`, `o`/`oracle`, `m`/`mana`, `mv`/`cmc`, `pow`, `tou`, `loy`, `r`/`rarity`, `s`/`set`, `b`/`block`, `cn`/`number`, `a`/`artist`, `ft`/`flavor`, `kw`/`keyword`, `f`/`format`, `banned`, `restricted`, `year`, `layout`, `produces`, `is:`, `has:`, `unique:`.
+
+Collection-only keywords: `status:` (`owned` / `ordered` / `listed` / `sold` / `traded` / `gifted` / `lost` / `removed`), `added:`, `price:`, `deck:`, `binder:`, `order:` (sort field), `direction:`. Date and numeric keywords accept the full operator set (`:`, `=`, `!=`, `>`, `>=`, `<`, `<=`). `added` accepts ISO calendar prefixes (`2024`, `2024-03`, `2024-03-15`), full ISO datetimes, and relative shortcuts (`today`, `yesterday`, `7d`, `30d`, `1y`).
+
+## Getting started
 
 ```bash
-# Clone and setup
-git clone https://github.com/thaen/efj-mtgc.git
-cd efj-mtgc
+git clone https://github.com/DeckDumpster/deckdumpster.git
+cd deckdumpster
 uv sync
 
-# One-command setup: init DB, cache Scryfall data, fetch MTGJSON
+# One-shot setup: DB + Scryfall bulk cache + MTGJSON data
 mtg setup
 
-# Or with demo data (~50 cards) to browse immediately
+# Or with ~50 cards of demo data
 mtg setup --demo
 
+# Or fast bring-up from the pre-built fixture
+mtg setup --demo --from-fixture tests/fixtures/test-data.sqlite
+
 # Start the web UI
-mtg crack-pack-server   # Open http://localhost:8080
-
-# Add cards by ID (no API key needed)
-mtg ingest-ids --id R 0200 EOE --id C 0075 EOE foil
-
-# Or set your Anthropic API key and add cards from corner photos
-export ANTHROPIC_API_KEY="sk-ant-..."
-mtg ingest-corners ~/photos/corners.jpg
-
-# Import a TCGPlayer order
-mtg ingest-order ~/Downloads/order-page.html
-
-# See what you've got
-mtg list
-mtg stats
-
-# Export to Moxfield
-mtg export -f moxfield -o collection.csv
+mtg crack-pack-server          # http://localhost:8080
 ```
 
-The `mtg setup` command handles database initialization, Scryfall bulk data caching (~80k cards), and MTGJSON data download in one step. Use `--skip-cache` or `--skip-data` to skip individual steps.
-
-## Requirements
+### Requirements
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- [Anthropic API key](https://console.anthropic.com/) (only needed for `ingest-corners` and OCR ingestion)
-- [Podman](https://podman.io/) for container deployment (optional, needed for `deploy/` scripts and UI tests)
+- `ANTHROPIC_API_KEY` (only needed for photo-based ingestion — set in env or `~/.config/mtgc/default.env`)
+- [Podman](https://podman.io/) (only for the deployment scripts under `deploy/` and the integration / UI test suites)
 
-### Podman setup (macOS)
+Data lives in `~/.mtgc/` by default (override with `MTGC_HOME`). The collection DB defaults to `~/.mtgc/collection.sqlite` (override with `--db` or `MTGC_DB`).
 
-```bash
-brew install podman
-podman machine init
-podman machine start
-```
+## CLI
 
-The Podman machine persists across reboots but must be started after each reboot with `podman machine start`.
+The CLI is a thin wrapper for headless ingestion and scripting. Common entry points:
 
-## Configuration
+| Command | What it does |
+|---|---|
+| `mtg setup [--demo] [--from-fixture PATH]` | Init DB, bulk-cache Scryfall, fetch MTGJSON |
+| `mtg crack-pack-server [--port N]` | Start the web UI (default port 8080) |
+| `mtg ingest-ids --id R 0200 EOE [foil] [--source X]` | Add cards by rarity / collector # / set |
+| `mtg ingest-corners photo.jpg ...` | Add cards from corner photos (Claude Vision) |
+| `mtg ingest-ocr photo.jpg ...` | Add cards from full card photos (local OCR + Claude) |
+| `mtg ingest-order order.html` | Import a TCGPlayer / Card Kingdom order |
+| `mtg orders {list,show,receive}` | Manage orders |
+| `mtg import file.csv` | Import from Moxfield / Archidekt / Deckbox (auto-detected) |
+| `mtg export -f {moxfield,archidekt,deckbox} -o out.csv` | Export collection |
+| `mtg list [--set X] [--name Y] [--foil] ...` | List collection entries |
+| `mtg show ID` / `mtg edit ID ...` / `mtg delete ID` | Inspect or edit one entry |
+| `mtg stats` | Collection summary |
+| `mtg wishlist {add,list,fulfill,remove}` | Wishlist management |
+| `mtg cache all [--force]` | Refresh the local Scryfall cache |
+| `mtg data fetch` / `mtg data fetch-prices` | Pull MTGJSON catalogue + prices |
+| `mtg db {init,refresh,split}` | Database maintenance |
 
-**API Key**: Set `ANTHROPIC_API_KEY` environment variable or add to your shell profile. Only required for photo-based ingestion commands.
+Run `mtg <command> --help` for full flags on any subcommand.
 
-**Database**: Default location is `~/.mtgc/collection.sqlite`. Override with:
-- `--db /path/to/db.sqlite` flag
-- `MTGC_DB` environment variable
+## Data model (one-line tour)
 
-**Data files**: Stored in `~/.mtgc/` (override with `MTGC_HOME` env):
-- `collection.sqlite` — card collection database
-- `AllPrintings.json` — MTGJSON card data (for booster simulation)
-- `AllPricesToday.json` — MTGJSON price data
+A physical card is a row in `collection`, linked to a `printings` row (specific set + collector number), which links to a `cards` row (oracle identity). Each collection entry carries status (`owned` / `ordered` / `listed` / `sold` / `traded` / `gifted` / `lost` / `removed`), condition, finish, language, purchase price, optional sale price, source, optional FK to `orders`, and optional mutually-exclusive FK to either `decks` or `binders`. Status changes append to `status_log`; deck/binder moves append to `movement_log`. Prices live in an append-only `prices` time series with a `latest_prices` view. Sealed products have their own collection table (`sealed_collection`) and price series.
 
-## Usage
+## Deployment
 
-### Ingest cards by ID
-
-Add cards using their printed rarity letter, collector number, and set code. No Anthropic API key required.
-
-```bash
-mtg ingest-ids --id R 0200 EOE                        # Single card
-mtg ingest-ids --id R 0200 EOE --id C 0075 EOE        # Multiple cards
-mtg ingest-ids --id C 0187 EOE foil                    # Foil card
-mtg ingest-ids --id P 0012 SPG --source "promo pack"   # With source tag
-mtg ingest-ids --id R 0200 EOE --condition LP          # Set condition
-```
-
-Rarity codes: C (common), U (uncommon), R (rare), M (mythic), P (promo), L (land), T (token)
-
-### Ingest cards from corner photos
-
-Photograph the bottom-left corners of your cards. Claude Vision reads the rarity, collector number, set code, and foil status from the printed text.
+The repo ships rootless Podman Quadlet scripts under `deploy/` for Linux and parallel `mac-*.sh` scripts for macOS. Each instance gets its own image tag, data volume, env file, and port — no sudo, no port collisions. CI auto-deploys `prod` on push to `main`.
 
 ```bash
-mtg ingest-corners photo.jpg                           # Single photo
-mtg ingest-corners *.jpg                               # Multiple photos
-mtg ingest-corners photo.jpg --review                  # Review before adding
-mtg ingest-corners photo.jpg --source "GP Vegas"       # Tag with source
-mtg ingest-corners photo.jpg --condition LP            # Set condition
+bash deploy/setup.sh my-feature --test    # ~seconds, pre-built fixture
+systemctl --user start mtgc-my-feature
+bash deploy/teardown.sh my-feature --purge
 ```
 
-### Ingest orders from TCGPlayer or Card Kingdom
-
-Import purchase orders to track cards as "ordered" with seller and pricing info. Supports TCGPlayer saved HTML pages (including paginated multi-file orders), TCGPlayer text (clipboard paste), and Card Kingdom text.
-
-```bash
-mtg ingest-order order.html                            # Single order page
-mtg ingest-order page1.html page2.html page3.html      # Multiple pages (paginated)
-mtg ingest-order order.txt -f tcg_text                  # Explicit format
-mtg ingest-order --dry-run order.html                   # Preview without saving
-mtg ingest-order --status owned order.html              # Import as owned (default: ordered)
-pbpaste | mtg ingest-order                              # From clipboard via stdin
-```
-
-Ingestion is idempotent — re-importing the same order (same order number + seller) is a no-op. Non-MTG products (Pokemon, Lorcana, Disney Lorcana) are automatically skipped. Treatment variants (borderless, extended art, showcase) are matched to the correct Scryfall printing.
-
-### Manage orders
-
-```bash
-mtg orders list                  # List all orders with card counts and totals
-mtg orders show 27               # Show order details with per-card printings
-mtg orders receive 27            # Batch flip all cards in order from ordered → owned
-```
-
-### Import/Export
-
-```bash
-# Import from other platforms
-mtg import cards.csv                      # Auto-detect format
-mtg import cards.csv -f moxfield          # Explicit format
-mtg import cards.csv --dry-run            # Preview without saving
-
-# Export to other platforms
-mtg export -f moxfield -o collection.csv
-mtg export -f archidekt -o collection.csv
-mtg export -f deckbox -o collection.csv
-mtg export -f moxfield --set DMU -o dmu.csv       # Filter by set
-mtg export -f moxfield --name "Lightning" -o l.csv # Filter by name
-```
-
-### Browse and manage collection
-
-```bash
-# List and filter
-mtg list                          # All cards (default limit: 50)
-mtg list --set DMU                # By set
-mtg list --name "Lightning"       # By name (partial match)
-mtg list --foil                   # Only foils/etched
-mtg list --nonfoil                # Only non-foils
-mtg list --condition LP           # By condition
-mtg list --source "GP Vegas"      # By source
-mtg list --limit 100              # Change result limit
-mtg list --offset 50              # Pagination
-
-# View details
-mtg show 42                       # Full details for entry #42
-
-# Edit entries
-mtg edit 42 --condition LP        # Update condition
-mtg edit 42 --finish foil         # Update finish (nonfoil, foil, etched)
-mtg edit 42 --price 5.99          # Set purchase price
-mtg edit 42 --language Japanese   # Set language
-mtg edit 42 --source "trade"      # Set source
-mtg edit 42 --notes "SP card"     # Set notes
-mtg edit 42 --tags "modern,staple" # Set tags
-mtg edit 42 --tradelist 1         # Flag as tradelist (also: --alter, --proxy, --signed, --misprint)
-mtg edit 42 --status sold         # Update status (owned/ordered/listed/sold/removed)
-
-# Delete entries
-mtg delete 42                     # Remove entry (with confirmation)
-mtg delete 42 -y                  # Skip confirmation
-
-# Stats
-mtg stats                         # Collection summary
-```
-
-### Wishlist
-
-```bash
-mtg wishlist add "Lightning Bolt"             # Add by card name
-mtg wishlist list                             # List all wishlist entries
-mtg wishlist fulfill 1                        # Mark entry as fulfilled
-mtg wishlist remove 1                         # Delete entry
-```
-
-### Caching and data management
-
-```bash
-# Cache all Scryfall card data (bulk download, 3 API calls)
-mtg cache all                     # First run: downloads ~300MB, caches ~80k cards
-mtg cache all                     # Subsequent: skips cached sets, processes only new ones
-mtg cache all --force             # Reprocess all sets
-
-# MTGJSON data (for booster pack simulation and prices)
-mtg data fetch                    # Download AllPrintings.json
-mtg data fetch-prices             # Download AllPricesToday.json
-
-# Database management
-mtg db init                       # Initialize database
-mtg db init --force               # Recreate tables
-mtg db refresh                    # Re-fetch Scryfall data for cached printings
-mtg db refresh --all              # Refresh all printings
-```
-
-### Web UI
-
-```bash
-mtg crack-pack-server                        # Start on default port 8080
-mtg crack-pack-server --port 3000            # Custom port
-```
-
-Pages available at `http://localhost:8080`:
-- **Collection** (`/collection`) — Browse, filter, and manage your collection with grid/table views, set browsing, and "include unowned" mode
-- **Crack-a-Pack** (`/crack`) — Virtual booster pack simulator with price data
-- **Explore Sheets** (`/sheets`) — Browse booster sheet layouts by set and product type
-- **Card Ingestor** (`/ingestor-ocr`) — Upload card images for OCR-based identification and collection entry
-- **Decks** (`/decks`) — Create and manage decks with mainboard/sideboard/commander zones
-- **Binders** (`/binders`) — Organize cards into named binders
-- **Order Ingestor** (`/ingestor-order`) — Import TCGPlayer/Card Kingdom orders via paste or file upload
-
-## Data Model
-
-Each physical card you own is stored as a separate row with:
-
-| Field | Description |
-|-------|-------------|
-| Printing | Scryfall ID linking to specific set/collector number |
-| Status | owned, ordered, listed, sold, removed (with audit log) |
-| Condition | Near Mint, Lightly Played, Moderately Played, Heavily Played, Damaged |
-| Finish | nonfoil, foil, etched |
-| Language | Default: English |
-| Purchase price | Optional (auto-populated from order ingestion) |
-| Sale price | Optional (for sold cards) |
-| Acquired date | Auto-set on import |
-| Source | corner_ingest, manual_id, moxfield_import, order_import, etc. |
-| Order | Optional link to purchase order (seller, order number, totals) |
-| Deck | Optional assignment to a named deck (with zone: mainboard/sideboard/commander) |
-| Binder | Optional assignment to a named binder (mutually exclusive with deck) |
-| Flags | tradelist, alter, proxy, signed, misprint |
-
-## How It Works
-
-1. **Card Identification**: Manual entry (rarity/CN/set), Claude Vision (corner photos), local OCR + Claude (full card photos), or order import (TCGPlayer/Card Kingdom)
-2. **Scryfall Lookup**: Cards resolved by set code + collector number via Scryfall API. Order imports use treatment-aware matching to resolve borderless, extended art, and showcase variants to the correct printing.
-3. **Local Caching**: Full card data cached in SQLite to avoid repeated API calls. `mtg cache all` bulk-caches all ~80k cards from Scryfall's bulk data endpoint.
-4. **Collection Storage**: Cards added to your collection with finish, condition, source metadata, and lifecycle status tracking. Order-imported cards are linked to their purchase order for per-seller tracking.
+See `CLAUDE.md` for the deployment details.
 
 ## Development
 
 ```bash
-uv sync                   # Install dependencies
-uv run pytest             # Run tests (some require ANTHROPIC_API_KEY)
-uv run ruff check mtg_collector/  # Lint
+uv sync                                                              # Install deps
+uv run ruff check mtg_collector/                                     # Lint
+uv run pytest tests/ --ignore=tests/ui --ignore=tests/integration    # Unit tests
 ```
 
-### UI scenario tests
-
-UX regression tests using Claude Vision to drive a headless browser through real user flows. Each scenario is a YAML file describing a goal in natural language — Claude figures out the clicks, fills, and navigation to accomplish it, screenshotting at every step.
-
-```bash
-# One-time: install Chromium for Playwright
-uv run shot-scraper install
-
-# Start a test instance (fast: pre-built fixture, no network needed)
-bash deploy/setup.sh ui-test --test
-systemctl --user start mtgc-ui-test
-
-# Or with full data (requires seed volume)
-bash deploy/setup.sh ui-test --init
-systemctl --user start mtgc-ui-test
-
-# Run all UI scenarios (requires ANTHROPIC_API_KEY)
-uv run pytest tests/ui/ -v --instance ui-test
-```
-
-Scenarios live in `tests/ui/scenarios/`. To add a new one, create a YAML file with a `description` field and annotate it with related issue/PR numbers. See `tests/ui/scenarios/sealed_add_and_table_view.yaml` for an example.
+Three test tiers beyond the unit suite (each requires a running container instance): `tests/integration/` for API tests, `tests/ui/` for Playwright + Claude Vision UX scenarios, and the opt-in `--scryfall` corpus that compares the local search compiler against Scryfall's live results. `CLAUDE.md` has the full matrix.
 
 ## License
 
