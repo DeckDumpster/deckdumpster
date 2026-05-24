@@ -1,0 +1,13 @@
+# Scenario: Change a copy's finish from the collection card modal
+#
+# Related:
+#   issues: []
+#   pull_requests: [261]
+
+description: >
+  When viewing a card in the collection modal I can use the inline
+  finish select inside the owned copy's section to switch finishes.
+  The modal refreshes the copies list in place (no navigation), the
+  copy's header label updates to reflect the new finish, and the
+  collection grid behind the modal re-fetches so the foil treatment
+  tag on the row matches.

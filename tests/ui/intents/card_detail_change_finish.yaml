@@ -1,0 +1,12 @@
+# Scenario: Change a copy's finish from the card detail page
+#
+# Related:
+#   issues: []
+#   pull_requests: [261]
+
+description: >
+  From the card detail page I can use the inline finish select in an
+  owned copy's section to switch the copy between the finishes its
+  printing supports. After I choose a different finish the page
+  reloads and the copy's header label updates to reflect the new
+  finish.

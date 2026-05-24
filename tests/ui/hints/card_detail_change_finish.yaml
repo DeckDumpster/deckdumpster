@@ -1,0 +1,23 @@
+start_page: /card/fdn/100
+involves:
+  - 'copy section (class .copy-section) inside the card detail page'
+  - 'copy header text starting "Nonfoil Near Mint —" before the change'
+  - 'inline finish select (class .change-finish-select)'
+  - 'after change the page reloads and the copy header text starts "Foil Near Mint —"'
+fixture_data:
+  card_name: "Beast-Kin Ranger"
+  set_code: "fdn"
+  collector_number: "100"
+  initial_finish: "nonfoil"
+  target_finish: "foil"
+  printing_finishes: ["nonfoil", "foil"]
+notes: >
+  1. Navigate to /card/fdn/100 (Beast-Kin Ranger, 1 owned copy id=3,
+     currently nonfoil; printing supports nonfoil + foil so the select
+     renders).
+  2. Wait for the copy section and assert the header shows
+     "Nonfoil Near Mint".
+  3. Change the .change-finish-select value to "foil" — this PUTs
+     /api/collection/3 and calls window.location.reload().
+  4. Wait for the page to render the new header "Foil Near Mint" and
+     verify the copy section is still present afterwards.
