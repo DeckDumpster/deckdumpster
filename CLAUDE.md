@@ -1,340 +1,299 @@
 ## Project Overview
 
-MTG Card Collection Builder — Python CLI + web UI for managing Magic: The Gathering collections. Cards enter via Claude Vision (corner photos), OCR (full card photos), manual ID entry, or order ingestion (TCGPlayer/Card Kingdom). Card data lives in a local SQLite database (populated via `mtg setup` / `mtg cache all` from Scryfall bulk data). All runtime lookups use the local DB — no network calls. Web UI for collection browsing, virtual booster pack generation, image-based card ingestion, and order import. Import/export to Moxfield, Archidekt, Deckbox.
+MTG Card Collection Builder. Web app (primary) plus a CLI (bulk ingest / scripting / batch jobs). All runtime data lives in a local SQLite database under `~/.mtgc/`. Card data, prices, and sealed-product catalogue are pulled from Scryfall, MTGJSON, and TCGPlayer **only during setup / scheduled refresh** — every page render, search, and API call hits SQLite. The web UI is what users actually touch; the CLI is for headless flows (corner / OCR / order ingestion, exports, deploy automation).
 
 ## Development notes
 
-- **Always use `uv`** for all Python operations (not pip/venv/make): `uv sync`, `uv run pytest`, `uv run ruff check mtg_collector/`, `uv run mtg ...`
-- Code, models, deploy scripts, all go in the repo.
-- STORE DATA IN THE LOCAL DB. DO NOT add website queries that require the internet at runtime.
-- `ruff` is a dev dependency — always available via `uv run ruff`
-- **NEVER add fallback logic.** Errors should propagate to the user.
-- No fallback content, no silent defaults, no swallowed exceptions.
-- As few error paths as possible. Let it crash visibly.
-- Tests use pre-populated `tests/fixtures/test-cards.sqlite` for offline testing. Corner identification tests require `ANTHROPIC_API_KEY`.
-- Aggressively limit modality. Defaults are good enough for everyone.
-- **Tests that demonstrate bugs must fail.** If a test exists to reproduce a known bug, it should assert the correct/fixed behavior — not the broken behavior. A passing test means the bug is fixed; a failing test means the bug still exists. Never write a test that passes when the bug is present.
-- **After implementing any feature with UI changes, run `/qa-finish`** to generate UI scenario tests (intents, hints, implementations). This is a skill defined in `.claude/skills/qa-finish/SKILL.md`. It deploys a test container, walks the feature, and writes test artifacts under `tests/ui/`.
+- **Always use `uv`** for Python operations: `uv sync`, `uv run pytest`, `uv run ruff check mtg_collector/`, `uv run mtg ...`. Never `pip`, `python -m venv`, or `make`.
+- `ruff` is a dev dependency — `uv run ruff` is always available.
+- **STORE DATA IN THE LOCAL DB. DO NOT add runtime calls to Scryfall / MTGJSON / any external service in request handlers.** External services are only touched during `mtg setup`, `mtg cache`, `mtg data fetch*`, and the systemd `mtgc-prices` / `mtgc-sealed-catalog` / `mtgc-edhrec` timers.
+- **NEVER add fallback logic.** Errors should propagate. No fallback content, no silent defaults, no swallowed exceptions. Let it crash visibly.
+- As few error paths as possible. Aggressively limit modality — defaults are good enough for everyone.
+- **Tests that demonstrate bugs must fail.** A passing test means the bug is fixed; a failing test means the bug still exists. Never assert the broken behaviour.
+- **After implementing any feature with UI changes, run `/qa-finish`.** This skill (`.claude/skills/qa-finish/SKILL.md`) deploys a test container, walks the feature, and writes intent + hint + implementation YAML/Python under `tests/ui/`. Do not hand-write UI scenario tests outside this workflow.
 
 ## Commands
 
 ```bash
 uv sync                                                # Install deps
 uv run ruff check mtg_collector/                       # Lint
-uv run shot-scraper install                            # One-time: install Chromium for Playwright
+uv run shot-scraper install                            # One-time: Chromium for Playwright
 
-# --- Test suites (run in order of speed) ---
+# --- Test tiers, in order of speed ---
 
-# 1. Unit tests — no container, no network (~2.5 min, runs generative fuzz)
+# 1. Unit tests — no container, no network (~2.5 min, includes generative fuzz)
 uv run pytest tests/ --ignore=tests/ui --ignore=tests/integration
 
-# 2. Targeted tests — for fast iteration on specific areas (~20s)
+# 2. Targeted search tests — fast iteration (~20s)
 uv run pytest tests/test_search_compiler.py tests/test_search_corpus.py -q
 
 # 3. Integration tests — requires running container instance (~10s)
-bash deploy/setup.sh <instance> --test                           # fast fixture, no network
+bash deploy/setup.sh <instance> --test
 systemctl --user start mtgc-<instance>
 uv run pytest tests/integration/ --instance <instance>
 
-# 4. Scryfall comparison — opt-in, results cached in tests/.scryfall_cache.sqlite
-#    First run hits Scryfall API; subsequent runs use cache (~30s cached)
+# 4. Scryfall comparison corpus — opt-in, cached in tests/.scryfall_cache.sqlite (~30s warm)
 uv run pytest tests/test_search_scryfall.py --scryfall
 
-# 5. UI scenario tests — requires container + ANTHROPIC_API_KEY (expensive)
+# 5. UI scenario tests — Playwright + Claude Vision, expensive (~15-20 min full suite)
 uv run pytest tests/ui/ -v --instance <instance>
 
-# Always-skipped: 7 order parser tests need real vendor HTML files (not in repo)
+# Always-skipped: 7 order parser tests need real vendor HTML files (not in repo).
 
-mtg setup                                              # Init DB + cache Scryfall + fetch MTGJSON
-mtg setup --demo                                       # Full setup + load demo data (~50 cards)
-mtg setup --demo --from-fixture tests/fixtures/test-data.sqlite  # Fast setup from pre-built fixture
-mtg setup --skip-cache --skip-data                     # Fast start if data is already loaded.
-mtg crack-pack-server                                  # Start web UI on port 8080
+# --- App ---
+mtg setup                                              # DB + Scryfall cache + MTGJSON
+mtg setup --demo                                       # + ~50 demo cards
+mtg setup --demo --from-fixture tests/fixtures/test-data.sqlite   # Fast bring-up
+mtg crack-pack-server                                  # Web UI on port 8080
 
-# Deployment — rootless Podman, per-instance isolation
-bash deploy/seed.sh                      # One-time: create reusable seed data volume (~15-30 min)
-bash deploy/seed.sh --force              # Recreate seed volume (after schema changes)
-bash deploy/setup.sh my-feature --init   # Create instance + clone seed volume (~seconds)
-bash deploy/setup.sh my-feature --test   # Fast setup from pre-built fixture (~seconds, no network)
-bash deploy/setup.sh my-feature          # Create instance without data (auto-port, inherits API key)
-bash deploy/deploy.sh my-feature         # Rebuild image + restart
-bash deploy/teardown.sh my-feature       # Stop + remove (add --purge to delete data)
-systemctl --user start mtgc-my-feature   # Start instance
-systemctl --user status mtgc-my-feature  # Check status
+# --- Deployment (rootless Podman, per-instance isolation) ---
+bash deploy/seed.sh                                    # One-time reusable seed volume (~15-30 min)
+bash deploy/seed.sh --force                            # Recreate after schema migrations
+bash deploy/setup.sh <name> --test                     # Pre-built fixture (~seconds)
+bash deploy/setup.sh <name> --init                     # Clone seed volume (~seconds)
+bash deploy/setup.sh <name>                            # No data (auto-port, inherits API key)
+bash deploy/deploy.sh <name>                           # Rebuild image + restart
+bash deploy/teardown.sh <name> [--purge]               # Stop / remove
+bash deploy/prune-instances.sh                         # Clean up orphaned test instances
+systemctl --user start mtgc-<name>                     # Start / status
 ```
 
-## Data Model
+## Web routes
+
+The HTTP server is `mtg_collector/cli/crack_pack_server.py` — a single-file threaded stdlib `http.server` with manual path dispatch in `do_GET`/`do_POST`/`do_PUT`/`do_DELETE`. SSE is used for long-running ingest processing. No framework.
+
+### HTML pages
+| Path | What it serves |
+|---|---|
+| `/` | Homepage with nav to every section |
+| `/collection` | The main collection browser (search, filter, modal, grid/table) |
+| `/card/:set/:cn` | Standalone card detail page (printings, copies, price chart, history) |
+| `/decks`, `/decks/:id`, `/deck-builder/:id` | Deck list + unified detail/builder page |
+| `/binders` | Binder list and detail |
+| `/sealed` | Sealed product inventory and open-pack flow |
+| `/orders`, `/orders/:id` | Order list + per-order detail |
+| `/crack` | Virtual booster pack cracker |
+| `/sheets`, `/set-value` | Booster sheet explorer and per-set price reports |
+| `/upload`, `/recent`, `/process`, `/disambiguate` | OCR ingest pipeline (drop → background → status → resolve ambiguous matches) |
+| `/ingest-corners` | Corner-photo ingest UI |
+| `/ingestor-ids` | Manual rarity / CN / set entry |
+| `/ingestor-order` | Paste / upload TCGPlayer or Card Kingdom orders |
+| `/import-csv` | Moxfield / Archidekt / Deckbox CSV import |
+| `/search-help` | Full Scryfall-style search syntax reference |
+
+### Key API namespaces
+- `/api/collection`, `/api/collection/copies`, `/api/collection/:id/*`, `/api/collection/bulk-delete`
+- `/api/search`, `/api/search-suggest`, `/api/cards/by-name`, `/api/card/by-set-cn`, `/api/set-browse/:set_code`
+- `/api/decks`, `/api/decks/:id/*`, `/api/deck-builder/*`
+- `/api/binders`, `/api/binders/:id/*`
+- `/api/orders`, `/api/orders/:id/*`, `/api/order/{parse,resolve,commit}`
+- `/api/sealed/products`, `/api/sealed/collection`, `/api/sealed/open`, `/api/sealed/prices/*`, `/api/sealed/from-tcgplayer`
+- `/api/wishlist`, `/api/wishlist/bulk`
+- `/api/ingest2/*` (15+ endpoints for the OCR batch pipeline), `/api/corners/*`, `/api/ingest-ids/*`, `/api/import/*`
+- `/api/views`, `/api/settings`, `/api/shorten`, `/api/sets`, `/api/cached-sets`
+- `/api/fetch-prices`, `/api/prices-status` (used by the scheduled price timer)
+- `/api/jumpstart/*` (Jumpstart-specific helpers)
+
+## Data model
 
 ### Core join chain
 
 ```
-cards (oracle_id PK)          — Abstract card identity (name, colors, mana cost)
-  └─ printings (printing_id PK, FK oracle_id, FK set_code)  — Specific printing (art, rarity, image)
-       └─ collection (id PK, FK printing_id, FK? order_id, FK? deck_id, FK? binder_id)
-            ├─ orders (id PK)    — Purchase order (TCGPlayer/CK seller, totals, shipping)
-            ├─ decks (id PK)     — Named deck (format, sleeve, deck box)
-            └─ binders (id PK)   — Named binder (color, type)
+cards (oracle_id PK)             — abstract card identity (name, colours, mana cost, oracle text)
+  └─ printings (printing_id PK)  — specific printing (art, rarity, image_uri, finishes)
+       └─ collection (id PK)     — one row per physical card you own/ordered/sold
+            ├─ orders (id PK)    — purchase order (vendor, totals, shipping)
+            ├─ decks (id PK)     — named deck (format, sleeve, deck box, zones)
+            └─ binders (id PK)   — named binder (colour, type)
 
-sets (set_code PK)            — Set metadata, cards_fetched_at for cache status
-collection_views (id PK)      — Saved filter configurations for the collection page
+sets (set_code PK)               — set metadata, `cards_fetched_at` cache marker
+collection_views (id PK)         — saved filters + column layout for the collection page
 ```
 
-This is the fundamental chain: **card** → **printing** → **collection entry** (→ optional **order**).
-
-- `collection_view` (VIEW) denormalizes this entire chain into one queryable view.
-- `latest_prices` (VIEW) gives most recent price per card/source/type.
-
-### Key lookups
-
-- Card by name: `cards.name` (indexed)
-- Printing by set+CN: `printings(set_code, collector_number)` (unique)
-- Collection by printing ID: `collection.printing_id` (indexed)
-- Prices join to printings via `(set_code, collector_number)` — **not** by printing_id
-
-### Price data pipeline
-
-MTGJSON UUIDs → `mtgjson_uuid_map(uuid → set_code, collector_number)` → `prices` table (append-only time series). `latest_prices` view uses global max `observed_at`. Sources: TCGplayer, CardKingdom.
+`card → printing → collection entry → optional order` is the fundamental chain. `collection_view` (VIEW) denormalises it. `latest_prices` (VIEW) gives the most recent price per (set_code, collector_number, source, type).
 
 ### Other tables
 
 - `wishlist` — FK to `cards` (oracle-level) or `printings` (specific). Priority, max price, fulfilled status.
-- `ingest_cache` — Cached OCR + Claude results by image MD5 (avoids reprocessing).
-- `ingest_images` — Persistent web UI ingest pipeline state (READY_FOR_OCR → PROCESSING → DONE/ERROR).
-- `ingest_lineage` — Maps collection entries back to source images.
-- `decks` — Named decks with format, sleeve color, deck box, storage location. Origin metadata: `origin_set_code`, `origin_theme`, `origin_variation` for Jumpstart/precon tracking.
-- `deck_expected_cards` — Expected card list for precon/Jumpstart decks (keyed on `printing_id`). Used for completeness tracking and reassembly. Completeness comparison still uses `oracle_id` (via join through `printings`).
-- `binders` — Named binders with color, type, storage location.
-- `collection_views` — Saved filter/search configurations for the collection page.
-- `status_log` — Append-only audit of collection status changes.
-- `movement_log` — Append-only audit of deck/binder assignment changes (from/to deck, binder, zone).
-- `settings` — Key-value config (e.g. `price_sources`, `image_display`).
-- `batches` — Unified batch groupings for all ingestion flows (corner, OCR, CSV import, manual ID, orders, sealed_open) with optional deck assignment.
-- `sealed_product_cards` — Pre-resolved card contents for sealed products. Populated during MTGJSON import by resolving `contents_json` deck/card references. Used by the "Open Product" flow to add known cards to collection.
-- Schema v37 with auto-migrations in `schema.py`.
-- Repository classes in `models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `BatchRepository`, `SealedProductCardRepository`.
-- **Deck/binder exclusivity**: A collection entry can be in one deck OR one binder, not both. `deck_id` and `binder_id` are mutually exclusive (enforced by repository logic, returns HTTP 409 on conflict). Use `move_cards()` to atomically reassign.
+- `ingest_cache` — cached OCR + Claude results by image MD5 to avoid reprocessing.
+- `ingest_images` — persistent web ingest pipeline state (`READY_FOR_OCR` → `PROCESSING` → `DONE` / `ERROR`).
+- `ingest_lineage` — maps collection entries back to the source image.
+- `decks`, `deck_cards`, `deck_states` — decks with format, sleeve, box, location, and Jumpstart/precon origin metadata.
+- `deck_expected_cards` — expected card list (precons, Jumpstart). Keyed on `printing_id`; completeness compared via `oracle_id` join.
+- `binders` — colour, type, storage location.
+- `collection_views` — saved filter/search configurations.
+- `status_log`, `movement_log` — append-only audit of status changes and deck/binder moves.
+- `settings` — key-value config (`price_sources`, `image_display`, …).
+- `batches` — unified groupings for every ingestion flow (corner, OCR, CSV, manual ID, orders, sealed_open) with optional deck assignment.
+- `sealed_products`, `sealed_product_cards` — MTGJSON-derived sealed product catalogue with pre-resolved card contents.
+- `sealed_collection`, `sealed_prices`, `latest_sealed_prices` (VIEW) — owned sealed inventory and price history.
+- `mtgjson_uuid_map`, `mtgjson_printings`, `mtgjson_booster_sheets`, `mtgjson_booster_configs`, `tcgplayer_groups` — MTGJSON / TCGPlayer reference data.
+- `edhrec_recommendations` — populated by the `mtgc-edhrec` timer.
+- `prices`, `price_fetch_log` — append-only price time series and ingest log.
 
-Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB` env).
+Schema version **43**, with auto-migrations in `db/schema.py`. Repository classes in `db/models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `SealedProductRepository`, `SealedProductCardRepository`, `SealedCollectionRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `BatchRepository`.
+
+Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB`).
 
 ### Conventions
 
-- Collection status lifecycle: `owned` → `ordered` → `listed` → `sold` → `removed`
-- RARITY_MAP codes: `C` common, `U` uncommon, `R` rare, `M` mythic, `P` promo, `L` land (treated as common), `T` token
-- `colors`, `finishes`, `promo_types` columns store JSON arrays as TEXT — use `json.loads()`, not SQL array ops
+- Collection status lifecycle: `owned` → `ordered` → `listed` → `sold` / `traded` / `gifted` / `lost` / `removed`.
+- RARITY_MAP: `C` common, `U` uncommon, `R` rare, `M` mythic, `P` promo, `L` land (= common), `T` token.
+- `colors`, `finishes`, `promo_types` columns store JSON arrays as TEXT — use `json.loads()`, never SQL array ops.
+- `acquired_at` is stored as a full ISO 8601 UTC string (`2024-03-15T12:34:56.789Z`); the `added:` search keyword compares on the 19-char prefix in the user's local timezone.
 
-## Key Patterns
-
-### Card image display
-
-`collection.html` is the canonical reference for how cards are displayed. Card images come from Scryfall CDN via `printings.image_uri`. The `image_display` setting (`crop` or `normal`) controls which Scryfall image size is used.
-
-### Card detail page
-
-Standalone page at `/card/:set/:cn` (e.g. `/card/lci/150`). Served by `card_detail.html`, with page-specific styles in `card-detail.css` and logic in `card-detail.js`. First consumer of the shared CSS/JS foundation. API endpoint: `GET /api/card/by-set-cn?set=X&cn=Y`. Linked from the collection modal via "Full page" badge.
-
-### Unified deck page
-
-Both `/decks/:id` and `/deck-builder/:id` serve `deck_builder.html` with `deck-builder.js` and `deck-builder.css`. The page combines the builder's type-grouped list view with the detail page's grid view, zone tabs, edit modal, expected list import, and completeness tracking. View toggle switches between list (type-grouped, multi-column) and grid (card images with rarity borders). Zone tabs filter the grid view; list view shows all zones combined. Card names link to `/card/:set/:cn`. Deck list page (`decks.html`) links via single "View" link to `/decks/:id`.
-
-### Shared CSS/JS foundation
-
-`shared.css` and `shared.js` in `mtg_collector/static/` consolidate common styles and utilities duplicated across pages. New pages should import these; existing pages are untouched. `shared.css` uses CSS custom properties (`:root` variables) and `.site-header` (not bare `header`) to avoid collisions. `shared.js` exports: `esc()`, `parseJsonField()`, `renderMana()`, `getRarityColor()`, `RARITY_COLORS`, `DFC_LAYOUTS`, `getCkUrl()`.
-
-### Rarity/set border gradients
-
-Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-gradient(to bottom, ...)`. Shared JS helpers in `shared.js`: `getRarityColor(rarity)`, `RARITY_COLORS`. Also available in `crack_pack.html`: `getSetColor(cardSetCode, packSetCode)`, `buildCardBadges(card, packSetCode)`, `buildBadges(card, packSetCode)`. Use these for any new card display.
+## Key patterns
 
 ### Collection page filtering
+All filtering is one Scryfall-style query bar (`?q=...`). Standard Scryfall keywords (`c`, `id`, `t`, `o`, `m`, `mv`, `pow`, `tou`, `loy`, `r`, `s`, `cn`, `a`, `ft`, `kw`, `f`, `year`, `layout`, `produces`, `is:`, `has:`) plus collection-only extensions (`status:`, `added:`, `price:`, `deck:`, `binder:`, `order:`, `direction:`, `is:unassigned` / `is:decked` / `is:bindered` / `is:wanted` / `is:unowned`). Default when no `status:` is present: `status:owned OR status:ordered`. `is:unowned` flips the query to a LEFT JOIN against `printings` so unowned cards appear (lets users add a card from the modal). Operators `:`, `=`, `!=`, `>`, `>=`, `<`, `<=` are accepted on numeric/date keywords; the autocomplete suggests both keywords and per-keyword values, with corpus-driven suggestions (artist names, set codes, year/month buckets present in the user's collection) served by `/api/search-suggest`. `added:` resolves dates in the browser's local timezone (the page sends `Intl.DateTimeFormat().resolvedOptions().timeZone` on every `/api/collection` request).
 
-All filtering uses a single Scryfall-style query bar (`?q=...`). Standard Scryfall syntax plus collection extensions: `status:`, `added:`, `price:`, `deck:`, `binder:`, `is:unassigned`, `is:decked`, `is:bindered`, `is:wanted`, `is:unowned`, `order:price`. Default filter: `status:owned OR status:ordered` (when no explicit `status:` in query). `is:unowned` flips the query to a LEFT JOIN against `printings` so cards not yet in the collection appear (useful for adding a card from its modal/detail page). Autocomplete suggests keywords and values. Help page at `/search-help`.
+Search compiler lives in `mtg_collector/search/`: `grammar.py` (tokeniser), `transformer.py` (parser → AST), `compiler.py` (AST → SQL), `keywords.py` (canonical name registry), `dates.py` (timezone-aware date parsing).
 
 ### Card data access policy
+All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
 
-All runtime card lookups MUST use the local database, never the Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. Scryfall API is only used during `mtg setup` / `mtg cache` to populate the local DB.
+### Card image display
+`collection.html` is the canonical reference. Card images come from the Scryfall CDN via `printings.image_uri`. The `image_display` setting (`crop` or `normal`) controls which Scryfall image size is used.
 
-### Bulk data import
+### Card detail page
+Standalone at `/card/:set/:cn` (e.g. `/card/lci/150`). Served by `card_detail.html`, with `card-detail.css` and `card-detail.js`. Linked from the collection modal via the "Full page" badge. API endpoint: `GET /api/card/by-set-cn?set=X&cn=Y`.
 
-Scryfall bulk data is used only during `mtg setup` / `mtg cache all` to populate the local DB. `ScryfallBulkClient` in `services/bulk_import.py` handles this with 100ms rate limiting. 3 HTTP requests total for ~80k cards.
+### Unified deck page
+Both `/decks/:id` and `/deck-builder/:id` serve `deck_builder.html` with `deck-builder.js` and `deck-builder.css`. The page combines the builder's type-grouped list view with the detail page's grid view, zone tabs, edit modal, expected-list import, and completeness tracking. View toggle switches between list (type-grouped, multi-column) and grid (rarity-bordered card images). Zone tabs filter the grid view; list view shows all zones combined. The deck list page (`decks.html`) links via a single "View" link to `/decks/:id`.
 
-### Web server architecture
+### Sealed product flow
+`/sealed` lists products from `sealed_products` (populated by the `mtgc-sealed-catalog` timer from MTGJSON) and the user's own sealed inventory from `sealed_collection`. Opening a product calls `/api/sealed/open`, which uses pre-resolved `sealed_product_cards` rows to insert real `collection` entries (no Scryfall lookup at runtime). Sealed prices are a separate time series (`sealed_prices` + `latest_sealed_prices` view) so booster-box prices don't collide with single-card prices.
 
-`crack_pack_server.py` is a single-file threaded HTTP server (stdlib `http.server`). Routes are dispatched in `do_GET`/`do_POST`/`do_PUT`/`do_DELETE` via URL path matching. SSE for long-running operations (ingest processing). No framework — raw request handling.
+### Shared CSS/JS foundation
+`shared.css` and `shared.js` in `mtg_collector/static/`. New pages should import these; legacy pages still inline their helpers. `shared.css` uses `:root` custom properties and `.site-header` (not bare `header`) to avoid collisions. `shared.js` exports: `esc`, `parseJsonField`, `renderMana`, `formatPrice`, `getRarityColor`, `RARITY_COLORS`, `DFC_LAYOUTS`, `getCkUrl`.
+
+### Rarity / set border gradients
+Cards use CSS custom properties `--rarity-color` and `--set-color` with `linear-gradient(to bottom, …)`. Use `getRarityColor(rarity)` / `RARITY_COLORS` from `shared.js`. `crack_pack.html` additionally exposes `getSetColor`, `buildCardBadges`, `buildBadges` for pack rendering.
+
+### Price formatting
+Use `formatPrice(value)` from `shared.js` for any USD display — it returns `"$3,667.51"` (thousands separators, two decimals). Pages that don't yet import `shared.js` define an inline copy at the top of their script block. The four-decimal API-cost label in `recent.html` is the only deliberate exception.
 
 ### Order ingestion
+`order_parser.py` auto-detects format (`tcg_html`, `tcg_text`, `ck_text`) → `ParsedOrder`. `order_resolver.py` maps vendor set names to DB set codes via `SET_NAME_MAP` + DB lookup, then resolves to specific printings with treatment-aware matching (borderless, extended art, showcase, etched, etc.). Idempotent — duplicate `(order_number, seller_name)` is a no-op.
 
-`order_parser.py` auto-detects format (tcg_html, tcg_text, ck_text) → `ParsedOrder`. `order_resolver.py` maps vendor set names to DB set codes via `SET_NAME_MAP` + DB lookup, then resolves to specific printings with treatment-aware matching. Idempotent — duplicate order_number + seller_name skipped.
+### OCR ingest pipeline
+Web upload at `/upload` enqueues an `ingest_images` row with status `READY_FOR_OCR`. A background thread pool (`_ingest_executor` in `crack_pack_server.py`) picks it up, runs OCR + Claude vision, and moves it through `PROCESSING` → `DONE` (or `ERROR`). `/recent` shows status; `/disambiguate` is the resolution UI for ambiguous matches. `services/agent.py` implements the agentic tool-use loop (two tools: `query_local_db`, `analyze_image`). If `ANTHROPIC_API_KEY` is unset, the server logs `pending image(s) waiting — ANTHROPIC_API_KEY not set, skipping processing` and doesn't process — but it does still serve.
 
-### Agentic OCR (`services/agent.py`)
-
-Claude tool-use loop with two tools: `query_local_db` (SQL against local SQLite) and `analyze_image` (Claude Vision). Used by the web UI ingest pipeline for card identification from photos.
-
-### Claude API retry behavior
-
-Exponential backoff at 3s, 6s, 12s, 24s intervals. Bails immediately on 400 errors (no retry). See `services/claude.py`.
+### Claude API retry behaviour
+Exponential backoff at 3s / 6s / 12s / 24s. Bails immediately on 400 (no retry). See `services/claude.py`.
 
 ### Card ingestion via `resolve_and_add_ids()`
+Both `mtg ingest-ids` and `mtg ingest-corners` funnel through `resolve_and_add_ids()` in `cli/ingest_ids.py`: look up printing by (set_code, collector_number), create a collection entry with finish / condition / source, fail visibly if not cached (tell the user to run `mtg cache all`).
 
-Both `ingest-ids` and `ingest-corners` funnel through `resolve_and_add_ids()` in `cli/ingest_ids.py`:
-1. Look up printing in local DB by set + collector number
-2. Create collection entry with finish, condition, source metadata
-3. If card not found, fail with error telling user to run `mtg cache all`
+### WAL mode
+SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` and `crack_pack_server.py:_get_conn`). Multi-minute price-fetch transactions no longer block readers. **Backup and restore must use `sqlite3.backup()`, not `cp`** — see `tests/ui/conftest.py:_BACKUP_CMD` / `_RESTORE_CMD`. Plain `cp` over the main file leaves WAL state behind; under sustained writes the server can serve stale frames.
 
-## Known Pitfalls
+## Known pitfalls
 
 - **Prices join on `(set_code, collector_number)`, NOT `printing_id`.** The `prices` table has no FK to `printings`. Always join through set_code + collector_number.
 - **`deck_id` and `binder_id` are mutually exclusive.** A collection entry cannot be in both. The repository returns HTTP 409 on conflict. Use `move_cards()` to reassign atomically.
-- **JSON arrays stored as TEXT.** `colors`, `finishes`, `promo_types` are JSON-encoded strings. Use `json.loads()`, never SQL array operations.
-- **Card not in local DB → tell user to run `mtg cache all`.** Do not fall back to Scryfall API. The card simply isn't cached yet.
-- **Test fixture goes stale after schema migrations.** Regenerate with `uv run python scripts/build_test_fixture.py`, then recreate seed volume with `bash deploy/seed.sh --force`. Full fixture (with sealed product contents) requires `~/.mtgc/AllPrintings.json` — run `mtg data fetch` first.
-- **HTML pages share no JS imports (legacy).** Helpers like `getRarityColor()` are copy-pasted between existing pages. New pages should use `shared.css` + `shared.js` instead. The card detail page (`card_detail.html`) is the first to do so.
+- **JSON arrays stored as TEXT.** `colors`, `finishes`, `promo_types`, `keywords` are JSON-encoded strings. Use `json.loads()`, never SQL array operations.
+- **Card not in local DB → tell user to run `mtg cache all`.** Do not fall back to Scryfall API.
+- **Test fixture goes stale after schema migrations.** Regenerate with `uv run python scripts/build_test_fixture.py`, then recreate the seed volume with `bash deploy/seed.sh --force`. The full fixture (with sealed product contents) requires `~/.mtgc/AllPrintings.json` — run `mtg data fetch` first.
+- **HTML pages share no JS imports (legacy).** Helpers like `getRarityColor()` and `formatPrice()` are inlined in older pages. New pages should use `shared.css` + `shared.js`. Don't introduce a new ad-hoc price formatter — use `formatPrice` (or copy its body verbatim if the page can't load `shared.js`).
+- **Restoring DB snapshots with `cp` under WAL mode is broken.** See the "WAL mode" patterns section. Use `sqlite3.backup()`.
 
 ## Deployment
 
-Rootless Podman Quadlet. Each instance: separate repo clone, own image (`mtgc:<instance>`), data volume, env file, port. No sudo.
+Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}`/`{{PORT}}` placeholders). All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` placeholders), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
-- `~/.config/mtgc/default.env` has the shared API key; setup.sh copies it to new instances automatically
-- `~/.config/mtgc/<instance>.env` — per-instance env file
-- `~/.config/containers/systemd/mtgc-<instance>.container` — generated Quadlet unit
-- Service name: `mtgc-<instance>`, container name: `systemd-mtgc-<instance>`
-- Server checks `ANTHROPIC_API_KEY` at startup and fails fast if missing
-- CI: push to main → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch for other instances.
-- Deploy repo (private CI config): `rgantt/efj-mtgc-deploy`
+- `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
+- `~/.config/mtgc/<instance>.env` — per-instance env.
+- `~/.config/containers/systemd/mtgc-<instance>.container` — generated Quadlet unit.
+- Service name: `mtgc-<instance>`; container name: `systemd-mtgc-<instance>`.
+- Server logs a warning and skips OCR processing if `ANTHROPIC_API_KEY` is unset — it does **not** fail to start.
+- CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
+- Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
 
-## Container Validation
+## Container validation
 
-**Always validate new features in isolated containers before creating PRs.** This uses the standard deployment scripts with demo data pre-loaded. Do not run the application locally or use `mtg` commands directly on the host.
+**Always validate UI / API changes in an isolated container before opening a PR.** Use the deployment scripts; never run the server on the host.
 
 ### Setup (Linux)
 
-From the repo clone with your feature branch checked out:
-
 ```bash
-# Fast path: pre-built fixture, no network needed (~seconds)
+# Fast: pre-built fixture, no network
 bash deploy/setup.sh <instance> --test
 systemctl --user start mtgc-<instance>
 sleep 5
 
-# Full path: clone seed volume (requires seed.sh first)
-bash deploy/seed.sh
+# Full data: clone seed volume (run deploy/seed.sh once first)
 bash deploy/setup.sh <instance> --init
 systemctl --user start mtgc-<instance>
-sleep 5                                     # Wait for server startup
 ```
 
-`--test` uses a pre-built fixture DB baked into the container image — no seed volume or network required. `--init` clones the seed volume (run `seed.sh` first). Both load demo data (~50 cards + sealed products).
-
-Discover the assigned port:
+`--test` uses `tests/fixtures/test-data.sqlite` baked into the image plus `--demo` data (~50 cards + sealed products); no seed volume needed. `--init` clones the `mtgc-seed-data` volume (DB + Scryfall cache + MTGJSON catalogue + demo data) — falls back to a slow `mtg setup --demo` if the volume doesn't exist.
 
 ```bash
-podman port systemd-mtgc-<instance> 8081/tcp
+podman port systemd-mtgc-<instance> 8081/tcp                            # discover assigned port
 ```
 
 ### Setup (macOS)
 
-Prerequisites (one-time):
-
 ```bash
-brew install podman
-podman machine init
-podman machine start    # Also needed after each reboot
-```
-
-Then create an instance:
-
-```bash
-bash deploy/mac-setup.sh <instance> --test   # Fast: pre-built fixture (~seconds)
-bash deploy/mac-setup.sh <instance> --init   # Full: download + init data (~15-30 min)
-```
-
-The script auto-starts the container and prints the URL. Discover the port:
-
-```bash
-podman port mtgc-<instance> 8081/tcp
+brew install podman && podman machine init && podman machine start      # one-time
+bash deploy/mac-setup.sh <instance> --test                              # ~seconds
+bash deploy/mac-setup.sh <instance> --init                              # full data (~15-30 min)
+podman port mtgc-<instance> 8081/tcp                                    # discover port
 ```
 
 ### Validate
 
-The server uses HTTPS with a self-signed cert. Use `curl -ks` for all requests.
+The server uses HTTPS with a self-signed cert — `curl -ks` for everything.
 
 ```bash
-# Linux:
-PORT=$(podman port systemd-mtgc-<instance> 8081/tcp | grep -oP ':\K[0-9]+' | head -1)
-# macOS:
-PORT=$(podman port mtgc-<instance> 8081/tcp | cut -d: -f2 | head -1)
+PORT=$(podman port systemd-mtgc-<instance> 8081/tcp | grep -oP ':\K[0-9]+' | head -1)     # Linux
+PORT=$(podman port mtgc-<instance> 8081/tcp | cut -d: -f2 | head -1)                       # macOS
 
-# 1. Verify new page loads (HTTP 200 + non-empty body)
-curl -ks -o /dev/null -w "%{http_code} %{size_download}" "https://localhost:${PORT}/<your-page>"
-
-# 2. Verify nav link exists on homepage
-curl -ks "https://localhost:${PORT}/" | grep -o 'href="/<your-page>"'
-
-# 3. Test API endpoints with edge-case inputs (empty body, missing fields)
-curl -ks -X POST "https://localhost:${PORT}/api/<your-endpoint>" \
+curl -ks -o /dev/null -w "%{http_code} %{size_download}\n" "https://localhost:${PORT}/<page>"
+curl -ks "https://localhost:${PORT}/" | grep -o 'href="/<page>"'
+curl -ks -X POST "https://localhost:${PORT}/api/<endpoint>" \
   -H "Content-Type: application/json" -d '{}'
+
+journalctl --user -u mtgc-<instance> -f         # Linux logs
+podman logs -f mtgc-<instance>                  # macOS logs
 ```
 
-Check logs if anything fails:
+### Visual validation
 
 ```bash
-# Linux:
-journalctl --user -u mtgc-<instance> -f
-# macOS:
-podman logs -f mtgc-<instance>
-```
-
-### Visual Validation
-
-Use `shot-scraper` to screenshot key pages for visual regression checks. The self-signed cert requires `--browser-arg '--ignore-certificate-errors'`.
-
-```bash
-mkdir -p screenshots
-
-uv run shot-scraper "https://localhost:${PORT}/" \
-  --browser-arg '--ignore-certificate-errors' \
-  -o screenshots/index.png
-
 uv run shot-scraper "https://localhost:${PORT}/collection" \
   --browser-arg '--ignore-certificate-errors' \
   -o screenshots/collection.png
-
-uv run shot-scraper "https://localhost:${PORT}/sealed" \
-  --browser-arg '--ignore-certificate-errors' \
-  -o screenshots/sealed.png
 ```
 
 ### Teardown
 
 ```bash
-# Linux:
-bash deploy/teardown.sh <instance> --purge       # Stop + remove container, volume, env, and image
-# macOS:
-bash deploy/mac-teardown.sh <instance> --purge   # Stop + remove container, volume, env, and image
+bash deploy/teardown.sh <instance> --purge          # Linux
+bash deploy/mac-teardown.sh <instance> --purge      # macOS
 ```
 
 ### Notes
+- Instance name should match your branch (e.g. `issue44`, `my-feature`).
+- Data persists on the volume across container restarts; only `--purge` removes it.
+- After schema migrations, recreate the seed volume (`bash deploy/seed.sh --force`) and the test fixture (`uv run python scripts/build_test_fixture.py`).
+- `deploy/prune-instances.sh` cleans up orphaned test instances accumulated from interrupted runs.
 
-- Instance name should match your branch/feature (e.g., `issue44`, `my-feature`)
-- **For UI tests, prefer `--test`** — uses a pre-built fixture DB (~27 MB, 11 sets) baked into the image. No seed volume or network needed. Starts in seconds.
-- **For full data, use `--init`** — clones the seed volume. Run `bash deploy/seed.sh` first (fast no-op if it exists).
-- `--test` uses `tests/fixtures/test-data.sqlite` (regenerate with `uv run python scripts/build_test_fixture.py`).
-- `--init` clones the `mtgc-seed-data` volume (DB, Scryfall cache, MTGJSON data, ~50 demo cards). If no seed volume exists, it falls back to the slow `mtg setup --demo` path.
-- After schema migrations, recreate the seed volume with `bash deploy/seed.sh --force` and regenerate the test fixture.
-- Data persists on the volume across container restarts. Only `--purge` removes it.
+## UI scenario tests
 
-## UI Scenario Tests
-
-Data-driven UX regression tests using Claude Vision + Playwright. Excluded from `uv run pytest` by default (expensive — each scenario makes Claude API calls). Run them explicitly:
+Data-driven UX regression tests using Playwright + Claude Vision. Excluded from default `pytest` runs (expensive — each scenario fans out into multiple Claude calls). Run explicitly with a live container:
 
 ```bash
 uv run pytest tests/ui/ -v --instance <instance>
 ```
 
-**Creating new UI tests:** After implementing any feature with UI changes, run the `/qa-finish` skill (defined in `.claude/skills/qa-finish/SKILL.md`). This skill:
-1. Uses a subagent to analyze the diff and propose 2-5 intent-based scenarios
-2. Deploys a test container and walks the feature with `curl`
-3. Writes intent YAML (`tests/ui/intents/`), hint YAML (`tests/ui/hints/`), and implementation Python (`tests/ui/implementations/`)
+**Creating new UI tests:** after any feature with UI changes, run the `/qa-finish` skill (`.claude/skills/qa-finish/SKILL.md`). It:
+1. Analyses the diff with a subagent and proposes 2-5 intent-based scenarios.
+2. Deploys a test container and walks the feature with curl + the live server to gather real selectors and texts.
+3. Writes intent YAML (`tests/ui/intents/`), hint YAML (`tests/ui/hints/`), and Python implementation (`tests/ui/implementations/`).
+4. Runs the new tests against the container before tearing down.
 
-Do NOT create or modify UI scenario tests outside of the `/qa-finish` workflow.
-
+Do **not** create or modify UI scenario tests outside `/qa-finish`. Per-test DB isolation is via session-scoped `sqlite3.backup()` snapshot + per-test restore (see `tests/ui/conftest.py`).
