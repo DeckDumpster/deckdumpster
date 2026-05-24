@@ -1004,7 +1004,8 @@ class CollectionRepository:
                 o.order_number, o.source AS order_source, o.seller_name,
                 o.order_date,
                 il.image_md5, il.image_path, il.card_index,
-                ii.id AS image_id
+                ii.id AS image_id,
+                p.finishes AS available_finishes
             FROM collection c
             LEFT JOIN orders o ON c.order_id = o.id
             LEFT JOIN deck_cards dc ON dc.collection_id = c.id
@@ -1012,6 +1013,7 @@ class CollectionRepository:
             LEFT JOIN binders b ON c.binder_id = b.id
             LEFT JOIN ingest_lineage il ON il.collection_id = c.id
             LEFT JOIN ingest_images ii ON il.image_md5 = ii.md5
+            LEFT JOIN printings p ON c.printing_id = p.printing_id
             WHERE c.printing_id = ?
         """
         params: List[Any] = [printing_id]
