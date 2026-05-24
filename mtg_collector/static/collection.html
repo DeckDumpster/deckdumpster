@@ -315,6 +315,11 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
+  /* Fixed layout: column widths come from the first row's explicit widths
+     (set per-column via [data-col="X"] selectors below). Stops the Card
+     column from resizing as the virtual scroller swaps row ranges in/out,
+     and lets the skeleton match the eventual real-row layout. */
+  table-layout: fixed;
 }
 
 .collection-table th {
@@ -335,6 +340,8 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   padding: 2px 12px;
   border-bottom: 1px solid #0f346033;
   vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .collection-table tr:hover { background: rgba(15, 52, 96, 0.2); }
@@ -351,8 +358,8 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   animation: shimmer 1.5s infinite;
 }
 .skeleton-cell.thumb { width: 146px; height: 44px; display: inline-block; vertical-align: middle; margin-right: 10px; }
-.skeleton-cell.wide { width: 40%; display: inline-block; vertical-align: middle; }
-.skeleton-cell.narrow { width: 30%; }
+.skeleton-cell.wide { width: calc(100% - 156px); display: inline-block; vertical-align: middle; }
+.skeleton-cell.narrow { width: 100%; }
 @keyframes shimmer {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
@@ -698,10 +705,14 @@ a.lineage-link {
   border-radius: 16px;
   box-shadow: 0 12px 40px rgba(0,0,0,0.8);
   padding: 24px;
-  width: 420px;
+  width: 500px;
   max-width: 92vw;
   max-height: 90vh;
   overflow-y: auto;
+}
+.growth-chart-wrap { height: 200px; position: relative; }
+.growth-empty {
+  color: #888; font-size: 0.8rem; padding: 24px 0; text-align: center;
 }
 .stats-modal h2 {
   font-size: 1.1rem;
@@ -769,7 +780,9 @@ a.lineage-link {
 }
 .col-config-dropdown.open { display: block; }
 
-/* Narrow Qty column: card quantities are almost always single digits */
+/* Per-column widths. Under table-layout:fixed the unsized column ("name")
+   absorbs the remaining viewport width, so these only need to match the
+   typical maximum content size — not the worst-case. */
 .collection-table th[data-col="qty"],
 .collection-table td[data-col="qty"] {
   width: 40px;
@@ -777,6 +790,29 @@ a.lineage-link {
   padding-left: 4px;
   padding-right: 4px;
 }
+.collection-table th[data-col="mana"],
+.collection-table td[data-col="mana"] { width: 90px; }
+.collection-table th[data-col="type"],
+.collection-table td[data-col="type"] { width: 170px; }
+.collection-table th[data-col="set"],
+.collection-table td[data-col="set"] { width: 90px; }
+.collection-table th[data-col="collector_number"],
+.collection-table td[data-col="collector_number"] { width: 55px; }
+.collection-table th[data-col="price"],
+.collection-table td[data-col="price"] { width: 160px; }
+.collection-table th[data-col="condition"],
+.collection-table td[data-col="condition"] { width: 50px; text-align: center; }
+.collection-table th[data-col="date_added"],
+.collection-table td[data-col="date_added"] { width: 100px; }
+.collection-table th[data-col="ck_price"],
+.collection-table td[data-col="ck_price"] { width: 90px; }
+.collection-table th[data-col="tcg_price"],
+.collection-table td[data-col="tcg_price"] { width: 90px; }
+/* Name column is intentionally unsized — table-layout:fixed gives it the
+   remaining width. Keep a sensible floor so the thumb doesn't overflow on
+   narrow viewports. */
+.collection-table th[data-col="name"],
+.collection-table td[data-col="name"] { min-width: 220px; }
 
 /* Sort arrow */
 .sort-arrow { font-size: 0.7rem; margin-left: 2px; }
@@ -1890,14 +1926,167 @@ function _renderRarityBlock(counts) {
     </div>`;
 }
 
+let _growthChart = null;
+function _destroyGrowthChart() {
+  if (_growthChart) { _growthChart.destroy(); _growthChart = null; }
+}
+
+async function renderGrowthChart(primarySource) {
+  _destroyGrowthChart();
+  const wrap = document.getElementById('growth-chart-wrap');
+  if (!wrap) return;
+
+  // Reuse the existing /api/collection query string so the chart respects
+  // the user's current search filter.
+  let data;
+  try {
+    const res = await fetch(`/api/collection/growth?${getFetchParams()}`);
+    if (!res.ok) throw new Error('fetch failed');
+    data = await res.json();
+  } catch {
+    wrap.innerHTML = '<div class="growth-empty">Failed to load growth history</div>';
+    return;
+  }
+
+  if (!data.dates || !data.dates.length) {
+    wrap.innerHTML = '<div class="growth-empty">No acquisition history for the current filter</div>';
+    return;
+  }
+
+  const valSeries = primarySource === 'ck' ? data.ck_values : data.tcg_values;
+  const valLabel = primarySource === 'ck' ? 'Card Kingdom value' : 'TCGplayer value';
+
+  const earliest = new Date(data.dates[0]).getTime();
+  const spanDays = (Date.now() - earliest) / 86400000;
+  const pills = document.querySelectorAll('#growth-range-pills .price-range-pill');
+  const ranges = [30, 90, 180, 365, 0];
+  pills.forEach((pill, i) => {
+    pill.classList.toggle('disabled', ranges[i] > 0 && spanDays < ranges[i]);
+  });
+
+  function filterData(rangeDays) {
+    if (!rangeDays) return { dates: data.dates, counts: data.counts, values: valSeries };
+    const cutoffMs = Date.now() - rangeDays * 86400000;
+    let idx0 = data.dates.findIndex(d => new Date(d).getTime() >= cutoffMs);
+    if (idx0 === -1) idx0 = data.dates.length - 1;
+    return {
+      dates: data.dates.slice(idx0),
+      counts: data.counts.slice(idx0),
+      values: valSeries.slice(idx0),
+    };
+  }
+
+  function buildDatasets(f) {
+    return [
+      {
+        label: 'Cards',
+        data: f.dates.map((d, i) => ({ x: d, y: f.counts[i] })),
+        borderColor: '#7ec8e3',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        tension: 0.25,
+        yAxisID: 'y',
+      },
+      {
+        label: valLabel,
+        data: f.dates.map((d, i) => ({ x: d, y: f.values[i] })),
+        borderColor: '#e94560',
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        tension: 0.25,
+        yAxisID: 'y1',
+      },
+    ];
+  }
+
+  // Default range: ALL.
+  let activeRange = 0;
+  pills.forEach(p => p.classList.toggle('active', parseInt(p.dataset.range) === activeRange));
+
+  const canvas = document.getElementById('growth-chart-canvas');
+  const f = filterData(activeRange);
+  _growthChart = new Chart(canvas, {
+    type: 'line',
+    data: { datasets: buildDatasets(f) },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'MMM d, yyyy' },
+          ticks: { color: '#666', maxTicksLimit: 5, font: { size: 10 } },
+          grid: { color: 'rgba(255,255,255,0.06)' },
+        },
+        y: {
+          position: 'left',
+          ticks: { color: '#7ec8e3', font: { size: 10 }, callback: v => v.toLocaleString() },
+          grid: { color: 'rgba(255,255,255,0.06)' },
+          beginAtZero: true,
+        },
+        y1: {
+          position: 'right',
+          ticks: { color: '#e94560', font: { size: 10 }, callback: v => formatPrice(v) },
+          grid: { drawOnChartArea: false },
+          beginAtZero: true,
+        },
+      },
+      plugins: {
+        legend: { position: 'top', labels: { color: '#888', font: { size: 10 }, boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              if (ctx.dataset.yAxisID === 'y1') {
+                return `${ctx.dataset.label}: ${formatPrice(ctx.parsed.y)}`;
+              }
+              return `${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()}`;
+            }
+          },
+        },
+      },
+    },
+  });
+
+  pills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      if (pill.classList.contains('disabled')) return;
+      pills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const range = parseInt(pill.dataset.range);
+      const f = filterData(range);
+      _growthChart.data.datasets = buildDatasets(f);
+      _growthChart.update();
+    });
+  });
+}
+
 function openStatsModal() {
   if (!allCards.length) return;
   const s = computeResultStats(allCards);
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
-  const primary = sources[0] === 'ck' ? 'Card Kingdom' : 'TCGplayer';
+  const primarySource = sources[0] === 'ck' ? 'ck' : 'tcg';
+  const primary = primarySource === 'ck' ? 'Card Kingdom' : 'TCGplayer';
   statsModalContent.innerHTML = `
     <h2>Result statistics</h2>
     <div class="stats-subtitle">Default price source: ${primary}</div>
+    <div class="modal-section">
+      <div class="modal-section-title">Growth over time</div>
+      <div class="price-range-pills" id="growth-range-pills">
+        <button class="price-range-pill" data-range="30">1M</button>
+        <button class="price-range-pill" data-range="90">3M</button>
+        <button class="price-range-pill" data-range="180">6M</button>
+        <button class="price-range-pill" data-range="365">1Y</button>
+        <button class="price-range-pill active" data-range="0">ALL</button>
+      </div>
+      <div class="growth-chart-wrap" id="growth-chart-wrap">
+        <canvas id="growth-chart-canvas"></canvas>
+      </div>
+    </div>
     <div class="modal-section">
       <div class="modal-section-title">Counts</div>
       <div class="stats-grid">
@@ -1912,9 +2101,13 @@ function openStatsModal() {
     ${_renderRarityBlock(s.rarityCounts)}
   `;
   statsModalOverlay.classList.add('active');
+  renderGrowthChart(primarySource);
 }
 
-function closeStatsModal() { statsModalOverlay.classList.remove('active'); }
+function closeStatsModal() {
+  _destroyGrowthChart();
+  statsModalOverlay.classList.remove('active');
+}
 
 statusEl.addEventListener('click', openStatsModal);
 statusEl.addEventListener('keydown', (e) => {
@@ -2987,13 +3180,13 @@ function updateStatusText() {
 function renderSkeleton() {
   const visCols = getVisibleColumns();
   let html = '<table class="collection-table"><thead><tr>';
-  for (const col of visCols) html += `<th>${col.label}</th>`;
+  for (const col of visCols) html += `<th data-col="${col.key}">${col.label}</th>`;
   html += '</tr></thead><tbody>';
   for (let i = 0; i < 20; i++) {
     html += '<tr class="skeleton-row">';
     for (const col of visCols) {
-      if (col.key === 'name') html += '<td><div class="skeleton-cell thumb"></div><div class="skeleton-cell wide"></div></td>';
-      else html += '<td><div class="skeleton-cell narrow"></div></td>';
+      if (col.key === 'name') html += `<td data-col="${col.key}"><div class="skeleton-cell thumb"></div><div class="skeleton-cell wide"></div></td>`;
+      else html += `<td data-col="${col.key}"><div class="skeleton-cell narrow"></div></td>`;
     }
     html += '</tr>';
   }
