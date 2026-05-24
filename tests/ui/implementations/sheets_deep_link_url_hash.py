@@ -10,10 +10,13 @@ def steps(harness):
     # start_page: /sheets#set=blb&product=play — auto-navigated by test runner.
 
     # Wait for the status text to settle on the final sheet count.
-    # explore_sheets.html updates #status only after the section-render
-    # loop completes, so waiting on .section-header alone races the
-    # status update on slower runners.
-    harness.wait_for_text("8 sheets", timeout=5_000)
+    # explore_sheets.html updates #status only after the per-variant
+    # DOM render loop completes, which is genuinely slow on contended
+    # CI runners (fetches /api/sheets, then loops through every sheet
+    # and variant). The 5s default isn't always enough — give this
+    # specific assertion more headroom rather than bumping the global
+    # default for everyone.
+    harness.wait_for_text("8 sheets", timeout=10_000)
 
     # Verify the set input auto-filled with Bloomburrow (input value, not text)
     val = harness.page.input_value("#set-input")

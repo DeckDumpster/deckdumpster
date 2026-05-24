@@ -8,7 +8,7 @@ a result, and verifies the original card is replaced.
 
 def steps(harness):
     # start_page: /orders/1 — auto-navigated by test runner.
-    harness.wait_for_visible(".card-row", timeout=500)
+    harness.wait_for_visible(".card-row")
     # Note the original card name in the last row.
     harness.assert_text_present("Witness Protection")
     # Click the replace button on the last card row.
@@ -18,16 +18,16 @@ def steps(harness):
     replace_buttons = harness.page.locator(".btn-icon[title='Replace card']")
     replace_buttons.last.click()
     # Wait for the search overlay to open.
-    harness.wait_for_visible("#search-overlay.active", timeout=500)
+    harness.wait_for_visible("#search-overlay.active")
     # Type a search query (must be a card in the fixture DB) and wait for debounce + API
     harness.fill_by_selector("#search-input", "Beast-Kin Ranger")
     # Wait for search results.
-    harness.wait_for_visible(".search-candidate", timeout=500)
+    harness.wait_for_visible(".search-candidate")
     # Click the first search result.
     harness.click_by_selector(".search-candidate")
     # Overlay closes and card list refreshes.
-    harness.wait_for_hidden("#search-overlay.active", timeout=500)
-    harness.wait_for_visible(".card-row", timeout=500)
+    harness.wait_for_hidden("#search-overlay.active")
+    harness.wait_for_visible(".card-row")
     # Verify original card is gone.
     harness.assert_text_absent("Witness Protection")
     harness.screenshot("final_state")

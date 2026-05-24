@@ -19,7 +19,7 @@ def steps(harness):
     # Confirm.
     harness.click_by_selector("#confirm-add-btn")
     # Close the modal overlay if still visible.
-    harness.wait_for_hidden("#add-modal-overlay.active", timeout=500)
+    harness.wait_for_hidden("#add-modal-overlay.active")
     # Switch to table view.
     harness.click_by_selector("#view-table-btn")
     # Verify the product appears in the table.

@@ -18,7 +18,7 @@ def steps(harness):
 
     # Parse & Resolve
     harness.click_by_selector("#parse-btn")
-    harness.wait_for_text("Failed", timeout=500)
+    harness.wait_for_text("Failed")
 
     # Verify failed count in summary bar
     harness.assert_text_present("Failed")

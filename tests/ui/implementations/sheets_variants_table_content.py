@@ -22,7 +22,10 @@ def steps(harness):
     # Verify probability percentages are shown (table has % values)
     harness.assert_text_present("%")
 
-    # Verify status text shows sheet count
-    harness.assert_text_present("8 sheets")
+    # Verify status text shows sheet count. Use wait_for_text not
+    # assert_text_present — the "N sheets" status is set by JS only
+    # after the per-variant render loop finishes, which is slow on a
+    # contended CI runner.
+    harness.wait_for_text("8 sheets", timeout=10_000)
 
     harness.screenshot("final_state")

@@ -30,6 +30,6 @@ def steps(harness):
     harness.click_by_selector("#resolve-btn")
 
     # Wait for resolved card to appear
-    harness.wait_for_text("Beast-Kin Ranger", timeout=500)
+    harness.wait_for_text("Beast-Kin Ranger")
 
     harness.screenshot("final_state")

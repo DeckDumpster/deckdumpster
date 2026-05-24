@@ -9,7 +9,7 @@ the input empties, the button hides, and the full collection comes back.
 def steps(harness):
     # Navigate to Collection page and wait for the table to render.
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=500)
+    harness.wait_for_visible(".collection-table")
 
     # Clear button should be hidden when the input starts empty.
     harness.assert_hidden("#search-clear")

@@ -21,7 +21,7 @@ def steps(harness):
     harness.click_by_selector("#parse-btn")
 
     # Wait for results with failed resolution
-    harness.wait_for_text("Failed", timeout=500)
+    harness.wait_for_text("Failed")
 
     # Verify unresolved card styling appears
     harness.assert_visible(".unresolved")

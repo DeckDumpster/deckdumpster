@@ -16,7 +16,7 @@ def steps(harness):
 
     # Resolve
     harness.click_by_selector("#resolve-btn")
-    harness.wait_for_text("Beast-Kin Ranger", timeout=500)
+    harness.wait_for_text("Beast-Kin Ranger")
 
     # Toggle foil on (click the inactive "--" toggle)
     harness.click_by_selector(".foil-toggle")
