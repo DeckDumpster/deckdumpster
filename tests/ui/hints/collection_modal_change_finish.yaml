@@ -1,0 +1,25 @@
+start_page: /collection
+involves:
+  - 'collection search input (placeholder "Search (e.g. t:creature c:r mv>=3)")'
+  - 'card modal overlay (id #card-modal-overlay) opened by clicking the card'
+  - 'copies container in modal (id #copies-container)'
+  - 'copy section (class .copy-section) inside the modal'
+  - 'inline finish select (class .change-finish-select) in the copy section'
+  - 'copy header text "Nonfoil Near Mint —" before the change, "Foil Near Mint —" after'
+fixture_data:
+  card_name: "Beast-Kin Ranger"
+  search_term: "Beast-Kin"
+  initial_finish: "nonfoil"
+  target_finish: "foil"
+notes: >
+  1. Navigate to /collection.
+  2. Search for "Beast-Kin" to filter down to a single card.
+  3. Click the card to open the modal. Wait for #card-modal-overlay
+     and the copies in #copies-container to render.
+  4. Assert the copy header shows "Nonfoil Near Mint".
+  5. Change .change-finish-select to "foil" — this PUTs
+     /api/collection/3, then re-runs loadModalCopies(card) AND
+     fetchCollection() to refresh both the modal and the grid behind.
+  6. Wait for the new "Foil Near Mint" header to appear inside the
+     still-open modal; assert the modal overlay is still visible
+     (no navigation happened).
