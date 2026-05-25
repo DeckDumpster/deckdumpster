@@ -808,11 +808,14 @@ a.lineage-link {
 .collection-table td[data-col="ck_price"] { width: 90px; }
 .collection-table th[data-col="tcg_price"],
 .collection-table td[data-col="tcg_price"] { width: 90px; }
-/* Name column is intentionally unsized — table-layout:fixed gives it the
-   remaining width. Keep a sensible floor so the thumb doesn't overflow on
-   narrow viewports. */
+/* Name column: explicit width. Earlier this was unsized on the assumption
+   that table-layout:fixed would treat it as "absorb leftover space," but
+   that means on a wide viewport (1440+ px) all the slack flows into one
+   column and the Card cell becomes an absurd half-screen-wide block of
+   whitespace next to a 146px thumbnail. With every column sized, leftover
+   space gets distributed evenly across columns instead of dumped into one. */
 .collection-table th[data-col="name"],
-.collection-table td[data-col="name"] { min-width: 220px; }
+.collection-table td[data-col="name"] { width: 360px; }
 
 /* Mobile: the fixed-column widths above sum to ~825px for the default
    column set, which is much wider than a phone viewport. Under
