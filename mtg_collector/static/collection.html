@@ -814,6 +814,26 @@ a.lineage-link {
 .collection-table th[data-col="name"],
 .collection-table td[data-col="name"] { min-width: 220px; }
 
+/* Mobile: the fixed-column widths above sum to ~825px for the default
+   column set, which is much wider than a phone viewport. Under
+   table-layout:fixed the browser ignores the name column's min-width and
+   collapses it to 0, hiding the thumbnail and stacking Type content
+   under the Card header. Switch back to auto layout below 768px so the
+   table sizes to its content — accepts the no-resize-during-scroll
+   regression on mobile in exchange for being readable at all. Users
+   wanting a stable, image-rich mobile experience should use grid view. */
+@media (max-width: 768px) {
+  .collection-table { table-layout: auto; }
+  .collection-table th[data-col],
+  .collection-table td[data-col] {
+    width: auto;
+    min-width: 0;
+  }
+  /* Drop the overflow:hidden too, so content sizes the cell rather than
+     getting clipped invisibly. */
+  .collection-table td { overflow: visible; }
+}
+
 /* Sort arrow */
 .sort-arrow { font-size: 0.7rem; margin-left: 2px; }
 
