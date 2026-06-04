@@ -230,7 +230,6 @@ def commit_orders(
         "orders_created": 0,
         "orders_skipped": 0,
         "cards_added": 0,
-        "cards_linked": 0,
         "cards_skipped": 0,
         "errors": [],
         "collection_ids": [],
@@ -289,39 +288,30 @@ def commit_orders(
                 continue
 
             for _ in range(item.parsed.quantity):
-                # Check for existing unlinked ordered card with same printing_id
-                existing = _find_existing_unlinked(
-                    conn, item.printing_id, status
+                # One physical card per ordered quantity → one new collection row.
+                # Never reuse a pre-existing entry: an order is a distinct
+                # acquisition, and copies you already own (from Moxfield import,
+                # corner ingest, other orders, …) are different physical cards.
+                # Order-level idempotency above already blocks re-importing the
+                # same order, so this never double-adds.
+                finish = normalize_finish("foil" if item.parsed.foil else "nonfoil")
+                condition = normalize_condition(item.parsed.condition)
+                entry = CollectionEntry(
+                    id=None,
+                    printing_id=item.printing_id,
+                    finish=finish,
+                    condition=condition,
+                    purchase_price=item.parsed.price,
+                    source=source,
+                    status=status,
+                    order_id=order_id,
+                    acquired_at=ts,
+                    batch_id=batch_id,
                 )
-
-                if existing:
-                    # Link existing entry to this order
-                    conn.execute(
-                        "UPDATE collection SET order_id = ?, batch_id = ? WHERE id = ?",
-                        (order_id, batch_id, existing),
-                    )
-                    summary["cards_linked"] += 1
-                    batch_card_count += 1
-                else:
-                    # Create new collection entry
-                    finish = normalize_finish("foil" if item.parsed.foil else "nonfoil")
-                    condition = normalize_condition(item.parsed.condition)
-                    entry = CollectionEntry(
-                        id=None,
-                        printing_id=item.printing_id,
-                        finish=finish,
-                        condition=condition,
-                        purchase_price=item.parsed.price,
-                        source=source,
-                        status=status,
-                        order_id=order_id,
-                        acquired_at=ts,
-                        batch_id=batch_id,
-                    )
-                    new_id = collection_repo.add(entry)
-                    summary["cards_added"] += 1
-                    summary["collection_ids"].append(new_id)
-                    batch_card_count += 1
+                new_id = collection_repo.add(entry)
+                summary["cards_added"] += 1
+                summary["collection_ids"].append(new_id)
+                batch_card_count += 1
 
         # Update batch card count
         if batch_repo and batch_id and batch_card_count:
@@ -329,15 +319,3 @@ def commit_orders(
 
     conn.commit()
     return summary
-
-
-def _find_existing_unlinked(
-    conn, printing_id: str, status: str
-) -> Optional[int]:
-    """Find an existing collection entry with matching printing_id, status, and no order_id."""
-    cursor = conn.execute(
-        "SELECT id FROM collection WHERE printing_id = ? AND status = ? AND order_id IS NULL LIMIT 1",
-        (printing_id, status),
-    )
-    row = cursor.fetchone()
-    return row["id"] if row else None

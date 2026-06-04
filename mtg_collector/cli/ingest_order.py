@@ -162,6 +162,5 @@ def run(args):
     print("\nDone!")
     print(f"  Orders created: {summary['orders_created']}")
     print(f"  Cards added: {summary['cards_added']}")
-    print(f"  Cards linked to existing: {summary['cards_linked']}")
     if summary["errors"]:
         print(f"  Errors: {len(summary['errors'])}")

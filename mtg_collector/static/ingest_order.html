@@ -526,7 +526,6 @@ async function commitOrders() {
     const summary = await res.json();
 
     let msg = `Added ${summary.cards_added} card(s)`;
-    if (summary.cards_linked > 0) msg += `, linked ${summary.cards_linked} existing`;
     msg += ` across ${summary.orders_created} order(s).`;
     if (summary.errors && summary.errors.length > 0) msg += ` ${summary.errors.length} error(s).`;
 

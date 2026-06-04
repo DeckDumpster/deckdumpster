@@ -211,35 +211,59 @@ class TestCommitOrders:
 
         assert summary["orders_created"] == 1
         assert summary["cards_added"] == 1
-        assert summary["cards_linked"] == 0
 
-    def test_commit_links_existing_unlinked(self, repos):
+    def test_commit_never_absorbs_existing_owned_copies(self, repos):
+        """Regression: importing an order must NOT reassign pre-existing copies.
+
+        A copy you already own (from Moxfield import, corner ingest, an earlier
+        order, …) is a different physical card from a copy in a new order.
+        Importing an order with the same printing must create new rows and leave
+        the existing copies' order_id untouched — not silently absorb them.
+        """
         order_repo = repos["order_repo"]
         collection_repo = repos["collection_repo"]
         conn = repos["conn"]
 
         sid = _TEST_PRINTING["printing_id"]
 
-        # Create an existing unlinked ordered card
-        collection_repo.add(CollectionEntry(
-            id=None, printing_id=sid, finish="nonfoil",
-            status="ordered", order_id=None,
-        ))
+        # Two copies already owned via unrelated channels, no order attached.
+        existing_ids = [
+            collection_repo.add(CollectionEntry(
+                id=None, printing_id=sid, finish="nonfoil",
+                status="owned", order_id=None, source="moxfield_import",
+            )),
+            collection_repo.add(CollectionEntry(
+                id=None, printing_id=sid, finish="nonfoil",
+                status="owned", order_id=None, source="corner_ingest",
+            )),
+        ]
         conn.commit()
 
-        # Now commit an order with the same card
-        parsed = ParsedOrder(order_number="LINK-1", source="tcgplayer", seller_name="Seller")
-        item = ParsedOrderItem(card_name="Card", condition="Near Mint", quantity=1)
+        # Import an order of 3 of the same printing, also as owned.
+        parsed = ParsedOrder(order_number="LINK-1", source="cardkingdom", seller_name="Card Kingdom")
+        item = ParsedOrderItem(card_name="Card", condition="Near Mint", quantity=3)
         resolved_item = ResolvedItem(parsed=item, printing_id=sid, card_name="Card")
         resolved_order = ResolvedOrder(parsed=parsed, items=[resolved_item])
 
         summary = commit_orders(
             [resolved_order], order_repo, collection_repo, conn,
-            status="ordered", source="order_import",
+            status="owned", source="order_import",
         )
 
-        assert summary["cards_linked"] == 1
-        assert summary["cards_added"] == 0
+        # All 3 ordered copies are brand-new rows.
+        assert summary["cards_added"] == 3
+        # The pre-existing owned copies are untouched — still no order attached.
+        for cid in existing_ids:
+            row = conn.execute(
+                "SELECT order_id, source FROM collection WHERE id = ?", (cid,)
+            ).fetchone()
+            assert row["order_id"] is None
+            assert row["source"] in ("moxfield_import", "corner_ingest")
+        # Net: 2 pre-existing + 3 ordered = 5 total copies of this printing.
+        total = conn.execute(
+            "SELECT COUNT(*) FROM collection WHERE printing_id = ?", (sid,)
+        ).fetchone()[0]
+        assert total == 5
 
     def test_commit_skips_unresolved(self, repos):
         order_repo = repos["order_repo"]
