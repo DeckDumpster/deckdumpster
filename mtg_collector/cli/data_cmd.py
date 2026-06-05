@@ -2,11 +2,13 @@
 
 import gzip
 import json
+import re
 import shutil
 import sqlite3
 import sys
 import time
 import urllib.request
+from collections import defaultdict
 from pathlib import Path
 
 from mtg_collector.db.connection import get_shared_write_path
@@ -23,6 +25,42 @@ def _download(url: str, dest: Path):
 MTGJSON_URL = "https://mtgjson.com/api/v5/AllPrintings.json.gz"
 MTGJSON_PRICES_URL = "https://mtgjson.com/api/v5/AllPricesToday.json.gz"
 MTGJSON_META_URL = "https://mtgjson.com/api/v5/Meta.json"
+
+# Variant-suffix patterns for grouping sibling jumpstart-style decks:
+#   "Angels (1)" / "Angels (2)" (J25, JMP, J22, most of TLE)
+#   "Courageous 1" / "Courageous 2" (LTR)
+_VARIANT_PAREN = re.compile(r"^(.+?)\s*\((\d+)\)\s*$")
+_VARIANT_TRAIL = re.compile(r"^(.+?)\s+(\d+)\s*$")
+
+
+def _detect_deck_variants(deck_names):
+    """Map each deck name to (base_name, variation).
+
+    A name only counts as a variant when 2+ siblings within the set share the
+    same stem — single decks keep their full name and variation=None.
+    """
+    parsed = {}
+    for n in deck_names:
+        m = _VARIANT_PAREN.match(n)
+        if m:
+            parsed[n] = (m.group(1), int(m.group(2)))
+            continue
+        m = _VARIANT_TRAIL.match(n)
+        if m:
+            parsed[n] = (m.group(1), int(m.group(2)))
+            continue
+        parsed[n] = (None, None)
+    stem_counts = defaultdict(int)
+    for stem, v in parsed.values():
+        if stem is not None:
+            stem_counts[stem] += 1
+    out = {}
+    for n, (stem, v) in parsed.items():
+        if stem is not None and stem_counts[stem] >= 2:
+            out[n] = (stem, v)
+        else:
+            out[n] = (n, None)
+    return out
 
 
 def get_allprintings_path() -> Path:
@@ -239,6 +277,7 @@ def import_mtgjson(db_path: str):
     config_rows = []
     sealed_rows = []
     sealed_card_rows = []
+    deck_rows = []  # for mtgjson_decks
     set_count = 0
     sets_with_boosters = []
     # Deck lookup: (set_code, deck_name) → [{uuid, count, is_foil, zone}]
@@ -328,12 +367,14 @@ def import_mtgjson(db_path: str):
                 "mtgjson",
             ))
 
-        # Decks → deck_lookup for resolving sealed product contents
-        for deck in set_data.get("decks", []):
-            deck_name = deck.get("name", "")
-            if not deck_name:
-                continue
+        # Decks → deck_lookup for resolving sealed product contents,
+        # plus mtgjson_decks rows so the precon/Jumpstart picker can read them.
+        set_decks = [d for d in set_data.get("decks", []) if d.get("name")]
+        variant_map = _detect_deck_variants([d["name"] for d in set_decks])
+        for deck in set_decks:
+            deck_name = deck["name"]
             entries = []
+            zones_for_table = {"mainBoard": [], "sideBoard": [], "commander": []}
             for zone_name in ("mainBoard", "sideBoard", "commander"):
                 zone_cards = deck.get(zone_name, [])
                 for card in zone_cards:
@@ -346,8 +387,25 @@ def import_mtgjson(db_path: str):
                         "is_foil": 1 if card.get("isFoil", False) else 0,
                         "zone": zone_name,
                     })
+                    zones_for_table[zone_name].append({
+                        "uuid": card_uuid,
+                        "count": card.get("count", 1),
+                        "is_foil": 1 if card.get("isFoil", False) else 0,
+                    })
             if entries:
                 deck_lookup[(set_code, deck_name)] = entries
+            base_name, variation = variant_map.get(deck_name, (deck_name, None))
+            main_count = sum(c["count"] for c in zones_for_table["mainBoard"])
+            deck_rows.append((
+                set_code,
+                deck_name,
+                base_name,
+                variation,
+                deck.get("type"),
+                deck.get("releaseDate"),
+                main_count,
+                json.dumps(zones_for_table),
+            ))
 
         # Booster data
         booster = set_data.get("booster")
@@ -427,6 +485,15 @@ def import_mtgjson(db_path: str):
         sealed_rows,
     )
 
+    print(f"  Inserting {len(deck_rows)} MTGJSON deck rows ...")
+    conn.execute("DELETE FROM mtgjson_decks")
+    conn.executemany(
+        "INSERT INTO mtgjson_decks "
+        "(set_code, name, base_name, variation, type, release_date, main_count, deck_data) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        deck_rows,
+    )
+
     # Resolve sealed product contents → sealed_product_cards
     # MTGJSON contents is {card: [...], deck: [...], sealed: [...], ...}
     for row in sealed_rows:
@@ -485,6 +552,7 @@ def import_mtgjson(db_path: str):
     print(f"  UUID map rows: {len(uuid_map_rows)}")
     print(f"  Sealed products: {len(sealed_rows)}")
     print(f"  Sealed product cards: {len(sealed_card_rows)}")
+    print(f"  MTGJSON decks: {len(deck_rows)}")
     print(f"  Elapsed: {elapsed:.1f}s")
 
 

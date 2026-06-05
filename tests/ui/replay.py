@@ -135,6 +135,16 @@ class ReplayHarness:
         self.page.wait_for_selector(selector, state="visible", timeout=timeout)
         self._snap()
 
+    def wait_for_attached(self, selector: str, timeout: int = 500):
+        """Wait for a DOM element to exist, regardless of visibility.
+
+        Use for elements that exist but are not visible to the user — e.g.
+        <option> nodes inside an unopened <select>.
+        """
+        self._record("wait_for_attached", selector)
+        self.page.wait_for_selector(selector, state="attached", timeout=timeout)
+        self._snap()
+
     def wait_for_hidden(self, selector: str, timeout: int = 500):
         self._record("wait_for_hidden", selector)
         self.page.wait_for_selector(selector, state="hidden", timeout=timeout)

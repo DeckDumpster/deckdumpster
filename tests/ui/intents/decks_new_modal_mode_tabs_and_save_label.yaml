@@ -1,0 +1,13 @@
+# Scenario: New Deck modal exposes Blank / Preconstructed / Jumpstart tabs
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  When I click "New Deck" on /decks, the modal opens with three tabs at
+  the top — Blank (active by default), Preconstructed, and Jumpstart — and
+  the primary action button reads "Create". When I click the Preconstructed
+  tab, the Name/Format/Description fields disappear, a Set dropdown appears,
+  and the button now reads "Import". Switching back to Blank restores the
+  original fields and the "Create" label.

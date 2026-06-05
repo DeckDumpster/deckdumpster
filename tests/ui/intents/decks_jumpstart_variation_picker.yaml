@@ -1,0 +1,13 @@
+# Scenario: Jumpstart import lets me pick among sibling variations
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the Jumpstart tab of the New Deck modal I pick a set, then pick a
+  theme that has multiple sibling variations. A row of variation chips
+  appears with the first chip pre-highlighted. When I click a different
+  chip the highlight moves and the import preview updates to name that
+  specific variation. Clicking Import creates that variation as a new
+  deck.
