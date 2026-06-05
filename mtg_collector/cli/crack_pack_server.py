@@ -1233,6 +1233,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_get(int(did))
             else:
                 self._send_json({"error": "Not found"}, 404)
+        # Precon / Jumpstart import picker
+        elif path == "/api/precons/sets":
+            self._api_precons_sets(params)
+        elif path == "/api/precons/decks":
+            self._api_precons_decks(params)
         # Binder API routes
         elif path == "/api/binders":
             self._api_binders_list()
@@ -1474,6 +1479,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_deck_create(data)
+        elif path == "/api/precons/import":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_precons_import(data)
         elif path.startswith("/api/decks/") and path.endswith("/expected"):
             did = path[len("/api/decks/"):-len("/expected")]
             if did.isdigit():
@@ -5417,6 +5427,209 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         deck = repo.find_by_origin(set_code, theme, variation)
         conn.close()
         self._send_json(deck)
+
+    # ---------- Precon / Jumpstart import picker ----------
+
+    # MTGJSON deck types we expose. Jumpstart goes in its own kind because
+    # of the variant grouping; everything else lives under "precon".
+    _PRECON_TYPES = (
+        "Commander Deck", "Theme Deck", "Intro Pack", "Planeswalker Deck",
+        "Duel Deck", "Deck Builder's Toolkit", "Arena Starter Deck",
+        "Welcome Deck", "Starter Kit", "Box Set",
+    )
+    _JUMPSTART_TYPES = ("Jumpstart",)
+
+    def _precon_kind_types(self, kind: str) -> tuple:
+        if kind == "jumpstart":
+            return self._JUMPSTART_TYPES
+        return self._PRECON_TYPES
+
+    def _api_precons_sets(self, params: dict):
+        """List sets that have decks of the requested kind, with deck counts.
+
+        Query params: kind=jumpstart|precon (default: precon)
+        """
+        kind = params.get("kind", ["precon"])[0]
+        types = self._precon_kind_types(kind)
+        placeholders = ",".join("?" * len(types))
+        conn = self._get_conn()
+        rows = conn.execute(
+            f"""SELECT d.set_code, COALESCE(s.set_name, d.set_code) AS set_name,
+                       COUNT(*) AS deck_count
+                FROM mtgjson_decks d
+                LEFT JOIN sets s ON s.set_code = d.set_code
+                WHERE d.type IN ({placeholders})
+                GROUP BY d.set_code
+                ORDER BY MAX(d.release_date) DESC, set_name""",
+            types,
+        ).fetchall()
+        conn.close()
+        self._send_json([dict(r) for r in rows])
+
+    def _api_precons_decks(self, params: dict):
+        """List decks in a set, grouped by base_name for jumpstart.
+
+        Query params: set_code=X (required), kind=jumpstart|precon (default: precon)
+        """
+        set_code = params.get("set_code", [None])[0]
+        if not set_code:
+            self._send_json({"error": "set_code is required"}, 400)
+            return
+        kind = params.get("kind", ["precon"])[0]
+        types = self._precon_kind_types(kind)
+        placeholders = ",".join("?" * len(types))
+        conn = self._get_conn()
+        rows = conn.execute(
+            f"""SELECT name, base_name, variation, type, main_count, release_date
+                FROM mtgjson_decks
+                WHERE set_code = ? AND type IN ({placeholders})
+                ORDER BY base_name, variation, name""",
+            (set_code.lower(), *types),
+        ).fetchall()
+        conn.close()
+
+        if kind == "jumpstart":
+            # Group siblings under the same base_name.
+            groups = {}
+            order = []
+            for r in rows:
+                key = r["base_name"]
+                if key not in groups:
+                    groups[key] = {
+                        "base_name": key,
+                        "type": r["type"],
+                        "variations": [],
+                    }
+                    order.append(key)
+                groups[key]["variations"].append({
+                    "name": r["name"],
+                    "variation": r["variation"],
+                    "main_count": r["main_count"],
+                })
+            self._send_json([groups[k] for k in order])
+        else:
+            self._send_json([
+                {
+                    "name": r["name"],
+                    "type": r["type"],
+                    "main_count": r["main_count"],
+                    "release_date": r["release_date"],
+                }
+                for r in rows
+            ])
+
+    def _api_precons_import(self, data: dict):
+        """Create a new deck from a known MTGJSON decklist.
+
+        Body: {set_code, deck_name, custom_name?, sleeve_color?, deck_box?, storage_location?, state?}
+
+        Always populates deck_expected_cards from the MTGJSON deck data.
+        UUIDs that can't be resolved to a local printing are reported in
+        the response under `unresolved` but do not abort the import — the
+        user can populate those cards manually or run `mtg cache all`.
+        """
+        set_code = (data.get("set_code") or "").lower()
+        deck_name = data.get("deck_name")
+        if not set_code or not deck_name:
+            self._send_json(
+                {"error": "set_code and deck_name are required"}, 400)
+            return
+
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                """SELECT set_code, name, base_name, variation, type, deck_data
+                   FROM mtgjson_decks WHERE set_code = ? AND name = ?""",
+                (set_code, deck_name),
+            ).fetchone()
+            if not row:
+                self._send_json(
+                    {"error": f"No MTGJSON deck '{deck_name}' in set {set_code}"},
+                    404)
+                return
+
+            set_name_row = conn.execute(
+                "SELECT set_name FROM sets WHERE set_code = ?", (set_code,)
+            ).fetchone()
+            set_name = set_name_row["set_name"] if set_name_row else set_code.upper()
+
+            zones = json.loads(row["deck_data"])
+            # Resolve each UUID through mtgjson_uuid_map → printings.
+            uuids = []
+            for zone in ("mainBoard", "sideBoard", "commander"):
+                for c in zones.get(zone, []):
+                    uuids.append((zone, c["uuid"], c.get("count", 1)))
+
+            if uuids:
+                placeholders = ",".join("?" * len(uuids))
+                resolved = conn.execute(
+                    f"""SELECT m.uuid, p.printing_id
+                        FROM mtgjson_uuid_map m
+                        JOIN printings p ON p.set_code = m.set_code
+                                        AND p.collector_number = m.collector_number
+                        WHERE m.uuid IN ({placeholders})""",
+                    [u[1] for u in uuids],
+                ).fetchall()
+                uuid_to_pid = {r["uuid"]: r["printing_id"] for r in resolved}
+            else:
+                uuid_to_pid = {}
+
+            ZONE_MAP = {"mainBoard": "mainboard", "sideBoard": "sideboard",
+                        "commander": "commander"}
+            expected = []
+            unresolved = []
+            for zone, uuid, count in uuids:
+                pid = uuid_to_pid.get(uuid)
+                if pid is None:
+                    unresolved.append({"zone": zone, "uuid": uuid, "count": count})
+                    continue
+                expected.append({
+                    "printing_id": pid,
+                    "zone": ZONE_MAP[zone],
+                    "quantity": count,
+                })
+
+            # Build deck record.
+            from mtg_collector.db.models import Deck, DeckRepository
+            repo = DeckRepository(conn)
+            base_name = row["base_name"]
+            variation = row["variation"]
+            deck_type = row["type"] or ""
+            is_jumpstart = "jumpstart" in deck_type.lower()
+            default_label = f"{deck_name} ({set_name})"
+            name = (data.get("custom_name") or "").strip() or default_label
+            fmt = data.get("format")
+            if not fmt and is_jumpstart:
+                fmt = "jumpstart"
+            elif not fmt and "commander" in deck_type.lower():
+                fmt = "commander"
+            deck = Deck(
+                id=None,
+                name=name,
+                description=data.get("description") or deck_type or None,
+                format=fmt,
+                is_precon=True,
+                sleeve_color=data.get("sleeve_color"),
+                deck_box=data.get("deck_box"),
+                storage_location=data.get("storage_location"),
+                origin_set_code=set_code,
+                origin_theme=base_name,
+                origin_variation=variation,
+                state_id=self._resolve_state_id(data.get("state", "idea")),
+            )
+            deck_id = repo.add(deck)
+            if expected:
+                repo.set_expected_cards(deck_id, expected)
+            conn.commit()
+            created = repo.get(deck_id)
+        finally:
+            conn.close()
+
+        self._send_json({
+            "deck": created,
+            "expected_count": len(expected),
+            "unresolved": unresolved,
+        }, 201)
 
     def _api_deck_get(self, deck_id: int):
         conn = self._get_conn()

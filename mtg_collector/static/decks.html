@@ -199,6 +199,66 @@ main { padding: 24px; }
   margin-top: 16px;
 }
 
+/* Mode picker tabs */
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #0f3460;
+}
+.mode-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #888;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+.mode-tab:hover { color: #fff; }
+.mode-tab.active {
+  color: #e94560;
+  border-bottom-color: #e94560;
+}
+.mode-section { display: none; }
+.mode-section.active { display: block; }
+.import-preview {
+  background: rgba(15,52,96,0.4);
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  color: #aaa;
+  font-size: 0.85rem;
+}
+.import-preview strong { color: #fff; }
+.variation-picker {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.variation-picker label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #0f3460;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  color: #ccc;
+  font-size: 0.85rem;
+}
+.variation-picker label.checked,
+.variation-picker input:checked + label {
+  background: #e94560;
+  color: #fff;
+  border-color: #e94560;
+}
+.variation-picker input { display: none; }
+
 /* Format sections */
 .format-section { margin-bottom: 32px; }
 .format-header {
@@ -327,28 +387,86 @@ main { padding: 24px; }
 <div class="modal-backdrop" id="deck-modal">
   <div class="modal">
     <h3 id="modal-title">New Deck</h3>
-    <div class="form-group">
-      <label>Name *</label>
-      <input type="text" id="f-name" placeholder="My Commander Deck">
+
+    <div class="mode-tabs" id="mode-tabs">
+      <button class="mode-tab active" data-mode="blank" onclick="setMode('blank')">Blank</button>
+      <button class="mode-tab" data-mode="precon" onclick="setMode('precon')">Preconstructed</button>
+      <button class="mode-tab" data-mode="jumpstart" onclick="setMode('jumpstart')">Jumpstart</button>
     </div>
-    <div class="form-group">
-      <label>Format</label>
-      <select id="f-format">
-        <option value="">-- None --</option>
-        <option value="commander">Commander / EDH</option>
-        <option value="jumpstart">Jumpstart</option>
-        <option value="standard">Standard</option>
-        <option value="modern">Modern</option>
-        <option value="pioneer">Pioneer</option>
-        <option value="legacy">Legacy</option>
-        <option value="vintage">Vintage</option>
-        <option value="pauper">Pauper</option>
-      </select>
+
+    <!-- Blank mode -->
+    <div class="mode-section active" id="mode-blank">
+      <div class="form-group">
+        <label>Name *</label>
+        <input type="text" id="f-name" placeholder="My Commander Deck">
+      </div>
+      <div class="form-group">
+        <label>Format</label>
+        <select id="f-format">
+          <option value="">-- None --</option>
+          <option value="commander">Commander / EDH</option>
+          <option value="jumpstart">Jumpstart</option>
+          <option value="standard">Standard</option>
+          <option value="modern">Modern</option>
+          <option value="pioneer">Pioneer</option>
+          <option value="legacy">Legacy</option>
+          <option value="vintage">Vintage</option>
+          <option value="pauper">Pauper</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea id="f-description" rows="2"></textarea>
+      </div>
     </div>
-    <div class="form-group">
-      <label>Description</label>
-      <textarea id="f-description" rows="2"></textarea>
+
+    <!-- Precon mode -->
+    <div class="mode-section" id="mode-precon">
+      <div class="form-group">
+        <label>Set</label>
+        <select id="f-precon-set" onchange="loadPickerDecks('precon')">
+          <option value="">-- Pick a set --</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Deck</label>
+        <select id="f-precon-deck" onchange="updateImportPreview('precon')">
+          <option value="">-- Pick a deck --</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Custom name (optional)</label>
+        <input type="text" id="f-precon-custom" placeholder="Leave blank to use the deck's name">
+      </div>
+      <div class="import-preview" id="precon-preview" style="display:none"></div>
     </div>
+
+    <!-- Jumpstart mode -->
+    <div class="mode-section" id="mode-jumpstart">
+      <div class="form-group">
+        <label>Set</label>
+        <select id="f-js-set" onchange="loadPickerDecks('jumpstart')">
+          <option value="">-- Pick a set --</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Theme</label>
+        <select id="f-js-theme" onchange="updateJsVariations()">
+          <option value="">-- Pick a theme --</option>
+        </select>
+      </div>
+      <div class="form-group" id="js-variation-group" style="display:none">
+        <label>Variation</label>
+        <div class="variation-picker" id="f-js-variations"></div>
+      </div>
+      <div class="form-group">
+        <label>Custom name (optional)</label>
+        <input type="text" id="f-js-custom" placeholder="Leave blank to use Theme (Set)">
+      </div>
+      <div class="import-preview" id="jumpstart-preview" style="display:none"></div>
+    </div>
+
+    <!-- Shared fields -->
     <div class="form-group">
       <label>State</label>
       <select id="f-deck-state">
@@ -356,28 +474,6 @@ main { padding: 24px; }
         <option value="ready">Ready</option>
         <option value="constructed">Constructed</option>
       </select>
-    </div>
-    <div class="form-group">
-      <label><input type="checkbox" id="f-precon" onchange="togglePreconFields()"> Preconstructed deck</label>
-    </div>
-    <div class="precon-fields" id="precon-fields" style="display:none">
-      <div class="form-group">
-        <label>Origin Set</label>
-        <select id="f-origin-set">
-          <option value="">-- None --</option>
-          <option value="jmp">Jumpstart (JMP)</option>
-          <option value="j22">Jumpstart 2022 (J22)</option>
-          <option value="j25">Jumpstart 2025 (J25)</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Theme</label>
-        <input type="text" id="f-origin-theme" placeholder="e.g. Goblins, Angels">
-      </div>
-      <div class="form-group">
-        <label>Variation</label>
-        <input type="number" id="f-origin-variation" min="1" max="4" placeholder="1-4">
-      </div>
     </div>
     <div class="form-group">
       <label>Sleeve Color</label>
@@ -392,7 +488,7 @@ main { padding: 24px; }
       <input type="text" id="f-location" placeholder="e.g. shelf 2, left side">
     </div>
     <div class="form-actions">
-      <button onclick="saveDeck()">Save</button>
+      <button id="modal-save-btn" onclick="saveDeck()">Create</button>
       <button class="secondary" onclick="closeModal('deck-modal')">Cancel</button>
     </div>
   </div>
@@ -639,52 +735,222 @@ function renderDeckCard(d) {
 
 // ===== Create Deck =====
 
+let currentMode = 'blank';
+// Cache of decks per (kind, set_code) to avoid re-fetching when the user toggles.
+const pickerCache = {};
+let pickerDecks = []; // current set's deck list for the active mode
+
 function showCreateModal() {
   document.getElementById('modal-title').textContent = 'New Deck';
   document.getElementById('f-name').value = '';
   document.getElementById('f-format').value = '';
   document.getElementById('f-description').value = '';
   document.getElementById('f-deck-state').value = 'idea';
-  document.getElementById('f-precon').checked = false;
-  document.getElementById('f-origin-set').value = '';
-  document.getElementById('f-origin-theme').value = '';
-  document.getElementById('f-origin-variation').value = '';
-  document.getElementById('precon-fields').style.display = 'none';
+  document.getElementById('f-precon-set').innerHTML = '<option value="">-- Pick a set --</option>';
+  document.getElementById('f-precon-deck').innerHTML = '<option value="">-- Pick a deck --</option>';
+  document.getElementById('f-precon-custom').value = '';
+  document.getElementById('precon-preview').style.display = 'none';
+  document.getElementById('f-js-set').innerHTML = '<option value="">-- Pick a set --</option>';
+  document.getElementById('f-js-theme').innerHTML = '<option value="">-- Pick a theme --</option>';
+  document.getElementById('f-js-custom').value = '';
+  document.getElementById('f-js-variations').innerHTML = '';
+  document.getElementById('js-variation-group').style.display = 'none';
+  document.getElementById('jumpstart-preview').style.display = 'none';
   document.getElementById('f-sleeve').value = '';
   document.getElementById('f-deckbox').value = '';
   document.getElementById('f-location').value = '';
+  setMode('blank');
   document.getElementById('deck-modal').classList.add('active');
 }
 
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  document.querySelectorAll('.mode-section').forEach(s => {
+    s.classList.toggle('active', s.id === 'mode-' + mode);
+  });
+  document.getElementById('modal-save-btn').textContent = mode === 'blank' ? 'Create' : 'Import';
+  if (mode === 'precon' || mode === 'jumpstart') {
+    loadPickerSets(mode);
+  }
+}
+
+async function loadPickerSets(kind) {
+  const setSelectId = kind === 'jumpstart' ? 'f-js-set' : 'f-precon-set';
+  const sel = document.getElementById(setSelectId);
+  if (sel.options.length > 1) return; // already populated
+  sel.innerHTML = '<option value="">Loading...</option>';
+  const res = await fetch('/api/precons/sets?kind=' + kind);
+  const sets = await res.json();
+  if (!Array.isArray(sets) || sets.length === 0) {
+    sel.innerHTML = '<option value="">No decklists found — run `mtg data fetch`</option>';
+    return;
+  }
+  let html = '<option value="">-- Pick a set --</option>';
+  for (const s of sets) {
+    html += `<option value="${esc(s.set_code)}">${esc(s.set_name)} — ${s.deck_count} deck${s.deck_count === 1 ? '' : 's'}</option>`;
+  }
+  sel.innerHTML = html;
+}
+
+async function loadPickerDecks(kind) {
+  const setSelectId = kind === 'jumpstart' ? 'f-js-set' : 'f-precon-set';
+  const set_code = document.getElementById(setSelectId).value;
+  if (!set_code) return;
+  const key = kind + ':' + set_code;
+  if (!pickerCache[key]) {
+    const res = await fetch(`/api/precons/decks?kind=${kind}&set_code=${encodeURIComponent(set_code)}`);
+    pickerCache[key] = await res.json();
+  }
+  pickerDecks = pickerCache[key];
+
+  if (kind === 'jumpstart') {
+    const sel = document.getElementById('f-js-theme');
+    let html = '<option value="">-- Pick a theme --</option>';
+    for (const grp of pickerDecks) {
+      html += `<option value="${esc(grp.base_name)}">${esc(grp.base_name)}${grp.variations.length > 1 ? ' (' + grp.variations.length + ' variants)' : ''}</option>`;
+    }
+    sel.innerHTML = html;
+    document.getElementById('f-js-variations').innerHTML = '';
+    document.getElementById('js-variation-group').style.display = 'none';
+    document.getElementById('jumpstart-preview').style.display = 'none';
+  } else {
+    const sel = document.getElementById('f-precon-deck');
+    let html = '<option value="">-- Pick a deck --</option>';
+    for (const d of pickerDecks) {
+      html += `<option value="${esc(d.name)}">${esc(d.name)} — ${esc(d.type || '')}</option>`;
+    }
+    sel.innerHTML = html;
+    document.getElementById('precon-preview').style.display = 'none';
+  }
+}
+
+function updateJsVariations() {
+  const baseName = document.getElementById('f-js-theme').value;
+  const group = pickerDecks.find(g => g.base_name === baseName);
+  const wrap = document.getElementById('js-variation-group');
+  const picker = document.getElementById('f-js-variations');
+  if (!group) {
+    wrap.style.display = 'none';
+    picker.innerHTML = '';
+    document.getElementById('jumpstart-preview').style.display = 'none';
+    return;
+  }
+  if (group.variations.length === 1) {
+    wrap.style.display = 'none';
+    picker.innerHTML = '';
+    // Hidden single variation — pin it
+    picker.dataset.selectedName = group.variations[0].name;
+    updateImportPreview('jumpstart');
+    return;
+  }
+  wrap.style.display = '';
+  let html = '';
+  group.variations.forEach((v, i) => {
+    const id = 'js-var-' + i;
+    const label = v.variation != null ? '#' + v.variation : v.name;
+    html += `<label class="${i === 0 ? 'checked' : ''}" data-name="${esc(v.name)}" onclick="pickJsVariation(this)">${esc(label)}</label>`;
+  });
+  picker.innerHTML = html;
+  picker.dataset.selectedName = group.variations[0].name;
+  updateImportPreview('jumpstart');
+}
+
+function pickJsVariation(el) {
+  const picker = document.getElementById('f-js-variations');
+  picker.querySelectorAll('label').forEach(l => l.classList.remove('checked'));
+  el.classList.add('checked');
+  picker.dataset.selectedName = el.dataset.name;
+  updateImportPreview('jumpstart');
+}
+
+function updateImportPreview(kind) {
+  if (kind === 'precon') {
+    const name = document.getElementById('f-precon-deck').value;
+    const set_code = document.getElementById('f-precon-set').value;
+    const pv = document.getElementById('precon-preview');
+    if (!name) { pv.style.display = 'none'; return; }
+    const d = pickerDecks.find(x => x.name === name);
+    if (!d) { pv.style.display = 'none'; return; }
+    pv.style.display = '';
+    pv.innerHTML = `Will import <strong>${esc(d.main_count)}</strong> cards from <strong>${esc(name)}</strong> (${esc(set_code.toUpperCase())}) into a new deck with the expected list filled in.`;
+  } else {
+    const pv = document.getElementById('jumpstart-preview');
+    const set_code = document.getElementById('f-js-set').value;
+    const selectedName = document.getElementById('f-js-variations').dataset.selectedName;
+    if (!selectedName) { pv.style.display = 'none'; return; }
+    let total = null;
+    for (const g of pickerDecks) {
+      const v = g.variations.find(x => x.name === selectedName);
+      if (v) { total = v.main_count; break; }
+    }
+    pv.style.display = '';
+    pv.innerHTML = `Will import <strong>${esc(total ?? '?')}</strong> cards from <strong>${esc(selectedName)}</strong> (${esc(set_code.toUpperCase())}) into a new deck with the expected list filled in.`;
+  }
+}
+
 async function saveDeck() {
-  const data = {
-    name: document.getElementById('f-name').value.trim(),
-    format: document.getElementById('f-format').value || null,
-    description: document.getElementById('f-description').value.trim() || null,
+  if (currentMode === 'blank') {
+    const data = {
+      name: document.getElementById('f-name').value.trim(),
+      format: document.getElementById('f-format').value || null,
+      description: document.getElementById('f-description').value.trim() || null,
+      state: document.getElementById('f-deck-state').value,
+      sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
+      deck_box: document.getElementById('f-deckbox').value.trim() || null,
+      storage_location: document.getElementById('f-location').value.trim() || null,
+    };
+    if (!data.name) { alert('Name is required'); return; }
+    const res = await fetch('/api/decks', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) { alert('Create failed: ' + await res.text()); return; }
+    const result = await res.json();
+    closeModal('deck-modal');
+    window.location.href = '/decks/' + result.id;
+    return;
+  }
+
+  // Import a known decklist (precon or jumpstart).
+  let set_code, deck_name, custom_name;
+  if (currentMode === 'precon') {
+    set_code = document.getElementById('f-precon-set').value;
+    deck_name = document.getElementById('f-precon-deck').value;
+    custom_name = document.getElementById('f-precon-custom').value.trim();
+    if (!set_code || !deck_name) { alert('Pick a set and a deck'); return; }
+  } else {
+    set_code = document.getElementById('f-js-set').value;
+    deck_name = document.getElementById('f-js-variations').dataset.selectedName;
+    custom_name = document.getElementById('f-js-custom').value.trim();
+    if (!set_code || !deck_name) { alert('Pick a set, theme, and variation'); return; }
+  }
+
+  const body = {
+    set_code,
+    deck_name,
+    custom_name: custom_name || null,
     state: document.getElementById('f-deck-state').value,
-    is_precon: document.getElementById('f-precon').checked,
     sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
     deck_box: document.getElementById('f-deckbox').value.trim() || null,
     storage_location: document.getElementById('f-location').value.trim() || null,
-    origin_set_code: document.getElementById('f-origin-set').value || null,
-    origin_theme: document.getElementById('f-origin-theme').value.trim() || null,
-    origin_variation: document.getElementById('f-origin-variation').value ? parseInt(document.getElementById('f-origin-variation').value) : null,
   };
-  if (!data.name) { alert('Name is required'); return; }
-
-  const res = await fetch('/api/decks', {
+  const res = await fetch('/api/precons/import', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(data),
+    body: JSON.stringify(body),
   });
+  if (!res.ok) { alert('Import failed: ' + await res.text()); return; }
   const result = await res.json();
   closeModal('deck-modal');
-  window.location.href = '/decks/' + result.id;
-}
-
-function togglePreconFields() {
-  const show = document.getElementById('f-precon').checked;
-  document.getElementById('precon-fields').style.display = show ? '' : 'none';
+  const u = result.unresolved || [];
+  if (u.length) {
+    alert(`Imported ${result.expected_count} cards. ${u.length} could not be resolved to a local printing — run \`mtg cache all\` to fetch them.`);
+  }
+  window.location.href = '/decks/' + result.deck.id;
 }
 
 // ===== Utils =====

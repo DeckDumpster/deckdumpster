@@ -26,7 +26,7 @@ def steps(harness):
     harness.select_by_label("#f-format", "Pioneer")
 
     # Click Save
-    harness.click_by_text("Save")
+    harness.click_by_selector("#modal-save-btn")
 
     # Wait for redirect to the unified deck page (renders deck header h2)
     harness.wait_for_text("Test Redirect Deck", timeout=500)

@@ -28,7 +28,11 @@ UI_TEST_SETS = ["ecl", "fin"]
 # Sets required by demo ingest samples (recents page test data)
 DEMO_INGEST_SETS = ["tsp", "ddh", "tmp", "8ed", "roe"]
 
-ALL_SETS = DEMO_SETS + UI_TEST_SETS + DEMO_INGEST_SETS
+# Sets required by the precon / Jumpstart import picker UI tests
+# (mtgjson_decks rows + sets table entries for friendly names).
+PRECON_TEST_SETS = ["j25", "spm"]
+
+ALL_SETS = DEMO_SETS + UI_TEST_SETS + DEMO_INGEST_SETS + PRECON_TEST_SETS
 
 # Fallback sealed products — inserted only if not already present from MTGJSON.
 # The first 8 match demo_data.DEMO_SEALED_PRODUCTS category keywords so demo
@@ -83,7 +87,7 @@ def main():
         conn2 = sqlite3.connect(str(OUTPUT))
         all_set_str = ",".join(f"'{s}'" for s in ALL_SETS)
         for table in ("mtgjson_printings", "mtgjson_uuid_map", "mtgjson_booster_sheets",
-                       "mtgjson_booster_configs"):
+                       "mtgjson_booster_configs", "mtgjson_decks"):
             before = conn2.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608
             conn2.execute(f"DELETE FROM {table} WHERE set_code NOT IN ({all_set_str})")  # noqa: S608
             after = conn2.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608

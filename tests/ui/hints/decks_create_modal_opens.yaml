@@ -2,19 +2,16 @@ start_page: /decks
 involves:
   - '"New Deck" button in header controls'
   - "#deck-modal.active with h3#modal-title showing 'New Deck'"
-  - "#f-name input with placeholder 'My Commander Deck'"
-  - "#f-format select with format options"
-  - "#f-description textarea"
-  - "#f-precon checkbox labeled 'Preconstructed deck'"
-  - "#precon-fields hidden by default (display:none)"
-  - "#f-sleeve, #f-deckbox, #f-location text inputs"
-  - "Save and Cancel buttons in .form-actions"
+  - "three .mode-tab buttons: Blank (active by default), Preconstructed, Jumpstart"
+  - "Blank mode: #f-name, #f-format, #f-description"
+  - "Shared fields under every mode: #f-deck-state, #f-sleeve, #f-deckbox, #f-location"
+  - "Primary action button #modal-save-btn (text 'Create' in Blank, 'Import' in others)"
+  - "Precon mode swaps in #f-precon-set + #f-precon-deck and hides #mode-blank"
 fixture_data: {}
 notes: >
-  Navigate to /decks. Wait for the page to load. Click the "New Deck" button.
-  Wait for the modal to appear (#deck-modal.active). Verify the modal title
-  shows "New Deck". Verify the Name field, Format dropdown, Description
-  textarea, Preconstructed deck checkbox, Sleeve Color, Deck Box, and Storage
-  Location fields are visible. Verify Save and Cancel buttons are visible.
-  Verify the precon fields (Origin Set, Theme, Variation) are hidden. Check
-  the precon checkbox and verify precon fields appear. Take a screenshot.
+  Navigate to /decks. Click "New Deck" — modal opens with three tabs at the top.
+  Blank is active by default and shows the Name, Format, Description fields plus
+  the shared State/Sleeve/Deckbox/Location row. The primary button reads "Create"
+  and a Cancel button is visible. Click the Preconstructed tab — the blank-mode
+  section hides, the precon Set + Deck dropdowns appear, and the save button text
+  flips to "Import". Take a screenshot.

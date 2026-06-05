@@ -22,7 +22,9 @@ def steps(harness):
     # Verify probability percentages are shown (table has % values)
     harness.assert_text_present("%")
 
-    # Verify status text shows sheet count
-    harness.assert_text_present("8 sheets")
+    # Verify status text shows sheet count. The status text is set after
+    # the sheets render, so wait for it explicitly rather than racing the
+    # 500ms default in assert_text_present.
+    harness.wait_for_text("8 sheets", timeout=3000)
 
     harness.screenshot("final_state")

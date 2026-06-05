@@ -1,0 +1,24 @@
+start_page: /decks
+involves:
+  - 'New Deck modal Preconstructed tab'
+  - 'Set dropdown id=f-precon-set, populated by GET /api/precons/sets?kind=precon'
+  - 'Deck dropdown id=f-precon-deck, populated when a set is chosen'
+  - '#precon-preview shows "Will import N cards from <Deck> (<SET>)..."'
+  - '#modal-save-btn labeled "Import" — calls POST /api/precons/import'
+  - 'After success, browser navigates to /decks/:id'
+  - 'Created deck name is "<Deck> (<Set Name>)" when no custom name is given'
+fixture_data:
+  set_label: "Marvel's Spider-Man — 5 decks"
+  set_code: spm
+  deck_label: "Red Deck — Welcome Deck"
+  deck_name: "Red Deck"
+  default_created_name: "Red Deck (Marvel's Spider-Man)"
+notes: >
+  1. Click "New Deck". 2. Click the "Preconstructed" tab. 3. Wait for
+  the Set dropdown options to populate (look for the label
+  "Marvel's Spider-Man — 5 decks"). 4. Select that set. 5. Wait for
+  the Deck dropdown to populate and select "Red Deck — Welcome Deck".
+  6. Confirm the preview line contains "Will import 30 cards" and
+  "Red Deck". 7. Click "Import". 8. The browser navigates to the new
+  deck's page; the deck name "Red Deck (Marvel's Spider-Man)" is
+  visible.

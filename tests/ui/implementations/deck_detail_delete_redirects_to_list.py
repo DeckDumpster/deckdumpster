@@ -17,7 +17,7 @@ def steps(harness):
     harness.click_by_text("New Deck")
     harness.wait_for_visible("#deck-modal.active")
     harness.fill_by_selector("#f-name", "Deck To Delete")
-    harness.click_by_text("Save")
+    harness.click_by_selector("#modal-save-btn")
 
     # Wait for redirect to the new deck's unified page
     harness.wait_for_visible(".deck-header h2")

@@ -2,14 +2,15 @@
 
 import sqlite3
 
-SCHEMA_VERSION = 43
+SCHEMA_VERSION = 44
 
 # Tables whose data can be served from an ATTACHed shared DB via temp views.
 SHARED_TABLES = [
     "cards", "sets", "printings", "prices", "price_fetch_log",
     "mtgjson_uuid_map", "mtgjson_printings", "mtgjson_booster_sheets",
-    "mtgjson_booster_configs", "sealed_products", "sealed_product_cards",
-    "sealed_prices", "tcgplayer_groups", "edhrec_recommendations",
+    "mtgjson_booster_configs", "mtgjson_decks", "sealed_products",
+    "sealed_product_cards", "sealed_prices", "tcgplayer_groups",
+    "edhrec_recommendations",
 ]
 SHARED_VIEWS = ["latest_prices", "latest_sealed_prices"]
 
@@ -427,6 +428,24 @@ CREATE TABLE IF NOT EXISTS mtgjson_booster_configs (
 );
 CREATE INDEX IF NOT EXISTS idx_config_set_product ON mtgjson_booster_configs(set_code, product);
 
+-- Preconstructed / Jumpstart decklists imported from MTGJSON `decks`.
+-- Drives the "import known decklist" picker in the New Deck modal.
+-- `base_name` strips a trailing variant marker ("Angels (1)" -> "Angels", "Courageous 1" -> "Courageous")
+-- when sibling decks with the same stem exist in the same set; otherwise base_name = name and variation is NULL.
+CREATE TABLE IF NOT EXISTS mtgjson_decks (
+    set_code     TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    base_name    TEXT NOT NULL,
+    variation    INTEGER,
+    type         TEXT,           -- 'Jumpstart', 'Commander Deck', 'Theme Deck', ...
+    release_date TEXT,
+    main_count   INTEGER NOT NULL DEFAULT 0,
+    deck_data    TEXT NOT NULL,  -- JSON: {mainBoard: [{uuid,count,isFoil?}], sideBoard, commander}
+    PRIMARY KEY (set_code, name)
+);
+CREATE INDEX IF NOT EXISTS idx_mtgjson_decks_type ON mtgjson_decks(type);
+CREATE INDEX IF NOT EXISTS idx_mtgjson_decks_set_type ON mtgjson_decks(set_code, type);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_collection_printing ON collection(printing_id);
 CREATE INDEX IF NOT EXISTS idx_collection_source ON collection(source);
@@ -737,6 +756,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v41_to_v42(conn)
         if current < 43:
             _migrate_v42_to_v43(conn)
+        if current < 44:
+            _migrate_v43_to_v44(conn)
 
     # Record schema version
     conn.execute(
@@ -2674,6 +2695,28 @@ def _migrate_v42_to_v43(conn: sqlite3.Connection):
         """)
 
 
+def _migrate_v43_to_v44(conn: sqlite3.Connection):
+    """Add mtgjson_decks table for the precon/Jumpstart import picker.
+
+    Populated next time `mtg data fetch` runs. Until then the picker shows an empty list.
+    """
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS mtgjson_decks (
+            set_code     TEXT NOT NULL,
+            name         TEXT NOT NULL,
+            base_name    TEXT NOT NULL,
+            variation    INTEGER,
+            type         TEXT,
+            release_date TEXT,
+            main_count   INTEGER NOT NULL DEFAULT 0,
+            deck_data    TEXT NOT NULL,
+            PRIMARY KEY (set_code, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mtgjson_decks_type ON mtgjson_decks(type);
+        CREATE INDEX IF NOT EXISTS idx_mtgjson_decks_set_type ON mtgjson_decks(set_code, type);
+    """)
+
+
 def rebuild_fts(conn):
     """Rebuild the cards_fts full-text search index.
 
@@ -2710,6 +2753,7 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS sealed_products;
         DROP TABLE IF EXISTS price_fetch_log;
         DROP TABLE IF EXISTS prices;
+        DROP TABLE IF EXISTS mtgjson_decks;
         DROP TABLE IF EXISTS mtgjson_booster_configs;
         DROP TABLE IF EXISTS mtgjson_booster_sheets;
         DROP TABLE IF EXISTS mtgjson_printings;

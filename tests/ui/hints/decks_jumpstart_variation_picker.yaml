@@ -1,0 +1,27 @@
+start_page: /decks
+involves:
+  - 'New Deck modal Jumpstart tab'
+  - 'Set dropdown id=f-js-set, populated by GET /api/precons/sets?kind=jumpstart'
+  - 'Theme dropdown id=f-js-theme, populated when a set is chosen'
+  - 'Variation chip row inside #f-js-variations — labels carry data-name="<deck name>"'
+  - 'first chip is .checked by default; clicking another chip moves the highlight'
+  - '#jumpstart-preview shows "Will import N cards from <Deck name> (<SET>)..."'
+  - 'POST /api/precons/import creates the chosen variant and navigates to /decks/:id'
+fixture_data:
+  set_label: "Foundations Jumpstart — 121 decks"
+  set_code: j25
+  theme_label: "Angels (2 variants)"
+  theme_base: "Angels"
+  variation_chip_to_click: "Angels (2)"
+  default_created_name: "Angels (2) (Foundations Jumpstart)"
+notes: >
+  1. Click "New Deck". 2. Click the "Jumpstart" tab. 3. Wait for the
+  Set dropdown to populate, select "Foundations Jumpstart — 121 decks".
+  4. Wait for the Theme dropdown to populate, select
+  "Angels (2 variants)". 5. The Variation chips appear inside
+  #f-js-variations; the first chip (#1, data-name="Angels (1)") is
+  .checked by default. 6. Click the chip with data-name="Angels (2)";
+  it becomes .checked and the first one loses .checked. 7. Confirm
+  the preview text contains "Angels (2)". 8. Click "Import". 9. The
+  browser navigates to /decks/:id; the deck name
+  "Angels (2) (Foundations Jumpstart)" appears.

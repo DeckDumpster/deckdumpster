@@ -1,0 +1,21 @@
+start_page: /decks
+involves:
+  - 'New Deck modal Jumpstart tab'
+  - 'Set dropdown id=f-js-set'
+  - 'Theme dropdown id=f-js-theme — when a single-variant theme is chosen, no chips appear'
+  - 'Variation chip wrapper #js-variation-group stays display:none'
+  - '#jumpstart-preview still appears with the card count'
+fixture_data:
+  set_label: "Foundations — 10 decks"
+  set_code: fdn
+  theme_label: "Goblins"
+  default_created_name: "Goblins (Foundations)"
+notes: >
+  Foundations (FDN) is a small set whose Jumpstart-type decks are
+  single-decklist themes (no "(1)/(2)" siblings). 1. Click "New Deck".
+  2. Click "Jumpstart". 3. Wait for Set dropdown, select
+  "Foundations — 10 decks". 4. Wait for Theme dropdown, select
+  "Goblins" (note: no "(N variants)" suffix). 5. Assert the variation
+  group #js-variation-group is hidden. 6. Confirm the preview line
+  contains "Will import" and "Goblins". 7. Click "Import". 8. Browser
+  navigates to /decks/:id; deck name "Goblins (Foundations)" appears.

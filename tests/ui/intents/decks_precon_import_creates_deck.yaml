@@ -1,0 +1,12 @@
+# Scenario: Import a known preconstructed deck from MTGJSON
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the New Deck modal I switch to the Preconstructed tab, pick a set,
+  pick one of that set's decks from the deck dropdown, see a live preview
+  saying "Will import N cards from <Deck> (<SET>)...", and click Import.
+  I land on the new deck's standalone page and the deck has its expected
+  card list pre-populated from the MTGJSON decklist.

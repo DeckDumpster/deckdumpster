@@ -1,0 +1,17 @@
+start_page: /decks
+involves:
+  - '"New Deck" button (top of /decks) opens the deck-modal'
+  - 'three .mode-tab buttons: Blank, Preconstructed, Jumpstart'
+  - 'Blank mode shows #f-name input with placeholder "My Commander Deck"'
+  - 'Precon mode shows #f-precon-set select; hides #f-name'
+  - 'primary action button #modal-save-btn flips text Create/Import'
+fixture_data: {}
+notes: >
+  1. Click "New Deck". Modal opens, default tab is Blank (active by
+  default). Verify the Name input "My Commander Deck" placeholder is
+  visible and the save button reads "Create".
+  2. Click the "Preconstructed" tab. Verify the Set dropdown appears
+  (id=f-precon-set) and the Name input is no longer visible, and the
+  save button now reads "Import".
+  3. Click the "Blank" tab again. Verify the Name input returns and
+  the save button is back to "Create".

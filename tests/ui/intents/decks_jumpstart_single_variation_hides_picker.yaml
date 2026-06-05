@@ -1,0 +1,12 @@
+# Scenario: Single-variant Jumpstart themes hide the chip picker
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  On the Jumpstart tab when I pick a set and then pick a theme that only
+  has one variation (no sibling decklists), the Variation chip row stays
+  hidden — there is nothing to choose among — but the import preview still
+  appears with the correct card count, and clicking Import creates the
+  deck.
