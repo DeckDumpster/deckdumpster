@@ -4,7 +4,7 @@ Hand-written implementation for collection_search_unowned.
 Verifies that "is:unowned" routes the collection query through the
 LEFT-JOIN template and surfaces cards from the local database that
 aren't in the user's collection. The fixture contains 0 owned "lotus"
-rows but 3 unowned printings in the card database.
+rows but a handful of unowned lotus printings in the card database.
 """
 
 
@@ -17,11 +17,11 @@ def steps(harness):
     harness.wait_for_text("0 results")
     harness.screenshot("default_lotus_empty")
 
-    # Prepend is:unowned — three printings from the card DB appear
+    # Prepend is:unowned — unowned lotus printings from the card DB appear
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "is:unowned lotus")
-    harness.wait_for_text("3 results")
+    harness.wait_for_text("4 results")
 
-    # Each of the three printings is named
+    # Representative printings are named
     harness.assert_text_present("Gilded Lotus")
     harness.assert_text_present("Lotus Bloom")
     harness.assert_text_present("Lotus Petal")

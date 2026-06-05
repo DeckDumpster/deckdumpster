@@ -18,14 +18,14 @@ def steps(harness):
     harness.wait_for_visible("#deck-modal.active")
 
     # Click Save without entering a name (alert auto-accepted)
-    harness.click_by_text("Save")
+    harness.click_by_selector("#modal-save-btn")
 
     # Modal should still be open after the alert
     harness.assert_visible("#deck-modal.active")
 
     # Now fill in a name and save successfully
     harness.fill_by_selector("#f-name", "Validated Deck")
-    harness.click_by_text("Save")
+    harness.click_by_selector("#modal-save-btn")
 
     # Wait for redirect to the new deck's unified page
     harness.wait_for_visible(".deck-header h2")

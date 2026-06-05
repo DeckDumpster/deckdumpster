@@ -1,13 +1,14 @@
-# Scenario: New Deck modal opens with all expected fields
+# Scenario: New Deck modal opens with the three-tab picker
 #
 # Prerequisites:
 #   The /decks page loads with the "New Deck" button visible
 
 description: >
-  When I visit /decks and click the "New Deck" button, a modal opens with the
-  title "New Deck". The modal contains form fields: Name (placeholder "My
-  Commander Deck"), Format (dropdown with commander, standard, modern, pioneer,
-  legacy, vintage, pauper), Description (textarea), a "Preconstructed deck"
-  checkbox, Sleeve Color, Deck Box, and Storage Location. Save and Cancel
-  buttons are visible at the bottom. The precon-specific fields (Origin Set,
-  Theme, Variation) are hidden until the checkbox is checked.
+  When I visit /decks and click the "New Deck" button, a modal opens with
+  three tabs at the top — Blank, Preconstructed, Jumpstart — with Blank
+  active by default. Blank mode shows core form fields (Name, Format,
+  Description) plus shared fields (Sleeve Color, Deck Box, Storage
+  Location, State). The primary action button reads "Create" and a Cancel
+  button is also visible. When I click the Preconstructed tab, the blank
+  form fields are hidden, the set/deck pickers appear, and the action
+  button flips to "Import".

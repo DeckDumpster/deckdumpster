@@ -21,7 +21,7 @@ def steps(harness):
     harness.fill_by_selector("#f-name", "Minimal Deck")
 
     # Click Save (all other fields left at defaults)
-    harness.click_by_text("Save")
+    harness.click_by_selector("#modal-save-btn")
 
     # Wait for redirect to the new deck's unified page
     harness.wait_for_visible(".deck-header h2")
