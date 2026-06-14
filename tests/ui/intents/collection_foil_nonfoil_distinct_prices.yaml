@@ -1,0 +1,21 @@
+# Scenario: Foil and non-foil copies show their own finish's price
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+#
+# Prerequisites:
+#   The test instance must have a printing that is owned in BOTH a foil and a
+#   non-foil copy, and have distinct foil vs non-foil prices in the shared
+#   latest_prices table. The default --test fixture owns fdn/132 (Scrawling
+#   Crawler) in both finishes but has no price rows, so the implementation
+#   seeds latest_prices via podman exec before searching.
+
+description: >
+  When I own both a foil and a non-foil copy of the same printing, the
+  collection view shows each copy its own market price. The foil copy
+  displays the (higher) foil price and the non-foil copy displays the
+  (lower) non-foil price — they are NOT both shown at the non-foil
+  price. Searching for the card surfaces two rows, and the foil row's
+  Price column shows the foil number while the non-foil row shows the
+  non-foil number.

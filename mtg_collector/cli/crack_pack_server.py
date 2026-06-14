@@ -2216,9 +2216,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 if compiled and "b.name" in (compiled.where_sql or ""):
                     joins.append("LEFT JOIN binders b ON c.binder_id = b.id")
             if needs_price_join:
+                # price_type follows the copy's actual finish so foil copies sort
+                # by their foil price, not the nonfoil price. Etched uses foil.
                 joins.append(
                     "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
-                    " AND _lp.collector_number = p.collector_number AND _lp.price_type = 'normal'"
+                    " AND _lp.collector_number = p.collector_number"
+                    " AND _lp.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END"
                 )
             if needs_wishlist_join:
                 joins.append(
@@ -2405,8 +2408,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if results:
             price_keys = []
             for card in results:
-                finishes = json.loads(card["finishes"]) if card["finishes"] else []
-                price_type = "normal" if "nonfoil" in finishes else "foil"
+                # Use the physical copy's actual finish (c.finish), not the
+                # printing's available finishes (p.finishes) — otherwise a foil
+                # copy of a printing that also exists in nonfoil shows the
+                # nonfoil price. Etched copies use foil pricing.
+                price_type = "foil" if card["finish"] in ("foil", "etched") else "normal"
                 sc = card["set_code"].lower()
                 cn = card["collector_number"]
                 price_keys.append((sc, cn, price_type))
