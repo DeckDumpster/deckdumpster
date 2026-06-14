@@ -1,0 +1,33 @@
+start_page: /collection
+involves:
+  - 'search input (#search-input, placeholder "Search (e.g. t:creature c:r mv>=3)")'
+  - 'collection table rows (tr[data-idx]) in the default table view'
+  - 'Price column badges built by buildPriceBadges (SF <tcg> / CK <ck>)'
+  - 'foil row carries an "F" finish badge next to the card name'
+fixture_data:
+  card_name: "Scrawling Crawler"
+  set_code: "fdn"
+  collector_number: "132"
+  owned_finishes: ["nonfoil", "foil"]
+  nonfoil_tcg_price: "3.00"
+  foil_tcg_price: "99.00"
+  nonfoil_ck_price: "3.30"
+  foil_ck_price: "110.00"
+notes: >
+  The --test fixture owns fdn/132 (Scrawling Crawler) as two nonfoil
+  copies (ids 1, 34) plus one foil copy (id 2), but has no price rows.
+  latest_prices lives in the shared reference DB (/data/shared.sqlite),
+  not /data/collection.sqlite — the implementation must seed it there.
+
+  1. Seed /data/shared.sqlite latest_prices via podman exec: for fdn/132
+     insert tcgplayer normal=3.00 / foil=99.00 and cardkingdom
+     normal=3.30 / foil=110.00.
+  2. The runner auto-navigates to /collection. Type "Scrawling Crawler"
+     into #search-input; the page debounces and fetches /api/collection.
+  3. The default table view groups by finish, so two rows render: a
+     foil row (qty 1) and a nonfoil row (qty 2).
+  4. Assert "$99.00" is present (the foil price) — this is the
+     regression guard. Before the fix both rows showed the non-foil
+     "$3.00" and "$99.00" never appeared.
+  5. Assert "$3.00" is present (the non-foil price) and that exactly two
+     rows render.
