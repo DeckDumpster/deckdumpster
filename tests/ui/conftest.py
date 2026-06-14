@@ -15,6 +15,8 @@ Or pass an existing instance via --instance:
 import logging
 import ssl
 import subprocess
+import sys
+import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -109,6 +111,51 @@ def pytest_addoption(parser):
             parser.addoption(*opt_args, **opt_kwargs)
         except ValueError:
             pass
+
+
+# ── Live progress for the long-running UI suite ──────────────────────────────
+# The UI suite runs for minutes with one parametrized item per intent. Under CI
+# stdout is a pipe (not a TTY), so pytest block-buffers its output and nothing
+# surfaces until the run ends — and a hung test is invisible. These hooks emit a
+# flushed line per test to the *original* stderr. sys.__stderr__ bypasses
+# pytest's per-test output capture, and flush=True defeats block buffering, so
+# progress streams to GitHub Actions in real time. Scoped to UI nodeids so a
+# combined `pytest tests/` run doesn't narrate the unit suite too.
+
+_progress = {"total": 0, "done": 0}
+
+
+def _is_ui(nodeid: str) -> bool:
+    return nodeid.startswith("tests/ui/") or "/ui/" in nodeid
+
+
+def _emit(msg: str) -> None:
+    print(msg, file=sys.__stderr__, flush=True)
+
+
+def pytest_collection_modifyitems(session, config, items):
+    _progress["total"] = sum(1 for it in items if _is_ui(it.nodeid))
+
+
+def pytest_runtest_logstart(nodeid, location):
+    if not _is_ui(nodeid):
+        return
+    _progress["done"] += 1
+    _emit(
+        f"▶ [{_progress['done']}/{_progress['total']}] "
+        f"{time.strftime('%H:%M:%S')} START {nodeid}"
+    )
+
+
+def pytest_runtest_logreport(report):
+    # Report on the call phase (pass/fail of the test body) plus setup
+    # skips/errors, which never reach the call phase.
+    if not _is_ui(report.nodeid):
+        return
+    if report.when != "call" and not (report.when == "setup" and report.outcome != "passed"):
+        return
+    icon = {"passed": "✓", "failed": "✗", "skipped": "○"}.get(report.outcome, "?")
+    _emit(f"  {icon} {report.outcome.upper()} {report.nodeid} ({report.duration:.1f}s)")
 
 
 @pytest.fixture(scope="session")
