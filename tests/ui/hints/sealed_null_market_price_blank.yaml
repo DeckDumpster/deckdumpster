@@ -1,0 +1,22 @@
+start_page: /sealed
+involves:
+  - the Duskmourn: House of Horror Bundle row, which has no sealed price
+  - empty Market and Total table cells for that row
+  - absence of any "$0.00" anywhere on the page
+  - its Min Cost of $40.00, which is still shown
+fixture_data:
+  unpriced_product: "Duskmourn: House of Horror"
+  unpriced_category: "Bundle"
+  unpriced_min_cost: "$40.00"
+notes: >
+  Read-only against fixture data.
+
+  The fixture deliberately leaves this one demo-held product unpriced (see
+  DEMO_SEALED_PRICES in scripts/build_test_fixture.py, which omits the
+  ("dsk", "bundle") pair) precisely so this path stays covered.
+
+  The strongest assertion is a global one: "$0.00" must not appear anywhere on
+  /sealed, in either view. Every other visible entry is priced, so a regression
+  that substituted 0 for null would surface as "$0.00" on this row. Also assert
+  the row's own $40.00 min cost is still rendered, proving the row itself is
+  present rather than filtered out.

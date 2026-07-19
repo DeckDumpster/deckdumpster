@@ -1,0 +1,23 @@
+start_page: /sealed
+involves:
+  - table view toggle (#view-table-btn)
+  - Market column header, showing a per-unit price
+  - Total column header, immediately right of Market, showing quantity x price
+  - the Foundations Collector Booster Pack row, quantity 6
+fixture_data:
+  product: "Foundations"
+  category: "Collector Booster Pack"
+  quantity: "6"
+  min_cost: "$4.50"
+  market_per_unit: "$3.50"
+  total: "$21.00"
+notes: >
+  Read-only against fixture data — do not add, edit or dispose anything. The
+  quantity-6 Foundations entry is shared with sealed_partial_dispose_qty, so
+  this scenario must not mutate it.
+
+  Switch to table view with #view-table-btn. The table is table.sealed-table.
+  Both Market and Total are default-on columns, so no column-drawer
+  interaction is needed. Assert the Market and Total headers are both present
+  and that $3.50 and $21.00 both appear. The key evidence is that the two are
+  different values on the same row: Market is per unit, Total is 6 x $3.50.
