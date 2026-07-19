@@ -398,3 +398,110 @@ def test_handler_write_error_does_not_lock_db(single_db_path):
     assert row is not None
     assert row[0] == "ok"
     check.close()
+
+
+# ── Sealed collection handler connection-leak tests (efj-mtgc-dw0) ──
+
+
+def _seed_sealed_product(db_path, *, entry_status=None, quantity=1):
+    """Insert a sealed_products row, and optionally a sealed_collection entry."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO sealed_products (uuid, name, set_code, category, imported_at) "
+        "VALUES ('sealed-uuid-1', 'Test Booster Box', 'tst', 'booster_box', "
+        "'2025-01-01T00:00:00')"
+    )
+    if entry_status is not None:
+        conn.execute(
+            "INSERT INTO sealed_collection "
+            "(id, sealed_product_uuid, quantity, condition, status, added_at) "
+            "VALUES (1, 'sealed-uuid-1', ?, 'Near Mint', ?, '2025-01-01T00:00:00')",
+            (quantity, entry_status),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _assert_writes_still_work(db_path, key):
+    """The next writer must not hit 'database is locked'."""
+    conn2 = sqlite3.connect(db_path, timeout=1)
+    conn2.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (key,))
+    conn2.commit()
+    conn2.close()
+
+    check = sqlite3.connect(db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    check.close()
+
+
+def test_sealed_collection_add_integrity_error_does_not_lock_db(single_db_path):
+    """_api_sealed_collection_add must release the connection on any exception.
+
+    Reproduces efj-mtgc-dw0: the handler closed the connection only on its
+    success and not-found paths, so the IntegrityError raised by
+    sealed_collection's status CHECK constraint escaped before conn.close().
+    The leaked connection kept an open write transaction; under WAL mode that
+    holds the write lock and every subsequent write fails "database is locked"
+    until the service is restarted.
+
+    Also asserts the error still propagates — releasing the lock must not turn
+    into swallowing the error into a tidy JSON response.
+    """
+    _seed_sealed_product(single_db_path)
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_sealed_collection_add({
+                "sealed_product_uuid": "sealed-uuid-1",
+                "status": "not_a_real_status",
+            })
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_sealed_add_error")
+
+
+def test_sealed_collection_dispose_non_valueerror_does_not_lock_db(single_db_path):
+    """_api_sealed_collection_dispose catches only ValueError — anything else leaks.
+
+    Disposing part of a stack takes the split path: the original entry is
+    UPDATEd (opening a write transaction) and only then is the split row
+    INSERTed. An unsupported JSON type for sale_price makes sqlite3 raise
+    ProgrammingError on that INSERT, which sails past the narrow
+    `except ValueError` and past conn.close() — leaving the write transaction,
+    and the WAL write lock, held by the leaked connection.
+    """
+    _seed_sealed_product(single_db_path, entry_status="owned", quantity=3)
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.ProgrammingError):
+            handler._api_sealed_collection_dispose(
+                1, {"new_status": "sold", "quantity": 1,
+                    "sale_price": {"usd": 5}})
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_sealed_dispose_error")
+
+
+def test_sealed_collection_bulk_dispose_error_does_not_lock_db(single_db_path):
+    """_api_sealed_collection_bulk_dispose has no except at all — every error leaks.
+
+    The first id disposes cleanly (opening a write transaction); the second is
+    an unsupported JSON type, so the lookup SELECT raises ProgrammingError with
+    that transaction still open. Without a finally the connection — and the WAL
+    write lock it holds — is never released.
+    """
+    _seed_sealed_product(single_db_path, entry_status="owned")
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.ProgrammingError):
+            handler._api_sealed_collection_bulk_dispose(
+                {"ids": [1, {"bad": "id"}], "new_status": "sold"})
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_sealed_bulk_error")
