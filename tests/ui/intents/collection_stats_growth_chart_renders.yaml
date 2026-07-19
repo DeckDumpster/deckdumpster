@@ -1,0 +1,22 @@
+# Scenario: Growth-over-time chart renders in the result-stats modal
+#
+# Related:
+#   issues: [efj-mtgc-655]
+#   pull_requests: []
+#
+# Prerequisites:
+#   The chart needs both acquisition history and price history. The --test
+#   fixture has neither: it ships 0 collection rows (the ~45 cards come from
+#   --demo at setup time, all acquired "today") and only 5 price rows. The
+#   implementation therefore seeds both via podman exec before opening the
+#   modal — backdated acquired_at into /data/collection.sqlite and price rows
+#   into /data/shared.sqlite (prices resolve through the ATTACHed shared DB,
+#   so seeding collection.sqlite has no effect).
+
+description: >
+  When I open the "Result statistics" modal from the collection page,
+  the first section is "Growth over time": a line chart plotting how my
+  collection's card count and total value have changed since my earliest
+  acquisition. With acquisition and price history present I see an actual
+  rendered chart, not the "No acquisition history for the current filter"
+  placeholder.

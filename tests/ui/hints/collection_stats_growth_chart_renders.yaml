@@ -1,0 +1,34 @@
+start_page: /collection
+involves:
+  - "result count text in header (#status), e.g. '45 cards, $10.46'"
+  - "stats modal overlay #stats-modal-overlay (gains .active when open)"
+  - "'Growth over time' section title inside #stats-modal-content"
+  - "growth chart wrapper #growth-chart-wrap"
+  - "Chart.js canvas #growth-chart-canvas"
+  - ".growth-empty placeholder shown when the series is empty"
+fixture_data:
+  demo_cards: 45
+  seeded_span_days: 120
+  seeded_price_pairs: 42
+notes: >
+  The chart is driven by GET /api/collection/growth, which returns
+  {dates, counts, tcg_values, ck_values}. It is fetched lazily by
+  renderGrowthChart() when the modal opens, so seeding before opening the
+  modal is sufficient.
+
+  Seed first, via podman exec. Prices MUST go into /data/shared.sqlite:
+  MTGC_SHARED_DB is set in the test container and attach_shared() creates
+  temp views that shadow the main-schema tables, so rows written to
+  /data/collection.sqlite's `prices` table are invisible to the server.
+  Acquisition dates are a genuine collection column and do go into
+  /data/collection.sqlite. Spread acquired_at over the last 120 days and
+  write price rows every 5th day (deliberate gaps, so the server-side
+  forward-fill is exercised) for both tcgplayer and cardkingdom, in both
+  normal and foil price_type, plus some cardkingdom buylist_normal rows
+  that the endpoint must ignore.
+
+  Then navigate to /collection, wait for .collection-table, click #status
+  to open the modal, wait for #stats-modal-overlay.active, and confirm
+  "Growth over time" is present, #growth-chart-canvas is visible, and the
+  text "No acquisition history for the current filter" is absent.
+  With this seed the series is 121 days, counts 1 -> 45, TCG 7.00 -> 837.00.

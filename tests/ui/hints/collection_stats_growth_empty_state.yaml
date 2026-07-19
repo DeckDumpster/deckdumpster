@@ -1,0 +1,25 @@
+start_page: /collection
+involves:
+  - "search input, placeholder 'Search (e.g. t:creature c:r mv>=3)'"
+  - "result count text in header (#status)"
+  - "stats modal overlay #stats-modal-overlay"
+  - ".growth-empty placeholder div inside #growth-chart-wrap"
+fixture_data:
+  unowned_results: 7603
+notes: >
+  No seeding needed — this is the unseeded fixture's natural state for this
+  filter. The server short-circuits is:unowned in _api_collection_growth and
+  returns {"dates": [], "counts": [], "tcg_values": [], "ck_values": []}.
+  renderGrowthChart() sees an empty dates array and replaces the wrapper's
+  contents with
+  '<div class="growth-empty">No acquisition history for the current filter</div>'
+  so no canvas is created.
+
+  Type "is:unowned" into the search box (300ms debounce). Unowned rows carry
+  qty 0, so updateStatusText() falls back to counting rows and switches the
+  noun: the status reads "7,603 results", NOT "7,603 cards". Assert on the
+  noun rather than the number so the test survives fixture regeneration.
+  Click #status, wait for #stats-modal-overlay.active, then assert
+  .growth-empty is visible, the message text is present, and
+  #growth-chart-canvas is NOT attached. The Counts section still renders, so
+  "Entries (rows)" remains present — the empty state is scoped to the chart.

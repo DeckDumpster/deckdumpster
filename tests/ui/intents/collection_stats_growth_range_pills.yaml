@@ -1,0 +1,17 @@
+# Scenario: Growth chart time-range pills reflect the available data span
+#
+# Related:
+#   issues: [efj-mtgc-655]
+#   pull_requests: []
+#
+# Prerequisites:
+#   Same seeding as collection_stats_growth_chart_renders, with the earliest
+#   acquisition pinned ~120 days back so that the 1M/3M ranges are covered by
+#   the data but 6M/1Y are not. See that intent for why seeding is required.
+
+description: >
+  Above the growth chart there are time-range pills (1M, 3M, 6M, 1Y, ALL)
+  with ALL selected by default. Ranges longer than my actual history are
+  greyed out — with about four months of history, 1M and 3M are available
+  but 6M and 1Y are not. Clicking 3M narrows the chart to the last three
+  months and makes 3M the selected pill.

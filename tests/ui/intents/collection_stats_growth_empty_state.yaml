@@ -1,0 +1,12 @@
+# Scenario: Growth chart shows an empty state for filters with no history
+#
+# Related:
+#   issues: [efj-mtgc-655]
+#   pull_requests: []
+
+description: >
+  When I search "is:unowned" the collection page shows cards I don't own,
+  which by definition have no acquisition history. Opening the result-stats
+  modal still works and still shows my counts, but the growth section shows
+  "No acquisition history for the current filter" instead of a chart —
+  rather than an empty chart, an error, or a hang.
