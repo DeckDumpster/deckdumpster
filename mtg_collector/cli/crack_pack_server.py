@@ -7050,36 +7050,40 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             color=data.get("color"), binder_type=data.get("binder_type"),
             storage_location=data.get("storage_location"),
         )
-        binder_id = repo.add(binder)
-        conn.commit()
-        result = repo.get(binder_id)
-        conn.close()
+        try:
+            binder_id = repo.add(binder)
+            conn.commit()
+            result = repo.get(binder_id)
+        finally:
+            conn.close()
         self._send_json(result, 201)
 
     def _api_binder_update(self, binder_id: int, data: dict):
         conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
-        if not repo.get(binder_id):
+        try:
+            if not repo.get(binder_id):
+                self._send_json({"error": "Binder not found"}, 404)
+                return
+            repo.update(binder_id, data)
+            conn.commit()
+            result = repo.get(binder_id)
+        finally:
             conn.close()
-            self._send_json({"error": "Binder not found"}, 404)
-            return
-        repo.update(binder_id, data)
-        conn.commit()
-        result = repo.get(binder_id)
-        conn.close()
         self._send_json(result)
 
     def _api_binder_delete(self, binder_id: int):
         conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
-        if not repo.delete(binder_id):
+        try:
+            if not repo.delete(binder_id):
+                self._send_json({"error": "Binder not found"}, 404)
+                return
+            conn.commit()
+        finally:
             conn.close()
-            self._send_json({"error": "Binder not found"}, 404)
-            return
-        conn.commit()
-        conn.close()
         self._send_json({"ok": True})
 
     def _api_binder_cards(self, binder_id: int):
@@ -7172,38 +7176,42 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             id=None, name=name, description=data.get("description"),
             filters_json=filters_json,
         )
-        view_id = repo.add(view)
-        conn.commit()
-        result = repo.get(view_id)
-        conn.close()
+        try:
+            view_id = repo.add(view)
+            conn.commit()
+            result = repo.get(view_id)
+        finally:
+            conn.close()
         self._send_json(result, 201)
 
     def _api_view_update(self, view_id: int, data: dict):
         conn = self._get_conn()
         from mtg_collector.db.models import CollectionViewRepository
         repo = CollectionViewRepository(conn)
-        if not repo.get(view_id):
+        try:
+            if not repo.get(view_id):
+                self._send_json({"error": "View not found"}, 404)
+                return
+            if "filters_json" in data and isinstance(data["filters_json"], dict):
+                data["filters_json"] = json.dumps(data["filters_json"])
+            repo.update(view_id, data)
+            conn.commit()
+            result = repo.get(view_id)
+        finally:
             conn.close()
-            self._send_json({"error": "View not found"}, 404)
-            return
-        if "filters_json" in data and isinstance(data["filters_json"], dict):
-            data["filters_json"] = json.dumps(data["filters_json"])
-        repo.update(view_id, data)
-        conn.commit()
-        result = repo.get(view_id)
-        conn.close()
         self._send_json(result)
 
     def _api_view_delete(self, view_id: int):
         conn = self._get_conn()
         from mtg_collector.db.models import CollectionViewRepository
         repo = CollectionViewRepository(conn)
-        if not repo.delete(view_id):
+        try:
+            if not repo.delete(view_id):
+                self._send_json({"error": "View not found"}, 404)
+                return
+            conn.commit()
+        finally:
             conn.close()
-            self._send_json({"error": "View not found"}, 404)
-            return
-        conn.commit()
-        conn.close()
         self._send_json({"ok": True})
 
     def _api_shorten(self, params):
