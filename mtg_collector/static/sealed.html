@@ -1179,7 +1179,8 @@ const ALL_COLUMNS = [
   { key: 'min_cost', label: 'Min Cost',  sort: 'min_cost',       defaultOn: true },
   { key: 'max_cost', label: 'Max Cost',  sort: 'max_cost',       defaultOn: false },
   { key: 'avg_cost', label: 'Avg Cost',  sort: 'avg_cost',       defaultOn: false },
-  { key: 'market',   label: 'Market',    sort: 'market_total',   defaultOn: true },
+  { key: 'market',   label: 'Market',    sort: 'market_price',   defaultOn: true },
+  { key: 'total',    label: 'Total',     sort: 'market_total',   defaultOn: true },
   { key: 'added',    label: 'Added',     sort: 'added_at',       defaultOn: false },
   { key: 'status',   label: 'Status',    sort: 'primary_status', defaultOn: false },
 ];
@@ -1188,6 +1189,12 @@ const DEFAULT_COLS = ALL_COLUMNS.filter(c => c.defaultOn).map(c => c.key);
 let enabledCols = JSON.parse(localStorage.getItem('sealedCols') || 'null') || DEFAULT_COLS;
 if (enabledCols.includes('cost')) {
   enabledCols = enabledCols.map(k => k === 'cost' ? 'min_cost' : k);
+  localStorage.setItem('sealedCols', JSON.stringify(enabledCols));
+}
+// 'Market' used to render the all-units total; it is now per-unit and 'Total' carries
+// that figure. Give existing layouts the new column so they don't silently lose it.
+if (enabledCols.includes('market') && !enabledCols.includes('total')) {
+  enabledCols.splice(enabledCols.indexOf('market') + 1, 0, 'total');
   localStorage.setItem('sealedCols', JSON.stringify(enabledCols));
 }
 const COL_SORT_MAP = Object.fromEntries(ALL_COLUMNS.map(c => [c.key, c.sort]));
@@ -1937,7 +1944,8 @@ function renderTable() {
     const minCost = product.min_cost != null ? formatPrice(product.min_cost) : '';
     const maxCost = product.max_cost != null ? formatPrice(product.max_cost) : '';
     const avgCost = product.avg_cost != null ? formatPrice(product.avg_cost) : '';
-    const market = product.market_total != null ? formatPrice(product.market_total) : '';
+    const market = product.market_price != null ? formatPrice(product.market_price) : '';
+    const marketTotal = product.market_total != null ? formatPrice(product.market_total) : '';
     const added = product.added_at ? product.added_at.slice(0, 10) : '';
 
     const rowSelected = selectionMode && isProductSelected(product) ? ' selected' : '';
@@ -1958,6 +1966,7 @@ function renderTable() {
         case 'max_cost': html += `<td>${maxCost}</td>`; break;
         case 'avg_cost': html += `<td>${avgCost}</td>`; break;
         case 'market':   html += `<td>${market}</td>`; break;
+        case 'total':    html += `<td>${marketTotal}</td>`; break;
         case 'added':    html += `<td>${added}</td>`; break;
         case 'status':   html += `<td>${renderStatusBadges(product.status_counts)}</td>`; break;
       }
