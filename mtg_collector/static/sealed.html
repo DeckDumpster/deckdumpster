@@ -426,6 +426,7 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   vertical-align: middle;
 }
 .market-price { color: #7ec8e3; font-size: 0.75rem; font-weight: 600; }
+.market-total { color: #5a8fa3; font-size: 0.7rem; font-weight: 600; }
 
 /* Column config drawer */
 .col-drawer-backdrop {
@@ -1895,7 +1896,10 @@ function renderGrid() {
     const qtyBadge = product.total_quantity > 1 ? `<span class="qty-badge">${product.total_quantity}x</span>` : '';
     const statusBadge = `<span class="status-badge ${product.primary_status}">${product.primary_status}</span>`;
     const costText = product.min_cost != null ? formatPrice(product.min_cost) : '';
-    const marketText = product.market_total != null ? formatPrice(product.market_total) : '';
+    const marketText = product.market_price != null ? formatPrice(product.market_price) : '';
+    // Total repeats the per-unit figure when qty is 1, so only surface it when it adds something.
+    const marketTotalText = (product.market_total != null && product.total_quantity > 1)
+      ? formatPrice(product.market_total) : '';
     const selectable = selectionMode ? ' selectable' : '';
     const selected = selectionMode && isProductSelected(product) ? ' selected' : '';
     const checkboxHtml = selectionMode ? `<input type="checkbox" class="select-checkbox" ${isProductSelected(product) ? 'checked' : ''}>` : '';
@@ -1911,7 +1915,8 @@ function renderGrid() {
       <div class="card-info">
         <div class="card-name">${esc(product.set_name || product.set_code || '')}</div>
         <div class="card-set">${esc(formatCategory(product))}</div>
-        ${marketText ? `<div class="market-price">${marketText} mkt</div>` : ''}
+        ${marketText ? `<div class="market-price">${marketText}/ea mkt</div>` : ''}
+        ${marketTotalText ? `<div class="market-total">${marketTotalText} total</div>` : ''}
         ${costText ? `<div class="card-price">${costText}/ea cost</div>` : ''}
       </div>
     </div>`;
