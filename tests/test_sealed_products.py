@@ -1344,3 +1344,196 @@ class TestSealedProductSource:
         product = repo.get("tcgcsv-uuid")
         assert product is not None
         assert product.source == "tcgcsv"
+
+
+# =============================================================================
+# latest_sealed_prices: most recent row PER product (efj-mtgc-gyp)
+# =============================================================================
+
+
+def _seed_prices(conn, rows):
+    """rows = [(product_id, observed_at, market_price), ...]"""
+    conn.executemany(
+        "INSERT INTO sealed_prices (tcgplayer_product_id, observed_at, market_price,"
+        " low_price, mid_price, high_price, direct_low_price)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(p, d, m, m - 1, m, m + 1, m - 2) for p, d, m in rows],
+    )
+    conn.commit()
+
+
+class TestLatestSealedPricesPerProduct:
+    """The view must return the newest row per tcgplayer_product_id.
+
+    A global MAX(observed_at) filter silently drops every product that was absent
+    from the most recent fetch, even when it has usable price history.
+    """
+
+    def test_product_absent_from_latest_fetch_keeps_its_earlier_price(self, test_db):
+        """Priced on day 1 but not day 2 => still visible, with the day-1 price."""
+        _, conn = test_db
+        _seed_prices(conn, [
+            ("prod-stale", "2026-01-01", 100.0),   # only ever priced on day 1
+            ("prod-fresh", "2026-01-01", 50.0),
+            ("prod-fresh", "2026-01-02", 55.0),    # day 2 = global max
+        ])
+
+        rows = {
+            r["tcgplayer_product_id"]: r
+            for r in conn.execute("SELECT * FROM latest_sealed_prices")
+        }
+
+        assert "prod-stale" in rows, "product missing from newest fetch was dropped"
+        assert rows["prod-stale"]["market_price"] == 100.0
+        assert rows["prod-stale"]["observed_at"] == "2026-01-01"
+        # and the freshly-priced product still resolves to its newest row
+        assert rows["prod-fresh"]["market_price"] == 55.0
+        assert rows["prod-fresh"]["observed_at"] == "2026-01-02"
+
+    def test_row_count_equals_distinct_products_with_any_price(self, test_db):
+        """One row per product that has any price row at all."""
+        _, conn = test_db
+        _seed_prices(conn, [
+            ("a", "2026-01-01", 1.0), ("a", "2026-01-02", 2.0), ("a", "2026-01-03", 3.0),
+            ("b", "2026-01-01", 10.0), ("b", "2026-01-02", 20.0),
+            ("c", "2026-01-01", 100.0),
+            ("d", "2026-01-03", 7.0),
+        ])
+
+        distinct = conn.execute(
+            "SELECT COUNT(DISTINCT tcgplayer_product_id) FROM sealed_prices"
+        ).fetchone()[0]
+        view_rows = conn.execute(
+            "SELECT COUNT(*) FROM latest_sealed_prices"
+        ).fetchone()[0]
+
+        assert distinct == 4
+        assert view_rows == distinct
+
+    def test_single_price_row_product_is_visible(self, test_db):
+        """A product with exactly one price row appears with that row."""
+        _, conn = test_db
+        _seed_prices(conn, [
+            ("only-once", "2026-01-01", 42.0),
+            ("noisy", "2026-01-05", 9.0),
+        ])
+
+        row = conn.execute(
+            "SELECT * FROM latest_sealed_prices WHERE tcgplayer_product_id = 'only-once'"
+        ).fetchone()
+
+        assert row is not None
+        assert row["market_price"] == 42.0
+        assert row["observed_at"] == "2026-01-01"
+
+    def test_per_product_latest_differs_from_global_latest(self, test_db):
+        """The view is genuinely per-product, not the global-max set."""
+        _, conn = test_db
+        _seed_prices(conn, [
+            ("p1", "2026-01-01", 1.0),
+            ("p2", "2026-01-02", 2.0),
+            ("p3", "2026-01-03", 3.0),
+        ])
+
+        global_max_rows = conn.execute(
+            "SELECT COUNT(*) FROM sealed_prices"
+            " WHERE observed_at = (SELECT MAX(observed_at) FROM sealed_prices)"
+        ).fetchone()[0]
+        view_rows = conn.execute("SELECT COUNT(*) FROM latest_sealed_prices").fetchone()[0]
+
+        assert global_max_rows == 1, "global-max filter sees only the newest day"
+        assert view_rows == 3, "per-product view sees every product"
+        assert view_rows != global_max_rows
+
+    def test_no_duplicate_rows_per_product(self, test_db):
+        """UNIQUE(tcgplayer_product_id, observed_at) makes ties impossible.
+
+        Two rows for the same product can never share an observed_at, so the
+        per-product MAX resolves to exactly one row. Documented by asserting the
+        constraint is enforced and that the view never duplicates a product.
+        """
+        _, conn = test_db
+        _seed_prices(conn, [
+            ("dup", "2026-01-01", 5.0),
+            ("dup", "2026-01-02", 6.0),
+        ])
+
+        # A tie on (product, observed_at) is rejected by the schema.
+        with pytest.raises(sqlite3.IntegrityError):
+            _seed_prices(conn, [("dup", "2026-01-02", 99.0)])
+        conn.rollback()
+
+        rows = conn.execute(
+            "SELECT tcgplayer_product_id, COUNT(*) AS n FROM latest_sealed_prices"
+            " GROUP BY tcgplayer_product_id HAVING n > 1"
+        ).fetchall()
+        assert rows == [], "view returned more than one row for a product"
+
+    def test_stats_market_value_includes_stale_priced_products(self, test_db):
+        """/sealed stats must value a product whose newest price is not from today."""
+        _, conn = test_db
+        conn.execute("INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test Set')")
+        conn.executemany(
+            "INSERT INTO sealed_products (uuid, name, set_code, category,"
+            " tcgplayer_product_id, imported_at) VALUES (?, ?, 'tst', 'booster_box', ?, '2026-01-01')",
+            [("u-stale", "Stale Box", "prod-stale"), ("u-fresh", "Fresh Box", "prod-fresh")],
+        )
+        conn.executemany(
+            "INSERT INTO sealed_collection (sealed_product_uuid, quantity, status, added_at)"
+            " VALUES (?, 1, 'owned', '2026-01-01')",
+            [("u-stale",), ("u-fresh",)],
+        )
+        _seed_prices(conn, [
+            ("prod-stale", "2026-01-01", 100.0),
+            ("prod-fresh", "2026-01-02", 55.0),
+        ])
+
+        stats = SealedCollectionRepository(conn).stats()
+
+        assert stats["market_value"] == 155.0, "stale-priced product valued at zero"
+
+
+class TestMigrationV44ToV45:
+    """An existing DB carrying the old global-max view gets it redefined."""
+
+    def test_existing_db_view_is_redefined(self, test_db):
+        """Simulate a pre-v45 DB, re-run init_db, verify per-product semantics."""
+        db_path, conn = test_db
+
+        # Reinstate the old (buggy) view definition and roll the version back.
+        conn.execute("DROP VIEW IF EXISTS latest_sealed_prices")
+        conn.execute("""
+            CREATE VIEW latest_sealed_prices AS
+            SELECT tcgplayer_product_id, low_price, mid_price, high_price,
+                   market_price, direct_low_price, observed_at
+            FROM sealed_prices
+            WHERE observed_at = (SELECT MAX(observed_at) FROM sealed_prices)
+        """)
+        _seed_prices(conn, [
+            ("keeps", "2026-01-01", 100.0),
+            ("newer", "2026-01-02", 55.0),
+        ])
+        conn.execute("DELETE FROM schema_version")
+        conn.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (44, '2026-01-01T00:00:00Z')"
+        )
+        conn.commit()
+
+        # Old view drops the stale product.
+        assert conn.execute("SELECT COUNT(*) FROM latest_sealed_prices").fetchone()[0] == 1
+
+        close_connection()
+        conn2 = get_connection(db_path)
+        init_db(conn2)
+
+        assert get_current_version(conn2) == SCHEMA_VERSION
+        assert conn2.execute("SELECT COUNT(*) FROM latest_sealed_prices").fetchone()[0] == 2
+        row = conn2.execute(
+            "SELECT * FROM latest_sealed_prices WHERE tcgplayer_product_id = 'keeps'"
+        ).fetchone()
+        assert row["market_price"] == 100.0
+
+        # Idempotent: a second init_db is a no-op and leaves the view correct.
+        init_db(conn2)
+        assert conn2.execute("SELECT COUNT(*) FROM latest_sealed_prices").fetchone()[0] == 2
+        close_connection()

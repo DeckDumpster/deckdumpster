@@ -36,7 +36,7 @@ from mtg_collector.db.models import (
     Set,
     SetRepository,
 )
-from mtg_collector.db.schema import get_current_version, init_db
+from mtg_collector.db.schema import SCHEMA_VERSION, get_current_version, init_db
 
 
 @pytest.fixture
@@ -86,8 +86,8 @@ def seeded_db(db):
 # =============================================================================
 
 class TestMigration:
-    def test_fresh_install_has_v44(self, db):
-        assert get_current_version(db) == 44
+    def test_fresh_install_is_current_version(self, db):
+        assert get_current_version(db) == SCHEMA_VERSION
 
     def test_tables_exist(self, db):
         tables = [r[0] for r in db.execute(
