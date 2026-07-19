@@ -13,6 +13,90 @@ def _compile(q: str) -> CompiledQuery:
     return compile_query(parse_query(q))
 
 
+# Every keyword that accepts a comparison operator, with a representative value.
+_OPERATOR_KEYWORDS = [
+    ("mv", "3"),
+    ("cmc", "3"),
+    ("manavalue", "3"),
+    ("year", "2020"),
+    ("price", "10"),
+    ("added", "2024-01-01"),
+    ("pow", "2"),
+    ("power", "2"),
+    ("tou", "2"),
+    ("toughness", "2"),
+    ("loy", "3"),
+    ("loyalty", "3"),
+    ("pt", "4"),
+    ("cn", "100"),
+    ("number", "100"),
+    ("r", "rare"),
+    ("rarity", "rare"),
+    ("c", "rg"),
+    ("id", "wu"),
+    ("status", "owned"),
+]
+
+_COMPARISON_OPERATORS = ["=", "!=", ">", ">=", "<", "<="]
+
+
+class TestColonOperatorParity:
+    """`keyword:>value` must behave identically to `keyword>value`.
+
+    Regression: the tokenizer used to treat `:` as the operator and hand the
+    whole `>value` string to the compiler as a literal value, which fell
+    through to a `1=0` match-nothing clause — silently returning zero rows
+    instead of raising.
+    """
+
+    @pytest.mark.parametrize("keyword,value", _OPERATOR_KEYWORDS)
+    @pytest.mark.parametrize("op", _COMPARISON_OPERATORS)
+    def test_colon_prefixed_operator_matches_bare_operator(self, keyword, value, op):
+        colon_form = _compile(f"{keyword}:{op}{value}")
+        bare_form = _compile(f"{keyword}{op}{value}")
+        assert colon_form.where_sql == bare_form.where_sql
+        assert colon_form.params == bare_form.params
+
+    @pytest.mark.parametrize("keyword,value", _OPERATOR_KEYWORDS)
+    @pytest.mark.parametrize("op", _COMPARISON_OPERATORS)
+    def test_colon_prefixed_operator_is_not_match_nothing(self, keyword, value, op):
+        c = _compile(f"{keyword}:{op}{value}")
+        assert "1=0" not in c.where_sql
+
+    @pytest.mark.parametrize("keyword,value", _OPERATOR_KEYWORDS)
+    @pytest.mark.parametrize("op", _COMPARISON_OPERATORS)
+    def test_negated_colon_prefixed_operator_matches_bare(self, keyword, value, op):
+        colon_form = _compile(f"-{keyword}:{op}{value}")
+        bare_form = _compile(f"-{keyword}{op}{value}")
+        assert colon_form.where_sql == bare_form.where_sql
+        assert colon_form.params == bare_form.params
+
+    @pytest.mark.parametrize("keyword,value", _OPERATOR_KEYWORDS)
+    def test_plain_colon_still_works(self, keyword, value):
+        """Control: bare `keyword:value` must be unaffected by the fix."""
+        c = _compile(f"{keyword}:{value}")
+        assert "1=0" not in c.where_sql
+
+    def test_quoted_value_starting_with_operator_is_literal(self):
+        """A quoted value keeps a leading operator character as literal text."""
+        c = _compile('o:">"')
+        assert "1=0" not in c.where_sql
+        assert any(">" in str(p) for p in c.params)
+
+    @pytest.mark.parametrize("query", [
+        "mv:>5",
+        "price:>10",
+        "year:>2020",
+        "added:>2026-05-01",
+        "added:>=2026-05-01",
+    ])
+    def test_reported_bug_queries_compile_to_real_predicates(self, query):
+        """The exact queries from the bug report must not compile to `1=0`."""
+        c = _compile(query)
+        assert "1=0" not in c.where_sql
+        assert c.params
+
+
 class TestColorCompilation:
     def test_color_contains(self):
         c = _compile("c:r")
