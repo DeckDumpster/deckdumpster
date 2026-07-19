@@ -1,9 +1,12 @@
 """Tool-using Claude agent service for MTG card identification from photos."""
 
 import json
+import re
 import sqlite3
 import sys
 import time
+import unicodedata
+from functools import lru_cache
 
 import anthropic
 import httpx
@@ -194,7 +197,13 @@ _QUERY_TOOL_NOTES = (
     "- There is NO 'foil' column — use finishes (JSON TEXT, e.g. '[\"nonfoil\"]')\n"
     "- There is NO 'set_name' column on printings — set_name is on sets. JOIN sets to get it.\n"
     "- Always qualify set_code with a table alias (e.g. p.set_code) to avoid ambiguity.\n"
-    "- Use LIKE with % for substring matching; COLLATE NOCASE for case-insensitivity\n"
+    "- set_code is ALWAYS stored lowercase (e.g. 'ltr', not 'LTR'). OCR reads set codes in\n"
+    "  uppercase off the card, so lowercase them before comparing: p.set_code = 'ltr'.\n"
+    "  An uppercase literal will silently match zero rows.\n"
+    "- Use LIKE with % for substring matching. On this connection LIKE is both\n"
+    "  case-insensitive and accent-insensitive, so LIKE '%Eomer%' matches the stored\n"
+    "  'Éomer of the Riddermark'. Never add or strip diacritics to work around a miss —\n"
+    "  either spelling matches. COLLATE NOCASE is unnecessary.\n"
     "- Do NOT use LIMIT when fetching printings of a specific card — you need all rows to find the right printing\n"
     "- Use LIMIT only for broad/exploratory queries (e.g. browsing sets)\n"
     "- Only SELECT is permitted"
@@ -220,6 +229,67 @@ _ANALYZE_IMAGE_TOOL = {
 }
 
 _AGENT_TABLES = ("cards", "printings", "sets")
+
+
+@lru_cache(maxsize=8192)
+def _fold(s: str) -> str:
+    """Strip diacritics and casefold, so 'Éomer' and 'eomer' compare equal.
+
+    NFKD splits precomposed characters into base + combining marks; dropping the
+    combining marks leaves the unaccented base letter.
+    """
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c)
+    ).casefold()
+
+
+@lru_cache(maxsize=512)
+def _like_pattern_to_regex(pattern: str, escape: str | None) -> re.Pattern:
+    """Compile a folded SQL LIKE pattern into an equivalent anchored regex."""
+    out = ["(?s)"]
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if escape and ch == escape and i + 1 < len(pattern):
+            out.append(re.escape(pattern[i + 1]))
+            i += 2
+            continue
+        if ch == "%":
+            out.append(".*")
+        elif ch == "_":
+            out.append(".")
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def _like_accent_insensitive(pattern, subject, escape=None):
+    """Accent- and case-insensitive replacement for SQLite's built-in like().
+
+    SQLite calls this as like(pattern, subject[, escape]) — note the reversed
+    argument order relative to `subject LIKE pattern`. NULL on either side yields
+    NULL, matching built-in behaviour.
+    """
+    if pattern is None or subject is None:
+        return None
+    regex = _like_pattern_to_regex(_fold(str(pattern)), _fold(escape) if escape else None)
+    return 1 if regex.match(_fold(str(subject))) else 0
+
+
+def _install_accent_insensitive_like(conn: sqlite3.Connection) -> None:
+    """Override LIKE on this connection so OCR'd names match accented DB values.
+
+    OCR strips diacritics ('Éomer' is read as 'Eomer'), so the agent's SQL would
+    never match. SQLite lets an application-defined `like` function replace the
+    built-in one; overriding it here fixes every LIKE the agent emits, in either
+    spelling direction, without touching the schema. Scoped to the agent's own
+    connection — the collection search path is unaffected.
+    """
+    conn.create_function(
+        "like", 2, lambda p, s: _like_accent_insensitive(p, s), deterministic=True
+    )
+    conn.create_function("like", 3, _like_accent_insensitive, deterministic=True)
 
 
 def _build_tools(conn: sqlite3.Connection) -> list[dict]:
@@ -449,6 +519,7 @@ def run_agent(
     )
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
+    _install_accent_insensitive_like(conn)
     tools = _build_tools(conn)
 
     trace_lines: list[str] = trace_out if trace_out is not None else []
