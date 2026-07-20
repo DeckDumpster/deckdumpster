@@ -7266,45 +7266,46 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         conn = self._get_conn()
-        init_db(conn)
+        try:
+            init_db(conn)
 
-        card_repo = CardRepository(conn)
-        printing_repo = PrintingRepository(conn)
+            card_repo = CardRepository(conn)
+            printing_repo = PrintingRepository(conn)
 
-        card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
-        if not card:
+            card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
+            if not card:
+                self._send_json({"error": f"No card found matching '{name}' (run `mtg cache all` to populate)"}, 404)
+                return
+
+            oracle_id = card.oracle_id
+            set_code = data.get("set_code")
+            printing_id = None
+
+            if set_code:
+                cn = data.get("collector_number")
+                printings = printing_repo.get_by_oracle_id(oracle_id)
+                for p in printings:
+                    if p.set_code == set_code.lower():
+                        if cn and p.collector_number != cn:
+                            continue
+                        printing_id = p.printing_id
+                        break
+
+            repo = WishlistRepository(conn)
+            entry = WishlistEntry(
+                id=None,
+                oracle_id=oracle_id,
+                printing_id=printing_id,
+                max_price=data.get("max_price"),
+                priority=data.get("priority", 0),
+                notes=data.get("notes"),
+                added_at=now_iso(),
+                source="server",
+            )
+            new_id = repo.add(entry)
+            conn.commit()
+        finally:
             conn.close()
-            self._send_json({"error": f"No card found matching '{name}' (run `mtg cache all` to populate)"}, 404)
-            return
-
-        oracle_id = card.oracle_id
-        set_code = data.get("set_code")
-        printing_id = None
-
-        if set_code:
-            cn = data.get("collector_number")
-            printings = printing_repo.get_by_oracle_id(oracle_id)
-            for p in printings:
-                if p.set_code == set_code.lower():
-                    if cn and p.collector_number != cn:
-                        continue
-                    printing_id = p.printing_id
-                    break
-
-        repo = WishlistRepository(conn)
-        entry = WishlistEntry(
-            id=None,
-            oracle_id=oracle_id,
-            printing_id=printing_id,
-            max_price=data.get("max_price"),
-            priority=data.get("priority", 0),
-            notes=data.get("notes"),
-            added_at=now_iso(),
-            source="server",
-        )
-        new_id = repo.add(entry)
-        conn.commit()
-        conn.close()
 
         self._send_json({"id": new_id, "name": card.name, "oracle_id": oracle_id, "printing_id": printing_id})
 
@@ -7325,52 +7326,54 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         conn = self._get_conn()
-        init_db(conn)
+        try:
+            init_db(conn)
 
-        card_repo = CardRepository(conn)
-        printing_repo = PrintingRepository(conn)
-        wishlist_repo = WishlistRepository(conn)
+            card_repo = CardRepository(conn)
+            printing_repo = PrintingRepository(conn)
+            wishlist_repo = WishlistRepository(conn)
 
-        added = []
-        errors = []
+            added = []
+            errors = []
 
-        for item in cards:
-            name = (item.get("name") or "").strip()
-            if not name:
-                errors.append({"name": name, "error": "name is required"})
-                continue
-            set_code = item.get("set_code")
-            cn = item.get("collector_number")
-            try:
-                card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
-                if not card:
-                    errors.append({"name": name, "error": f"No card found matching '{name}'"})
+            for item in cards:
+                name = (item.get("name") or "").strip()
+                if not name:
+                    errors.append({"name": name, "error": "name is required"})
                     continue
-                oracle_id = card.oracle_id
-                printing_id = None
-                if set_code:
-                    printings = printing_repo.get_by_oracle_id(oracle_id)
-                    for p in printings:
-                        if p.set_code == set_code.lower():
-                            if cn and p.collector_number != cn:
-                                continue
-                            printing_id = p.printing_id
-                            break
-                entry = WishlistEntry(
-                    id=None,
-                    oracle_id=oracle_id,
-                    printing_id=printing_id,
-                    priority=item.get("priority", 0),
-                    added_at=now_iso(),
-                    source="server",
-                )
-                new_id = wishlist_repo.add(entry)
-                added.append({"id": new_id, "name": card.name, "oracle_id": oracle_id, "printing_id": printing_id})
-            except Exception as exc:
-                errors.append({"name": name, "error": str(exc)})
+                set_code = item.get("set_code")
+                cn = item.get("collector_number")
+                try:
+                    card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
+                    if not card:
+                        errors.append({"name": name, "error": f"No card found matching '{name}'"})
+                        continue
+                    oracle_id = card.oracle_id
+                    printing_id = None
+                    if set_code:
+                        printings = printing_repo.get_by_oracle_id(oracle_id)
+                        for p in printings:
+                            if p.set_code == set_code.lower():
+                                if cn and p.collector_number != cn:
+                                    continue
+                                printing_id = p.printing_id
+                                break
+                    entry = WishlistEntry(
+                        id=None,
+                        oracle_id=oracle_id,
+                        printing_id=printing_id,
+                        priority=item.get("priority", 0),
+                        added_at=now_iso(),
+                        source="server",
+                    )
+                    new_id = wishlist_repo.add(entry)
+                    added.append({"id": new_id, "name": card.name, "oracle_id": oracle_id, "printing_id": printing_id})
+                except Exception as exc:
+                    errors.append({"name": name, "error": str(exc)})
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"added": added, "errors": errors})
 
     def _api_wishlist_delete(self, wid: int):
@@ -7398,12 +7401,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         from mtg_collector.db.schema import init_db
 
         conn = self._get_conn()
-        init_db(conn)
+        try:
+            init_db(conn)
 
-        repo = WishlistRepository(conn)
-        fulfilled = repo.fulfill(wid)
-        conn.commit()
-        conn.close()
+            repo = WishlistRepository(conn)
+            fulfilled = repo.fulfill(wid)
+            conn.commit()
+        finally:
+            conn.close()
 
         if fulfilled:
             self._send_json({"ok": True})
@@ -7500,45 +7505,47 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             purchase_price = float(purchase_price)
 
         conn = self._get_conn()
-        init_db(conn)
+        try:
+            init_db(conn)
 
-        collection_repo = CollectionRepository(conn)
-        entry = CollectionEntry(
-            id=None,
-            printing_id=printing_id,
-            finish=finish,
-            acquired_at=acquired_at,
-            purchase_price=purchase_price,
-            source=source,
-        )
-        new_id = collection_repo.add(entry)
+            collection_repo = CollectionRepository(conn)
+            entry = CollectionEntry(
+                id=None,
+                printing_id=printing_id,
+                finish=finish,
+                acquired_at=acquired_at,
+                purchase_price=purchase_price,
+                source=source,
+            )
+            new_id = collection_repo.add(entry)
 
-        # Auto-fulfill matching wishlist entry
-        fulfilled_wishlist_id = None
-        wishlist_repo = WishlistRepository(conn)
-        # Check for a printing-specific wishlist entry first
-        row = conn.execute(
-            "SELECT id FROM wishlist WHERE printing_id = ? AND fulfilled_at IS NULL LIMIT 1",
-            (printing_id,),
-        ).fetchone()
-        if row:
-            wishlist_repo.fulfill(row["id"])
-            fulfilled_wishlist_id = row["id"]
-        else:
-            # Check for an oracle-level wishlist entry
+            # Auto-fulfill matching wishlist entry
+            fulfilled_wishlist_id = None
+            wishlist_repo = WishlistRepository(conn)
+            # Check for a printing-specific wishlist entry first
             row = conn.execute(
-                """SELECT w.id FROM wishlist w
-                   JOIN printings p ON p.oracle_id = w.oracle_id
-                   WHERE p.printing_id = ? AND w.printing_id IS NULL
-                     AND w.fulfilled_at IS NULL LIMIT 1""",
+                "SELECT id FROM wishlist WHERE printing_id = ? AND fulfilled_at IS NULL LIMIT 1",
                 (printing_id,),
             ).fetchone()
             if row:
                 wishlist_repo.fulfill(row["id"])
                 fulfilled_wishlist_id = row["id"]
+            else:
+                # Check for an oracle-level wishlist entry
+                row = conn.execute(
+                    """SELECT w.id FROM wishlist w
+                       JOIN printings p ON p.oracle_id = w.oracle_id
+                       WHERE p.printing_id = ? AND w.printing_id IS NULL
+                         AND w.fulfilled_at IS NULL LIMIT 1""",
+                    (printing_id,),
+                ).fetchone()
+                if row:
+                    wishlist_repo.fulfill(row["id"])
+                    fulfilled_wishlist_id = row["id"]
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
 
         result = {"id": new_id}
         if fulfilled_wishlist_id is not None:
@@ -7578,22 +7585,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         conn = self._get_conn()
-        init_db(conn)
-
-        repo = CollectionRepository(conn)
         try:
-            repo.dispose(
-                entry_id,
-                new_status,
-                sale_price=data.get("sale_price"),
-                note=data.get("note"),
-            )
-            conn.commit()
+            init_db(conn)
+
+            repo = CollectionRepository(conn)
+            try:
+                repo.dispose(
+                    entry_id,
+                    new_status,
+                    sale_price=data.get("sale_price"),
+                    note=data.get("note"),
+                )
+                conn.commit()
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
+        finally:
             conn.close()
-            self._send_json({"ok": True})
-        except ValueError as e:
-            conn.close()
-            self._send_json({"error": str(e)}, 400)
+        self._send_json({"ok": True})
 
     def _api_collection_delete(self, entry_id: int):
         """Hard-delete a collection entry with lineage cleanup."""
