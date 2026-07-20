@@ -1976,10 +1976,18 @@ async function renderGrowthChart(primarySource) {
   // Every point is an absolute value for its own date, so a narrower range is
   // exactly a tail slice of a wider one. Narrowing therefore never needs the
   // network; only widening does.
+  //
+  // The cutoff is derived the way the server derives it — whole UTC days back
+  // from the series' own last day — so a sliced range is indistinguishable from
+  // a fetched one. Using Date.now() here instead would carry the current
+  // time-of-day and drop the window's first day, making a sliced 1M one point
+  // shorter than a fetched 1M.
   function tail(data, rangeDays) {
     if (!rangeDays) return data;
-    const cutoffMs = Date.now() - rangeDays * 86400000;
-    const i = data.dates.findIndex(d => new Date(d).getTime() >= cutoffMs);
+    const last = data.dates[data.dates.length - 1];
+    const cutoff = new Date(Date.parse(last + 'T00:00:00Z') - rangeDays * 86400000)
+      .toISOString().slice(0, 10);
+    const i = data.dates.indexOf(cutoff);
     if (i <= 0) return data;
     return {
       dates: data.dates.slice(i),
