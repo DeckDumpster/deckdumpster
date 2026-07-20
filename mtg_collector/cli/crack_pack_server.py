@@ -8139,36 +8139,37 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         conn = self._get_conn()
-        init_db(conn)
+        try:
+            init_db(conn)
 
-        # Verify the product exists
-        product_repo = SealedProductRepository(conn)
-        product = product_repo.get(uuid)
-        if not product:
+            # Verify the product exists
+            product_repo = SealedProductRepository(conn)
+            product = product_repo.get(uuid)
+            if not product:
+                self._send_json({"error": f"Sealed product '{uuid}' not found"}, 404)
+                return
+
+            entry = SealedCollectionEntry(
+                id=None,
+                sealed_product_uuid=uuid,
+                quantity=data.get("quantity", 1),
+                condition=data.get("condition", "Near Mint"),
+                purchase_price=data.get("purchase_price"),
+                purchase_date=data.get("purchase_date"),
+                source=data.get("source"),
+                seller_name=data.get("seller_name"),
+                notes=data.get("notes"),
+                status=data.get("status", "owned"),
+            )
+
+            repo = SealedCollectionRepository(conn)
+            new_id = repo.add(entry)
+            conn.commit()
+
+            # Fetch back for response
+            created = repo.get(new_id)
+        finally:
             conn.close()
-            self._send_json({"error": f"Sealed product '{uuid}' not found"}, 404)
-            return
-
-        entry = SealedCollectionEntry(
-            id=None,
-            sealed_product_uuid=uuid,
-            quantity=data.get("quantity", 1),
-            condition=data.get("condition", "Near Mint"),
-            purchase_price=data.get("purchase_price"),
-            purchase_date=data.get("purchase_date"),
-            source=data.get("source"),
-            seller_name=data.get("seller_name"),
-            notes=data.get("notes"),
-            status=data.get("status", "owned"),
-        )
-
-        repo = SealedCollectionRepository(conn)
-        new_id = repo.add(entry)
-        conn.commit()
-
-        # Fetch back for response
-        created = repo.get(new_id)
-        conn.close()
 
         image_url = None
         if product.tcgplayer_product_id:
@@ -8240,10 +8241,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         conn = self._get_conn()
-        init_db(conn)
-        repo = SealedCollectionRepository(conn)
-
         try:
+            init_db(conn)
+            repo = SealedCollectionRepository(conn)
+
             qty = data.get("quantity")
             if qty is not None:
                 qty = int(qty)
@@ -8253,11 +8254,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 quantity=qty,
             )
             conn.commit()
-            conn.close()
-            self._send_json({"ok": True})
         except ValueError as e:
-            conn.close()
             self._send_json({"error": str(e)}, 400)
+            return
+        finally:
+            conn.close()
+        self._send_json({"ok": True})
 
     def _api_sealed_collection_bulk_dispose(self, data: dict):
         """Bulk-transition sealed collection entries' status."""
@@ -8274,11 +8276,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         conn = self._get_conn()
-        init_db(conn)
-        repo = SealedCollectionRepository(conn)
-        result = repo.bulk_dispose(ids, new_status, sale_price=data.get("sale_price"))
-        conn.commit()
-        conn.close()
+        try:
+            init_db(conn)
+            repo = SealedCollectionRepository(conn)
+            result = repo.bulk_dispose(ids, new_status, sale_price=data.get("sale_price"))
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({
             "disposed": len(result["disposed"]),
             "skipped": len(result["skipped"]),
