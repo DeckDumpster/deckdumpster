@@ -5798,10 +5798,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             count = repo.add_cards(deck_id, collection_ids, zone=zone)
             conn.commit()
         except ValueError as e:
-            conn.close()
             self._send_json({"error": str(e)}, 409)
             return
-        conn.close()
+        finally:
+            conn.close()
         self._send_json({"ok": True, "count": count})
 
     def _api_deck_remove_cards(self, deck_id: int, data: dict):
@@ -5812,9 +5812,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
-        count = repo.remove_cards(deck_id, collection_ids)
-        conn.commit()
-        conn.close()
+        try:
+            count = repo.remove_cards(deck_id, collection_ids)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"ok": True, "count": count})
 
     def _api_deck_adjust_quantity(self, deck_id: int, data: dict):
@@ -5848,9 +5850,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
-        count = repo.move_cards(collection_ids, deck_id, zone=zone)
-        conn.commit()
-        conn.close()
+        try:
+            count = repo.move_cards(collection_ids, deck_id, zone=zone)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"ok": True, "count": count})
 
     def _api_deck_expected_get(self, deck_id: int):
@@ -7123,10 +7127,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             count = repo.add_cards(binder_id, collection_ids)
             conn.commit()
         except ValueError as e:
-            conn.close()
             self._send_json({"error": str(e)}, 409)
             return
-        conn.close()
+        finally:
+            conn.close()
         self._send_json({"ok": True, "count": count})
 
     def _api_binder_remove_cards(self, binder_id: int, data: dict):
@@ -7137,9 +7141,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
-        count = repo.remove_cards(binder_id, collection_ids)
-        conn.commit()
-        conn.close()
+        try:
+            count = repo.remove_cards(binder_id, collection_ids)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"ok": True, "count": count})
 
     def _api_binder_move_cards(self, binder_id: int, data: dict):
@@ -7150,9 +7156,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn = self._get_conn()
         from mtg_collector.db.models import BinderRepository
         repo = BinderRepository(conn)
-        count = repo.move_cards(collection_ids, binder_id)
-        conn.commit()
-        conn.close()
+        try:
+            count = repo.move_cards(collection_ids, binder_id)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"ok": True, "count": count})
 
     # ===== Collection View API handlers =====

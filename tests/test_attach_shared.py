@@ -398,3 +398,76 @@ def test_handler_write_error_does_not_lock_db(single_db_path):
     assert row is not None
     assert row[0] == "ok"
     check.close()
+
+
+def test_deck_add_cards_integrity_error_does_not_lock_db(single_db_path):
+    """A non-ValueError exception must not leak the connection or its lock.
+
+    Reproduces efj-mtgc-7rp: _api_deck_add_cards caught only ValueError, so the
+    IntegrityError raised by deck_cards' zone CHECK constraint escaped before
+    conn.close(). The leaked connection held an open write transaction, and in
+    WAL mode that wedges every subsequent writer with "database is locked".
+
+    Also asserts the error still propagates — releasing the lock must not turn
+    into swallowing the error.
+    """
+    setup = sqlite3.connect(single_db_path)
+    setup.execute(
+        "INSERT INTO decks (id, name, state_id, created_at, updated_at) "
+        "VALUES (1, 'Test Deck', 1, '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+    )
+    setup.commit()
+    setup.close()
+
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        # The IntegrityError must reach the caller, not be converted into a
+        # tidy JSON error response.
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_deck_add_cards(
+                1, {"collection_ids": [1], "zone": "not_a_real_zone"})
+        assert handler._responses == []
+
+        # ...and the connection must have been released, so the next write
+        # succeeds instead of failing with "database is locked".
+        conn2 = sqlite3.connect(single_db_path, timeout=1)
+        conn2.execute(
+            "INSERT INTO settings (key, value) VALUES ('after_deck_error', 'ok')")
+        conn2.commit()
+        conn2.close()
+
+    check = sqlite3.connect(single_db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = 'after_deck_error'").fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    check.close()
+
+
+def test_binder_add_cards_integrity_error_does_not_lock_db(single_db_path):
+    """Sibling of the deck handler — same except-ValueError-only shape.
+
+    BinderRepository.add_cards writes a movement_log row whose binder column is
+    a foreign key; a non-existent binder_id raises IntegrityError once FK
+    enforcement is on (default mode), which must not leak the connection.
+    """
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_binder_add_cards(999999, {"collection_ids": [1]})
+        assert handler._responses == []
+
+        conn2 = sqlite3.connect(single_db_path, timeout=1)
+        conn2.execute(
+            "INSERT INTO settings (key, value) VALUES ('after_binder_error', 'ok')")
+        conn2.commit()
+        conn2.close()
+
+    check = sqlite3.connect(single_db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = 'after_binder_error'").fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    check.close()
