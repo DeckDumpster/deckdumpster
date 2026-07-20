@@ -76,7 +76,8 @@ def tokenize(query: str) -> list[tuple[str, str, str, int]]:
                     keyword = m.group(1)
                     op = m.group(2) if name == "NEG_KEYWORD_COMPARE" else ":"
                     val_pos = m.end()
-                    val, val_end = _read_value(query, val_pos)
+                    val, val_end, quoted = _read_value(query, val_pos)
+                    op, val, val_pos = _fold_colon_operator(op, val, val_pos, quoted)
                     tokens.append(("KEYWORD_EXPR", keyword, op, pos + 1))
                     tokens.append(("VALUE", val, "", val_pos))
                     pos = val_end
@@ -87,7 +88,7 @@ def tokenize(query: str) -> list[tuple[str, str, str, int]]:
                     op = m.group(2)
                     # Now read the value
                     val_pos = m.end()
-                    val, val_end = _read_value(query, val_pos)
+                    val, val_end, _quoted = _read_value(query, val_pos)
                     tokens.append(("KEYWORD_EXPR", keyword, op, pos))
                     tokens.append(("VALUE", val, "", val_pos))
                     pos = val_end
@@ -97,8 +98,9 @@ def tokenize(query: str) -> list[tuple[str, str, str, int]]:
                     keyword = m.group(1)
                     # Now read the value
                     val_pos = m.end()
-                    val, val_end = _read_value(query, val_pos)
-                    tokens.append(("KEYWORD_EXPR", keyword, ":", pos))
+                    val, val_end, quoted = _read_value(query, val_pos)
+                    op, val, val_pos = _fold_colon_operator(":", val, val_pos, quoted)
+                    tokens.append(("KEYWORD_EXPR", keyword, op, pos))
                     tokens.append(("VALUE", val, "", val_pos))
                     pos = val_end
                     matched = True
@@ -121,23 +123,54 @@ def tokenize(query: str) -> list[tuple[str, str, str, int]]:
     return tokens
 
 
-def _read_value(query: str, pos: int) -> tuple[str, int]:
-    """Read a value starting at pos. Handles quoted strings and unquoted tokens."""
+# Comparison operators that may follow a `:`, longest-first so that `>=`
+# is preferred over `>` and `!=` over a bare `=`.
+_COLON_FOLDABLE_OPS = ("!=", "<=", ">=", "<", ">", "=")
+
+
+def _fold_colon_operator(
+    op: str, val: str, val_pos: int, quoted: bool
+) -> tuple[str, str, int]:
+    """Fold a comparison operator written after a colon into the operator slot.
+
+    Scryfall-style queries accept both ``mv>5`` and ``mv:>5``. The tokenizer
+    matches ``mv:`` first, leaving ``>5`` as the value; without this fold the
+    compiler receives operator ``:`` and the literal value ``">5"``, which is
+    not a number and previously compiled to a match-nothing ``1=0`` clause.
+
+    Only unquoted values are folded, so ``o:">"`` still searches for a literal
+    ``>`` character.
+    """
+    if op != ":" or quoted:
+        return (op, val, val_pos)
+
+    for candidate in _COLON_FOLDABLE_OPS:
+        if val.startswith(candidate):
+            return (candidate, val[len(candidate) :], val_pos + len(candidate))
+
+    return (op, val, val_pos)
+
+
+def _read_value(query: str, pos: int) -> tuple[str, int, bool]:
+    """Read a value starting at pos. Handles quoted strings and unquoted tokens.
+
+    Returns ``(value, end_position, was_quoted)``.
+    """
     if pos >= len(query):
-        return ("", pos)
+        return ("", pos, False)
 
     if query[pos] == '"':
         # Quoted value
         end = query.find('"', pos + 1)
         if end == -1:
             raise SearchError("Unterminated quoted string", position=pos)
-        return (query[pos + 1 : end], end + 1)
+        return (query[pos + 1 : end], end + 1, True)
     else:
         # Unquoted value: read until whitespace or ) or end
         end = pos
         while end < len(query) and query[end] not in (" ", "\t", "\n", "\r", ")"):
             end += 1
-        return (query[pos:end], end)
+        return (query[pos:end], end, False)
 
 
 def parse_query(query: str):
