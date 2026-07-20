@@ -4241,22 +4241,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "printing_id is required"}, 400)
             return
         conn = self._get_conn()
-        init_db(conn)
-        entry = CollectionEntry(
-            id=None,
-            printing_id=printing_id,
-            finish=data.get("finish", "nonfoil"),
-            condition=data.get("condition", "Near Mint"),
-            purchase_price=data.get("purchase_price"),
-            acquired_at=now_iso(),
-            source="order_import",
-            status="ordered",
-            order_id=order_id,
-        )
-        repo = CollectionRepository(conn)
-        new_id = repo.add(entry)
-        conn.commit()
-        conn.close()
+        try:
+            init_db(conn)
+            entry = CollectionEntry(
+                id=None,
+                printing_id=printing_id,
+                finish=data.get("finish", "nonfoil"),
+                condition=data.get("condition", "Near Mint"),
+                purchase_price=data.get("purchase_price"),
+                acquired_at=now_iso(),
+                source="order_import",
+                status="ordered",
+                order_id=order_id,
+            )
+            repo = CollectionRepository(conn)
+            new_id = repo.add(entry)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"id": new_id})
 
     def _api_order_parse(self):
@@ -4451,33 +4453,34 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             resolved_orders.append(ro)
 
         conn = self._get_conn()
-        init_db(conn)
-        collection_repo = CollectionRepository(conn)
-        order_repo = OrderRepository(conn)
+        try:
+            init_db(conn)
+            collection_repo = CollectionRepository(conn)
+            order_repo = OrderRepository(conn)
 
-        from mtg_collector.db.models import BatchRepository
-        batch_repo = BatchRepository(conn)
+            from mtg_collector.db.models import BatchRepository
+            batch_repo = BatchRepository(conn)
 
-        summary = commit_orders(
-            resolved_orders, order_repo, collection_repo, conn,
-            status=status, source=source, batch_repo=batch_repo,
-        )
+            summary = commit_orders(
+                resolved_orders, order_repo, collection_repo, conn,
+                status=status, source=source, batch_repo=batch_repo,
+            )
 
-        # Optional deck/binder assignment for newly added cards
-        assign_target = data.get("assign_target", "")
-        if assign_target and summary.get("collection_ids"):
-            from mtg_collector.db.models import BinderRepository, DeckRepository
-            cids = summary["collection_ids"]
-            if assign_target.startswith("deck:"):
-                did = int(assign_target.split(":")[1])
-                zone = data.get("assign_zone", "mainboard")
-                DeckRepository(conn).add_cards(did, cids, zone=zone)
-            elif assign_target.startswith("binder:"):
-                bid = int(assign_target.split(":")[1])
-                BinderRepository(conn).add_cards(bid, cids)
-            conn.commit()
-
-        conn.close()
+            # Optional deck/binder assignment for newly added cards
+            assign_target = data.get("assign_target", "")
+            if assign_target and summary.get("collection_ids"):
+                from mtg_collector.db.models import BinderRepository, DeckRepository
+                cids = summary["collection_ids"]
+                if assign_target.startswith("deck:"):
+                    did = int(assign_target.split(":")[1])
+                    zone = data.get("assign_zone", "mainboard")
+                    DeckRepository(conn).add_cards(did, cids, zone=zone)
+                elif assign_target.startswith("binder:"):
+                    bid = int(assign_target.split(":")[1])
+                    BinderRepository(conn).add_cards(bid, cids)
+                conn.commit()
+        finally:
+            conn.close()
         self._send_json(summary)
 
     def _api_collection_history(self, collection_id: int):
@@ -4542,11 +4545,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         from mtg_collector.db.models import CollectionRepository
         from mtg_collector.db.schema import init_db
         conn = self._get_conn()
-        init_db(conn)
-        repo = CollectionRepository(conn)
-        ok = repo.receive_card(collection_id)
-        conn.commit()
-        conn.close()
+        try:
+            init_db(conn)
+            repo = CollectionRepository(conn)
+            ok = repo.receive_card(collection_id)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"received": 1 if ok else 0})
 
     def _api_order_receive(self, order_id: int):
@@ -4556,11 +4561,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         data = self._read_json_body()  # None when no body — backward-compatible
         card_ids = data.get("card_ids") if data else None
         conn = self._get_conn()
-        init_db(conn)
-        repo = OrderRepository(conn)
-        count = repo.receive_order(order_id, card_ids=card_ids)
-        conn.commit()
-        conn.close()
+        try:
+            init_db(conn)
+            repo = OrderRepository(conn)
+            count = repo.receive_order(order_id, card_ids=card_ids)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"received": count})
 
     # ── Corner Ingest API endpoints ──
