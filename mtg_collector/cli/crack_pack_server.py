@@ -4918,35 +4918,34 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         conn = self._get_conn()
-        init_db(conn)
-        batch_repo = BatchRepository(conn)
-        deck_repo = DeckRepository(conn)
-
-        batch = batch_repo.get(batch_id)
-        if not batch:
-            conn.close()
-            self._send_json({"error": "Batch not found"}, 404)
-            return
-
-        # Get collection IDs for this batch
-        cards = batch_repo.get_cards(batch_id)
-        collection_ids = [c["id"] for c in cards]
-
-        if not collection_ids:
-            conn.close()
-            self._send_json({"error": "No cards in batch"}, 400)
-            return
-
         try:
-            deck_repo.add_cards(int(deck_id), collection_ids, zone=deck_zone)
-        except ValueError as e:
-            conn.close()
-            self._send_json({"error": str(e)}, 409)
-            return
+            init_db(conn)
+            batch_repo = BatchRepository(conn)
+            deck_repo = DeckRepository(conn)
 
-        batch_repo.set_deck(batch_id, int(deck_id), deck_zone)
-        conn.commit()
-        conn.close()
+            batch = batch_repo.get(batch_id)
+            if not batch:
+                self._send_json({"error": "Batch not found"}, 404)
+                return
+
+            # Get collection IDs for this batch
+            cards = batch_repo.get_cards(batch_id)
+            collection_ids = [c["id"] for c in cards]
+
+            if not collection_ids:
+                self._send_json({"error": "No cards in batch"}, 400)
+                return
+
+            try:
+                deck_repo.add_cards(int(deck_id), collection_ids, zone=deck_zone)
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 409)
+                return
+
+            batch_repo.set_deck(batch_id, int(deck_id), deck_zone)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"ok": True, "assigned": len(collection_ids)})
 
     def _api_batch_update(self, batch_id: int, data: dict):
@@ -5659,53 +5658,57 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "name is required"}, 400)
             return
         conn = self._get_conn()
-        from mtg_collector.db.models import Deck, DeckRepository
-        repo = DeckRepository(conn)
-        origin_var = data.get("origin_variation")
-        if origin_var is not None:
-            origin_var = int(origin_var)
-        deck = Deck(
-            id=None, name=name, description=data.get("description"),
-            format=data.get("format"), is_precon=bool(data.get("is_precon")),
-            sleeve_color=data.get("sleeve_color"), deck_box=data.get("deck_box"),
-            storage_location=data.get("storage_location"),
-            origin_set_code=data.get("origin_set_code"),
-            origin_theme=data.get("origin_theme"),
-            origin_variation=origin_var,
-            state_id=self._resolve_state_id(data.get("state", "idea")),
-        )
-        deck_id = repo.add(deck)
-        conn.commit()
-        result = repo.get(deck_id)
-        conn.close()
+        try:
+            from mtg_collector.db.models import Deck, DeckRepository
+            repo = DeckRepository(conn)
+            origin_var = data.get("origin_variation")
+            if origin_var is not None:
+                origin_var = int(origin_var)
+            deck = Deck(
+                id=None, name=name, description=data.get("description"),
+                format=data.get("format"), is_precon=bool(data.get("is_precon")),
+                sleeve_color=data.get("sleeve_color"), deck_box=data.get("deck_box"),
+                storage_location=data.get("storage_location"),
+                origin_set_code=data.get("origin_set_code"),
+                origin_theme=data.get("origin_theme"),
+                origin_variation=origin_var,
+                state_id=self._resolve_state_id(data.get("state", "idea")),
+            )
+            deck_id = repo.add(deck)
+            conn.commit()
+            result = repo.get(deck_id)
+        finally:
+            conn.close()
         self._send_json(result, 201)
 
     def _api_deck_update(self, deck_id: int, data: dict):
         conn = self._get_conn()
-        from mtg_collector.db.models import DeckRepository
-        repo = DeckRepository(conn)
-        if not repo.get(deck_id):
+        try:
+            from mtg_collector.db.models import DeckRepository
+            repo = DeckRepository(conn)
+            if not repo.get(deck_id):
+                self._send_json({"error": "Deck not found"}, 404)
+                return
+            if "state" in data:
+                data["state_id"] = self._resolve_state_id(data.pop("state"))
+            repo.update(deck_id, data)
+            conn.commit()
+            result = repo.get(deck_id)
+        finally:
             conn.close()
-            self._send_json({"error": "Deck not found"}, 404)
-            return
-        if "state" in data:
-            data["state_id"] = self._resolve_state_id(data.pop("state"))
-        repo.update(deck_id, data)
-        conn.commit()
-        result = repo.get(deck_id)
-        conn.close()
         self._send_json(result)
 
     def _api_deck_delete(self, deck_id: int):
         conn = self._get_conn()
-        from mtg_collector.db.models import DeckRepository
-        repo = DeckRepository(conn)
-        if not repo.delete(deck_id):
+        try:
+            from mtg_collector.db.models import DeckRepository
+            repo = DeckRepository(conn)
+            if not repo.delete(deck_id):
+                self._send_json({"error": "Deck not found"}, 404)
+                return
+            conn.commit()
+        finally:
             conn.close()
-            self._send_json({"error": "Deck not found"}, 404)
-            return
-        conn.commit()
-        conn.close()
         self._send_json({"ok": True})
 
     def _api_deck_cards(self, deck_id: int, params: dict):
@@ -5842,83 +5845,82 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_deck_expected_set(self, deck_id: int, data: dict):
         conn = self._get_conn()
-        from mtg_collector.db.models import DeckRepository
-        repo = DeckRepository(conn)
-        if not repo.get(deck_id):
-            conn.close()
-            self._send_json({"error": "Deck not found"}, 404)
-            return
-
-        if "decklist" in data:
-            # Parse text decklist and resolve to printing_ids
-            from mtg_collector.db.models import CardRepository, PrintingRepository
-            from mtg_collector.importers.decklist import parse_line
-            card_repo = CardRepository(conn)
-            printing_repo = PrintingRepository(conn)
-            lines = data["decklist"].strip().split("\n")
-            cards = []
-            errors = []
-            for i, line in enumerate(lines, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    parsed = parse_line(line, i)
-                except ValueError as e:
-                    errors.append(str(e))
-                    continue
-                name = parsed["Name"]
-                set_code = (parsed.get("Edition") or "").strip().lower() or None
-                cn = parsed.get("Collector Number") or None
-                qty = int(parsed.get("Count", 1))
-                # Resolve card: try set+CN first, then name lookup
-                printing_id = None
-                if set_code and cn:
-                    p = printing_repo.get_by_set_cn(set_code, cn)
-                    if p:
-                        printing_id = p.printing_id
-                if not printing_id:
-                    card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
-                    if card:
-                        # Prefer owned printing, fallback to most recent non-digital
-                        owned = conn.execute(
-                            """SELECT p.printing_id FROM collection col
-                               JOIN printings p ON col.printing_id = p.printing_id
-                               JOIN sets s ON p.set_code = s.set_code
-                               WHERE p.oracle_id = ? AND col.status = 'owned'
-                               ORDER BY s.released_at DESC LIMIT 1""",
-                            (card.oracle_id,),
-                        ).fetchone()
-                        if owned:
-                            printing_id = owned[0]
-                        else:
-                            printings = printing_repo.get_by_oracle_id(card.oracle_id)
-                            if printings:
-                                printing_id = printings[0].printing_id
-                if not printing_id:
-                    errors.append(f"Line {i}: card not found: {name}")
-                    continue
-                cards.append({
-                    "printing_id": printing_id,
-                    "zone": "mainboard",
-                    "quantity": qty,
-                })
-            if errors:
-                conn.close()
-                self._send_json({"error": "Some cards could not be resolved",
-                                 "details": errors}, 400)
+        try:
+            from mtg_collector.db.models import DeckRepository
+            repo = DeckRepository(conn)
+            if not repo.get(deck_id):
+                self._send_json({"error": "Deck not found"}, 404)
                 return
-            count = repo.set_expected_cards(deck_id, cards)
-        elif "cards" in data:
-            count = repo.set_expected_cards(deck_id, data["cards"])
-        else:
-            conn.close()
-            self._send_json({"error": "Provide 'cards' or 'decklist'"}, 400)
-            return
 
-        conn.commit()
-        result = repo.get_expected_cards(deck_id)
-        conn.close()
+            if "decklist" in data:
+                # Parse text decklist and resolve to printing_ids
+                from mtg_collector.db.models import CardRepository, PrintingRepository
+                from mtg_collector.importers.decklist import parse_line
+                card_repo = CardRepository(conn)
+                printing_repo = PrintingRepository(conn)
+                lines = data["decklist"].strip().split("\n")
+                cards = []
+                errors = []
+                for i, line in enumerate(lines, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        parsed = parse_line(line, i)
+                    except ValueError as e:
+                        errors.append(str(e))
+                        continue
+                    name = parsed["Name"]
+                    set_code = (parsed.get("Edition") or "").strip().lower() or None
+                    cn = parsed.get("Collector Number") or None
+                    qty = int(parsed.get("Count", 1))
+                    # Resolve card: try set+CN first, then name lookup
+                    printing_id = None
+                    if set_code and cn:
+                        p = printing_repo.get_by_set_cn(set_code, cn)
+                        if p:
+                            printing_id = p.printing_id
+                    if not printing_id:
+                        card = card_repo.get_by_name(name) or card_repo.search_by_name(name)
+                        if card:
+                            # Prefer owned printing, fallback to most recent non-digital
+                            owned = conn.execute(
+                                """SELECT p.printing_id FROM collection col
+                                   JOIN printings p ON col.printing_id = p.printing_id
+                                   JOIN sets s ON p.set_code = s.set_code
+                                   WHERE p.oracle_id = ? AND col.status = 'owned'
+                                   ORDER BY s.released_at DESC LIMIT 1""",
+                                (card.oracle_id,),
+                            ).fetchone()
+                            if owned:
+                                printing_id = owned[0]
+                            else:
+                                printings = printing_repo.get_by_oracle_id(card.oracle_id)
+                                if printings:
+                                    printing_id = printings[0].printing_id
+                    if not printing_id:
+                        errors.append(f"Line {i}: card not found: {name}")
+                        continue
+                    cards.append({
+                        "printing_id": printing_id,
+                        "zone": "mainboard",
+                        "quantity": qty,
+                    })
+                if errors:
+                    self._send_json({"error": "Some cards could not be resolved",
+                                     "details": errors}, 400)
+                    return
+                count = repo.set_expected_cards(deck_id, cards)
+            elif "cards" in data:
+                count = repo.set_expected_cards(deck_id, data["cards"])
+            else:
+                self._send_json({"error": "Provide 'cards' or 'decklist'"}, 400)
+                return
+
+            conn.commit()
+            result = repo.get_expected_cards(deck_id)
+        finally:
+            conn.close()
         self._send_json({"ok": True, "count": count, "cards": result})
 
     def _api_deck_expected_add(self, deck_id: int, data: dict):
@@ -6060,21 +6062,21 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_deck_materialize(self, deck_id: int):
         conn = self._get_conn()
-        from mtg_collector.db.models import DeckRepository
-        repo = DeckRepository(conn)
-        deck = repo.get(deck_id)
-        if not deck:
+        try:
+            from mtg_collector.db.models import DeckRepository
+            repo = DeckRepository(conn)
+            deck = repo.get(deck_id)
+            if not deck:
+                self._send_json({"error": "Deck not found"}, 404)
+                return
+            from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
+            if deck["state_id"] == DECK_STATE_CONSTRUCTED:
+                self._send_json({"error": "Deck is already constructed"}, 400)
+                return
+            result = repo.materialize_deck(deck_id)
+            conn.commit()
+        finally:
             conn.close()
-            self._send_json({"error": "Deck not found"}, 404)
-            return
-        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
-        if deck["state_id"] == DECK_STATE_CONSTRUCTED:
-            conn.close()
-            self._send_json({"error": "Deck is already constructed"}, 400)
-            return
-        result = repo.materialize_deck(deck_id)
-        conn.commit()
-        conn.close()
         self._send_json(result)
 
     def _api_deck_reassemble(self, deck_id: int, data: dict):
@@ -6083,16 +6085,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "collection_ids is required"}, 400)
             return
         conn = self._get_conn()
-        from mtg_collector.db.models import DeckRepository
-        repo = DeckRepository(conn)
-        if not repo.get(deck_id):
+        try:
+            from mtg_collector.db.models import DeckRepository
+            repo = DeckRepository(conn)
+            if not repo.get(deck_id):
+                self._send_json({"error": "Deck not found"}, 404)
+                return
+            count = repo.move_cards(collection_ids, deck_id, zone="mainboard")
+            conn.commit()
+            result = repo.get_deck_completeness(deck_id)
+        finally:
             conn.close()
-            self._send_json({"error": "Deck not found"}, 404)
-            return
-        count = repo.move_cards(collection_ids, deck_id, zone="mainboard")
-        conn.commit()
-        result = repo.get_deck_completeness(deck_id)
-        conn.close()
         self._send_json({"ok": True, "moved": count, "completeness": result})
 
     # ===== Deck Builder API handlers =====
@@ -6144,42 +6147,40 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "commander_oracle_id is required"}, 400)
             return
         conn = self._get_conn()
-        card = conn.execute("SELECT name FROM cards WHERE oracle_id = ?",
-                            (commander_oracle_id,)).fetchone()
-        if not card:
-            conn.close()
-            self._send_json({"error": "Commander not found"}, 404)
-            return
-        from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
-        state_id = self._resolve_state_id(data.get("state", "idea"))
-        if state_id != DECK_STATE_CONSTRUCTED:
-            # Use DeckBuilderService for idea/ready decks to pre-populate
-            # template role categories (Lands, Ramp, etc.)
-            from mtg_collector.services.deck_builder import DeckBuilderService
-            svc = DeckBuilderService(conn)
-            try:
-                result = svc.create_deck(commander_oracle_id)
-            except ValueError as e:
-                conn.close()
-                self._send_json({"error": str(e)}, 400)
+        try:
+            card = conn.execute("SELECT name FROM cards WHERE oracle_id = ?",
+                                (commander_oracle_id,)).fetchone()
+            if not card:
+                self._send_json({"error": "Commander not found"}, 404)
                 return
+            from mtg_collector.db.models import DECK_STATE_CONSTRUCTED
+            state_id = self._resolve_state_id(data.get("state", "idea"))
+            if state_id != DECK_STATE_CONSTRUCTED:
+                # Use DeckBuilderService for idea/ready decks to pre-populate
+                # template role categories (Lands, Ramp, etc.)
+                from mtg_collector.services.deck_builder import DeckBuilderService
+                svc = DeckBuilderService(conn)
+                try:
+                    result = svc.create_deck(commander_oracle_id)
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
+            else:
+                from mtg_collector.db.models import Deck, DeckRepository
+                repo = DeckRepository(conn)
+                deck_name = data.get("name") or card["name"]
+                deck = Deck(
+                    id=None, name=deck_name, format="commander",
+                    state_id=DECK_STATE_CONSTRUCTED,
+                    commander_oracle_id=commander_oracle_id,
+                    commander_printing_id=data.get("commander_printing_id"),
+                )
+                deck_id = repo.add(deck)
+                conn.commit()
+                result = repo.get(deck_id)
+        finally:
             conn.close()
-            self._send_json(result, 201)
-        else:
-            from mtg_collector.db.models import Deck, DeckRepository
-            repo = DeckRepository(conn)
-            deck_name = data.get("name") or card["name"]
-            deck = Deck(
-                id=None, name=deck_name, format="commander",
-                state_id=DECK_STATE_CONSTRUCTED,
-                commander_oracle_id=commander_oracle_id,
-                commander_printing_id=data.get("commander_printing_id"),
-            )
-            deck_id = repo.add(deck)
-            conn.commit()
-            result = repo.get(deck_id)
-            conn.close()
-            self._send_json(result, 201)
+        self._send_json(result, 201)
 
     def _categorize_card_type(self, type_line: str) -> str:
         """Categorize a card by its type line, priority order."""
@@ -6399,11 +6400,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "collection_id is required"}, 400)
             return
         conn = self._get_conn()
-        from mtg_collector.db.models import DeckRepository
-        repo = DeckRepository(conn)
-        count = repo.remove_cards(deck_id, [collection_id])
-        conn.commit()
-        conn.close()
+        try:
+            from mtg_collector.db.models import DeckRepository
+            repo = DeckRepository(conn)
+            count = repo.remove_cards(deck_id, [collection_id])
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json({"ok": True, "removed": count})
 
     def _api_builder_browse_commanders(self, params: dict):

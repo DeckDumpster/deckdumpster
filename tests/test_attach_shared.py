@@ -398,3 +398,233 @@ def test_handler_write_error_does_not_lock_db(single_db_path):
     assert row is not None
     assert row[0] == "ok"
     check.close()
+
+
+# ── Connection-leak regression tests (efj-mtgc-656) ──
+#
+# Each of these handlers opened a connection with _get_conn() and closed it only
+# on its success / early-return paths. Any other exception escaped before
+# conn.close(), leaking the connection — the traceback keeps the handler frame
+# (and therefore the connection) alive, so it is never GC'd.
+#
+# When the escaping error happens *after* the handler has already written, the
+# leaked connection is still inside an open write transaction. Under WAL that
+# pins the single write lock and every later write fails "database is locked"
+# until the process restarts. Reads keep working, so the service looks healthy
+# while silently refusing all mutations.
+#
+# Every test asserts, in order:
+#   1. the original exception still propagates (pytest.raises)
+#   2. handler._responses == []  — the fix must not swallow the error into a
+#      tidy JSON body (CLAUDE.md: "NEVER add fallback logic")
+#   3. every connection the handler opened is now closed
+# and, for the handlers that write before failing, additionally that a
+# subsequent independent write succeeds (the write lock was really released).
+
+
+def _seed_deck_fixtures(db_path):
+    """Add a deck and a one-card batch to the standard single-DB fixture."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO decks (id, name, state_id, created_at, updated_at) "
+        "VALUES (1, 'Test Deck', 1, '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO batches (id, batch_uuid, name, batch_type, created_at) "
+        "VALUES (1, 'batch-uuid-1', 'Test Batch', 'manual', '2025-01-01T00:00:00')"
+    )
+    conn.execute("UPDATE collection SET batch_id = 1")
+    conn.commit()
+    conn.close()
+
+
+def _call_expecting_leak(handler, fn, exc_type):
+    """Run fn() expecting exc_type; assert it propagated and nothing leaked.
+
+    Spies on sqlite3.connect so we can prove every connection the handler
+    opened was actually closed — that is the invariant try/finally restores,
+    and it holds whether or not a write transaction was open at the time.
+    """
+    import mtg_collector.cli.crack_pack_server as cps
+
+    created = []
+    real_connect = sqlite3.connect
+
+    def spy(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        created.append(conn)
+        return conn
+
+    with patch.object(cps.sqlite3, "connect", spy):
+        with pytest.raises(exc_type):
+            fn()
+
+    # The error must reach the caller, not become a tidy JSON error response.
+    assert handler._responses == []
+    assert created, "handler opened no connection — test trigger is wrong"
+    for conn in created:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+
+
+def _assert_lock_released(db_path, key):
+    """The WAL write lock must be free: an independent writer must succeed."""
+    conn = sqlite3.connect(db_path, timeout=1)
+    conn.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (key,))
+    conn.commit()
+    conn.close()
+
+    check = sqlite3.connect(db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    check.close()
+
+
+# --- Handlers that write before failing: these wedge the DB when leaked. ---
+
+
+def test_deck_expected_set_error_does_not_lock_db(single_db_path):
+    """set_expected_cards() DELETEs, then hits UNIQUE(deck_id, printing_id, zone).
+
+    The DELETE opens the write transaction, so the leaked connection holds the
+    WAL write lock.
+    """
+    _seed_deck_fixtures(single_db_path)
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler,
+            lambda: handler._api_deck_expected_set(1, {"cards": [
+                {"printing_id": "print-1", "zone": "mainboard"},
+                {"printing_id": "print-1", "zone": "mainboard"},
+            ]}),
+            sqlite3.IntegrityError,
+        )
+        _assert_lock_released(single_db_path, "after_expected_set_error")
+
+
+def test_deck_materialize_error_does_not_lock_db(single_db_path):
+    """An expected card whose zone deck_cards' CHECK rejects.
+
+    deck_expected_cards.zone has no CHECK, but materialize_deck() copies it
+    into deck_cards.zone, which does. CHECK constraints fire regardless of
+    PRAGMA foreign_keys, so this also reproduces in the split-DB deployment.
+    """
+    _seed_deck_fixtures(single_db_path)
+    conn = sqlite3.connect(single_db_path)
+    conn.execute(
+        "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
+        "VALUES (1, 'print-1', 'bogus_zone', 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler, lambda: handler._api_deck_materialize(1),
+            sqlite3.IntegrityError,
+        )
+        _assert_lock_released(single_db_path, "after_materialize_error")
+
+
+def test_batch_assign_deck_error_does_not_lock_db(single_db_path):
+    """deck_cards' zone CHECK raises IntegrityError past the except ValueError.
+
+    Same shape as the efj-mtgc-7rp reproduction: the handler caught only
+    ValueError, so IntegrityError escaped before conn.close().
+    """
+    _seed_deck_fixtures(single_db_path)
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler,
+            lambda: handler._api_batch_assign_deck(
+                1, {"deck_id": 1, "deck_zone": "bogus_zone"}),
+            sqlite3.IntegrityError,
+        )
+        _assert_lock_released(single_db_path, "after_batch_assign_error")
+
+
+# --- Handlers that fail before their first write. No write transaction is
+# --- open, so the WAL lock is not held; the leak is still a leaked connection
+# --- and is asserted as such.
+
+
+def test_deck_create_error_does_not_leak_conn(single_db_path):
+    """int(origin_variation) raises after the connection is already open."""
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler,
+            lambda: handler._api_deck_create(
+                {"name": "X", "origin_variation": "abc"}),
+            ValueError,
+        )
+
+
+def test_deck_update_error_does_not_leak_conn(single_db_path):
+    """An unbindable parameter escapes DeckRepository.update()."""
+    _seed_deck_fixtures(single_db_path)
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler,
+            lambda: handler._api_deck_update(1, {"name": {"unbindable": 1}}),
+            sqlite3.ProgrammingError,
+        )
+
+
+def test_deck_delete_error_does_not_leak_conn(single_db_path):
+    """An unbindable deck_id escapes DeckRepository.delete()."""
+    _seed_deck_fixtures(single_db_path)
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler,
+            lambda: handler._api_deck_delete({"unbindable": 1}),
+            sqlite3.ProgrammingError,
+        )
+
+
+def test_deck_reassemble_error_does_not_leak_conn(single_db_path):
+    """An unbindable collection_id escapes DeckRepository.move_cards()."""
+    _seed_deck_fixtures(single_db_path)
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler,
+            lambda: handler._api_deck_reassemble(
+                1, {"collection_ids": [{"unbindable": 1}]}),
+            sqlite3.ProgrammingError,
+        )
+
+
+def test_builder_create_error_does_not_leak_conn(single_db_path):
+    """An unbindable deck name escapes past the handler's except ValueError."""
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler,
+            lambda: handler._api_builder_create({
+                "commander_oracle_id": "oracle-1",
+                "state": "constructed",
+                "name": {"unbindable": 1},
+            }),
+            sqlite3.ProgrammingError,
+        )
+
+
+def test_builder_remove_card_error_does_not_leak_conn(single_db_path):
+    """An unbindable collection_id escapes DeckRepository.remove_cards()."""
+    _seed_deck_fixtures(single_db_path)
+    handler = _make_handler(single_db_path)
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        _call_expecting_leak(
+            handler,
+            lambda: handler._api_builder_remove_card(
+                1, {"collection_id": {"unbindable": 1}}),
+            sqlite3.ProgrammingError,
+        )
