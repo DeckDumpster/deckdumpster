@@ -1,0 +1,26 @@
+start_page: /collection
+involves:
+  - "result count text in header (#status)"
+  - "stats modal overlay #stats-modal-overlay"
+  - "range pill container #growth-range-pills"
+  - "pill buttons .price-range-pill with data-range 30/90/180/365/0"
+  - "'.active' marks the selected pill, '.disabled' marks unavailable ranges"
+fixture_data:
+  seeded_span_days: 120
+  enabled_pills: 3
+  disabled_pills: 2
+notes: >
+  Pills are 1M(data-range=30), 3M(90), 6M(180), 1Y(365), ALL(0). ALL carries
+  .active in the initial markup. renderGrowthChart() computes
+  spanDays = (Date.now() - dates[0]) / 86400000 and then toggles .disabled on
+  each pill where ranges[i] > 0 && spanDays < ranges[i]. ALL is never disabled.
+
+  Seeding 120 days of acquisition history (see
+  collection_stats_growth_chart_renders for the required two-database seed)
+  gives spanDays ~= 120, so 1M and 3M stay enabled while 6M and 1Y are
+  disabled — exactly 2 disabled pills and 3 enabled ones.
+
+  Clicking a disabled pill is a no-op (the handler returns early). Clicking
+  3M removes .active from every pill, adds it to 3M, and re-slices the chart
+  datasets client-side without a refetch. Assert on
+  "#growth-range-pills .price-range-pill.active[data-range='90']" afterwards.
