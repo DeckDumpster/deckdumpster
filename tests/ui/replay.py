@@ -13,6 +13,11 @@ from pathlib import Path
 
 from .harness import EXTRACT_ELEMENTS_JS
 
+# Text assertions wait for async renders rather than sampling instantaneously.
+# Every other harness call passes timeout=500 to Playwright; these two used a
+# bare count() and raced page updates under load (efj-mtgc-h9z).
+TEXT_ASSERT_TIMEOUT_MS = 5_000
+
 log = logging.getLogger(__name__)
 
 
@@ -171,15 +176,35 @@ class ReplayHarness:
             self._fail(f"Expected hidden: {selector}")
         self._snap()
 
-    def assert_text_present(self, text: str):
+    def assert_text_present(self, text: str, timeout: int = TEXT_ASSERT_TIMEOUT_MS):
+        """Assert text is in the DOM, waiting for async renders to land.
+
+        Uses Playwright's auto-waiting rather than an instantaneous count():
+        pages that populate from a fetch would otherwise lose the race under
+        load and fail with no relation to the code under test.
+
+        Waits on "attached" rather than "visible" to preserve the previous
+        count() semantics, which counted DOM nodes regardless of visibility.
+        """
         self._record("assert_text_present", text)
-        count = self.page.get_by_text(text).count()
-        if count == 0:
+        try:
+            self.page.get_by_text(text).first.wait_for(
+                state="attached", timeout=timeout
+            )
+        except Exception:
             self._fail(f"Expected text present: {text}")
         self._snap()
 
     def assert_text_absent(self, text: str):
+        """Assert text is not in the DOM, after letting the page settle.
+
+        _settle() first is load-bearing: an instantaneous count() on a page
+        that has not rendered yet returns 0 and passes vacuously, asserting
+        nothing. Settling means a pass reflects genuinely-absent text rather
+        than an unrendered page.
+        """
         self._record("assert_text_absent", text)
+        self._settle()
         count = self.page.get_by_text(text).count()
         if count > 0:
             self._fail(f"Expected text absent but found {count} matches: {text}")
