@@ -416,216 +416,6 @@ def test_deck_add_cards_integrity_error_does_not_lock_db(single_db_path):
         "INSERT INTO decks (id, name, state_id, created_at, updated_at) "
         "VALUES (1, 'Test Deck', 1, '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
     )
-# ── Binder / view CRUD handlers must not leak the connection (efj-mtgc-5oa) ──
-
-
-def _abort_after(conn, event, table):
-    """Install a trigger that aborts *after* a write has dirtied `table`.
-
-    RAISE(ABORT) surfaces as sqlite3.IntegrityError. Because the row was
-    already written, the connection is left holding an open write transaction
-    — exactly the state a leaked connection wedges the DB in under WAL. A
-    trigger (not a foreign key) is used deliberately: the deployed split-DB
-    config runs with PRAGMA foreign_keys OFF, so FK errors are unreachable
-    there, while trigger/CHECK aborts always fire.
-    """
-    conn.execute(
-        f"CREATE TRIGGER boom_{event}_{table} AFTER {event} ON {table} "
-        f"BEGIN SELECT RAISE(ABORT, 'boom'); END"
-    )
-
-
-def _assert_writes_still_work(db_path, key):
-    """The DB must still accept writes — i.e. the connection was released."""
-# ── Sealed collection handler connection-leak tests (efj-mtgc-dw0) ──
-
-
-def _seed_sealed_product(db_path, *, entry_status=None, quantity=1):
-    """Insert a sealed_products row, and optionally a sealed_collection entry."""
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO sealed_products (uuid, name, set_code, category, imported_at) "
-        "VALUES ('sealed-uuid-1', 'Test Booster Box', 'tst', 'booster_box', "
-        "'2025-01-01T00:00:00')"
-    )
-    if entry_status is not None:
-        conn.execute(
-            "INSERT INTO sealed_collection "
-            "(id, sealed_product_uuid, quantity, condition, status, added_at) "
-            "VALUES (1, 'sealed-uuid-1', ?, 'Near Mint', ?, '2025-01-01T00:00:00')",
-            (quantity, entry_status),
-        )
-# ── Order handler connection-leak tests (efj-mtgc-skh) ──
-#
-# Detection pattern: lock-based (as in efj-mtgc-7rp / -5oa / -dw0).
-#
-# Every one of these four handlers writes a `status_log` row as the last step
-# of its unit of work, after it has already dirtied a page in `collection` or
-# `orders`. An AFTER INSERT trigger on `status_log` that RAISE(ABORT)s
-# therefore aborts the statement while leaving the write transaction open —
-# exactly the production shape, where an exception escapes the handler before
-# conn.close() runs and the leaked connection keeps the WAL write lock. Every
-# later write then fails "database is locked" until the process restarts.
-#
-# A trigger is used rather than a foreign key on purpose: in the deployed
-# split-DB configuration PRAGMA foreign_keys is OFF, so FK-based failures are
-# unreachable there.
-#
-# Each test also asserts the exception propagates (pytest.raises) and that the
-# handler sent no response (`_responses == []`), so a "fix" that swallows the
-# error into a tidy JSON body fails — CLAUDE.md forbids that trade.
-
-_STATUS_LOG_BOMB = (
-    "CREATE TRIGGER status_log_bomb AFTER INSERT ON status_log "
-    "BEGIN SELECT RAISE(ABORT, 'status_log_bomb'); END"
-)
-
-
-def _arm_status_log_bomb(db_path):
-    """Make any status_log insert abort, after the caller has dirtied a page."""
-    conn = sqlite3.connect(db_path)
-    conn.execute(_STATUS_LOG_BOMB)
-# ── Wishlist / collection handler connection-leak tests (efj-mtgc-0p8) ──
-#
-# _api_wishlist_add, _api_wishlist_bulk_add, _api_wishlist_fulfill,
-# _api_collection_add and _api_collection_dispose each opened a connection with
-# _get_conn() and closed it only on their success / early-return paths. Any
-# other exception escaped before conn.close(), leaking the connection — the
-# traceback pins the handler frame, so it is never GC'd.
-#
-# Every one of them writes before it can fail, so the leaked connection is still
-# inside an open write transaction. Under WAL that pins the single write lock
-# and every later write fails "database is locked" until the process restarts.
-# Reads keep working, so the service looks healthy while silently refusing all
-# mutations.
-#
-# Detection is lock-based: trigger the error, then assert an independent writer
-# still succeeds. Each test also asserts, before that check, that
-#   1. the original exception still propagates (pytest.raises), and
-#   2. handler._responses == []
-# so a "fix" that swallows the error into a tidy JSON body fails the test
-# (CLAUDE.md: "NEVER add fallback logic. Errors should propagate.").
-#
-# The errors are provoked with an AFTER-trigger that RAISE(ABORT)s. ABORT undoes
-# only the offending statement, so the surrounding write transaction — and its
-# WAL write lock — stays open, exactly as in production. A trigger is used
-# rather than a foreign key because the deployed split-DB configuration runs
-# with PRAGMA foreign_keys OFF, which would make an FK-based error unreachable
-# there; triggers and CHECK constraints fire either way.
-
-
-def _install_abort_trigger(db_path, name, event, table):
-    """Add an AFTER-trigger on `table` that aborts the statement."""
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        f"CREATE TRIGGER {name} AFTER {event} ON {table} "
-        f"BEGIN SELECT RAISE(ABORT, 'boom'); END"
-    )
-    conn.commit()
-    conn.close()
-
-
-def _assert_writes_still_work(db_path, key):
-    """The next writer must not hit 'database is locked'."""
-    conn2 = sqlite3.connect(db_path, timeout=1)
-    conn2.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (key,))
-    conn2.commit()
-    conn2.close()
-# ── Connection-leak regression tests (efj-mtgc-656) ──
-#
-# Each of these handlers opened a connection with _get_conn() and closed it only
-# on its success / early-return paths. Any other exception escaped before
-# conn.close(), leaking the connection — the traceback keeps the handler frame
-# (and therefore the connection) alive, so it is never GC'd.
-#
-# When the escaping error happens *after* the handler has already written, the
-# leaked connection is still inside an open write transaction. Under WAL that
-# pins the single write lock and every later write fails "database is locked"
-# until the process restarts. Reads keep working, so the service looks healthy
-# while silently refusing all mutations.
-#
-# Every test asserts, in order:
-#   1. the original exception still propagates (pytest.raises)
-#   2. handler._responses == []  — the fix must not swallow the error into a
-#      tidy JSON body (CLAUDE.md: "NEVER add fallback logic")
-#   3. every connection the handler opened is now closed
-# and, for the handlers that write before failing, additionally that a
-# subsequent independent write succeeds (the write lock was really released).
-
-
-def _seed_deck_fixtures(db_path):
-    """Add a deck and a one-card batch to the standard single-DB fixture."""
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO decks (id, name, state_id, created_at, updated_at) "
-        "VALUES (1, 'Test Deck', 1, '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
-    )
-    conn.execute(
-        "INSERT INTO batches (id, batch_uuid, name, batch_type, created_at) "
-        "VALUES (1, 'batch-uuid-1', 'Test Batch', 'manual', '2025-01-01T00:00:00')"
-    )
-    conn.execute("UPDATE collection SET batch_id = 1")
-def _seed_wishlist_entry(db_path):
-    """Insert an unfulfilled oracle-level wishlist row (id 1)."""
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "INSERT INTO wishlist (id, oracle_id, priority, added_at, source) "
-        "VALUES (1, 'oracle-1', 0, '2025-01-01T00:00:00', 'manual')"
-    )
-    conn.commit()
-    conn.close()
-
-
-def _call_expecting_leak(handler, fn, exc_type):
-    """Run fn() expecting exc_type; assert it propagated and nothing leaked.
-
-    Spies on sqlite3.connect so we can prove every connection the handler
-    opened was actually closed — that is the invariant try/finally restores,
-    and it holds whether or not a write transaction was open at the time.
-    """
-    import mtg_collector.cli.crack_pack_server as cps
-
-    created = []
-    real_connect = sqlite3.connect
-
-    def spy(*args, **kwargs):
-        conn = real_connect(*args, **kwargs)
-        created.append(conn)
-        return conn
-
-    with patch.object(cps.sqlite3, "connect", spy):
-        with pytest.raises(exc_type):
-            fn()
-
-    # The error must reach the caller, not become a tidy JSON error response.
-    assert handler._responses == []
-    assert created, "handler opened no connection — test trigger is wrong"
-    for conn in created:
-        with pytest.raises(sqlite3.ProgrammingError):
-            conn.execute("SELECT 1")
-
-
-def _assert_lock_released(db_path, key):
-    """The WAL write lock must be free: an independent writer must succeed."""
-def _assert_wal_write_lock_free(db_path, key):
-    """An independent writer must succeed — the write lock was really released."""
-    conn = sqlite3.connect(db_path, timeout=1)
-    conn.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (key,))
-    conn.commit()
-    conn.close()
-
-    check = sqlite3.connect(db_path)
-    row = check.execute(
-        "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    assert row is not None
-    assert row[0] == "ok"
-    check.close()
-
-
-def test_binder_create_error_does_not_lock_db(single_db_path):
-    """_api_binder_create must release its connection when the write fails."""
-    setup = sqlite3.connect(single_db_path)
-    _abort_after(setup, "INSERT", "binders")
     setup.commit()
     setup.close()
 
@@ -662,48 +452,6 @@ def test_binder_add_cards_integrity_error_does_not_lock_db(single_db_path):
     a foreign key; a non-existent binder_id raises IntegrityError once FK
     enforcement is on (default mode), which must not leak the connection.
     """
-        # The error must reach the caller, not become a tidy JSON response.
-        with pytest.raises(sqlite3.IntegrityError):
-            handler._api_binder_create({"name": "Boom Binder"})
-        assert handler._responses == []
-
-        _assert_writes_still_work(single_db_path, "after_binder_create_error")
-
-
-def test_binder_update_error_does_not_lock_db(single_db_path):
-    """_api_binder_update must release its connection when the write fails."""
-    setup = sqlite3.connect(single_db_path)
-    setup.execute(
-        "INSERT INTO binders (id, name, created_at, updated_at) "
-        "VALUES (1, 'Binder', '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
-    )
-    _abort_after(setup, "UPDATE", "binders")
-    setup.commit()
-    setup.close()
-
-def test_sealed_collection_add_integrity_error_does_not_lock_db(single_db_path):
-    """_api_sealed_collection_add must release the connection on any exception.
-
-    Reproduces efj-mtgc-dw0: the handler closed the connection only on its
-    success and not-found paths, so the IntegrityError raised by
-    sealed_collection's status CHECK constraint escaped before conn.close().
-    The leaked connection kept an open write transaction; under WAL mode that
-    holds the write lock and every subsequent write fails "database is locked"
-    until the service is restarted.
-
-    Also asserts the error still propagates — releasing the lock must not turn
-    into swallowing the error into a tidy JSON response.
-    """
-    _seed_sealed_product(single_db_path)
-def test_wishlist_add_abort_does_not_lock_db(single_db_path):
-    """_api_wishlist_add has no except at all — every error leaks the connection.
-
-    The INSERT into wishlist opens the write transaction and the AFTER-trigger
-    aborts it, so the IntegrityError escapes past conn.close() with the WAL
-    write lock still held by the leaked connection.
-    """
-    _install_abort_trigger(
-        single_db_path, "wishlist_add_boom", "INSERT", "wishlist")
     handler = _make_handler(single_db_path)
 
     with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
@@ -723,6 +471,72 @@ def test_wishlist_add_abort_does_not_lock_db(single_db_path):
     assert row is not None
     assert row[0] == "ok"
     check.close()
+
+
+def _abort_after(conn, event, table):
+    """Install a trigger that aborts *after* a write has dirtied `table`.
+
+    RAISE(ABORT) surfaces as sqlite3.IntegrityError. Because the row was
+    already written, the connection is left holding an open write transaction
+    — exactly the state a leaked connection wedges the DB in under WAL. A
+    trigger (not a foreign key) is used deliberately: the deployed split-DB
+    config runs with PRAGMA foreign_keys OFF, so FK errors are unreachable
+    there, while trigger/CHECK aborts always fire.
+    """
+    conn.execute(
+        f"CREATE TRIGGER boom_{event}_{table} AFTER {event} ON {table} "
+        f"BEGIN SELECT RAISE(ABORT, 'boom'); END"
+    )
+
+
+def _assert_writes_still_work(db_path, key):
+    """The DB must still accept writes — i.e. the connection was released."""
+    conn2 = sqlite3.connect(db_path, timeout=1)
+    conn2.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (key,))
+    conn2.commit()
+    conn2.close()
+
+    check = sqlite3.connect(db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    check.close()
+
+
+def test_binder_create_error_does_not_lock_db(single_db_path):
+    """_api_binder_create must release its connection when the write fails."""
+    setup = sqlite3.connect(single_db_path)
+    _abort_after(setup, "INSERT", "binders")
+    setup.commit()
+    setup.close()
+
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        # The error must reach the caller, not become a tidy JSON response.
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_binder_create({"name": "Boom Binder"})
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_binder_create_error")
+
+
+def test_binder_update_error_does_not_lock_db(single_db_path):
+    """_api_binder_update must release its connection when the write fails."""
+    setup = sqlite3.connect(single_db_path)
+    setup.execute(
+        "INSERT INTO binders (id, name, created_at, updated_at) "
+        "VALUES (1, 'Binder', '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+    )
+    _abort_after(setup, "UPDATE", "binders")
+    setup.commit()
+    setup.close()
+
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
             handler._api_binder_update(1, {"name": "Renamed"})
         assert handler._responses == []
 
@@ -746,40 +560,6 @@ def test_binder_delete_error_does_not_lock_db(single_db_path):
     setup.commit()
     setup.close()
 
-            handler._api_wishlist_add({"name": "Local Card"})
-        assert handler._responses == []
-
-        _assert_wal_write_lock_free(single_db_path, "after_wishlist_add_error")
-
-
-def test_wishlist_bulk_add_item_error_does_not_lock_db(single_db_path):
-    """_api_wishlist_bulk_add's per-item except does not cover the item unpack.
-
-    `item.get("name")` runs *outside* the inner `except Exception`, so a
-    non-dict entry raises AttributeError straight out of the handler. The
-    preceding item has already been INSERTed, so the leaked connection holds an
-    open write transaction and, with it, the WAL write lock.
-    """
-    handler = _make_handler(single_db_path)
-
-    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
-        with pytest.raises(AttributeError):
-            handler._api_wishlist_bulk_add(
-                {"cards": [{"name": "Local Card"}, "not-a-dict"]})
-        assert handler._responses == []
-
-        _assert_wal_write_lock_free(single_db_path, "after_wishlist_bulk_error")
-
-
-def test_wishlist_fulfill_abort_does_not_lock_db(single_db_path):
-    """_api_wishlist_fulfill has no except at all — every error leaks.
-
-    The UPDATE opens the write transaction; the AFTER UPDATE trigger aborts the
-    statement but leaves the transaction, and the WAL write lock, held.
-    """
-    _seed_wishlist_entry(single_db_path)
-    _install_abort_trigger(
-        single_db_path, "wishlist_fulfill_boom", "UPDATE", "wishlist")
     handler = _make_handler(single_db_path)
 
     with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
@@ -797,23 +577,6 @@ def test_view_create_error_does_not_lock_db(single_db_path):
     setup.commit()
     setup.close()
 
-            handler._api_wishlist_fulfill(1)
-        assert handler._responses == []
-
-        _assert_wal_write_lock_free(
-            single_db_path, "after_wishlist_fulfill_error")
-
-
-def test_collection_add_abort_does_not_lock_db(single_db_path):
-    """_api_collection_add has no except at all — every error leaks.
-
-    CollectionRepository.add() INSERTs the collection row and only then the
-    status_log row. Aborting the status_log INSERT leaves the already-written
-    collection row in an open write transaction, so the leaked connection pins
-    the WAL write lock.
-    """
-    _install_abort_trigger(
-        single_db_path, "collection_add_boom", "INSERT", "status_log")
     handler = _make_handler(single_db_path)
 
     with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
@@ -836,25 +599,6 @@ def test_view_update_error_does_not_lock_db(single_db_path):
     setup.commit()
     setup.close()
 
-            handler._api_collection_add({"printing_id": "print-1"})
-        assert handler._responses == []
-
-        _assert_wal_write_lock_free(single_db_path, "after_collection_add_error")
-
-
-def test_collection_dispose_non_valueerror_does_not_lock_db(single_db_path):
-    """_api_collection_dispose catches only ValueError — anything else leaks.
-
-    A valid owned -> sold transition UPDATEs the collection row and then logs
-    the change to status_log. Aborting that INSERT raises IntegrityError, which
-    sails past the narrow `except ValueError` and past conn.close() with the
-    collection UPDATE — and the WAL write lock — still uncommitted.
-
-    The `except ValueError` clause must stay exactly as narrow as it is: this
-    test fails if it is widened into swallowing the IntegrityError.
-    """
-    _install_abort_trigger(
-        single_db_path, "collection_dispose_boom", "INSERT", "status_log")
     handler = _make_handler(single_db_path)
 
     with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
@@ -884,7 +628,66 @@ def test_view_delete_error_does_not_lock_db(single_db_path):
         assert handler._responses == []
 
         _assert_writes_still_work(single_db_path, "after_view_delete_error")
-# --- Handlers that write before failing: these wedge the DB when leaked. ---
+
+
+def _seed_deck_fixtures(db_path):
+    """Add a deck and a one-card batch to the standard single-DB fixture."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO decks (id, name, state_id, created_at, updated_at) "
+        "VALUES (1, 'Test Deck', 1, '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO batches (id, batch_uuid, name, batch_type, created_at) "
+        "VALUES (1, 'batch-uuid-1', 'Test Batch', 'manual', '2025-01-01T00:00:00')"
+    )
+    conn.execute("UPDATE collection SET batch_id = 1")
+    conn.commit()
+    conn.close()
+
+
+def _call_expecting_leak(handler, fn, exc_type):
+    """Run fn() expecting exc_type; assert it propagated and nothing leaked.
+
+    Spies on sqlite3.connect so we can prove every connection the handler
+    opened was actually closed — that is the invariant try/finally restores,
+    and it holds whether or not a write transaction was open at the time.
+    """
+    import mtg_collector.cli.crack_pack_server as cps
+
+    created = []
+    real_connect = sqlite3.connect
+
+    def spy(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        created.append(conn)
+        return conn
+
+    with patch.object(cps.sqlite3, "connect", spy):
+        with pytest.raises(exc_type):
+            fn()
+
+    # The error must reach the caller, not become a tidy JSON error response.
+    assert handler._responses == []
+    assert created, "handler opened no connection — test trigger is wrong"
+    for conn in created:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
+
+
+def _assert_lock_released(db_path, key):
+    """The WAL write lock must be free: an independent writer must succeed."""
+    conn = sqlite3.connect(db_path, timeout=1)
+    conn.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (key,))
+    conn.commit()
+    conn.close()
+
+    check = sqlite3.connect(db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    check.close()
 
 
 def test_deck_expected_set_error_does_not_lock_db(single_db_path):
@@ -948,11 +751,6 @@ def test_batch_assign_deck_error_does_not_lock_db(single_db_path):
             sqlite3.IntegrityError,
         )
         _assert_lock_released(single_db_path, "after_batch_assign_error")
-
-
-# --- Handlers that fail before their first write. No write transaction is
-# --- open, so the WAL lock is not held; the leak is still a leaked connection
-# --- and is asserted as such.
 
 
 def test_deck_create_error_does_not_leak_conn(single_db_path):
@@ -1030,6 +828,45 @@ def test_builder_remove_card_error_does_not_leak_conn(single_db_path):
                 1, {"collection_id": {"unbindable": 1}}),
             sqlite3.ProgrammingError,
         )
+
+
+def _seed_sealed_product(db_path, *, entry_status=None, quantity=1):
+    """Insert a sealed_products row, and optionally a sealed_collection entry."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO sealed_products (uuid, name, set_code, category, imported_at) "
+        "VALUES ('sealed-uuid-1', 'Test Booster Box', 'tst', 'booster_box', "
+        "'2025-01-01T00:00:00')"
+    )
+    if entry_status is not None:
+        conn.execute(
+            "INSERT INTO sealed_collection "
+            "(id, sealed_product_uuid, quantity, condition, status, added_at) "
+            "VALUES (1, 'sealed-uuid-1', ?, 'Near Mint', ?, '2025-01-01T00:00:00')",
+            (quantity, entry_status),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_sealed_collection_add_integrity_error_does_not_lock_db(single_db_path):
+    """_api_sealed_collection_add must release the connection on any exception.
+
+    Reproduces efj-mtgc-dw0: the handler closed the connection only on its
+    success and not-found paths, so the IntegrityError raised by
+    sealed_collection's status CHECK constraint escaped before conn.close().
+    The leaked connection kept an open write transaction; under WAL mode that
+    holds the write lock and every subsequent write fails "database is locked"
+    until the service is restarted.
+
+    Also asserts the error still propagates — releasing the lock must not turn
+    into swallowing the error into a tidy JSON response.
+    """
+    _seed_sealed_product(single_db_path)
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
             handler._api_sealed_collection_add({
                 "sealed_product_uuid": "sealed-uuid-1",
                 "status": "not_a_real_status",
@@ -1080,20 +917,20 @@ def test_sealed_collection_bulk_dispose_error_does_not_lock_db(single_db_path):
         assert handler._responses == []
 
         _assert_writes_still_work(single_db_path, "after_sealed_bulk_error")
-def _assert_writes_still_work(db_path, marker):
-    """A leaked connection holds the WAL write lock; this write proves it isn't."""
-    conn2 = sqlite3.connect(db_path, timeout=1)
-    conn2.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (marker,))
-    conn2.commit()
-    conn2.close()
 
-    check = sqlite3.connect(db_path)
-    row = check.execute(
-        "SELECT value FROM settings WHERE key = ?", (marker,)
-    ).fetchone()
-    check.close()
-    assert row is not None
-    assert row[0] == "ok"
+
+_STATUS_LOG_BOMB = (
+    "CREATE TRIGGER status_log_bomb AFTER INSERT ON status_log "
+    "BEGIN SELECT RAISE(ABORT, 'status_log_bomb'); END"
+)
+
+
+def _arm_status_log_bomb(db_path):
+    """Make any status_log insert abort, after the caller has dirtied a page."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(_STATUS_LOG_BOMB)
+    conn.commit()
+    conn.close()
 
 
 def _seed_order(db_path, *, ordered_card=False):
@@ -1223,6 +1060,140 @@ def test_order_receive_error_does_not_lock_db(single_db_path):
         assert handler._responses == []
 
         _assert_writes_still_work(single_db_path, "after_order_receive_error")
+
+
+def _install_abort_trigger(db_path, name, event, table):
+    """Add an AFTER-trigger on `table` that aborts the statement."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        f"CREATE TRIGGER {name} AFTER {event} ON {table} "
+        f"BEGIN SELECT RAISE(ABORT, 'boom'); END"
+    )
+    conn.commit()
+    conn.close()
+
+
+def _seed_wishlist_entry(db_path):
+    """Insert an unfulfilled oracle-level wishlist row (id 1)."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO wishlist (id, oracle_id, priority, added_at, source) "
+        "VALUES (1, 'oracle-1', 0, '2025-01-01T00:00:00', 'manual')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def _assert_wal_write_lock_free(db_path, key):
+    """An independent writer must succeed — the write lock was really released."""
+    conn = sqlite3.connect(db_path, timeout=1)
+    conn.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (key,))
+    conn.commit()
+    conn.close()
+
+    check = sqlite3.connect(db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    check.close()
+
+
+def test_wishlist_add_abort_does_not_lock_db(single_db_path):
+    """_api_wishlist_add has no except at all — every error leaks the connection.
+
+    The INSERT into wishlist opens the write transaction and the AFTER-trigger
+    aborts it, so the IntegrityError escapes past conn.close() with the WAL
+    write lock still held by the leaked connection.
+    """
+    _install_abort_trigger(
+        single_db_path, "wishlist_add_boom", "INSERT", "wishlist")
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_wishlist_add({"name": "Local Card"})
+        assert handler._responses == []
+
+        _assert_wal_write_lock_free(single_db_path, "after_wishlist_add_error")
+
+
+def test_wishlist_bulk_add_item_error_does_not_lock_db(single_db_path):
+    """_api_wishlist_bulk_add's per-item except does not cover the item unpack.
+
+    `item.get("name")` runs *outside* the inner `except Exception`, so a
+    non-dict entry raises AttributeError straight out of the handler. The
+    preceding item has already been INSERTed, so the leaked connection holds an
+    open write transaction and, with it, the WAL write lock.
+    """
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(AttributeError):
+            handler._api_wishlist_bulk_add(
+                {"cards": [{"name": "Local Card"}, "not-a-dict"]})
+        assert handler._responses == []
+
+        _assert_wal_write_lock_free(single_db_path, "after_wishlist_bulk_error")
+
+
+def test_wishlist_fulfill_abort_does_not_lock_db(single_db_path):
+    """_api_wishlist_fulfill has no except at all — every error leaks.
+
+    The UPDATE opens the write transaction; the AFTER UPDATE trigger aborts the
+    statement but leaves the transaction, and the WAL write lock, held.
+    """
+    _seed_wishlist_entry(single_db_path)
+    _install_abort_trigger(
+        single_db_path, "wishlist_fulfill_boom", "UPDATE", "wishlist")
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_wishlist_fulfill(1)
+        assert handler._responses == []
+
+        _assert_wal_write_lock_free(
+            single_db_path, "after_wishlist_fulfill_error")
+
+
+def test_collection_add_abort_does_not_lock_db(single_db_path):
+    """_api_collection_add has no except at all — every error leaks.
+
+    CollectionRepository.add() INSERTs the collection row and only then the
+    status_log row. Aborting the status_log INSERT leaves the already-written
+    collection row in an open write transaction, so the leaked connection pins
+    the WAL write lock.
+    """
+    _install_abort_trigger(
+        single_db_path, "collection_add_boom", "INSERT", "status_log")
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_collection_add({"printing_id": "print-1"})
+        assert handler._responses == []
+
+        _assert_wal_write_lock_free(single_db_path, "after_collection_add_error")
+
+
+def test_collection_dispose_non_valueerror_does_not_lock_db(single_db_path):
+    """_api_collection_dispose catches only ValueError — anything else leaks.
+
+    A valid owned -> sold transition UPDATEs the collection row and then logs
+    the change to status_log. Aborting that INSERT raises IntegrityError, which
+    sails past the narrow `except ValueError` and past conn.close() with the
+    collection UPDATE — and the WAL write lock — still uncommitted.
+
+    The `except ValueError` clause must stay exactly as narrow as it is: this
+    test fails if it is widened into swallowing the IntegrityError.
+    """
+    _install_abort_trigger(
+        single_db_path, "collection_dispose_boom", "INSERT", "status_log")
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
             handler._api_collection_dispose(1, {"new_status": "sold"})
         assert handler._responses == []
 
