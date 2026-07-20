@@ -77,11 +77,12 @@ def run_verify(args):
     """Report any schema objects missing from the database."""
     import sys
 
-    from mtg_collector.db.schema import get_current_version
+    from mtg_collector.db.schema import get_current_version, verify_shared_schema
 
     conn = get_connection(args.db_path)
     version = get_current_version(conn)
     missing = verify_schema(conn)
+    missing_shared = verify_shared_schema(conn)
 
     print(f"Location: {args.db_path}")
     print(f"Schema version: {version} (expected {SCHEMA_VERSION})")
@@ -91,6 +92,20 @@ def run_verify(args):
         for name in missing:
             print(f"  {name}")
         print("\nRun 'mtg db init --force' to re-apply the schema.")
+
+    if missing_shared:
+        print(f"\nMISSING {len(missing_shared)} object(s) from the shared reference DB:")
+        for name in missing_shared:
+            print(f"  {name}")
+        # 'db init --force' repairs `main`; it cannot repair the shared DB, which
+        # production mounts read-only. Rebuilding the shared volume is the fix.
+        print(
+            "\nThese are served from MTGC_SHARED_DB, not from this database. "
+            "'mtg db init --force' will NOT repair them — rebuild the shared "
+            "reference DB with 'mtg db split --shared-out <path> --prune'."
+        )
+
+    if missing or missing_shared:
         sys.exit(1)
 
     print(f"All {len(SCHEMA_OBJECTS)} schema objects present.")

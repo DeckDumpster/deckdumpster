@@ -662,6 +662,31 @@ def verify_schema(conn: sqlite3.Connection) -> list[str]:
     return sorted(SCHEMA_OBJECTS - present)
 
 
+def verify_shared_schema(conn: sqlite3.Connection) -> list[str]:
+    """Return shared reference objects absent from the ATTACHed `shared` schema.
+
+    Empty when no shared DB is attached, or when the shared DB is intact.
+
+    verify_schema() unions `main` with every ATTACHed schema, so an object that
+    survives in `main` masks its absence from `shared`.  That union is the right
+    rule for the boot path — `db split --prune` only DELETEs rows, so `main`
+    keeps every definition and a healthy split deployment must not be called
+    damaged.  But under split-DB reads are routed at `shared` by the temp views,
+    so an object missing *there* still breaks queries.  This is the per-schema
+    view of that, reported by `mtg db verify` only.
+
+    Deliberately not wired into init_db: production mounts the shared volume
+    read-only, so the server refusing to boot over it would strand the operator
+    with no in-container remedy.  Rebuilding the shared volume is the fix.
+    """
+    attached = {row[1] for row in conn.execute("PRAGMA database_list")}
+    if "shared" not in attached:
+        return []
+
+    present = {r[0] for r in conn.execute("SELECT name FROM shared.sqlite_master")}
+    return sorted(set(SHARED_TABLES + SHARED_VIEWS) - present)
+
+
 def refresh_latest_prices(conn: sqlite3.Connection) -> int:
     """Repopulate the latest_prices table from the prices table.
 

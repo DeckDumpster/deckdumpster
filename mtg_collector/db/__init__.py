@@ -24,6 +24,7 @@ from mtg_collector.db.schema import (
     SchemaIntegrityError,
     init_db,
     verify_schema,
+    verify_shared_schema,
 )
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "get_shared_write_path",
     "init_db",
     "verify_schema",
+    "verify_shared_schema",
     "SchemaIntegrityError",
     "SCHEMA_OBJECTS",
     "SCHEMA_VERSION",

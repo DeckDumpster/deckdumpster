@@ -23,6 +23,7 @@ from mtg_collector.db.schema import (
     SchemaIntegrityError,
     init_db,
     verify_schema,
+    verify_shared_schema,
 )
 
 
@@ -336,6 +337,74 @@ def test_damaged_split_db_reports_then_the_named_remedy_repairs_it(split_dbs):
     assert init_db(conn, force=True) is True
     assert verify_schema(conn) == []
     assert init_db(conn) is False
+    conn.close()
+
+
+# ── The shared DB needs its own pass ──
+
+
+def test_shared_gap_is_invisible_to_the_boot_path_check(split_dbs):
+    """An object live in main but missing from shared is masked by the union.
+
+    This is why verify_shared_schema exists.  The union is still the right rule
+    for init_db: `db split --prune` only empties main, so main legitimately
+    keeps every definition in a healthy split deployment.
+    """
+    user_path, shared_path = split_dbs
+    conn = sqlite3.connect(shared_path)
+    conn.execute("DROP TABLE sealed_products")
+    conn.commit()
+    conn.close()
+
+    conn = sqlite3.connect(user_path)
+    attach_shared(conn, shared_path)
+    assert verify_schema(conn) == []  # masked by main's surviving definition
+    assert init_db(conn) is False  # so the server still boots
+    conn.close()
+
+
+def test_verify_shared_schema_reports_the_shared_gap(split_dbs):
+    user_path, shared_path = split_dbs
+    conn = sqlite3.connect(shared_path)
+    conn.execute("DROP TABLE sealed_products")
+    conn.commit()
+    conn.close()
+
+    conn = sqlite3.connect(user_path)
+    attach_shared(conn, shared_path)
+    assert "sealed_products" in verify_shared_schema(conn)
+    conn.close()
+
+
+def test_verify_shared_schema_is_quiet_on_an_intact_split_db(split_dbs):
+    user_path, shared_path = split_dbs
+    conn = sqlite3.connect(user_path)
+    attach_shared(conn, shared_path)
+    assert verify_shared_schema(conn) == []
+    conn.close()
+
+
+def test_verify_shared_schema_is_empty_without_a_shared_db(db):
+    """Single-DB deployments have no shared schema to check."""
+    assert verify_shared_schema(db) == []
+
+
+def test_force_does_not_claim_to_repair_the_shared_db(split_dbs):
+    """--force repairs main only; the shared gap must survive it, not be hidden.
+
+    Production mounts the shared volume read-only, so this is a real limit of
+    the remedy, not something to paper over.
+    """
+    user_path, shared_path = split_dbs
+    conn = sqlite3.connect(shared_path)
+    conn.execute("DROP TABLE sealed_products")
+    conn.commit()
+    conn.close()
+
+    conn = sqlite3.connect(user_path)
+    attach_shared(conn, shared_path)
+    init_db(conn, force=True)
+    assert "sealed_products" in verify_shared_schema(conn)
     conn.close()
 
 
