@@ -734,8 +734,18 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
         return False
 
     if current == 0 or force:
-        # Fresh install - create all tables
-        conn.executescript(SCHEMA_SQL)
+        # Fresh install - create all tables.
+        #
+        # Under split-DB the connection carries temp views shadowing the shared
+        # reference tables.  They are a read-routing device and must not be
+        # visible to DDL: with the shadow up, `CREATE INDEX ... ON latest_prices`
+        # resolves to the temp *view* and SQLite raises "views may not be
+        # indexed", which broke `mtg db init --force` — the very repair the
+        # integrity check above tells the operator to run.
+        from mtg_collector.db.connection import suspend_shared_shadow
+
+        with suspend_shared_shadow(conn):
+            conn.executescript(SCHEMA_SQL)
         # Seed default settings
         _seed_default_settings(conn)
     else:

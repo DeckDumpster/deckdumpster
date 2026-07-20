@@ -243,3 +243,104 @@ def test_object_present_only_in_shared_counts_as_present(split_dbs):
     attach_shared(conn, shared_path)
     assert "tcgplayer_groups" not in verify_schema(conn)
     conn.close()
+
+
+# ── The remedy must work where the error is raised (efj-mtgc-9hs) ──
+#
+# The integrity check above tells the operator to run `mtg db init --force`.
+# Under split-DB that command aborted with "views may not be indexed": the temp
+# views attach_shared() installs shadow the main-schema tables, so the
+# CREATE INDEX on latest_prices in SCHEMA_SQL hit a view.  A check that
+# recommends a broken remedy is worse than no check.
+
+
+def test_force_repair_succeeds_under_split_db(split_dbs):
+    """`mtg db init --force` must run on the connection the server actually uses.
+
+    Before the fix this raised
+    sqlite3.OperationalError: views may not be indexed.
+    """
+    user_path, shared_path = split_dbs
+    conn = sqlite3.connect(user_path)
+    attach_shared(conn, shared_path)
+
+    # The shadow is up: latest_prices is a TABLE in main and a VIEW in temp.
+    assert conn.execute(
+        "SELECT type FROM main.sqlite_master WHERE name='latest_prices'"
+    ).fetchone()[0] == "table"
+    assert conn.execute(
+        "SELECT type FROM temp.sqlite_master WHERE name='latest_prices'"
+    ).fetchone()[0] == "view"
+
+    assert init_db(conn, force=True) is True
+    conn.close()
+
+
+def test_force_repair_recreates_an_index_the_shadow_hides(split_dbs):
+    """The repair is genuine: the index really lands in main, not skipped."""
+    user_path, shared_path = split_dbs
+    for path in (user_path, shared_path):
+        conn = sqlite3.connect(path)
+        conn.execute("DROP INDEX idx_latest_prices_card")
+        conn.commit()
+        conn.close()
+
+    conn = sqlite3.connect(user_path)
+    attach_shared(conn, shared_path)
+    assert "idx_latest_prices_card" in verify_schema(conn)
+
+    init_db(conn, force=True)
+
+    assert conn.execute(
+        "SELECT 1 FROM main.sqlite_master WHERE name='idx_latest_prices_card'"
+    ).fetchone()
+    assert verify_schema(conn) == []
+    conn.close()
+
+
+def test_shadow_is_restored_after_the_repair(split_dbs):
+    """Suspending the shadow for DDL must not leave the connection degraded."""
+    user_path, shared_path = split_dbs
+    conn = sqlite3.connect(user_path)
+    attach_shared(conn, shared_path)
+
+    init_db(conn, force=True)
+
+    # The temp views are back...
+    assert conn.execute(
+        "SELECT type FROM temp.sqlite_master WHERE name='latest_prices'"
+    ).fetchone()[0] == "view"
+    # ...and unqualified reads still route to shared, not to the emptied main.
+    assert conn.execute("SELECT COUNT(*) FROM main.sets").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM sets").fetchone()[0] == 1
+    conn.close()
+
+
+def test_damaged_split_db_reports_then_the_named_remedy_repairs_it(split_dbs):
+    """End to end: detect, run exactly what the message says, come back clean."""
+    user_path, shared_path = split_dbs
+    for path in (user_path, shared_path):
+        conn = sqlite3.connect(path)
+        conn.execute("DROP TABLE sealed_products")
+        conn.commit()
+        conn.close()
+
+    conn = sqlite3.connect(user_path)
+    attach_shared(conn, shared_path)
+
+    with pytest.raises(SchemaIntegrityError) as exc:
+        init_db(conn)
+    assert "mtg db init --force" in str(exc.value)
+
+    # Run the remedy the message named, on this same split-DB connection.
+    assert init_db(conn, force=True) is True
+    assert verify_schema(conn) == []
+    assert init_db(conn) is False
+    conn.close()
+
+
+def test_force_is_unaffected_without_a_shared_db(db):
+    """Single-DB deployments keep the old behaviour — the suspend is a no-op."""
+    db.execute("DROP TABLE sealed_products")
+    assert init_db(db, force=True) is True
+    assert verify_schema(db) == []
