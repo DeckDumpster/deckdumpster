@@ -75,6 +75,7 @@ def run_init(args):
 
 def run_verify(args):
     """Report any schema objects missing from the database."""
+    import os
     import sys
 
     from mtg_collector.db.schema import get_current_version, verify_shared_schema
@@ -97,12 +98,19 @@ def run_verify(args):
         print(f"\nMISSING {len(missing_shared)} object(s) from the shared reference DB:")
         for name in missing_shared:
             print(f"  {name}")
-        # 'db init --force' repairs `main`; it cannot repair the shared DB, which
-        # production mounts read-only. Rebuilding the shared volume is the fix.
+        # A plain 'db init --force' repairs `main` only. The shared DB needs its
+        # own pass, pointed at it directly. NOT 'db split' — main is pruned, so
+        # re-splitting would copy zero rows over the reference data.
+        shared_path = os.environ.get("MTGC_SHARED_DB", "<shared db>")
         print(
-            "\nThese are served from MTGC_SHARED_DB, not from this database. "
-            "'mtg db init --force' will NOT repair them — rebuild the shared "
-            "reference DB with 'mtg db split --shared-out <path> --prune'."
+            "\nThese are served from MTGC_SHARED_DB, not from this database, so "
+            "'mtg db init --force' on this database will NOT repair them. "
+            f"Re-apply the schema to the shared DB itself:\n"
+            f"\n  MTGC_DB={shared_path} mtg db init --force\n"
+            "\nThat is CREATE ... IF NOT EXISTS, so the reference rows survive. "
+            "Production mounts the shared volume read-only — run it against a "
+            "writable copy and re-publish the volume. Recreated reference tables "
+            "come back EMPTY; repopulate with 'mtg data fetch'."
         )
 
     if missing or missing_shared:
