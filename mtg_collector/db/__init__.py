@@ -16,7 +16,16 @@ from mtg_collector.db.models import (
     SetRepository,
     WishlistRepository,
 )
-from mtg_collector.db.schema import SCHEMA_VERSION, SHARED_TABLES, SHARED_VIEWS, init_db
+from mtg_collector.db.schema import (
+    SCHEMA_OBJECTS,
+    SCHEMA_VERSION,
+    SHARED_TABLES,
+    SHARED_VIEWS,
+    SchemaIntegrityError,
+    init_db,
+    verify_schema,
+    verify_shared_schema,
+)
 
 __all__ = [
     "get_db_path",
@@ -26,6 +35,10 @@ __all__ = [
     "get_shared_db_path",
     "get_shared_write_path",
     "init_db",
+    "verify_schema",
+    "verify_shared_schema",
+    "SchemaIntegrityError",
+    "SCHEMA_OBJECTS",
     "SCHEMA_VERSION",
     "SHARED_TABLES",
     "SHARED_VIEWS",

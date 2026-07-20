@@ -131,7 +131,10 @@ collection_views (id PK)         — saved filters + column layout for the colle
 - `edhrec_recommendations` — populated by the `mtgc-edhrec` timer.
 - `prices`, `price_fetch_log` — append-only price time series and ingest log.
 
-Schema version **43**, with auto-migrations in `db/schema.py`. Repository classes in `db/models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `SealedProductRepository`, `SealedProductCardRepository`, `SealedCollectionRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `BatchRepository`.
+Schema version is `SCHEMA_VERSION` in `db/schema.py` — read the constant, never a
+number written down elsewhere. Auto-migrations live in the same file, and
+`init_db` raises `SchemaIntegrityError` if the recorded version is current but
+objects `SCHEMA_SQL` defines are missing (`mtg db verify` checks this on demand). Repository classes in `db/models.py`: `CardRepository`, `SetRepository`, `PrintingRepository`, `CollectionRepository`, `OrderRepository`, `WishlistRepository`, `SealedProductRepository`, `SealedProductCardRepository`, `SealedCollectionRepository`, `DeckRepository`, `BinderRepository`, `CollectionViewRepository`, `BatchRepository`.
 
 Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB`).
 

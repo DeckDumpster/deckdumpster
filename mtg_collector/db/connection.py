@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -99,25 +100,46 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     return _connection
 
 
-def attach_shared(conn, shared_db_path):
-    """ATTACH a shared reference DB and create temp views to shadow local tables.
+#: Cross-schema views re-created as temp views so they resolve through the
+#: shadow chain instead of reading from the emptied main-schema tables.
+_CROSS_SCHEMA_VIEWS = ("collection_view", "sealed_collection_view")
 
-    Also re-creates cross-schema views (collection_view, sealed_collection_view)
-    as temp views so they resolve table references through the temp view chain
-    instead of reading from empty main-schema tables.
+
+def shadow_view_names():
+    """Every temp view name create_shared_shadow() installs."""
+    from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS
+
+    return list(SHARED_TABLES) + list(SHARED_VIEWS) + list(_CROSS_SCHEMA_VIEWS)
+
+
+def shared_is_attached(conn) -> bool:
+    """True when a `shared` database is ATTACHed to this connection."""
+    return any(row[1] == "shared" for row in conn.execute("PRAGMA database_list"))
+
+
+def attach_shared(conn, shared_db_path):
+    """ATTACH a shared reference DB and create temp views to shadow local tables."""
+    conn.execute("ATTACH DATABASE ? AS shared", (shared_db_path,))
+    create_shared_shadow(conn)
+
+
+def create_shared_shadow(conn):
+    """Create the temp views that route reads at the ATTACHed `shared` DB.
+
+    Requires `shared` to already be ATTACHed.  Split out from attach_shared() so
+    the shadow can be rebuilt without re-ATTACHing — see suspend_shared_shadow().
     """
     from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS
 
-    conn.execute("ATTACH DATABASE ? AS shared", (shared_db_path,))
     for table in SHARED_TABLES:
         conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{table}] AS SELECT * FROM shared.[{table}]")
     for view in SHARED_VIEWS:
         conn.execute(f"CREATE TEMP VIEW IF NOT EXISTS [{view}] AS SELECT * FROM shared.[{view}]")
 
-    # Re-create cross-schema views as temp views. Stored views in main resolve
-    # table names in the main schema (empty user tables). Temp views resolve via
-    # SQLite's temp → main → attached priority, hitting our temp view redirects.
-    for view_name in ("collection_view", "sealed_collection_view"):
+    # Stored views in main resolve table names in the main schema (empty user
+    # tables). Temp views resolve via SQLite's temp → main → attached priority,
+    # hitting our temp view redirects.
+    for view_name in _CROSS_SCHEMA_VIEWS:
         row = conn.execute(
             "SELECT sql FROM main.sqlite_master WHERE type='view' AND name=?",
             (view_name,),
@@ -130,6 +152,40 @@ def attach_shared(conn, shared_db_path):
         temp_sql = sql.replace(f"CREATE VIEW IF NOT EXISTS {view_name}", f"CREATE TEMP VIEW {view_name}", 1)
         temp_sql = temp_sql.replace(f"CREATE VIEW {view_name}", f"CREATE TEMP VIEW {view_name}", 1)
         conn.execute(temp_sql)
+
+
+def drop_shared_shadow(conn):
+    """Drop the temp views create_shared_shadow() installed."""
+    for name in shadow_view_names():
+        conn.execute(f"DROP VIEW IF EXISTS temp.[{name}]")
+
+
+@contextmanager
+def suspend_shared_shadow(conn):
+    """Run a block with the temp shadow views removed, then restore them.
+
+    The shadow is a *read* routing mechanism: it makes `SELECT ... FROM cards`
+    reach `shared.cards` on a connection whose `main.cards` was emptied by
+    `db split --prune`.  It has no business being visible to DDL.  While it is
+    installed, SQLite resolves unqualified names temp → main → attached, so
+    `CREATE INDEX ... ON latest_prices` finds the temp *view* shadowing the
+    main-schema table and fails with "views may not be indexed".
+
+    DETACHing `shared` is not sufficient: the temp views outlive the DETACH and
+    keep shadowing the same names.  The shadow itself has to come down.
+
+    A no-op when no shared DB is attached, so single-DB deployments are
+    unaffected.
+    """
+    if not shared_is_attached(conn):
+        yield
+        return
+
+    drop_shared_shadow(conn)
+    try:
+        yield
+    finally:
+        create_shared_shadow(conn)
 
 
 def close_connection():
