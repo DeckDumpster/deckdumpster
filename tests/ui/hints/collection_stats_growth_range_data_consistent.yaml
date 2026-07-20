@@ -1,0 +1,43 @@
+start_page: /collection
+involves:
+  - "result count text in header (#status)"
+  - "stats modal overlay #stats-modal-overlay"
+  - "range pill container #growth-range-pills"
+  - "Chart.js canvas #growth-chart-canvas"
+  - "live Chart instance via Chart.getChart('growth-chart-canvas')"
+fixture_data:
+  seeded_span_days: 120
+  all_points: 121
+  three_month_points: 91
+  one_month_points: 31
+notes: >
+  This is the regression net for the server-side windowing, so assert on the
+  numbers in the Chart.js datasets rather than on pixels. Dataset 0 is the card
+  count, dataset 1 is the value series; both are arrays of {x, y} where x is a
+  "YYYY-MM-DD" string.
+
+  Read the series with page.evaluate:
+  Chart.getChart('growth-chart-canvas').data.datasets[0].data.map(p => [p.x, p.y]).
+
+  Each range is a different server response (GET /api/collection/growth with
+  &range=), not a client-side crop of one payload, so the equality checks below
+  are the thing actually under test. Every point is an absolute value for its
+  own date, so overlapping days MUST agree exactly across ranges.
+
+  Sequence: open on 3M (91 points) and capture it. Click ALL and wait for 121
+  points. Assert the last point (date, count, value) is identical to the last
+  point of the 3M series, and that the final 91 points of the ALL series equal
+  the 3M series element for element. Click 1M, wait for 31 points, assert its
+  points equal the final 31 of ALL. Click back to 3M, wait for 91 points, and
+  assert the series is identical to the one captured on open.
+
+  The carried-in position is the part most likely to regress silently: the
+  FIRST point of a window is not zero and not the first day of the collection.
+  With this seed the 3M window opens at count 12 / TCG 154.57 while the full
+  history opens at count 1 / TCG 7.00. Assert the 3M opening count is well
+  above 1 and that it matches the ALL series on that same date — a broken
+  carried-in position changes only that first point, which is exactly what a
+  pixel or "chart renders" check would miss.
+
+  Pill clicks flip .active before the data resolves, so always wait on the
+  dataset length via page.wait_for_function, never on the pill class.

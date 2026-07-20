@@ -1,0 +1,22 @@
+# Scenario: Growth chart shows the same history whichever range I pick
+#
+# Related:
+#   issues: [efj-mtgc-655, efj-mtgc-lze]
+#   pull_requests: []
+#
+# Prerequisites:
+#   Same two-database seeding as collection_stats_growth_chart_renders, with
+#   ~120 days of acquisition history and price rows only every 5th day so the
+#   forward-fill (and the carried-in price at a window start that falls in a
+#   gap) is exercised. See that intent for why seeding is required.
+
+description: >
+  The growth chart opens on the last three months, but switching ranges only
+  changes how far back I am looking — not what the chart says. When I widen
+  to ALL the line extends back to my earliest acquisition while today's card
+  count and value stay exactly the same, and the three months I was already
+  looking at are unchanged. When I narrow to 1M and then go back to 3M I see
+  precisely the series I started with. A shorter range never shows my
+  collection as smaller or cheaper than it really was on those days: the
+  cards I already owned when the window opens are counted and priced, not
+  treated as though I had just started collecting.

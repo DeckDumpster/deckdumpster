@@ -12,9 +12,13 @@ fixture_data:
   seeded_price_pairs: 42
 notes: >
   The chart is driven by GET /api/collection/growth, which returns
-  {dates, counts, tcg_values, ck_values}. It is fetched lazily by
+  {dates, counts, tcg_values, ck_values, earliest}. It is fetched lazily by
   renderGrowthChart() when the modal opens, so seeding before opening the
-  modal is sufficient.
+  modal is sufficient. The request carries &range=<days> and the server
+  computes only that window; the chart opens on range=90 (3M), so the
+  default response is 91 days, not the full seeded span. `earliest` is the
+  first acquisition across the whole filtered collection regardless of
+  window, and is what sizes the range pills.
 
   Seed first, via podman exec. Prices MUST go into /data/shared.sqlite:
   MTGC_SHARED_DB is set in the test container and attach_shared() creates
@@ -31,4 +35,6 @@ notes: >
   to open the modal, wait for #stats-modal-overlay.active, and confirm
   "Growth over time" is present, #growth-chart-canvas is visible, and the
   text "No acquisition history for the current filter" is absent.
-  With this seed the series is 121 days, counts 1 -> 45, TCG 7.00 -> 837.00.
+  With this seed the full history is 121 days (counts 1 -> 45, TCG
+  7.00 -> 837.00), and the 3M window the chart opens on is the last 91 of
+  those days: counts 12 -> 45, opening TCG 154.57.

@@ -10,17 +10,25 @@ fixture_data:
   enabled_pills: 3
   disabled_pills: 2
 notes: >
-  Pills are 1M(data-range=30), 3M(90), 6M(180), 1Y(365), ALL(0). ALL carries
-  .active in the initial markup. renderGrowthChart() computes
-  spanDays = (Date.now() - dates[0]) / 86400000 and then toggles .disabled on
-  each pill where ranges[i] > 0 && spanDays < ranges[i]. ALL is never disabled.
+  Pills are 1M(data-range=30), 3M(90), 6M(180), 1Y(365), ALL(0). 3M carries
+  .active in the initial markup and GROWTH_DEFAULT_RANGE is 90.
+  renderGrowthChart() computes
+  spanDays = (Date.now() - new Date(data.earliest)) / 86400000 -- note
+  `earliest`, not dates[0], since dates[0] is now the window start -- and then
+  toggles .disabled on each pill where ranges[i] > 0 && spanDays < ranges[i].
+  ALL is never disabled.
 
   Seeding 120 days of acquisition history (see
   collection_stats_growth_chart_renders for the required two-database seed)
   gives spanDays ~= 120, so 1M and 3M stay enabled while 6M and 1Y are
   disabled — exactly 2 disabled pills and 3 enabled ones.
 
-  Clicking a disabled pill is a no-op (the handler returns early). Clicking
-  3M removes .active from every pill, adds it to 3M, and re-slices the chart
-  datasets client-side without a refetch. Assert on
-  "#growth-range-pills .price-range-pill.active[data-range='90']" afterwards.
+  Clicking a disabled pill is a no-op (the handler returns early). Clicking an
+  enabled pill removes .active from every pill and adds it to the clicked one
+  immediately, before any data resolves -- so asserting only on .active can
+  pass before the chart redraws. Widening (3M -> ALL) issues a fetch with
+  &range=0; narrowing is sliced from the payload already held and never hits
+  the network. To assert the chart actually redrew, wait on the Chart.js
+  dataset length rather than on the pill class:
+  page.wait_for_function("() => Chart.getChart('growth-chart-canvas')
+  .data.datasets[0].data.length === 121").
