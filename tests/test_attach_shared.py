@@ -455,6 +455,36 @@ def _seed_sealed_product(db_path, *, entry_status=None, quantity=1):
             "VALUES (1, 'sealed-uuid-1', ?, 'Near Mint', ?, '2025-01-01T00:00:00')",
             (quantity, entry_status),
         )
+# ── Order handler connection-leak tests (efj-mtgc-skh) ──
+#
+# Detection pattern: lock-based (as in efj-mtgc-7rp / -5oa / -dw0).
+#
+# Every one of these four handlers writes a `status_log` row as the last step
+# of its unit of work, after it has already dirtied a page in `collection` or
+# `orders`. An AFTER INSERT trigger on `status_log` that RAISE(ABORT)s
+# therefore aborts the statement while leaving the write transaction open —
+# exactly the production shape, where an exception escapes the handler before
+# conn.close() runs and the leaked connection keeps the WAL write lock. Every
+# later write then fails "database is locked" until the process restarts.
+#
+# A trigger is used rather than a foreign key on purpose: in the deployed
+# split-DB configuration PRAGMA foreign_keys is OFF, so FK-based failures are
+# unreachable there.
+#
+# Each test also asserts the exception propagates (pytest.raises) and that the
+# handler sent no response (`_responses == []`), so a "fix" that swallows the
+# error into a tidy JSON body fails — CLAUDE.md forbids that trade.
+
+_STATUS_LOG_BOMB = (
+    "CREATE TRIGGER status_log_bomb AFTER INSERT ON status_log "
+    "BEGIN SELECT RAISE(ABORT, 'status_log_bomb'); END"
+)
+
+
+def _arm_status_log_bomb(db_path):
+    """Make any status_log insert abort, after the caller has dirtied a page."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(_STATUS_LOG_BOMB)
     conn.commit()
     conn.close()
 
@@ -926,3 +956,146 @@ def test_sealed_collection_bulk_dispose_error_does_not_lock_db(single_db_path):
         assert handler._responses == []
 
         _assert_writes_still_work(single_db_path, "after_sealed_bulk_error")
+def _assert_writes_still_work(db_path, marker):
+    """A leaked connection holds the WAL write lock; this write proves it isn't."""
+    conn2 = sqlite3.connect(db_path, timeout=1)
+    conn2.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (marker,))
+    conn2.commit()
+    conn2.close()
+
+    check = sqlite3.connect(db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = ?", (marker,)
+    ).fetchone()
+    check.close()
+    assert row is not None
+    assert row[0] == "ok"
+
+
+def _seed_order(db_path, *, ordered_card=False):
+    """Insert order id 1, optionally with one 'ordered' collection row on it."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO orders (id, order_number, source, seller_name, order_date, created_at) "
+        "VALUES (1, 'ORD-1', 'tcgplayer', 'Test Seller', '2025-01-01', "
+        "'2025-01-01T00:00:00')"
+    )
+    cid = None
+    if ordered_card:
+        cur = conn.execute(
+            "INSERT INTO collection "
+            "(printing_id, status, finish, condition, acquired_at, source, order_id) "
+            "VALUES ('print-1', 'ordered', 'nonfoil', 'Near Mint', "
+            "'2025-01-01T00:00:00', 'order_import', 1)"
+        )
+        cid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return cid
+
+
+def test_order_add_card_error_does_not_lock_db(single_db_path):
+    """_api_order_add_card must release its connection when repo.add() fails.
+
+    CollectionRepository.add() inserts the collection row (dirtying a page and
+    taking the write lock) and then the status_log row, which the trigger
+    aborts. Without try/finally the connection leaks with that write
+    transaction still open and wedges every later writer.
+    """
+    _seed_order(single_db_path)
+    _arm_status_log_bomb(single_db_path)
+
+    handler = _make_handler(single_db_path)
+    handler._read_json_body = lambda: {"printing_id": "print-1"}
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_order_add_card(1)
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_order_add_card_error")
+
+
+def test_order_commit_error_does_not_lock_db(single_db_path):
+    """_api_order_commit must release its connection when the commit fails.
+
+    commit_orders() does real multi-row work — order row, collection rows,
+    status_log rows — so an abort part-way through leaves an open write
+    transaction. try/finally must not change those commit semantics, only
+    guarantee the connection is closed.
+    """
+    _arm_status_log_bomb(single_db_path)
+
+    handler = _make_handler(single_db_path)
+    handler._read_json_body = lambda: {
+        "orders": [
+            {
+                "order_number": "ORD-COMMIT-1",
+                "source": "tcgplayer",
+                "seller_name": "Test Seller",
+                "order_date": "2025-01-01",
+                "total": 3.50,
+                "items": [
+                    {
+                        "card_name": "Local Card",
+                        "parsed_name": "Local Card",
+                        "printing_id": "print-1",
+                        "set_code": "tst",
+                        "collector_number": "1",
+                        "condition": "Near Mint",
+                        "foil": False,
+                        "quantity": 1,
+                        "price": 3.50,
+                    }
+                ],
+            }
+        ]
+    }
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_order_commit()
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_order_commit_error")
+
+
+def test_collection_receive_error_does_not_lock_db(single_db_path):
+    """_api_collection_receive must release its connection when the flip fails.
+
+    receive_card() updates the collection row to 'owned' and then writes the
+    status_log row, which aborts — leaving the UPDATE's write lock held on a
+    leaked connection.
+    """
+    cid = _seed_order(single_db_path, ordered_card=True)
+    _arm_status_log_bomb(single_db_path)
+
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_collection_receive(cid)
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_collection_receive_error")
+
+
+def test_order_receive_error_does_not_lock_db(single_db_path):
+    """_api_order_receive must release its connection when the batch flip fails.
+
+    receive_order() updates every ordered card on the order and then logs each
+    status change; the trigger aborts the log insert with the UPDATE already
+    holding the write lock.
+    """
+    _seed_order(single_db_path, ordered_card=True)
+    _arm_status_log_bomb(single_db_path)
+
+    handler = _make_handler(single_db_path)
+    handler._read_json_body = lambda: None
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_order_receive(1)
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_order_receive_error")
