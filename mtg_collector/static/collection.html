@@ -1954,56 +1954,76 @@ function _destroyGrowthChart() {
   if (_growthChart) { _growthChart.destroy(); _growthChart = null; }
 }
 
+// The growth endpoint now computes only the window it is asked for, so the
+// default range is what the page pays for on open. 3 months is the common case;
+// ALL is one click away. Widening the default again is a one-line change here.
+const GROWTH_DEFAULT_RANGE = 90;
+let _growthReq = 0;
+
 async function renderGrowthChart(primarySource) {
   _destroyGrowthChart();
   const wrap = document.getElementById('growth-chart-wrap');
   if (!wrap) return;
 
-  // Reuse the existing /api/collection query string so the chart respects
-  // the user's current search filter.
-  let data;
-  try {
-    const res = await fetch(`/api/collection/growth?${getFetchParams()}`);
-    if (!res.ok) throw new Error('fetch failed');
-    data = await res.json();
-  } catch {
-    wrap.innerHTML = '<div class="growth-empty">Failed to load growth history</div>';
-    return;
-  }
-
-  if (!data.dates || !data.dates.length) {
-    wrap.innerHTML = '<div class="growth-empty">No acquisition history for the current filter</div>';
-    return;
-  }
-
-  const valSeries = primarySource === 'ck' ? data.ck_values : data.tcg_values;
   const valLabel = primarySource === 'ck' ? 'Card Kingdom value' : 'TCGplayer value';
-
-  const earliest = new Date(data.dates[0]).getTime();
-  const spanDays = (Date.now() - earliest) / 86400000;
   const pills = document.querySelectorAll('#growth-range-pills .price-range-pill');
   const ranges = [30, 90, 180, 365, 0];
-  pills.forEach((pill, i) => {
-    pill.classList.toggle('disabled', ranges[i] > 0 && spanDays < ranges[i]);
-  });
 
-  function filterData(rangeDays) {
-    if (!rangeDays) return { dates: data.dates, counts: data.counts, values: valSeries };
+  // Payloads by range, scoped to this invocation — reopening the modal picks up
+  // the current search filter and starts empty.
+  const cache = new Map();
+
+  // Every point is an absolute value for its own date, so a narrower range is
+  // exactly a tail slice of a wider one. Narrowing therefore never needs the
+  // network; only widening does.
+  function tail(data, rangeDays) {
+    if (!rangeDays) return data;
     const cutoffMs = Date.now() - rangeDays * 86400000;
-    let idx0 = data.dates.findIndex(d => new Date(d).getTime() >= cutoffMs);
-    if (idx0 === -1) idx0 = data.dates.length - 1;
+    const i = data.dates.findIndex(d => new Date(d).getTime() >= cutoffMs);
+    if (i <= 0) return data;
     return {
-      dates: data.dates.slice(idx0),
-      counts: data.counts.slice(idx0),
-      values: valSeries.slice(idx0),
+      dates: data.dates.slice(i),
+      counts: data.counts.slice(i),
+      tcg_values: data.tcg_values.slice(i),
+      ck_values: data.ck_values.slice(i),
+      earliest: data.earliest,
     };
   }
 
-  function buildDatasets(f) {
+  // Narrowest already-fetched range that fully contains `range` (0 = ALL).
+  function coveringRange(range) {
+    let best = null;
+    for (const r of cache.keys()) {
+      if (r !== 0 && (range === 0 || r < range)) continue;
+      if (best === null || best === 0 || (r !== 0 && r < best)) best = r;
+    }
+    return best;
+  }
+
+  async function load(range) {
+    if (cache.has(range)) return cache.get(range);
+    const cover = coveringRange(range);
+    if (cover !== null) {
+      const sliced = tail(cache.get(cover), range);
+      cache.set(range, sliced);
+      return sliced;
+    }
+    const res = await fetch(`/api/collection/growth?${getFetchParams()}&range=${range}`);
+    if (!res.ok) throw new Error('fetch failed');
+    const data = await res.json();
+    cache.set(range, data);
+    // A window clamped to the first acquisition IS the full history — record it
+    // as ALL so the widest pill is already satisfied.
+    if (data.dates.length && data.dates[0] === data.earliest) cache.set(0, data);
+    return data;
+  }
+
+  function buildDatasets(d) {
+    const values = primarySource === 'ck' ? d.ck_values : d.tcg_values;
     return [
       {
         label: 'Cards',
-        data: f.dates.map((d, i) => ({ x: d, y: f.counts[i] })),
+        data: d.dates.map((x, i) => ({ x, y: d.counts[i] })),
         borderColor: '#7ec8e3',
         backgroundColor: 'transparent',
         borderWidth: 1.5,
@@ -2014,7 +2034,7 @@ async function renderGrowthChart(primarySource) {
       },
       {
         label: valLabel,
-        data: f.dates.map((d, i) => ({ x: d, y: f.values[i] })),
+        data: d.dates.map((x, i) => ({ x, y: values[i] })),
         borderColor: '#e94560',
         backgroundColor: 'transparent',
         borderWidth: 1.5,
@@ -2026,15 +2046,35 @@ async function renderGrowthChart(primarySource) {
     ];
   }
 
-  // Default range: ALL.
-  let activeRange = 0;
+  let activeRange = GROWTH_DEFAULT_RANGE;
+  let data;
+  try {
+    data = await load(activeRange);
+  } catch {
+    wrap.innerHTML = '<div class="growth-empty">Failed to load growth history</div>';
+    return;
+  }
+
+  if (!data.dates || !data.dates.length) {
+    wrap.innerHTML = '<div class="growth-empty">No acquisition history for the current filter</div>';
+    return;
+  }
+
+  // Pills are sized by the whole collection's span, not the fetched window —
+  // `earliest` is the first acquisition regardless of range.
+  const spanDays = (Date.now() - new Date(data.earliest).getTime()) / 86400000;
+  pills.forEach((pill, i) => {
+    pill.classList.toggle('disabled', ranges[i] > 0 && spanDays < ranges[i]);
+  });
+  // Never leave a disabled pill selected: a collection younger than the default
+  // window already has its entire history in hand, so show it as ALL.
+  if (activeRange !== 0 && spanDays < activeRange) activeRange = 0;
   pills.forEach(p => p.classList.toggle('active', parseInt(p.dataset.range) === activeRange));
 
   const canvas = document.getElementById('growth-chart-canvas');
-  const f = filterData(activeRange);
   _growthChart = new Chart(canvas, {
     type: 'line',
-    data: { datasets: buildDatasets(f) },
+    data: { datasets: buildDatasets(data) },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -2076,13 +2116,23 @@ async function renderGrowthChart(primarySource) {
   });
 
   pills.forEach(pill => {
-    pill.addEventListener('click', () => {
+    pill.addEventListener('click', async () => {
       if (pill.classList.contains('disabled')) return;
       pills.forEach(p => p.classList.remove('active'));
       pill.classList.add('active');
       const range = parseInt(pill.dataset.range);
-      const f = filterData(range);
-      _growthChart.data.datasets = buildDatasets(f);
+      // Cached and sliced ranges resolve without awaiting the network; a widening
+      // fetch can still land out of order, so only the newest click may draw.
+      const token = ++_growthReq;
+      let d;
+      try {
+        d = await load(range);
+      } catch {
+        wrap.innerHTML = '<div class="growth-empty">Failed to load growth history</div>';
+        return;
+      }
+      if (token !== _growthReq || !_growthChart) return;
+      _growthChart.data.datasets = buildDatasets(d);
       _growthChart.update();
     });
   });
@@ -2101,10 +2151,10 @@ function openStatsModal() {
       <div class="modal-section-title">Growth over time</div>
       <div class="price-range-pills" id="growth-range-pills">
         <button class="price-range-pill" data-range="30">1M</button>
-        <button class="price-range-pill" data-range="90">3M</button>
+        <button class="price-range-pill active" data-range="90">3M</button>
         <button class="price-range-pill" data-range="180">6M</button>
         <button class="price-range-pill" data-range="365">1Y</button>
-        <button class="price-range-pill active" data-range="0">ALL</button>
+        <button class="price-range-pill" data-range="0">ALL</button>
       </div>
       <div class="growth-chart-wrap" id="growth-chart-wrap">
         <canvas id="growth-chart-canvas"></canvas>
