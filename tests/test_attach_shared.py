@@ -416,6 +416,44 @@ def test_deck_add_cards_integrity_error_does_not_lock_db(single_db_path):
         "INSERT INTO decks (id, name, state_id, created_at, updated_at) "
         "VALUES (1, 'Test Deck', 1, '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
     )
+# ── Binder / view CRUD handlers must not leak the connection (efj-mtgc-5oa) ──
+
+
+def _abort_after(conn, event, table):
+    """Install a trigger that aborts *after* a write has dirtied `table`.
+
+    RAISE(ABORT) surfaces as sqlite3.IntegrityError. Because the row was
+    already written, the connection is left holding an open write transaction
+    — exactly the state a leaked connection wedges the DB in under WAL. A
+    trigger (not a foreign key) is used deliberately: the deployed split-DB
+    config runs with PRAGMA foreign_keys OFF, so FK errors are unreachable
+    there, while trigger/CHECK aborts always fire.
+    """
+    conn.execute(
+        f"CREATE TRIGGER boom_{event}_{table} AFTER {event} ON {table} "
+        f"BEGIN SELECT RAISE(ABORT, 'boom'); END"
+    )
+
+
+def _assert_writes_still_work(db_path, key):
+    """The DB must still accept writes — i.e. the connection was released."""
+    conn2 = sqlite3.connect(db_path, timeout=1)
+    conn2.execute("INSERT INTO settings (key, value) VALUES (?, 'ok')", (key,))
+    conn2.commit()
+    conn2.close()
+
+    check = sqlite3.connect(db_path)
+    row = check.execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    assert row is not None
+    assert row[0] == "ok"
+    check.close()
+
+
+def test_binder_create_error_does_not_lock_db(single_db_path):
+    """_api_binder_create must release its connection when the write fails."""
+    setup = sqlite3.connect(single_db_path)
+    _abort_after(setup, "INSERT", "binders")
     setup.commit()
     setup.close()
 
@@ -452,6 +490,25 @@ def test_binder_add_cards_integrity_error_does_not_lock_db(single_db_path):
     a foreign key; a non-existent binder_id raises IntegrityError once FK
     enforcement is on (default mode), which must not leak the connection.
     """
+        # The error must reach the caller, not become a tidy JSON response.
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_binder_create({"name": "Boom Binder"})
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_binder_create_error")
+
+
+def test_binder_update_error_does_not_lock_db(single_db_path):
+    """_api_binder_update must release its connection when the write fails."""
+    setup = sqlite3.connect(single_db_path)
+    setup.execute(
+        "INSERT INTO binders (id, name, created_at, updated_at) "
+        "VALUES (1, 'Binder', '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+    )
+    _abort_after(setup, "UPDATE", "binders")
+    setup.commit()
+    setup.close()
+
     handler = _make_handler(single_db_path)
 
     with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
@@ -471,3 +528,94 @@ def test_binder_add_cards_integrity_error_does_not_lock_db(single_db_path):
     assert row is not None
     assert row[0] == "ok"
     check.close()
+            handler._api_binder_update(1, {"name": "Renamed"})
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_binder_update_error")
+
+
+def test_binder_delete_error_does_not_lock_db(single_db_path):
+    """_api_binder_delete must release its connection when the write fails.
+
+    The binder holds a card, so delete() writes movement_log rows and clears
+    collection.binder_id before the DELETE aborts — the transaction is already
+    dirty when the exception escapes.
+    """
+    setup = sqlite3.connect(single_db_path)
+    setup.execute(
+        "INSERT INTO binders (id, name, created_at, updated_at) "
+        "VALUES (1, 'Binder', '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+    )
+    setup.execute("UPDATE collection SET binder_id = 1 WHERE id = 1")
+    _abort_after(setup, "DELETE", "binders")
+    setup.commit()
+    setup.close()
+
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_binder_delete(1)
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_binder_delete_error")
+
+
+def test_view_create_error_does_not_lock_db(single_db_path):
+    """_api_view_create must release its connection when the write fails."""
+    setup = sqlite3.connect(single_db_path)
+    _abort_after(setup, "INSERT", "collection_views")
+    setup.commit()
+    setup.close()
+
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_view_create(
+                {"name": "Boom View", "filters_json": '{"q": "t:creature"}'})
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_view_create_error")
+
+
+def test_view_update_error_does_not_lock_db(single_db_path):
+    """_api_view_update must release its connection when the write fails."""
+    setup = sqlite3.connect(single_db_path)
+    setup.execute(
+        "INSERT INTO collection_views (id, name, filters_json, created_at, updated_at) "
+        "VALUES (1, 'View', '{}', '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+    )
+    _abort_after(setup, "UPDATE", "collection_views")
+    setup.commit()
+    setup.close()
+
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_view_update(1, {"name": "Renamed"})
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_view_update_error")
+
+
+def test_view_delete_error_does_not_lock_db(single_db_path):
+    """_api_view_delete must release its connection when the write fails."""
+    setup = sqlite3.connect(single_db_path)
+    setup.execute(
+        "INSERT INTO collection_views (id, name, filters_json, created_at, updated_at) "
+        "VALUES (1, 'View', '{}', '2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+    )
+    _abort_after(setup, "DELETE", "collection_views")
+    setup.commit()
+    setup.close()
+
+    handler = _make_handler(single_db_path)
+
+    with patch("mtg_collector.cli.crack_pack_server._shared_db_path", None):
+        with pytest.raises(sqlite3.IntegrityError):
+            handler._api_view_delete(1)
+        assert handler._responses == []
+
+        _assert_writes_still_work(single_db_path, "after_view_delete_error")
