@@ -1,8 +1,13 @@
 """Database schema and migrations."""
 
+import re
 import sqlite3
 
 SCHEMA_VERSION = 44
+
+
+class SchemaIntegrityError(Exception):
+    """Raised when the recorded schema version does not match the objects on disk."""
 
 # Tables whose data can be served from an ATTACHed shared DB via temp views.
 SHARED_TABLES = [
@@ -612,6 +617,51 @@ LEFT JOIN batches bat ON c.batch_id = bat.id;
 """
 
 
+_CREATE_RE = re.compile(
+    r"CREATE\s+(?:VIRTUAL\s+)?(?:TABLE|VIEW|INDEX)\s+"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?\[?([A-Za-z_][A-Za-z0-9_]*)\]?",
+    re.IGNORECASE,
+)
+
+# Every object a complete schema must contain, derived from SCHEMA_SQL itself so
+# it can never drift from the DDL.  A fresh install runs SCHEMA_SQL and nothing
+# else, so SCHEMA_SQL *is* the definition of "intact".
+#
+# Names only, no types: `latest_prices` is a TABLE while `latest_sealed_prices`
+# is a VIEW, and which is which changes between releases.  Presence is the
+# invariant worth asserting; the type is not.
+SCHEMA_OBJECTS = frozenset(_CREATE_RE.findall(SCHEMA_SQL))
+
+
+def verify_schema(conn: sqlite3.Connection) -> list[str]:
+    """Return the names of schema objects that SCHEMA_SQL defines but the DB lacks.
+
+    Returns an empty list when the schema is intact.
+
+    Existence only — never row counts.  Under split-DB (MTGC_SHARED_DB) the
+    reference tables are emptied in `main` by `db split --prune` and served from
+    the ATTACHed `shared` schema, so "populated in main?" is false for a
+    perfectly healthy deployment.  `db split --prune` only DELETEs rows, so
+    `main` keeps every definition; searching `main` plus every ATTACHed schema
+    makes the check identical in monolithic and split deployments.
+
+    The `temp` schema is deliberately excluded.  attach_shared() creates a temp
+    view per shared table without validating its target, so a temp view named
+    `sealed_products` exists even when shared.sealed_products does not — trusting
+    `temp` would blind the check to exactly the tables the prod incident lost.
+    """
+    present: set[str] = set()
+    for row in conn.execute("PRAGMA database_list"):
+        schema = row[1]
+        if schema == "temp":
+            continue
+        present.update(
+            r[0] for r in conn.execute(f"SELECT name FROM [{schema}].sqlite_master")
+        )
+
+    return sorted(SCHEMA_OBJECTS - present)
+
+
 def refresh_latest_prices(conn: sqlite3.Connection) -> int:
     """Repopulate the latest_prices table from the prices table.
 
@@ -657,12 +707,30 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
 
     Returns:
         True if schema was created/updated, False if already up to date
+
+    Raises:
+        SchemaIntegrityError: if the recorded version is current but objects
+            SCHEMA_SQL defines are missing from the database.
     """
     from mtg_collector.utils import now_iso
 
     current = get_current_version(conn)
 
     if current >= SCHEMA_VERSION and not force:
+        # The version number is the *only* evidence this path has that the DDL
+        # ever ran.  If a version was recorded without its migration executing,
+        # the change is skipped permanently and surfaces much later as an
+        # unrelated "no such table" deep inside a command.  Check the objects.
+        missing = verify_schema(conn)
+        if missing:
+            raise SchemaIntegrityError(
+                f"Database reports schema version {current} but "
+                f"{len(missing)} object(s) defined by the schema are missing: "
+                f"{', '.join(missing)}. "
+                "The recorded version advanced without the DDL being applied. "
+                "Run 'mtg db init --force' to re-apply the schema "
+                "(CREATE ... IF NOT EXISTS; existing data is preserved)."
+            )
         return False
 
     if current == 0 or force:
