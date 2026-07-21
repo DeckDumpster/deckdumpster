@@ -95,6 +95,79 @@ def api(base_url):
     return APIClient(base_url)
 
 
+# DB paths inside the container (data volume mount point).
+_CONTAINER_DB = "/data/collection.sqlite"
+_CONTAINER_DB_BACKUP = "/data/collection.sqlite.integ.bak"
+_CONTAINER_SHARED_DB = "/data/shared.sqlite"
+_CONTAINER_SHARED_DB_BACKUP = "/data/shared.sqlite.integ.bak"
+
+# Snapshot before the suite, restore after. Mirrors tests/ui/conftest.py's
+# per-test isolation, but at SESSION scope: integration deliberately exercises
+# real mutations and tests may depend on each other's writes within the run, so
+# we don't restore between tests — only once at the end, to hand the container
+# back in fixture state. Without this, mutations here (notably test_fetch_prices,
+# which live-fetches TCGCSV prices into the shared sealed_prices table) survive
+# into a subsequent `pytest tests/ui/` run against the same container, whose
+# session snapshot then captures the polluted prices — silently breaking sealed
+# UI scenarios that assert on fixture prices.
+#
+# Both collection.sqlite and shared.sqlite are covered (shared holds sealed_prices
+# and latest_* views). Uses sqlite3.backup() in both directions rather than cp:
+# under WAL the live .sqlite is one of three files, and a cp leaves the -wal
+# sidecar so the server keeps reading stale frames. backup() copies pages through
+# SQLite's locking protocol.
+_INTEG_BACKUP_CMD = (
+    f'python3 -c "import sqlite3, os; '
+    f"s=sqlite3.connect('{_CONTAINER_DB}'); "
+    f"d=sqlite3.connect('{_CONTAINER_DB_BACKUP}'); "
+    f"s.backup(d); s.close(); d.close(); "
+    f"p='{_CONTAINER_SHARED_DB}'; "
+    f"b='{_CONTAINER_SHARED_DB_BACKUP}'; "
+    f"exec('if os.path.exists(p):\\n s=sqlite3.connect(p)\\n d=sqlite3.connect(b)\\n s.backup(d)\\n s.close()\\n d.close()')"
+    '"'
+)
+_INTEG_RESTORE_CMD = (
+    f'python3 -c "import sqlite3, os; '
+    f"s=sqlite3.connect('{_CONTAINER_DB_BACKUP}'); "
+    f"d=sqlite3.connect('{_CONTAINER_DB}'); "
+    f"s.backup(d); s.close(); d.close(); "
+    f"p='{_CONTAINER_SHARED_DB_BACKUP}'; "
+    f"q='{_CONTAINER_SHARED_DB}'; "
+    f"exec('if os.path.exists(p):\\n s=sqlite3.connect(p)\\n d=sqlite3.connect(q)\\n s.backup(d)\\n s.close()\\n d.close()')"
+    '"'
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _restore_container_after_suite(instance_name):
+    """Snapshot the container's DBs before the suite and restore them after.
+
+    No-op when there is no container (the skip path), so local runs against a
+    remote/base URL are unaffected.
+    """
+    container = _discover_container(instance_name)
+    if container is None:
+        yield
+        return
+    snapshot = subprocess.run(
+        ["podman", "exec", container, "bash", "-c", _INTEG_BACKUP_CMD],
+        capture_output=True, text=True,
+    )
+    # If the snapshot itself failed, don't pretend we can restore — fail loudly
+    # rather than silently leaving the container polluted for later suites.
+    snapshot.check_returncode()
+    yield
+    subprocess.run(
+        ["podman", "exec", container, "bash", "-c", _INTEG_RESTORE_CMD],
+        check=True, capture_output=True, text=True,
+    )
+    subprocess.run(
+        ["podman", "exec", container, "rm", "-f",
+         _CONTAINER_DB_BACKUP, _CONTAINER_SHARED_DB_BACKUP],
+        capture_output=True,
+    )
+
+
 class APIClient:
     """Minimal HTTP client for integration tests (no external deps)."""
 
