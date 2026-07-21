@@ -1,0 +1,13 @@
+# Scenario: Market column is per-unit and the Total column carries qty x price
+#
+# Related:
+#   issues: [efj-mtgc-zun]
+#   pull_requests: []
+
+description: >
+  When I look at my sealed collection in table view, the Market column shows
+  what one unit is worth and the Total column immediately to its right shows
+  what all my units of that product are worth together. My six Foundations
+  Collector Booster Packs show a $3.50 market price and a $21.00 total, so I
+  can compare the market price against the Min Cost column beside it without
+  doing arithmetic in my head.

@@ -1,0 +1,23 @@
+start_page: /sealed
+involves:
+  - a pre-existing 'sealedCols' localStorage layout containing 'market' but not 'total'
+  - the Total column appearing after a reload
+  - the migrated layout persisting back to localStorage
+fixture_data:
+  legacy_layout: '["qty","image","name","set","min_cost","market"]'
+  migrated_layout: '["qty","image","name","set","min_cost","market","total"]'
+  evidence_row_total: "$21.00"
+notes: >
+  Read-only against sealed data — this scenario only writes localStorage.
+
+  The migration lives at module scope in sealed.html and runs once per page
+  load, so the sequence must be: load /sealed (establishes the origin), seed
+  the legacy layout via harness.page.evaluate, then navigate to /sealed again
+  so a fresh load re-runs the migration. There is precedent for the
+  page.evaluate escape hatch in
+  tests/ui/implementations/deck_detail_list_view_no_overflow.py.
+
+  Assert both the visible outcome (a Total header and the $21.00 value on the
+  qty-6 Foundations row, neither of which the legacy layout would have shown)
+  and the stored outcome (localStorage now ends with 'total', spliced in
+  directly after 'market').

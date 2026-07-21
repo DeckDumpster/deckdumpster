@@ -1,0 +1,12 @@
+# Scenario: A saved column layout from before the Market/Total split gains Total
+#
+# Related:
+#   issues: [efj-mtgc-zun]
+#   pull_requests: []
+
+description: >
+  I customised my sealed table columns before the Market column was split into
+  a per-unit price and a separate Total. When I next open the page, the Total
+  column has been added to my saved layout, sitting right after Market. I keep
+  seeing the all-units figure I was used to, instead of silently losing it
+  because Market changed meaning underneath me.

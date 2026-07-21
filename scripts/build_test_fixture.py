@@ -52,6 +52,49 @@ SEALED_PRODUCTS = [
     ("fin", "play_booster_box", "Final Fantasy Play Booster Box"),
 ]
 
+# Sealed price seeding.
+#
+# The /sealed page shows a per-unit market price alongside a quantity x price
+# total, so the fixture needs prices on the products demo data actually holds —
+# including one with quantity > 1 — for that arithmetic to be exercisable.
+#
+# CRITICAL: the latest_sealed_prices VIEW filters on a GLOBAL max observed_at
+# (WHERE observed_at = (SELECT MAX(observed_at) FROM sealed_prices)), not a
+# per-product max — see efj-mtgc-gyp. Every row seeded here MUST therefore share
+# one observed_at, or products dated earlier drop out of the view entirely.
+SEALED_OBSERVED_AT = "2026-04-01"
+
+# (set_code, category_keyword, market_price). The pairs mirror
+# demo_data.DEMO_SEALED_PRODUCTS and are resolved with the same
+# "set_code = ? AND category LIKE ? LIMIT 1" query, so the priced products are
+# exactly the ones the demo sealed_collection holds.
+#
+# ("dsk", "bundle") is deliberately absent: leaving one demo-held product
+# unpriced keeps the null-price render path ('' rather than $0.00) covered on
+# the page itself.
+DEMO_SEALED_PRICES = [
+    ("dsk", "booster_box", 119.99),
+    ("blb", "booster_box", 99.50),
+    ("fdn", "booster_pack", 3.50),   # demo qty 6 -> $21.00 total
+    ("mh3", "booster_pack", 11.25),  # demo qty 3 -> $33.75 total
+    ("otj", "bundle", 38.75),
+    ("blb", "booster_pack", 4.99),   # demo qty 4 -> $19.96 total
+    ("fdn", "booster_box", 104.00),
+]
+
+# Representative market price per category, used to give the wider catalogue a
+# spread of price points. Categories absent here stay unpriced.
+SEALED_CATEGORY_PRICES = {
+    "booster_pack": 5.25,
+    "booster_box": 109.00,
+    "booster_case": 640.00,
+    "bundle": 42.00,
+    "bundle_case": 245.00,
+    "box_set": 74.50,
+    "deck": 16.00,
+    "limited_aid_tool": 28.00,
+}
+
 OUTPUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "test-data.sqlite"
 
 
@@ -148,6 +191,67 @@ def main():
         ("blb", "124", "tcgplayer", "normal", 10.46, "2026-04-01"),
     )
     print(f"  Seeded {len(price_rows)} price rows for blb/124")
+
+    # Seed sealed prices. All rows share SEALED_OBSERVED_AT — see the note there.
+    print("  Seeding sealed price data...")
+    priced_tcg_ids: set[str] = set()
+
+    def add_sealed_price(tcg_id: str, market: float):
+        conn.execute(
+            """INSERT OR IGNORE INTO sealed_prices
+               (tcgplayer_product_id, low_price, mid_price, high_price,
+                market_price, direct_low_price, observed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                tcg_id,
+                round(market * 0.88, 2),
+                round(market * 0.97, 2),
+                round(market * 1.35, 2),
+                market,
+                round(market * 0.92, 2),
+                SEALED_OBSERVED_AT,
+            ),
+        )
+        priced_tcg_ids.add(tcg_id)
+
+    # 1. Products the demo sealed_collection holds, resolved exactly as
+    #    demo_data.load_demo_data() resolves them.
+    demo_priced = 0
+    for set_code, category_keyword, market in DEMO_SEALED_PRICES:
+        row = conn.execute(
+            "SELECT tcgplayer_product_id FROM sealed_products "
+            "WHERE set_code = ? AND category LIKE ? LIMIT 1",
+            (set_code, category_keyword),
+        ).fetchone()
+        if row is None or row["tcgplayer_product_id"] is None:
+            print(f"    WARNING: no priceable product for {set_code}/{category_keyword}")
+            continue
+        add_sealed_price(row["tcgplayer_product_id"], market)
+        demo_priced += 1
+    print(f"    Priced {demo_priced} demo-held products")
+
+    # 2. A spread across the wider catalogue. Every third product keeps a slice
+    #    of the catalogue deliberately unpriced alongside the 40 that have no
+    #    tcgplayer_product_id at all.
+    catalogue = conn.execute(
+        "SELECT tcgplayer_product_id, category FROM sealed_products "
+        "WHERE tcgplayer_product_id IS NOT NULL ORDER BY tcgplayer_product_id"
+    ).fetchall()
+    spread_priced = 0
+    for i, row in enumerate(catalogue):
+        tcg_id = row["tcgplayer_product_id"]
+        base = SEALED_CATEGORY_PRICES.get(row["category"])
+        if base is None or tcg_id in priced_tcg_ids or i % 3 != 0:
+            continue
+        # Fan the price out around the category base so the data spans a range
+        # rather than repeating one value per category.
+        add_sealed_price(tcg_id, round(base * (0.7 + 0.05 * (i % 13)), 2))
+        spread_priced += 1
+    print(f"    Priced {spread_priced} further catalogue products")
+
+    total_priced = len(priced_tcg_ids)
+    unpriced = conn.execute("SELECT COUNT(*) FROM sealed_products").fetchone()[0] - total_priced
+    print(f"    {total_priced} sealed products priced, {unpriced} left unpriced")
 
     conn.commit()
 

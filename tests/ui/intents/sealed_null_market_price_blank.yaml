@@ -1,0 +1,12 @@
+# Scenario: A product with no market price shows blank cells, not $0.00
+#
+# Related:
+#   issues: [efj-mtgc-zun, efj-mtgc-vk5]
+#   pull_requests: []
+
+description: >
+  My Duskmourn: House of Horror Bundle has no market price on record. Its
+  Market and Total cells are simply empty, and its grid tile shows no market
+  line at all. It never claims the product is worth $0.00, because zero is a
+  real price and would be misleading — I can still see the $40.00 I paid for
+  it.

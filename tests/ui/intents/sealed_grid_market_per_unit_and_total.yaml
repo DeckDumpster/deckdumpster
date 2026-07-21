@@ -1,0 +1,12 @@
+# Scenario: Grid tiles show a per-unit market price, plus a total only when qty > 1
+#
+# Related:
+#   issues: [efj-mtgc-zun]
+#   pull_requests: []
+
+description: >
+  When I switch my sealed collection to grid view, each tile tells me what one
+  unit is worth. My six Foundations Collector Booster Packs show "$3.50/ea mkt"
+  and, because I hold more than one, a second line reading "$21.00 total". A
+  product I only own one of shows just the per-unit line, with no redundant
+  total repeating the same number back at me.

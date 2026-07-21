@@ -426,6 +426,7 @@ button.secondary.active { background: #0f3460; border-color: #e94560; }
   vertical-align: middle;
 }
 .market-price { color: #7ec8e3; font-size: 0.75rem; font-weight: 600; }
+.market-total { color: #5a8fa3; font-size: 0.7rem; font-weight: 600; }
 
 /* Column config drawer */
 .col-drawer-backdrop {
@@ -1179,7 +1180,8 @@ const ALL_COLUMNS = [
   { key: 'min_cost', label: 'Min Cost',  sort: 'min_cost',       defaultOn: true },
   { key: 'max_cost', label: 'Max Cost',  sort: 'max_cost',       defaultOn: false },
   { key: 'avg_cost', label: 'Avg Cost',  sort: 'avg_cost',       defaultOn: false },
-  { key: 'market',   label: 'Market',    sort: 'market_total',   defaultOn: true },
+  { key: 'market',   label: 'Market',    sort: 'market_price',   defaultOn: true },
+  { key: 'total',    label: 'Total',     sort: 'market_total',   defaultOn: true },
   { key: 'added',    label: 'Added',     sort: 'added_at',       defaultOn: false },
   { key: 'status',   label: 'Status',    sort: 'primary_status', defaultOn: false },
 ];
@@ -1188,6 +1190,12 @@ const DEFAULT_COLS = ALL_COLUMNS.filter(c => c.defaultOn).map(c => c.key);
 let enabledCols = JSON.parse(localStorage.getItem('sealedCols') || 'null') || DEFAULT_COLS;
 if (enabledCols.includes('cost')) {
   enabledCols = enabledCols.map(k => k === 'cost' ? 'min_cost' : k);
+  localStorage.setItem('sealedCols', JSON.stringify(enabledCols));
+}
+// 'Market' used to render the all-units total; it is now per-unit and 'Total' carries
+// that figure. Give existing layouts the new column so they don't silently lose it.
+if (enabledCols.includes('market') && !enabledCols.includes('total')) {
+  enabledCols.splice(enabledCols.indexOf('market') + 1, 0, 'total');
   localStorage.setItem('sealedCols', JSON.stringify(enabledCols));
 }
 const COL_SORT_MAP = Object.fromEntries(ALL_COLUMNS.map(c => [c.key, c.sort]));
@@ -1888,7 +1896,10 @@ function renderGrid() {
     const qtyBadge = product.total_quantity > 1 ? `<span class="qty-badge">${product.total_quantity}x</span>` : '';
     const statusBadge = `<span class="status-badge ${product.primary_status}">${product.primary_status}</span>`;
     const costText = product.min_cost != null ? formatPrice(product.min_cost) : '';
-    const marketText = product.market_total != null ? formatPrice(product.market_total) : '';
+    const marketText = product.market_price != null ? formatPrice(product.market_price) : '';
+    // Total repeats the per-unit figure when qty is 1, so only surface it when it adds something.
+    const marketTotalText = (product.market_total != null && product.total_quantity > 1)
+      ? formatPrice(product.market_total) : '';
     const selectable = selectionMode ? ' selectable' : '';
     const selected = selectionMode && isProductSelected(product) ? ' selected' : '';
     const checkboxHtml = selectionMode ? `<input type="checkbox" class="select-checkbox" ${isProductSelected(product) ? 'checked' : ''}>` : '';
@@ -1904,7 +1915,8 @@ function renderGrid() {
       <div class="card-info">
         <div class="card-name">${esc(product.set_name || product.set_code || '')}</div>
         <div class="card-set">${esc(formatCategory(product))}</div>
-        ${marketText ? `<div class="market-price">${marketText} mkt</div>` : ''}
+        ${marketText ? `<div class="market-price">${marketText}/ea mkt</div>` : ''}
+        ${marketTotalText ? `<div class="market-total">${marketTotalText} total</div>` : ''}
         ${costText ? `<div class="card-price">${costText}/ea cost</div>` : ''}
       </div>
     </div>`;
@@ -1937,7 +1949,8 @@ function renderTable() {
     const minCost = product.min_cost != null ? formatPrice(product.min_cost) : '';
     const maxCost = product.max_cost != null ? formatPrice(product.max_cost) : '';
     const avgCost = product.avg_cost != null ? formatPrice(product.avg_cost) : '';
-    const market = product.market_total != null ? formatPrice(product.market_total) : '';
+    const market = product.market_price != null ? formatPrice(product.market_price) : '';
+    const marketTotal = product.market_total != null ? formatPrice(product.market_total) : '';
     const added = product.added_at ? product.added_at.slice(0, 10) : '';
 
     const rowSelected = selectionMode && isProductSelected(product) ? ' selected' : '';
@@ -1958,6 +1971,7 @@ function renderTable() {
         case 'max_cost': html += `<td>${maxCost}</td>`; break;
         case 'avg_cost': html += `<td>${avgCost}</td>`; break;
         case 'market':   html += `<td>${market}</td>`; break;
+        case 'total':    html += `<td>${marketTotal}</td>`; break;
         case 'added':    html += `<td>${added}</td>`; break;
         case 'status':   html += `<td>${renderStatusBadges(product.status_counts)}</td>`; break;
       }

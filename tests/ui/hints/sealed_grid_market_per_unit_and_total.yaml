@@ -1,0 +1,25 @@
+start_page: /sealed
+involves:
+  - grid view toggle (#view-grid-btn)
+  - card tiles (.sheet-card) with a .market-price line reading "<price>/ea mkt"
+  - a .market-total line reading "<price> total", present only when quantity > 1
+  - quantity badge (.qty-badge) showing "6x"
+fixture_data:
+  multi_qty_product: "Foundations Collector Booster Pack"
+  multi_qty_quantity: "6"
+  multi_qty_per_unit: "$3.50/ea mkt"
+  multi_qty_total: "$21.00 total"
+  single_qty_product: "Bloomburrow Collector Booster Box"
+  single_qty_per_unit: "$99.50/ea mkt"
+notes: >
+  Read-only against fixture data.
+
+  Click #view-grid-btn to switch to grid view, then wait for .sheet-card.
+  Tiles carry .market-price (per unit, always present when priced) and
+  .market-total (only when total_quantity > 1).
+
+  The gating is the interesting assertion: with 7 visible entries and only two
+  of them at quantity > 1 (Foundations packs qty 6, Modern Horizons 3 packs
+  qty 3), exactly 2 tiles should have a .market-total line. Use
+  assert_element_count(".market-total", 2) for that. The default filter hides
+  the 'opened' Bloomburrow packs (qty 4), so they do not count.
