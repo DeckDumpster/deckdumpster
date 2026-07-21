@@ -2617,11 +2617,140 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"available": False, "last_modified": None})
 
+    # Aggregates the whole growth series inside SQLite so only one row per day
+    # crosses the driver boundary (previously ~1.1M price rows did).
+    #
+    # Shape, in stages (each a TEMP table so it is computed exactly once):
+    #   pop_t     - the filtered population, one row per collection entry.
+    #   keys_t    - distinct (set_code, collector_number, price_type); rowid = kid.
+    #   grp_iv_t  - per key, the cumulative quantity held and the day range that
+    #               quantity is valid for (SUM/LEAD windows over acquisition days).
+    #   price_iv_t- per (key, source), each price and the day range it is the
+    #               most recent observation for. LEAD(observed_at) over the price
+    #               series IS the forward-fill, expressed declaratively.
+    #   seg_t     - grp_iv_t x price_iv_t intersected on key and overlapping day
+    #               range: "this many copies at this price for these days".
+    # The final statement turns segments into a per-day difference array and
+    # running-sums it over the day spine, which is O(segments) rather than
+    # O(groups x days).
+    #
+    # Days are integer offsets from the first acquisition, not date strings:
+    # the window sort is the dominant cost and sorting one INTEGER beats sorting
+    # five TEXT columns by a wide margin. Dates are rebuilt for the 163-ish
+    # output rows only.
+    #
+    # Money is summed as INTEGER cents. Every `prices.price` is exactly two
+    # decimal places, so `ROUND(qty * price * 100)` is exact and the running sum
+    # carries no float drift across ~1M deltas.
+
+    _GROWTH_POP_SQL = """
+        CREATE TEMP TABLE pop_t AS
+        SELECT p.set_code AS set_code,
+               p.collector_number AS cn,
+               CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END AS price_type,
+               substr(c.acquired_at, 1, 10) AS acq_date
+        FROM collection c
+        JOIN printings p ON c.printing_id = p.printing_id
+        JOIN cards card ON p.oracle_id = card.oracle_id
+        JOIN sets s ON p.set_code = s.set_code
+        LEFT JOIN orders o ON c.order_id = o.id
+        LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+        LEFT JOIN decks d ON dc.deck_id = d.id
+        LEFT JOIN binders b ON c.binder_id = b.id
+        {extra_joins_sql}
+        WHERE ({where_sql}) AND c.acquired_at IS NOT NULL
+        GROUP BY c.id
+    """
+
+    _GROWTH_GRP_SQL = """
+        CREATE TEMP TABLE grp_iv_t AS
+        WITH grp AS (
+            SELECT k.rowid AS kid,
+                   MIN(CAST(julianday(pop_t.acq_date) - julianday(?) AS INTEGER), ?) AS day,
+                   COUNT(*) AS qty
+            FROM pop_t
+            JOIN keys_t k ON k.set_code = pop_t.set_code
+                         AND k.cn = pop_t.cn
+                         AND k.price_type = pop_t.price_type
+            GROUP BY kid, day
+        )
+        SELECT kid,
+               day AS from_d,
+               LEAD(day) OVER w AS to_d,
+               qty,
+               SUM(qty) OVER w AS cum
+        FROM grp
+        WINDOW w AS (PARTITION BY kid ORDER BY day)
+    """
+
+    # `source` is folded to an integer bit (1 = tcgplayer, 0 = cardkingdom) so the
+    # window partition is a single INTEGER expression.
+    _GROWTH_PRICE_SQL = """
+        CREATE TEMP TABLE price_iv_t AS
+        SELECT kid, src, from_d,
+               LEAD(from_d) OVER (PARTITION BY kid * 2 + src ORDER BY from_d) AS to_d,
+               price
+        FROM (
+            SELECT k.rowid AS kid,
+                   (pr.source = 'tcgplayer') AS src,
+                   CAST(julianday(pr.observed_at) - julianday(?) AS INTEGER) AS from_d,
+                   pr.price AS price
+            FROM keys_t k
+            JOIN prices pr ON pr.set_code = k.set_code
+                          AND pr.collector_number = k.cn
+                          AND pr.price_type = k.price_type
+            WHERE pr.source IN ('tcgplayer', 'cardkingdom')
+              AND pr.observed_at >= ?
+        )
+    """
+
+    _GROWTH_SEG_SQL = """
+        CREATE TEMP TABLE seg_t AS
+        SELECT pv.src AS src,
+               MAX(gi.from_d, pv.from_d) AS s,
+               CASE WHEN gi.to_d IS NULL THEN pv.to_d
+                    WHEN pv.to_d IS NULL THEN gi.to_d
+                    ELSE MIN(gi.to_d, pv.to_d) END AS e,
+               CAST(ROUND(gi.cum * pv.price * 100) AS INTEGER) AS cents
+        FROM price_iv_t pv
+        JOIN grp_iv_t gi ON gi.kid = pv.kid
+                        AND (gi.to_d IS NULL OR pv.from_d < gi.to_d)
+                        AND (pv.to_d IS NULL OR gi.from_d < pv.to_d)
+    """
+
+    _GROWTH_SERIES_SQL = """
+        WITH RECURSIVE days(dn) AS (
+            SELECT 0 UNION ALL SELECT dn + 1 FROM days WHERE dn < ?
+        ),
+        delta AS (
+            SELECT s AS dn, src, cents FROM seg_t
+            UNION ALL
+            SELECT e AS dn, src, -cents FROM seg_t WHERE e IS NOT NULL
+        ),
+        dd AS (
+            SELECT dn,
+                   SUM(CASE WHEN src = 1 THEN cents ELSE 0 END) AS dt,
+                   SUM(CASE WHEN src = 0 THEN cents ELSE 0 END) AS dc
+            FROM delta GROUP BY dn
+        ),
+        cnt AS (
+            SELECT from_d AS dn, SUM(qty) AS q FROM grp_iv_t GROUP BY from_d
+        )
+        SELECT date(?, '+' || dy.dn || ' day') AS d,
+               SUM(COALESCE(cnt.q, 0)) OVER (ORDER BY dy.dn) AS n,
+               SUM(COALESCE(dd.dt, 0)) OVER (ORDER BY dy.dn) AS tcg_cents,
+               SUM(COALESCE(dd.dc, 0)) OVER (ORDER BY dy.dn) AS ck_cents
+        FROM days dy
+        LEFT JOIN dd ON dd.dn = dy.dn
+        LEFT JOIN cnt ON cnt.dn = dy.dn
+        ORDER BY dy.dn
+    """
+
     def _api_collection_growth(self, params: dict):
         """Return daily (count, tcg_value, ck_value) series for the filtered collection.
 
-        Mirrors the search-filter parsing in `/api/collection`, then walks every
-        day from the earliest acquisition through today, summing:
+        Mirrors the search-filter parsing in `/api/collection`, then aggregates
+        every day from the earliest acquisition through today inside SQLite:
           - cards acquired by that date (count)
           - historical price on that date for each held card (value)
 
@@ -2632,8 +2761,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                    "tcg_values": [...], "ck_values": [...]}
         """
         import datetime as _dt
-        import itertools as _it
-        from collections import defaultdict
 
         from mtg_collector.search import SearchError, compile_query, parse_query
 
@@ -2653,9 +2780,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e), "position": e.position}, 400)
                 return
 
+        empty = {"dates": [], "counts": [], "tcg_values": [], "ck_values": []}
+
         # is:unowned makes no sense for a growth chart — ignore.
         if compiled and compiled.include_unowned:
-            self._send_json({"dates": [], "counts": [], "tcg_values": [], "ck_values": []})
+            self._send_json(empty)
             return
 
         # Match /api/collection's status default
@@ -2681,153 +2810,46 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         extra_joins_sql = "\n            ".join(extra_joins)
 
         conn = self._get_conn()
-        query = f"""
-            SELECT p.set_code, p.collector_number, c.finish,
-                   substr(c.acquired_at, 1, 10) AS acq_date
-            FROM collection c
-            JOIN printings p ON c.printing_id = p.printing_id
-            JOIN cards card ON p.oracle_id = card.oracle_id
-            JOIN sets s ON p.set_code = s.set_code
-            LEFT JOIN orders o ON c.order_id = o.id
-            LEFT JOIN deck_cards dc ON dc.collection_id = c.id
-            LEFT JOIN decks d ON dc.deck_id = d.id
-            LEFT JOIN binders b ON c.binder_id = b.id
-            {extra_joins_sql}
-            WHERE ({where_sql}) AND c.acquired_at IS NOT NULL
-            GROUP BY c.id
-        """
-        pop_rows = conn.execute(query, sql_params).fetchall()
-
-        if not pop_rows:
-            conn.close()
-            self._send_json({"dates": [], "counts": [], "tcg_values": [], "ck_values": []})
-            return
-
-        # Build the date axis: earliest acquisition → today (UTC).
-        # acquired_at is ISO 8601 UTC, so the first 10 chars are a UTC date.
-        min_acq = min(r["acq_date"] for r in pop_rows)
         try:
-            start = _dt.date.fromisoformat(min_acq)
-        except (TypeError, ValueError):
+            conn.execute(
+                self._GROWTH_POP_SQL.format(
+                    extra_joins_sql=extra_joins_sql, where_sql=where_sql
+                ),
+                sql_params,
+            )
+
+            # Date axis: earliest acquisition -> today (UTC). `acquired_at` is
+            # ISO 8601 UTC, so the first 10 chars are a UTC date.
+            today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+            start_d, end_d = conn.execute(
+                "SELECT MIN(acq_date),"
+                " CASE WHEN MIN(acq_date) > ? THEN MIN(acq_date) ELSE ? END"
+                " FROM pop_t",
+                (today, today),
+            ).fetchone()
+            if start_d is None:
+                self._send_json(empty)
+                return
+            end_dn = (
+                _dt.date.fromisoformat(end_d) - _dt.date.fromisoformat(start_d)
+            ).days
+
+            conn.execute(
+                "CREATE TEMP TABLE keys_t AS"
+                " SELECT DISTINCT set_code, cn, price_type FROM pop_t"
+            )
+            conn.execute(self._GROWTH_GRP_SQL, (start_d, end_dn))
+            conn.execute(self._GROWTH_PRICE_SQL, (start_d, start_d))
+            conn.execute(self._GROWTH_SEG_SQL)
+            rows = conn.execute(self._GROWTH_SERIES_SQL, (end_dn, start_d)).fetchall()
+        finally:
             conn.close()
-            self._send_json({"dates": [], "counts": [], "tcg_values": [], "ck_values": []})
-            return
-        end = _dt.datetime.utcnow().date()
-        if end < start:
-            end = start
-        num_days = (end - start).days + 1
-        date_list = [(start + _dt.timedelta(days=i)).isoformat() for i in range(num_days)]
-        date_idx = {d: i for i, d in enumerate(date_list)}
-
-        # Group population by (set_code, collector_number, finish). Each row in
-        # `collection` = 1 physical card.
-        groups: dict[tuple, list[int]] = defaultdict(list)
-        for r in pop_rows:
-            acq = r["acq_date"]
-            i = date_idx.get(acq)
-            if i is None:
-                # Acquired_at before start? Shouldn't happen — start = min(acq).
-                # Acquired_at after today (clock skew)? Clamp to last day.
-                i = num_days - 1
-            groups[(r["set_code"], r["collector_number"], r["finish"])].append(i)
-
-        # Fetch price history for the population, scoped to dates >= start.
-        #
-        # Only the series this chart actually consumes are read: the two retail
-        # sources, and per card the single price_type its finish maps to. That
-        # skips the `buylist_*` series entirely and roughly halves the rows
-        # pulled out of SQLite (prod: 2.14M -> 1.13M). Pinning `price_type` to a
-        # constant also lets SQLite seek the full
-        # (set_code, collector_number, source, price_type, observed_at) unique
-        # index instead of the shorter idx_prices_card.
-        #
-        # There is deliberately no `ORDER BY observed_at` — it forced a temp
-        # B-tree sort over the whole result. `_forward_fill` needs ascending
-        # observations, so the (small) per-key lists are sorted below instead.
-        pairs_by_type: dict[str, set] = defaultdict(set)
-        for set_code, cn, finish in groups:
-            pairs_by_type["foil" if finish in ("foil", "etched") else "normal"].add((set_code, cn))
-
-        # SQLite has a default parameter limit (often 32766); chunk to be safe.
-        prices_by_key: dict[tuple, list[tuple[str, float]]] = defaultdict(list)
-        CHUNK = 500
-        for price_type, pairs in pairs_by_type.items():
-            pair_list = sorted(pairs)
-            for i in range(0, len(pair_list), CHUNK):
-                chunk = pair_list[i:i + CHUNK]
-                placeholders = ",".join(["(?, ?)"] * len(chunk))
-                chunk_params = [v for pair in chunk for v in pair]
-                chunk_params.append(price_type)
-                chunk_params.append(min_acq)
-                price_rows = conn.execute(
-                    f"""
-                    SELECT set_code, collector_number, source, observed_at, price
-                    FROM prices
-                    WHERE (set_code, collector_number) IN ({placeholders})
-                      AND source IN ('tcgplayer', 'cardkingdom')
-                      AND price_type = ?
-                      AND observed_at >= ?
-                    """,
-                    chunk_params,
-                ).fetchall()
-                for pr in price_rows:
-                    k = (pr["set_code"], pr["collector_number"], pr["source"], price_type)
-                    prices_by_key[k].append((pr["observed_at"], pr["price"]))
-        conn.close()
-
-        for points in prices_by_key.values():
-            points.sort()
-
-        # Also include any pre-window prices so the first days forward-fill
-        # correctly. Fetch the latest price <= start per (set,cn,source,type).
-        # (Skipped: prices before start are rare in practice; if a card has no
-        # price >= start, the chart shows 0 for it until a price appears, which
-        # is acceptable for a "growth" view.)
-
-        def _forward_fill(points: list[tuple[str, float]]) -> list[float]:
-            out = [0.0] * num_days
-            j = 0
-            current = 0.0
-            for i, d in enumerate(date_list):
-                while j < len(points) and points[j][0] <= d:
-                    current = points[j][1]
-                    j += 1
-                out[i] = current
-            return out
-
-        # Cumulative count series.
-        count_series = [0] * num_days
-        for indices in groups.values():
-            for ai in indices:
-                count_series[ai] += 1
-        count_series = list(_it.accumulate(count_series))
-
-        # Value series — per group, forward-fill prices and multiply by
-        # cumulative count within the group.
-        tcg_values = [0.0] * num_days
-        ck_values = [0.0] * num_days
-        for (set_code, cn, finish), indices in groups.items():
-            price_type = "foil" if finish in ("foil", "etched") else "normal"
-            tcg_prices = _forward_fill(prices_by_key.get((set_code, cn, "tcgplayer", price_type), []))
-            ck_prices = _forward_fill(prices_by_key.get((set_code, cn, "cardkingdom", price_type), []))
-            grp_cum = [0] * num_days
-            for ai in indices:
-                grp_cum[ai] += 1
-            grp_cum = list(_it.accumulate(grp_cum))
-            for i in range(num_days):
-                if grp_cum[i]:
-                    tcg_values[i] += grp_cum[i] * tcg_prices[i]
-                    ck_values[i] += grp_cum[i] * ck_prices[i]
-
-        # Round value series to cents to keep payload small.
-        tcg_values = [round(v, 2) for v in tcg_values]
-        ck_values = [round(v, 2) for v in ck_values]
 
         self._send_json({
-            "dates": date_list,
-            "counts": count_series,
-            "tcg_values": tcg_values,
-            "ck_values": ck_values,
+            "dates": [r["d"] for r in rows],
+            "counts": [r["n"] for r in rows],
+            "tcg_values": [r["tcg_cents"] / 100.0 for r in rows],
+            "ck_values": [r["ck_cents"] / 100.0 for r in rows],
         })
 
     def _api_price_history(self, set_code: str, collector_number: str):
