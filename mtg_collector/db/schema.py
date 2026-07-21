@@ -3,7 +3,7 @@
 import re
 import sqlite3
 
-SCHEMA_VERSION = 44
+SCHEMA_VERSION = 45
 
 
 class SchemaIntegrityError(Exception):
@@ -559,12 +559,19 @@ FROM sealed_collection sc
 JOIN sealed_products sp ON sc.sealed_product_uuid = sp.uuid
 LEFT JOIN sets s ON sp.set_code = s.set_code;
 
--- Latest sealed prices view (same pattern as latest_prices)
+-- Latest sealed prices view: most recent row PER product (same per-key semantics
+-- as latest_prices). A global MAX(observed_at) would drop any product missing from
+-- the newest fetch even though it has usable price history.
+-- UNIQUE(tcgplayer_product_id, observed_at) makes ties impossible, so this yields
+-- exactly one row per product that has any price row.
 CREATE VIEW IF NOT EXISTS latest_sealed_prices AS
 SELECT tcgplayer_product_id, low_price, mid_price, high_price,
        market_price, direct_low_price, observed_at
-FROM sealed_prices
-WHERE observed_at = (SELECT MAX(observed_at) FROM sealed_prices);
+FROM sealed_prices p
+WHERE p.observed_at = (
+    SELECT MAX(p2.observed_at) FROM sealed_prices p2
+    WHERE p2.tcgplayer_product_id = p.tcgplayer_product_id
+);
 
 -- Denormalized collection view
 CREATE VIEW IF NOT EXISTS collection_view AS
@@ -861,6 +868,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v42_to_v43(conn)
         if current < 44:
             _migrate_v43_to_v44(conn)
+        if current < 45:
+            _migrate_v44_to_v45(conn)
 
     # Record schema version
     conn.execute(
@@ -2817,6 +2826,30 @@ def _migrate_v43_to_v44(conn: sqlite3.Connection):
         );
         CREATE INDEX IF NOT EXISTS idx_mtgjson_decks_type ON mtgjson_decks(type);
         CREATE INDEX IF NOT EXISTS idx_mtgjson_decks_set_type ON mtgjson_decks(set_code, type);
+    """)
+
+
+def _migrate_v44_to_v45(conn: sqlite3.Connection):
+    """Redefine latest_sealed_prices to take the latest row PER product.
+
+    The v18 definition filtered on a single global MAX(observed_at), so any product
+    absent from the most recent fetch vanished from the view even when it had a
+    perfectly good price from an earlier day (measured on prod: 2,927 of 3,095
+    products visible, ~5% silently dropped). This matches latest_prices, which is
+    genuinely per-key most-recent.
+
+    A view cannot be altered in place — it must be dropped and recreated.
+    """
+    conn.execute("DROP VIEW IF EXISTS latest_sealed_prices")
+    conn.execute("""
+        CREATE VIEW latest_sealed_prices AS
+        SELECT tcgplayer_product_id, low_price, mid_price, high_price,
+               market_price, direct_low_price, observed_at
+        FROM sealed_prices p
+        WHERE p.observed_at = (
+            SELECT MAX(p2.observed_at) FROM sealed_prices p2
+            WHERE p2.tcgplayer_product_id = p.tcgplayer_product_id
+        )
     """)
 
 
