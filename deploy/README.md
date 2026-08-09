@@ -170,6 +170,8 @@ journalctl --user -u mtgc-<name> | grep 'externally-provided certificate'
 
 `curl` without `-k` succeeding is the whole test. If it fails certificate verification, the browser will too.
 
+**Renewal is yours.** Obtaining and renewing a certificate is the operator's problem — the app only reads the files it is pointed at, once, at startup — and no tool or cadence is recommended here.
+
 ### Recipe 1 — `tailscale cert` (recommended)
 
 ```bash
@@ -189,19 +191,6 @@ It is also the recipe that survives being handed to someone else. Any deployer r
 
 If `tailscale cert` refuses to run without root, either keep the `sudo` and `chown` the two files to yourself afterwards (rootless Podman needs to read them as you), or grant yourself LocalAPI access once with `sudo tailscale set --operator=$USER` and drop the `sudo`.
 
-**Renewal is yours.** The certificate is a normal Let's Encrypt one — 90 days. Files written this way are not tracked by `tailscaled`; it does not know where you moved them, so nothing renews them on your behalf. `deploy/mtgc-cert-renew.{service,timer}` is a sample following the same pattern as the other `mtgc-*` units — weekly, `Persistent=true`, restarts the instance afterwards, because the certificate is read once at startup and a new file on disk changes nothing until then. It is **not** installed by `setup.sh`:
-
-```bash
-sed 's/{{INSTANCE}}/<name>/g' deploy/mtgc-cert-renew.service \
-  > ~/.config/systemd/user/mtgc-cert-renew-<name>.service
-sed 's/{{INSTANCE}}/<name>/g' deploy/mtgc-cert-renew.timer \
-  > ~/.config/systemd/user/mtgc-cert-renew-<name>.timer
-# Edit the hostname in the .service, then:
-systemctl --user daemon-reload
-systemctl --user enable --now mtgc-cert-renew-<name>.timer
-systemctl --user list-timers 'mtgc-cert-renew-*'
-```
-
 ### Recipe 2 — certbot DNS-01 on a domain you own (fallback)
 
 Use this only if the host is not on a tailnet. It works for a LAN host for the same reason Recipe 1 does: the DNS-01 challenge needs only DNS records, never an inbound connection, so nothing has to be reachable on port 80 from the internet.
@@ -218,7 +207,7 @@ The costs it carries and Recipe 1 does not:
 - **A public DNS record for an RFC1918 address.** Pointing `mtgc.example.com` at `192.168.1.93` publishes your internal addressing to anyone who resolves the name.
 - **A domain to own and pay for**, and a second person deploying their own instance needs either their own domain or a share of yours.
 
-Copy the issued `fullchain.pem` / `privkey.pem` into the mounted directory, readable by the user running Podman, and adapt the sample renewal unit's `ExecStart` to your `certbot renew` invocation and deploy hook.
+Copy the issued `fullchain.pem` / `privkey.pem` into the mounted directory, readable by the user running Podman.
 
 ### Rollback
 
@@ -229,7 +218,7 @@ sed -i '/^MTGC_TLS_CERT=/d;/^MTGC_TLS_KEY=/d' ~/.config/mtgc/<name>.env
 systemctl --user restart mtgc-<name>
 ```
 
-The instance regenerates and serves the self-signed certificate again — browsers warn, `curl -ks` works, nothing else changes. To also drop the mount, re-run `setup.sh` without `--tls-certs` and `systemctl --user daemon-reload`. If you installed the renewal timer, `systemctl --user disable --now mtgc-cert-renew-<name>.timer`.
+The instance regenerates and serves the self-signed certificate again — browsers warn, `curl -ks` works, nothing else changes. To also drop the mount, re-run `setup.sh` without `--tls-certs` and `systemctl --user daemon-reload`.
 
 ## Scripts
 
@@ -240,7 +229,6 @@ The instance regenerates and serves the self-signed certificate again — browse
 | `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
 | `deploy.sh <name>` | Rebuild image and restart one instance |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
-| `mtgc-cert-renew.{service,timer}` | **Sample**, not installed. Certificate renewal — see [Trusted certificates](#trusted-certificates) |
 
 ## CI
 
