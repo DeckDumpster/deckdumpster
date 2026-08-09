@@ -8450,6 +8450,90 @@ def register(subparsers):
     parser.set_defaults(func=run)
 
 
+def _resolve_external_tls_paths():
+    """Resolve an operator-supplied certificate pair from the environment.
+
+    Returns ``(cert_path, key_path)`` when both ``MTGC_TLS_CERT`` and
+    ``MTGC_TLS_KEY`` are set, or ``None`` when neither is (the zero-config
+    self-signed default). Raises when exactly one is set, or when either points
+    at something that is not a readable file — a deployer who believes they are
+    serving a trusted certificate must never be silently downgraded to the
+    self-signed one.
+    """
+    cert = os.environ.get("MTGC_TLS_CERT", "").strip()
+    key = os.environ.get("MTGC_TLS_KEY", "").strip()
+
+    if not cert and not key:
+        return None
+
+    if not cert or not key:
+        set_var, unset_var = ("MTGC_TLS_KEY", "MTGC_TLS_CERT") if not cert else ("MTGC_TLS_CERT", "MTGC_TLS_KEY")
+        raise ValueError(
+            f"{set_var} is set but {unset_var} is not. "
+            "Set both to serve an externally-provided certificate, or neither to auto-generate a self-signed one."
+        )
+
+    paths = {"MTGC_TLS_CERT": Path(cert), "MTGC_TLS_KEY": Path(key)}
+    for var, path in paths.items():
+        if not path.is_file():
+            raise ValueError(f"{var}={path} is not a readable file.")
+        with open(path, "rb"):
+            pass
+
+    return paths["MTGC_TLS_CERT"], paths["MTGC_TLS_KEY"]
+
+
+def _generate_self_signed(cert_file, key_file):
+    """Write a self-signed certificate/key pair to the given paths."""
+    import socket
+    import subprocess
+
+    print("Generating self-signed certificate...")
+    san = "DNS:localhost,IP:127.0.0.1"
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        san += f",IP:{local_ip}"
+    except Exception:
+        pass
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", str(key_file), "-out", str(cert_file),
+            "-days", "3650", "-nodes",
+            "-subj", "/CN=mtgc-local",
+            "-addext", f"subjectAltName={san}",
+        ],
+        check=True,
+    )
+
+
+def _build_tls_context(cert_dir):
+    """Build the server's SSL context.
+
+    Uses the externally-provided certificate when ``MTGC_TLS_CERT`` /
+    ``MTGC_TLS_KEY`` are set; otherwise falls back to the auto-generated
+    self-signed pair under ``cert_dir``.
+    """
+    import ssl
+
+    external = _resolve_external_tls_paths()
+    if external is not None:
+        cert_file, key_file = external
+        print(f"[startup] Using externally-provided certificate: {cert_file}", flush=True)
+    else:
+        cert_file = cert_dir / "server.pem"
+        key_file = cert_dir / "server-key.pem"
+        if not cert_file.exists() or not key_file.exists():
+            _generate_self_signed(cert_file, key_file)
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(str(cert_file), str(key_file))
+    return ctx
+
+
 def run(args):
     """Run the crack-pack-server command."""
     db_path = get_db_path(getattr(args, "db", None))
@@ -8485,38 +8569,8 @@ def run(args):
     server = ThreadingHTTPServer(("", args.port), handler)
 
     if args.https:
-        import socket
-        import ssl
-        import subprocess
-
         cert_dir = Path(os.environ.get("MTGC_HOME", Path.home() / ".mtgc"))
-        cert_file = cert_dir / "server.pem"
-        key_file = cert_dir / "server-key.pem"
-
-        if not cert_file.exists() or not key_file.exists():
-            print("Generating self-signed certificate...")
-            san = "DNS:localhost,IP:127.0.0.1"
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-                s.close()
-                san += f",IP:{local_ip}"
-            except Exception:
-                pass
-            subprocess.run(
-                [
-                    "openssl", "req", "-x509", "-newkey", "rsa:2048",
-                    "-keyout", str(key_file), "-out", str(cert_file),
-                    "-days", "3650", "-nodes",
-                    "-subj", "/CN=mtgc-local",
-                    "-addext", f"subjectAltName={san}",
-                ],
-                check=True,
-            )
-
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(str(cert_file), str(key_file))
+        ctx = _build_tls_context(cert_dir)
         server.socket = ctx.wrap_socket(server.socket, server_side=True)
         server.socket.settimeout(10)
         scheme = "https"
