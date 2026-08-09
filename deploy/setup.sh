@@ -9,7 +9,7 @@
 #   loginctl enable-linger $USER
 #
 # Usage:
-#   bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>]
+#   bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]
 #
 # Examples:
 #   bash deploy/setup.sh prod 8081        # explicit port
@@ -17,10 +17,16 @@
 #   bash deploy/setup.sh test --init      # build + initialize data volume with demo data
 #   bash deploy/setup.sh ui-test --test   # fast setup from pre-built fixture (~seconds)
 #   bash deploy/setup.sh prod 8081 --http-port 8083   # also publish plain HTTP on 127.0.0.1:8083
+#   bash deploy/setup.sh prod 8081 --tls-certs ~/.config/mtgc/certs   # mount host certs at /certs
 #
 # --http-port publishes the container's plaintext listener on the LOOPBACK
 # interface only (127.0.0.1). It is for a host-local origin such as cloudflared;
 # nothing off-host can reach it. Omit it and the generated unit is unchanged.
+#
+# --tls-certs mounts a host directory of externally-obtained certificates (e.g.
+# from `tailscale cert`) at /certs inside the container, READ-ONLY. The app only
+# ever reads them — point MTGC_TLS_CERT / MTGC_TLS_KEY in the instance env file
+# at paths under /certs to use them. Omit it and the generated unit is unchanged.
 #
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
@@ -37,6 +43,7 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 INIT=false
 TEST=false
 HTTP_PORT=""
+TLS_CERTS=""
 POSITIONAL=()
 while [ $# -gt 0 ]; do
     case $1 in
@@ -50,17 +57,33 @@ while [ $# -gt 0 ]; do
             HTTP_PORT="$2"
             shift
             ;;
+        --tls-certs)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --tls-certs requires a directory"
+                exit 1
+            fi
+            TLS_CERTS="$2"
+            shift
+            ;;
         *) POSITIONAL+=("$1") ;;
     esac
     shift
 done
 
 if [ ${#POSITIONAL[@]} -lt 1 ]; then
-    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>]"
+    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]"
     echo "Example: bash deploy/setup.sh prod 8081"
     echo "         bash deploy/setup.sh test --init    # build + init data with demo dataset"
     echo "         bash deploy/setup.sh ui-test --test # fast setup from pre-built fixture"
     echo "         bash deploy/setup.sh prod 8081 --http-port 8083  # + plain HTTP on 127.0.0.1"
+    echo "         bash deploy/setup.sh prod 8081 --tls-certs ~/.config/mtgc/certs  # + read-only certs at /certs"
+    exit 1
+fi
+
+# The directory must already exist: Podman would otherwise create it as an empty
+# root-owned mount point and the container would start with no certificate to read.
+if [ -n "$TLS_CERTS" ] && [ ! -d "${TLS_CERTS/#%h/$HOME}" ]; then
+    echo "ERROR: --tls-certs directory does not exist: $TLS_CERTS"
     exit 1
 fi
 
@@ -90,6 +113,9 @@ else
 fi
 if [ -n "$HTTP_PORT" ]; then
     echo "    HTTP:     127.0.0.1:$HTTP_PORT (plaintext, loopback only)"
+fi
+if [ -n "$TLS_CERTS" ]; then
+    echo "    Certs:    $TLS_CERTS -> /certs (read-only)"
 fi
 echo "    Service:  $SERVICE_NAME"
 echo "    Repo:     $REPO_DIR"
@@ -150,7 +176,7 @@ else
 fi
 
 bash "$REPO_DIR/deploy/render-quadlet.sh" \
-    "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" \
+    "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
 
 # Conditionally mount shared reference volume if it exists.
