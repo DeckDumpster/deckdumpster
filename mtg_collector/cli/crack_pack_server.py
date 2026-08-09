@@ -8458,6 +8458,10 @@ def run(args):
     _shared_db_path = os.environ.get("MTGC_SHARED_DB")
     if _shared_db_path:
         print(f"[startup] Shared reference DB: {_shared_db_path}", flush=True)
+    # Presence of MTGC_HTTP_PORT is the switch for the second, plain-HTTP listener.
+    # A non-integer value raises out of int() and the process exits non-zero.
+    _http_port_env = os.environ.get("MTGC_HTTP_PORT")
+    http_port = int(_http_port_env) if _http_port_env is not None else None
     _background_db_path = db_path
     _ingest_executor = ThreadPoolExecutor(max_workers=4)
     _recover_pending_images(db_path)
@@ -8483,6 +8487,7 @@ def run(args):
     handler = partial(CrackPackHandler, gen, static_dir, db_path)
 
     server = ThreadingHTTPServer(("", args.port), handler)
+    plain_server = ThreadingHTTPServer(("", http_port), handler) if http_port is not None else None
 
     if args.https:
         import socket
@@ -8532,7 +8537,12 @@ def run(args):
     print(f"Disambiguate: {scheme}://localhost:{args.port}/disambiguate")
     print(f"Ingestor (Manual ID): {scheme}://localhost:{args.port}/ingestor-ids")
     print(f"Ingestor (Orders): {scheme}://localhost:{args.port}/ingestor-order")
+    if plain_server is not None:
+        print(f"Plain HTTP listener: http://localhost:{http_port}")
     print("Press Ctrl+C to stop.")
+
+    if plain_server is not None:
+        threading.Thread(target=plain_server.serve_forever, daemon=True).start()
 
     try:
         server.serve_forever()
@@ -8540,3 +8550,5 @@ def run(args):
         print("\nShutting down.")
         _ingest_executor.shutdown(wait=False)
         server.shutdown()
+        if plain_server is not None:
+            plain_server.shutdown()
