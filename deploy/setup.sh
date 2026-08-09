@@ -9,13 +9,18 @@
 #   loginctl enable-linger $USER
 #
 # Usage:
-#   bash deploy/setup.sh <instance> [port] [--init] [--test]
+#   bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>]
 #
 # Examples:
 #   bash deploy/setup.sh prod 8081        # explicit port
 #   bash deploy/setup.sh feature-xyz      # auto-assigns next free port
 #   bash deploy/setup.sh test --init      # build + initialize data volume with demo data
 #   bash deploy/setup.sh ui-test --test   # fast setup from pre-built fixture (~seconds)
+#   bash deploy/setup.sh prod 8081 --http-port 8083   # also publish plain HTTP on 127.0.0.1:8083
+#
+# --http-port publishes the container's plaintext listener on the LOOPBACK
+# interface only (127.0.0.1). It is for a host-local origin such as cloudflared;
+# nothing off-host can reach it. Omit it and the generated unit is unchanged.
 #
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
@@ -31,20 +36,31 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 INIT=false
 TEST=false
+HTTP_PORT=""
 POSITIONAL=()
-for arg in "$@"; do
-    case $arg in
+while [ $# -gt 0 ]; do
+    case $1 in
         --init) INIT=true ;;
         --test) TEST=true ;;
-        *) POSITIONAL+=("$arg") ;;
+        --http-port)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --http-port requires a port number"
+                exit 1
+            fi
+            HTTP_PORT="$2"
+            shift
+            ;;
+        *) POSITIONAL+=("$1") ;;
     esac
+    shift
 done
 
 if [ ${#POSITIONAL[@]} -lt 1 ]; then
-    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test]"
+    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>]"
     echo "Example: bash deploy/setup.sh prod 8081"
     echo "         bash deploy/setup.sh test --init    # build + init data with demo dataset"
     echo "         bash deploy/setup.sh ui-test --test # fast setup from pre-built fixture"
+    echo "         bash deploy/setup.sh prod 8081 --http-port 8083  # + plain HTTP on 127.0.0.1"
     exit 1
 fi
 
@@ -71,6 +87,9 @@ if [ "$PORT" = "0" ]; then
     echo "    Port:     (auto-assign)"
 else
     echo "    Port:     $PORT"
+fi
+if [ -n "$HTTP_PORT" ]; then
+    echo "    HTTP:     127.0.0.1:$HTTP_PORT (plaintext, loopback only)"
 fi
 echo "    Service:  $SERVICE_NAME"
 echo "    Repo:     $REPO_DIR"
@@ -130,9 +149,8 @@ else
     PORT_MAPPING="${PORT}:8081"
 fi
 
-sed \
-    -e "s|{{INSTANCE}}|${INSTANCE}|g" \
-    -e "s|{{PORT}}:8081|${PORT_MAPPING}|g" \
+bash "$REPO_DIR/deploy/render-quadlet.sh" \
+    "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
 
 # Conditionally mount shared reference volume if it exists.
