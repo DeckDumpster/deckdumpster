@@ -59,7 +59,7 @@ else
     # which is what historically broke nightly backups (no room to stage
     # the SQLite snapshot).
     echo "==> Pruning dangling images..."
-    podman image prune -f >/dev/null
+    podman image prune -f >/dev/null 2>&1 || true
 fi
 # Wait briefly for the container to start, then discover the assigned port
 sleep 2
