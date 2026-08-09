@@ -164,3 +164,53 @@ def test_unsafe_tls_certs_dir_is_rejected(bad):
 
 def test_setup_accepts_tls_certs_flag():
     assert "--tls-certs" in SETUP.read_text()
+
+
+# --- Sample certificate-renewal units (de-7mq) ---
+#
+# These are documentation artefacts, not deployed units. The load-bearing
+# assertion is the same UNSET MEANS UNCHANGED property as above: shipping them
+# must not cause any instance to acquire a renewal timer it did not ask for.
+
+DEPLOY = REPO_ROOT / "deploy"
+CERT_RENEW_SERVICE = DEPLOY / "mtgc-cert-renew.service"
+CERT_RENEW_TIMER = DEPLOY / "mtgc-cert-renew.timer"
+DEPLOY_README = DEPLOY / "README.md"
+
+
+@pytest.mark.parametrize("unit", [CERT_RENEW_SERVICE, CERT_RENEW_TIMER])
+def test_cert_renew_sample_follows_repo_unit_pattern(unit):
+    """Same shape as the other mtgc-* units: {{INSTANCE}} placeholder, oneshot,
+    persistent calendar timer. Otherwise the documented sed-substitute install
+    in deploy/README.md produces a unit systemd will not start."""
+    text = unit.read_text()
+    assert "{{INSTANCE}}" in text
+    assert "Description=" in text
+    if unit.suffix == ".service":
+        assert "Type=oneshot" in text
+        # A certificate is read once by load_cert_chain at startup; renewing
+        # without restarting keeps serving the expired one.
+        assert "systemctl --user restart mtgc-{{INSTANCE}}" in text
+    else:
+        assert "OnCalendar=" in text
+        assert "Persistent=true" in text
+        assert "WantedBy=timers.target" in text
+
+
+def test_cert_renew_sample_is_not_installed_by_setup():
+    """UNSET MEANS UNCHANGED: setup.sh must not reference the sample units, and
+    the Quadlet template must not gain a dependency on them."""
+    assert "cert-renew" not in SETUP.read_text()
+    assert "cert-renew" not in TEMPLATE.read_text()
+
+
+def test_readme_states_the_san_misconception():
+    """Fixing the self-signed certificate's SAN does not stop browser warnings —
+    trust is checked before naming. Re-deriving this cost real time once."""
+    readme = DEPLOY_README.read_text()
+    assert "## Trusted certificates" in readme
+    assert "subjectAltName" in readme
+    # Both recipes, and which one is recommended.
+    assert "tailscale cert" in readme
+    assert "DNS-01" in readme
+    assert "MTGC_TLS_CERT" in readme and "MTGC_TLS_KEY" in readme

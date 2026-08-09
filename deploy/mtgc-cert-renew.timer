@@ -1,0 +1,14 @@
+[Unit]
+Description=Weekly MTGC TLS certificate renewal ({{INSTANCE}})
+
+# SAMPLE — see mtgc-cert-renew.service. Weekly is deliberate: a Let's Encrypt
+# certificate is renewable from day 60 of its 90, so a weekly attempt leaves
+# ~4 chances to recover from a failed one before the certificate expires.
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target
