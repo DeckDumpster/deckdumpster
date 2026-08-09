@@ -16,7 +16,7 @@
 description: >
   When I open the "Result statistics" modal from the collection page,
   the first section is "Growth over time": a line chart plotting how my
-  collection's card count and total value have changed since my earliest
-  acquisition. With acquisition and price history present I see an actual
-  rendered chart, not the "No acquisition history for the current filter"
-  placeholder.
+  collection's card count and total value have changed over the last three
+  months, which is the range the chart opens on. With acquisition and price
+  history present I see an actual rendered chart, not the "No acquisition
+  history for the current filter" placeholder.

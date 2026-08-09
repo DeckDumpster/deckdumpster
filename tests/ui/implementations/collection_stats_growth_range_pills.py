@@ -2,8 +2,9 @@
 Hand-written implementation for collection_stats_growth_range_pills.
 
 Seeds ~120 days of history so the 1M/3M ranges are covered but 6M/1Y are not,
-then verifies the pills grey out accordingly and that clicking 3M moves the
-active selection.
+then verifies the pills grey out accordingly, that 3M is selected on open, and
+that clicking an enabled pill moves the active selection while clicking a
+greyed-out one does nothing.
 """
 
 import subprocess
@@ -85,9 +86,10 @@ def steps(harness):
     harness.wait_for_visible("#stats-modal-overlay.active", timeout=10_000)
     harness.wait_for_visible("#growth-chart-canvas", timeout=15_000)
 
-    # All five pills exist; ALL starts selected.
+    # All five pills exist; 3M is the default selection.
     harness.assert_element_count("#growth-range-pills .price-range-pill", 5)
-    harness.assert_visible("#growth-range-pills .price-range-pill.active[data-range='0']")
+    harness.assert_visible("#growth-range-pills .price-range-pill.active[data-range='90']")
+    harness.assert_element_count("#growth-range-pills .price-range-pill.active", 1)
 
     # 6M and 1Y exceed the seeded span, so exactly those two are disabled.
     harness.assert_element_count("#growth-range-pills .price-range-pill.disabled", 2)
@@ -98,14 +100,41 @@ def steps(harness):
     harness.assert_element_count("#growth-range-pills .price-range-pill:not(.disabled)", 3)
     harness.screenshot("pills_initial")
 
-    # Selecting 3M re-slices the chart and moves the active marker.
-    harness.click_by_selector("#growth-range-pills .price-range-pill[data-range='90']")
-    harness.wait_for_visible(
-        "#growth-range-pills .price-range-pill.active[data-range='90']", timeout=5_000
+    # Widening to ALL moves the active marker and redraws over the full span.
+    # The pill class flips before the fetch resolves, so wait on the chart data.
+    harness.click_by_selector("#growth-range-pills .price-range-pill[data-range='0']")
+    harness.page.wait_for_function(
+        "() => { const c = Chart.getChart('growth-chart-canvas');"
+        "        return c && c.data.datasets[0].data.length === 121; }",
+        timeout=15_000,
     )
+    harness.assert_visible("#growth-range-pills .price-range-pill.active[data-range='0']")
     harness.assert_element_count("#growth-range-pills .price-range-pill.active", 1)
 
-    # The chart is still rendered after the update.
+    # Narrowing to 1M is served from the payload already held.
+    harness.click_by_selector("#growth-range-pills .price-range-pill[data-range='30']")
+    harness.page.wait_for_function(
+        "() => { const c = Chart.getChart('growth-chart-canvas');"
+        "        return c && c.data.datasets[0].data.length === 31; }",
+        timeout=15_000,
+    )
+    harness.assert_visible("#growth-range-pills .price-range-pill.active[data-range='30']")
+
+    # A greyed-out range cannot be selected at all: .disabled sets
+    # pointer-events: none, so the click never reaches 1Y and 1M stays active.
+    # (Asserted via computed style rather than by clicking — Playwright
+    # correctly refuses to click an element that cannot receive pointer events.)
+    pointer_events = harness.page.eval_on_selector(
+        "#growth-range-pills .price-range-pill[data-range='365']",
+        "el => getComputedStyle(el).pointerEvents",
+    )
+    assert pointer_events == "none", (
+        f"disabled 1Y pill is still clickable (pointer-events: {pointer_events})"
+    )
+    harness.assert_visible("#growth-range-pills .price-range-pill.active[data-range='30']")
+    harness.assert_element_count("#growth-range-pills .price-range-pill.active", 1)
+
+    # The chart is still rendered after the updates.
     harness.assert_visible("#growth-chart-canvas")
 
     harness.screenshot("final_state")

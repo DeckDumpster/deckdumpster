@@ -2623,6 +2623,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     # Shape, in stages (each a TEMP table so it is computed exactly once):
     #   pop_t     - the filtered population, one row per collection entry.
     #   keys_t    - distinct (set_code, collector_number, price_type); rowid = kid.
+    #   carry_t   - per (key, source), the single most recent price strictly
+    #               before the window. See "Windowing" below.
     #   grp_iv_t  - per key, the cumulative quantity held and the day range that
     #               quantity is valid for (SUM/LEAD windows over acquisition days).
     #   price_iv_t- per (key, source), each price and the day range it is the
@@ -2634,7 +2636,29 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     # running-sums it over the day spine, which is O(segments) rather than
     # O(groups x days).
     #
-    # Days are integer offsets from the first acquisition, not date strings:
+    # Windowing (`?range=` days, 0 = full history)
+    # -------------------------------------------
+    # Day 0 is the window start, not the first acquisition. The series is
+    # cumulative, so the window cannot simply drop everything before it — the
+    # carried-in position has to be reconstructed at day 0:
+    #
+    #   quantity - acquisition day offsets are clamped to >= 0, so every
+    #              pre-window acquisition collapses onto day 0 and the existing
+    #              GROUP BY sums them into the day-0 opening quantity.
+    #   price    - the price in effect at the window start is usually OLDER than
+    #              the window, so `observed_at >= start` alone would zero out
+    #              those cards until their next observation. carry_t adds back
+    #              exactly one row per (key, source): the latest price strictly
+    #              before the window, given sentinel day -1 so it sorts ahead of
+    #              every in-window row and then clamps to day 0. Its real date is
+    #              irrelevant once clamped, which is why only `price` is fetched.
+    #
+    # carry_t is a seek (ORDER BY observed_at DESC LIMIT 1 on the unique index),
+    # so it costs O(keys) regardless of how deep the price history goes; a
+    # GROUP BY ... MAX(observed_at) formulation would instead scan every
+    # pre-window row and reintroduce the O(history) cost this change removes.
+    #
+    # Days are integer offsets from the window start, not date strings:
     # the window sort is the dominant cost and sorting one INTEGER beats sorting
     # five TEXT columns by a wide margin. Dates are rebuilt for the 163-ish
     # output rows only.
@@ -2666,7 +2690,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         CREATE TEMP TABLE grp_iv_t AS
         WITH grp AS (
             SELECT k.rowid AS kid,
-                   MIN(CAST(julianday(pop_t.acq_date) - julianday(?) AS INTEGER), ?) AS day,
+                   MAX(MIN(CAST(julianday(pop_t.acq_date) - julianday(?) AS INTEGER), ?), 0) AS day,
                    COUNT(*) AS qty
             FROM pop_t
             JOIN keys_t k ON k.set_code = pop_t.set_code
@@ -2685,9 +2709,39 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     # `source` is folded to an integer bit (1 = tcgplayer, 0 = cardkingdom) so the
     # window partition is a single INTEGER expression.
+
+    # The carried-in price: per (key, source) the latest observation strictly
+    # before the window start. One index seek per row of `keys_t` x 2 sources --
+    # the correlated ORDER BY ... DESC LIMIT 1 lets SQLite land on the end of the
+    # range and step back once, so this does not scan pre-window history.
+    _GROWTH_CARRY_SQL = """
+        CREATE TEMP TABLE carry_t AS
+        SELECT kid, src, price FROM (
+            SELECT k.rowid AS kid,
+                   s.src AS src,
+                   (SELECT pr.price
+                      FROM prices pr
+                     WHERE pr.set_code = k.set_code
+                       AND pr.collector_number = k.cn
+                       AND pr.source = s.nm
+                       AND pr.price_type = k.price_type
+                       AND pr.observed_at < ?
+                     ORDER BY pr.observed_at DESC
+                     LIMIT 1) AS price
+            FROM keys_t k
+            CROSS JOIN (SELECT 'tcgplayer' AS nm, 1 AS src
+                        UNION ALL SELECT 'cardkingdom', 0) s
+        )
+        WHERE price IS NOT NULL
+    """
+
+    # LEAD orders on the raw (possibly -1) day so the carried-in row is
+    # unambiguously first; only the emitted `from_d` is clamped into the window.
+    # A carried-in row followed by an observation on day 0 yields the empty
+    # interval [0, 0), whose +cents/-cents deltas cancel.
     _GROWTH_PRICE_SQL = """
         CREATE TEMP TABLE price_iv_t AS
-        SELECT kid, src, from_d,
+        SELECT kid, src, MAX(from_d, 0) AS from_d,
                LEAD(from_d) OVER (PARTITION BY kid * 2 + src ORDER BY from_d) AS to_d,
                price
         FROM (
@@ -2701,6 +2755,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                           AND pr.price_type = k.price_type
             WHERE pr.source IN ('tcgplayer', 'cardkingdom')
               AND pr.observed_at >= ?
+            UNION ALL
+            SELECT kid, src, -1 AS from_d, price FROM carry_t
         )
     """
 
@@ -2750,15 +2806,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Return daily (count, tcg_value, ck_value) series for the filtered collection.
 
         Mirrors the search-filter parsing in `/api/collection`, then aggregates
-        every day from the earliest acquisition through today inside SQLite:
+        each day of the requested window inside SQLite:
           - cards acquired by that date (count)
           - historical price on that date for each held card (value)
 
-        Prices forward-fill: the most recent known price <= D is used. Cards
-        with no price on/before D contribute 0 to value but still count.
+        `?range=` is the window length in days (0 / absent = full history). The
+        window is the last `range` days ending today; it is clamped to the first
+        acquisition, so asking for more days than the collection has is the same
+        as asking for everything. The series is cumulative and every point is
+        absolute, so a windowed response is bit-identical to the corresponding
+        slice of the full-history response.
+
+        Prices forward-fill: the most recent known price <= D is used, including
+        observations from before the window. Cards with no price on/before D
+        contribute 0 to value but still count.
 
         Response: {"dates": ["YYYY-MM-DD", ...], "counts": [...],
-                   "tcg_values": [...], "ck_values": [...]}
+                   "tcg_values": [...], "ck_values": [...], "earliest": "..."}
+        `earliest` is the first acquisition in the whole filtered collection,
+        independent of the window, so the UI can size its range pills.
         """
         import datetime as _dt
 
@@ -2766,6 +2832,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         q = params.get("q", [""])[0]
         tz = params.get("tz", [""])[0] or None
+        range_days = int(params.get("range", ["0"])[0] or 0)
 
         where_sql = "1=1"
         sql_params: list = []
@@ -2780,7 +2847,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e), "position": e.position}, 400)
                 return
 
-        empty = {"dates": [], "counts": [], "tcg_values": [], "ck_values": []}
+        empty = {
+            "dates": [], "counts": [], "tcg_values": [], "ck_values": [], "earliest": None,
+        }
 
         # is:unowned makes no sense for a growth chart — ignore.
         if compiled and compiled.include_unowned:
@@ -2818,18 +2887,29 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 sql_params,
             )
 
-            # Date axis: earliest acquisition -> today (UTC). `acquired_at` is
-            # ISO 8601 UTC, so the first 10 chars are a UTC date.
+            # Date axis: window start -> today (UTC). `acquired_at` is ISO 8601
+            # UTC, so the first 10 chars are a UTC date.
             today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
-            start_d, end_d = conn.execute(
+            earliest, end_d = conn.execute(
                 "SELECT MIN(acq_date),"
                 " CASE WHEN MIN(acq_date) > ? THEN MIN(acq_date) ELSE ? END"
                 " FROM pop_t",
                 (today, today),
             ).fetchone()
-            if start_d is None:
+            if earliest is None:
                 self._send_json(empty)
                 return
+
+            # The window is the last `range_days` days ending at end_d, clamped
+            # to the first acquisition — a range wider than the collection's own
+            # span degrades to full history rather than padding empty days.
+            start_d = earliest
+            if range_days > 0:
+                win_start = (
+                    _dt.date.fromisoformat(end_d) - _dt.timedelta(days=range_days)
+                ).isoformat()
+                if win_start > start_d:
+                    start_d = win_start
             end_dn = (
                 _dt.date.fromisoformat(end_d) - _dt.date.fromisoformat(start_d)
             ).days
@@ -2838,6 +2918,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "CREATE TEMP TABLE keys_t AS"
                 " SELECT DISTINCT set_code, cn, price_type FROM pop_t"
             )
+            conn.execute(self._GROWTH_CARRY_SQL, (start_d,))
             conn.execute(self._GROWTH_GRP_SQL, (start_d, end_dn))
             conn.execute(self._GROWTH_PRICE_SQL, (start_d, start_d))
             conn.execute(self._GROWTH_SEG_SQL)
@@ -2850,6 +2931,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "counts": [r["n"] for r in rows],
             "tcg_values": [r["tcg_cents"] / 100.0 for r in rows],
             "ck_values": [r["ck_cents"] / 100.0 for r in rows],
+            "earliest": earliest,
         })
 
     def _api_price_history(self, set_code: str, collector_number: str):
