@@ -205,13 +205,14 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 
 Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` placeholders), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
 - `~/.config/mtgc/<instance>.env` — per-instance env.
 - `~/.config/containers/systemd/mtgc-<instance>.container` — generated Quadlet unit.
 - Service name: `mtgc-<instance>`; container name: `systemd-mtgc-<instance>`.
 - Server logs a warning and skips OCR processing if `ANTHROPIC_API_KEY` is unset — it does **not** fail to start.
+- `MTGC_HTTP_PORT` (optional, per-instance env) adds a **second, plain-HTTP listener** on that container port alongside the TLS listener on 8081; unset means one listener and today's behaviour. It exists for a host-local Cloudflare Tunnel origin, and is only reachable if `setup.sh --http-port <p>` also published it — always as `PublishPort=127.0.0.1:<p>:8080`, loopback hardcoded so plaintext can never face the LAN. See `deploy/README.md` → "Cloudflare Tunnel origin".
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
 - Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
 
@@ -249,7 +250,7 @@ podman port mtgc-<instance> 8081/tcp                                    # discov
 
 ### Validate
 
-The server uses HTTPS with a self-signed cert — `curl -ks` for everything.
+The server uses HTTPS with a self-signed cert — `curl -ks` for everything. This stays the canonical form: port 8081 is HTTPS forever, and the optional `MTGC_HTTP_PORT` plaintext listener is loopback-only and off by default (see Deployment), so it is never how you validate a change.
 
 ```bash
 PORT=$(podman port systemd-mtgc-<instance> 8081/tcp | grep -oP ':\K[0-9]+' | head -1)     # Linux

@@ -77,12 +77,59 @@ bash deploy/teardown.sh feature-xyz         # keeps data volume
 bash deploy/teardown.sh feature-xyz --purge  # removes everything
 ```
 
+## Cloudflare Tunnel origin
+
+A tunnel connector (`cloudflared`) runs on the host and reaches the container over loopback. TLS on that hop protects nothing — it is `127.0.0.1` — and terminating it with the auto-generated self-signed cert forces the tunnel route to carry `noTLSVerify: true` permanently. The instance can instead serve the connector over **plain HTTP on a second listener**, while direct-LAN clients keep hitting HTTPS on 8081 exactly as before. One instance, two access paths.
+
+It is off unless you turn it on, and turning it on takes **two independent switches**:
+
+| Switch | Where | Effect |
+|---|---|---|
+| `MTGC_HTTP_PORT=8080` | `~/.config/mtgc/<instance>.env` | The app binds a second, plain-HTTP listener on that **container** port, in addition to the TLS listener on 8081. Unset → one listener, exactly today's behaviour. A non-integer value fails the server at startup — there is no fallback. |
+| `bash deploy/setup.sh <name> [port] --http-port <p>` | generated Quadlet unit | Publishes that container port on the **host** as `PublishPort=127.0.0.1:<p>:8080`. Omitted → the line is absent and the unit is byte-identical to a render with no plaintext publish. |
+
+Neither switch does anything useful alone: without the env var nothing is listening on 8080 inside the container; without the flag nothing outside the container namespace can reach it. `8080` is the container-side port the publish targets, so that is the value `MTGC_HTTP_PORT` takes.
+
+```bash
+# Enable on an instance. Check the host port is free first — on the CD host
+# 8080 and 8082 are already taken by other services; 8091 was picked for prod.
+echo "MTGC_HTTP_PORT=8080" >> ~/.config/mtgc/<name>.env
+bash deploy/setup.sh <name> <https-port> --http-port 8091
+systemctl --user daemon-reload
+systemctl --user restart mtgc-<name>
+
+# Verify: plain HTTP answers on loopback, HTTPS still answers, and the plain
+# port is NOT reachable from another host on the LAN.
+curl -s  -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8091/
+curl -ks -o /dev/null -w '%{http_code}\n' https://localhost:<https-port>/
+```
+
+Both switches survive a redeploy: `deploy.sh` on an existing instance rebuilds the image and restarts, but does not re-render the Quadlet unit or rewrite the env file. Turning the origin on or off is an env-file edit plus a restart — never a rebuild.
+
+### Why the publish is loopback-only
+
+`127.0.0.1` is hardcoded in `deploy/render-quadlet.sh` and is **not** operator-supplied; `--http-port` takes a port number and is rejected unless it is numeric, so it can never carry an address. This is the safety property the whole arrangement rests on, not an implementation detail: a `0.0.0.0` publish would put an unencrypted copy of the app in front of the LAN, WireGuard, and anything else routed to this host. Binding to loopback means the plaintext listener is reachable by a host-local origin such as `cloudflared` **and by nothing else** — enforced by the publish binding rather than by anyone remembering a rule.
+
+The HTTPS listener on 8081 is untouched by all of this. Direct-LAN access stays HTTPS forever.
+
+### Rollback
+
+Remove `MTGC_HTTP_PORT` from `~/.config/mtgc/<instance>.env` and restart:
+
+```bash
+sed -i '/^MTGC_HTTP_PORT=/d' ~/.config/mtgc/<name>.env
+systemctl --user restart mtgc-<name>
+```
+
+The app is back to a single TLS listener. No rebuild, no data migration. To also drop the host publish, re-run `setup.sh` without `--http-port` and `systemctl --user daemon-reload`. If the tunnel route was switched to plain HTTP, point it back at `https://localhost:8081` with `noTLSVerify: true`.
+
 ## Scripts
 
 | Script | Purpose |
 |---|---|
 | `seed.sh [--force]` | Create reusable seed data volume. Run once, all future `--init` clones from it |
-| `setup.sh <name> [port] [--init] [--test]` | Create instance. `--test` uses pre-built fixture (fast, no network). `--init` clones seed volume. Port auto-assigned if omitted |
+| `setup.sh <name> [port] [--init] [--test] [--http-port <p>]` | Create instance. `--test` uses pre-built fixture (fast, no network). `--init` clones seed volume. Port auto-assigned if omitted. `--http-port` adds a loopback-only plaintext publish — see [Cloudflare Tunnel origin](#cloudflare-tunnel-origin) |
+| `render-quadlet.sh <name> <port-mapping> <http-port> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
 | `deploy.sh <name>` | Rebuild image and restart one instance |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 
