@@ -28,6 +28,12 @@
 # ever reads them — point MTGC_TLS_CERT / MTGC_TLS_KEY in the instance env file
 # at paths under /certs to use them. Omit it and the generated unit is unchanged.
 #
+# Both flags are STICKY: they are recorded in the instance env file as
+# MTGC_HTTP_PUBLISH_PORT / MTGC_TLS_CERTS_DIR and re-applied when the flag is
+# omitted, so deploy.sh regenerating a missing Quadlet reproduces the unit
+# rather than silently dropping the publish and the mount. An explicit flag
+# overrides the record; delete the line to drop the setting.
+#
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
 #   with your API key). Falls back to .env.example (needs manual editing).
@@ -80,20 +86,40 @@ if [ ${#POSITIONAL[@]} -lt 1 ]; then
     exit 1
 fi
 
+INSTANCE="${POSITIONAL[0]}"
+SERVICE_NAME="mtgc-${INSTANCE}"
+QUADLET_DIR="$HOME/.config/containers/systemd"
+MTGC_CONFIG="$HOME/.config/mtgc"
+ENV_FILE="${MTGC_CONFIG}/${INSTANCE}.env"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# --- Recorded render inputs ---
+#
+# deploy.sh regenerates a missing Quadlet by re-running this script with the
+# instance name and nothing else. --http-port and --tls-certs are inputs to the
+# render, so unless they are recorded the regenerated unit silently loses both
+# the plaintext publish and the cert mount. Record them in the instance env file
+# — the same place MTGC_TLS_CERT / MTGC_TLS_KEY already live — and fall back to
+# the recorded value when the flag is omitted. An explicit flag always wins; to
+# drop a setting, delete its line from the env file and re-run.
+
+recorded() {
+    # Last assignment wins, matching how systemd reads an EnvironmentFile.
+    [ -f "$ENV_FILE" ] || return 0
+    sed -n "s/^$1=//p" "$ENV_FILE" | tail -1
+}
+
+[ -n "$HTTP_PORT" ] || HTTP_PORT="$(recorded MTGC_HTTP_PUBLISH_PORT)"
+[ -n "$TLS_CERTS" ] || TLS_CERTS="$(recorded MTGC_TLS_CERTS_DIR)"
+
 # The directory must already exist: Podman would otherwise create it as an empty
 # root-owned mount point and the container would start with no certificate to read.
 if [ -n "$TLS_CERTS" ] && [ ! -d "${TLS_CERTS/#%h/$HOME}" ]; then
     echo "ERROR: --tls-certs directory does not exist: $TLS_CERTS"
     exit 1
 fi
-
-INSTANCE="${POSITIONAL[0]}"
-SERVICE_NAME="mtgc-${INSTANCE}"
-QUADLET_DIR="$HOME/.config/containers/systemd"
-MTGC_CONFIG="$HOME/.config/mtgc"
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # --- Port assignment ---
 
@@ -137,7 +163,6 @@ fi
 
 # --- Env file ---
 
-ENV_FILE="${MTGC_CONFIG}/${INSTANCE}.env"
 if [ ! -f "$ENV_FILE" ]; then
     mkdir -p "$MTGC_CONFIG"
     if [ -f "${MTGC_CONFIG}/default.env" ]; then
@@ -153,6 +178,22 @@ if [ ! -f "$ENV_FILE" ]; then
 else
     echo "    $ENV_FILE already exists, skipping"
 fi
+
+# Record the render inputs resolved above so the next regeneration reproduces
+# this unit. Rewriting in place (rather than mv) keeps the file's 600 mode.
+record() {
+    local key="$1" value="$2" tmp
+    tmp="$(mktemp)"
+    grep -v "^${key}=" "$ENV_FILE" > "$tmp" || true
+    if [ -n "$value" ]; then
+        echo "${key}=${value}" >> "$tmp"
+    fi
+    cat "$tmp" > "$ENV_FILE"
+    rm -f "$tmp"
+}
+
+record MTGC_HTTP_PUBLISH_PORT "$HTTP_PORT"
+record MTGC_TLS_CERTS_DIR "$TLS_CERTS"
 
 # --- Build container image ---
 

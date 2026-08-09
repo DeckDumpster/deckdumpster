@@ -106,6 +106,8 @@ curl -ks -o /dev/null -w '%{http_code}\n' https://localhost:<https-port>/
 
 Both switches survive a redeploy: `deploy.sh` on an existing instance rebuilds the image and restarts, but does not re-render the Quadlet unit or rewrite the env file. Turning the origin on or off is an env-file edit plus a restart — never a rebuild.
 
+They also survive a **re-render**. `setup.sh` records `--http-port` as `MTGC_HTTP_PUBLISH_PORT` in the instance env file and defaults to the recorded value when the flag is omitted — so the missing-unit path in `deploy.sh` (which re-runs `setup.sh <name>` with no flags) reproduces the publish instead of silently dropping it. That failure would have been quiet: HTTPS keeps answering, so the instance looks healthy while the tunnel origin gets connection refused. An explicit `--http-port` on a later run overrides the record.
+
 ### Why the publish is loopback-only
 
 `127.0.0.1` is hardcoded in `deploy/render-quadlet.sh` and is **not** operator-supplied; `--http-port` takes a port number and is rejected unless it is numeric, so it can never carry an address. This is the safety property the whole arrangement rests on, not an implementation detail: a `0.0.0.0` publish would put an unencrypted copy of the app in front of the LAN, WireGuard, and anything else routed to this host. Binding to loopback means the plaintext listener is reachable by a host-local origin such as `cloudflared` **and by nothing else** — enforced by the publish binding rather than by anyone remembering a rule.
@@ -121,7 +123,15 @@ sed -i '/^MTGC_HTTP_PORT=/d' ~/.config/mtgc/<name>.env
 systemctl --user restart mtgc-<name>
 ```
 
-The app is back to a single TLS listener. No rebuild, no data migration. To also drop the host publish, re-run `setup.sh` without `--http-port` and `systemctl --user daemon-reload`. If the tunnel route was switched to plain HTTP, point it back at `https://localhost:8081` with `noTLSVerify: true`.
+The app is back to a single TLS listener. No rebuild, no data migration. If the tunnel route was switched to plain HTTP, point it back at `https://localhost:8081` with `noTLSVerify: true`.
+
+To also drop the host publish, delete the recorded line and re-render. Omitting `--http-port` is **not** enough — the flag is sticky by design, so that a regenerated unit reproduces the one it replaces:
+
+```bash
+sed -i '/^MTGC_HTTP_PUBLISH_PORT=/d' ~/.config/mtgc/<name>.env
+bash deploy/setup.sh <name> <https-port>
+systemctl --user daemon-reload
+```
 
 ## Trusted certificates
 
@@ -148,6 +158,8 @@ Two switches, same shape as the tunnel origin above: one mounts the files, one t
 | `MTGC_TLS_CERT` / `MTGC_TLS_KEY` | `~/.config/mtgc/<instance>.env` | Container-side paths to the certificate and private key. Both set → the app serves them on 8081. Neither set → today's self-signed behaviour. |
 
 Setting exactly one of the pair, or pointing either at something that is not a readable file, **fails the server at startup**. There is no fallback to the self-signed certificate: a deployer who believes they are serving a trusted certificate is never silently downgraded to one that warns.
+
+The two switches have to stay in step, so `--tls-certs` is recorded as `MTGC_TLS_CERTS_DIR` in the same env file and re-applied when the flag is omitted. Without that, a regenerated unit would keep `MTGC_TLS_CERT=/certs/cert.pem` while losing the mount that makes `/certs` exist — an unreadable path, which is exactly the startup failure above, on a loop. Removing the mount means deleting the recorded line (`sed -i '/^MTGC_TLS_CERTS_DIR=/d' ~/.config/mtgc/<name>.env`) along with `MTGC_TLS_CERT` / `MTGC_TLS_KEY`, then re-running `setup.sh`. If the recorded directory has been deleted, `setup.sh` refuses to render rather than quietly producing a unit without the mount.
 
 ```bash
 mkdir -p ~/.config/mtgc/certs
@@ -227,7 +239,7 @@ The instance regenerates and serves the self-signed certificate again — browse
 | `seed.sh [--force]` | Create reusable seed data volume. Run once, all future `--init` clones from it |
 | `setup.sh <name> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]` | Create instance. `--test` uses pre-built fixture (fast, no network). `--init` clones seed volume. Port auto-assigned if omitted. `--http-port` adds a loopback-only plaintext publish — see [Cloudflare Tunnel origin](#cloudflare-tunnel-origin). `--tls-certs` mounts a host cert directory read-only at `/certs` — see [Trusted certificates](#trusted-certificates) |
 | `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
-| `deploy.sh <name>` | Rebuild image and restart one instance |
+| `deploy.sh <name>` | Rebuild image and restart one instance. Regenerates the Quadlet via `setup.sh` if it has gone missing — `--http-port` / `--tls-certs` are re-applied from the env file, so the unit is reproduced rather than downgraded |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 
 ## CI
