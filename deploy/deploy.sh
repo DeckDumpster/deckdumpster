@@ -31,7 +31,11 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 QUADLET_FILE="$HOME/.config/containers/systemd/${SERVICE_NAME}.container"
 
-# If Quadlet doesn't exist yet, delegate to setup.sh for initial install
+# If Quadlet doesn't exist yet, delegate to setup.sh for initial install.
+# Passing only the instance name is safe: setup.sh reloads --http-port and
+# --tls-certs from MTGC_HTTP_PUBLISH_PORT / MTGC_TLS_CERTS_DIR in the instance
+# env file, so a regenerated unit keeps the plaintext publish and the cert
+# mount instead of silently dropping them.
 if [ ! -f "$QUADLET_FILE" ]; then
     echo "==> No Quadlet found for $INSTANCE, running initial setup..."
     bash "$SCRIPT_DIR/setup.sh" "$INSTANCE"
