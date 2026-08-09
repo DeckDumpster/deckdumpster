@@ -10,6 +10,7 @@ Environment=MTGC_HOME=/data
 PublishPort={{PORT}}:8081
 {{HTTP_PUBLISH}}
 Volume=mtgc-{{INSTANCE}}-data:/data:Z
+{{TLS_MOUNT}}
 AutoUpdate=local
 
 [Service]
