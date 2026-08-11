@@ -1,0 +1,29 @@
+start_page: /collection
+involves:
+  - "result count text in header (#status)"
+  - "stats modal overlay #stats-modal-overlay"
+  - "range pill container #growth-range-pills"
+  - "'.active' marks the selected pill, '.disabled' marks unavailable ranges"
+  - "Chart.js canvas #growth-chart-canvas"
+fixture_data:
+  seeded_span_days: 20
+  disabled_pills: 4
+  enabled_pills: 1
+  expected_points: 21
+notes: >
+  Seed exactly as collection_stats_growth_chart_renders does (acquisitions into
+  /data/collection.sqlite, prices into /data/shared.sqlite) but compress the
+  span to 20 days, prices every 2nd day.
+
+  spanDays ~= 20 is below every finite range, so 1M/3M/6M/1Y all get .disabled
+  and only ALL is selectable. GROWTH_DEFAULT_RANGE is 90, which would leave a
+  disabled pill selected, so renderGrowthChart() falls back to ALL:
+  `if (activeRange !== 0 && spanDays < activeRange) activeRange = 0`. Assert
+  .active is on data-range='0' and that exactly 4 pills carry .disabled.
+
+  Note the first request still goes out as &range=90. The server clamps a
+  window wider than the collection to the first acquisition, so the response
+  is the full 21-day history and dates[0] === earliest; the client sees that
+  and files the same payload under ALL, so no second request is made. The
+  chart therefore carries 21 points, and the empty-state placeholder
+  "No acquisition history for the current filter" must be absent.

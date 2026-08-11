@@ -1,16 +1,35 @@
 """Cache management commands: mtg cache all"""
 
 import json
+import sqlite3
 import sys
 
 from mtg_collector.db import get_connection, get_shared_write_path, init_db
 from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
-from mtg_collector.db.schema import rebuild_fts
+from mtg_collector.db.schema import rebuild_card_names, rebuild_fts
 from mtg_collector.services.bulk_import import resolve_reversible_oracle_id
 from mtg_collector.services.scryfall import ScryfallAPI
 from mtg_collector.utils import get_mtgc_home
 
 _BULK_DATA_URL = "https://api.scryfall.com/bulk-data"
+
+
+def _upsert_card_row(api, card_data, card_repo, printing_repo, skipped):
+    """Upsert one card + printing from a Scryfall entry.
+
+    Returns True on success, False if an IntegrityError forced a skip.
+    Skips let bulk import survive Scryfall reshuffles (e.g. an existing
+    printing_id reassigned to a new (set_code, collector_number)) without
+    aborting the whole run and starving Steps 5-6 (mark_cached + backfill).
+    """
+    try:
+        card_repo.upsert(api.to_card_model(card_data))
+        printing_repo.upsert(api.to_printing_model(card_data))
+        return True
+    except sqlite3.IntegrityError as e:
+        skipped.append((card_data.get("id"), card_data.get("set"),
+                        card_data.get("collector_number"), str(e)))
+        return False
 
 
 def register(subparsers):
@@ -113,6 +132,7 @@ def cache_all(db_path: str):
 
     processed = 0
     all_set_codes = set()
+    skipped = []
 
     for card_data in cards_data:
         set_code = card_data.get("set")
@@ -128,11 +148,8 @@ def cache_all(db_path: str):
         if card_data.get("lang", "en") != "en":
             continue
 
-        card = api.to_card_model(card_data)
-        card_repo.upsert(card)
-
-        printing = api.to_printing_model(card_data)
-        printing_repo.upsert(printing)
+        if not _upsert_card_row(api, card_data, card_repo, printing_repo, skipped):
+            continue
 
         all_set_codes.add(set_code)
         processed += 1
@@ -183,10 +200,8 @@ def cache_all(db_path: str):
                 resolve_reversible_oracle_id(card_data)
                 if "oracle_id" not in card_data:
                     continue
-                card = api.to_card_model(card_data)
-                card_repo.upsert(card)
-                printing = api.to_printing_model(card_data)
-                printing_repo.upsert(printing)
+                if not _upsert_card_row(api, card_data, card_repo, printing_repo, skipped):
+                    continue
                 set_backfill += 1
             set_repo.mark_cards_cached(sc)
             conn.commit()
@@ -232,10 +247,8 @@ def cache_all(db_path: str):
                 cn = card_data["collector_number"]
                 if printing_repo.get_by_set_cn(sc, cn):
                     continue  # Already have this collector number
-                card = api.to_card_model(card_data)
-                card_repo.upsert(card)
-                printing = api.to_printing_model(card_data)
-                printing_repo.upsert(printing)
+                if not _upsert_card_row(api, card_data, card_repo, printing_repo, skipped):
+                    continue
                 set_added += 1
             conn.commit()
             non_en_count += set_added
@@ -245,9 +258,14 @@ def cache_all(db_path: str):
     if non_en_count:
         print(f"  Added {non_en_count} non-English-only cards")
 
-    # Step 8: Rebuild full-text search index
+    # Step 8: Rebuild the indexes derived from cards.name
     print("Rebuilding full-text search index...")
     rebuild_fts(conn)
+    # printings.card_name is the other thing derived from cards.name. This pass
+    # is where an upstream rename arrives, so it is where the copy is repaired.
+    renamed = rebuild_card_names(conn)
+    if renamed:
+        print(f"  Resynced card_name on {renamed} printing(s)")
 
     # Step 9: Clean up temp file
     tmp_path.unlink(missing_ok=True)
@@ -256,6 +274,12 @@ def cache_all(db_path: str):
     print("\nDone!")
     print(f"  Cards processed: {processed}")
     print(f"  Sets updated: {len(all_set_codes)}")
+    if skipped:
+        print(f"  Skipped {len(skipped)} cards on IntegrityError:")
+        for pid, sc, cn, err in skipped[:20]:
+            print(f"    {sc}/{cn} ({pid}): {err}")
+        if len(skipped) > 20:
+            print(f"    ...and {len(skipped) - 20} more")
 
 
 def cache_set(db_path: str, set_code: str):

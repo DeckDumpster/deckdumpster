@@ -1,0 +1,18 @@
+# Scenario: A collection younger than the default range opens on ALL
+#
+# Related:
+#   issues: [efj-mtgc-655, efj-mtgc-lze]
+#   pull_requests: []
+#
+# Prerequisites:
+#   Same two-database seeding as collection_stats_growth_chart_renders, but
+#   with every acquisition inside the last ~20 days so the whole collection is
+#   younger than the chart's default 3-month range. See that intent for why
+#   seeding is required.
+
+description: >
+  The growth chart normally opens on the last three months, but I have only
+  been collecting for about three weeks. Rather than showing me a range I do
+  not have, the chart opens on ALL — every shorter range is greyed out, and
+  the one that is selected is never a greyed-out one. The chart still renders
+  my three weeks of history rather than an empty placeholder.

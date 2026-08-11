@@ -11,7 +11,8 @@
 
 description: >
   Above the growth chart there are time-range pills (1M, 3M, 6M, 1Y, ALL)
-  with ALL selected by default. Ranges longer than my actual history are
+  with 3M selected by default. Ranges longer than my actual history are
   greyed out — with about four months of history, 1M and 3M are available
-  but 6M and 1Y are not. Clicking 3M narrows the chart to the last three
-  months and makes 3M the selected pill.
+  but 6M and 1Y are not. Clicking ALL widens the chart to my whole history
+  and makes ALL the selected pill; clicking 1M narrows it to the last month.
+  A greyed-out range cannot be selected at all.

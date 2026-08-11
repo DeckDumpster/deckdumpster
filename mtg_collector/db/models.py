@@ -526,7 +526,14 @@ class PrintingRepository:
         self.conn = conn
 
     def upsert(self, p: Printing) -> None:
-        """Insert or update a printing."""
+        """Insert or update a printing.
+
+        card_name is denormalised from cards so the collection's default sort
+        can be served by idx_printings_card_name; it is filled here rather than
+        by the caller because this is the only writer of printings.  A printing
+        cached before its card leaves it NULL until the next
+        rebuild_card_names(), which `mtg cache` runs at the end of every pass.
+        """
         self.conn.execute(
             """
             INSERT INTO printings
@@ -535,12 +542,14 @@ class PrintingRepository:
              finishes, artist, image_uri, raw_json,
              power, toughness, loyalty, layout, flavor_text, flavor_name,
              watermark, digital, reserved, reprint, produced_mana, games,
-             face0_mana_cost, face1_mana_cost)
+             face0_mana_cost, face1_mana_cost, card_name)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT name FROM cards WHERE oracle_id = ?))
             ON CONFLICT(set_code, collector_number) DO UPDATE SET
                 printing_id = excluded.printing_id,
                 oracle_id = excluded.oracle_id,
+                card_name = excluded.card_name,
                 rarity = excluded.rarity,
                 frame_effects = excluded.frame_effects,
                 border_color = excluded.border_color,
@@ -595,6 +604,7 @@ class PrintingRepository:
                 to_json_array(p.games),
                 p.face0_mana_cost,
                 p.face1_mana_cost,
+                p.oracle_id,
             ),
         )
 

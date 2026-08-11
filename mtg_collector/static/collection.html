@@ -1515,8 +1515,32 @@ const gridSizeWrap = document.getElementById('grid-size-wrap');
 let currentView = 'table';
 let sortOrder = 'asc';
 let sortColumn = 'name';
+// The result is fetched a window at a time, so `allCards` is SPARSE: its
+// length is the full match count and only the pages scrolled into are filled
+// in. Index is the row's absolute position in the server's ordering, which is
+// what the virtual scrollers already address rows by, so a hole is simply a
+// row whose page has not arrived. Iterate with forEach/for..in (which skip
+// holes) rather than a counted loop, or you will act on `undefined`.
 let allCards = [];
-let allCardsUnfiltered = [];
+// Rows matching the query server-side — the length allCards is sized to.
+let totalMatches = 0;
+// Aggregates over the whole result, from the server. Not summable here: the
+// rows in memory grow as the user scrolls, so a local sum would climb with them.
+let resultTotalQty = 0;
+let resultTotalValue = 0;
+// Page bookkeeping. PAGE_SIZE matches the server's default limit.
+const PAGE_SIZE = 250;
+const pageState = new Map();   // page index -> 'loading' | 'loaded'
+let loadedRows = 0;
+// Bumped on every new query/sort. A page response carrying a stale generation
+// belongs to a result the user has already navigated away from.
+let fetchGeneration = 0;
+// The query string the current result was fetched with, pinned so that later
+// pages of it are pages of the SAME result rather than of whatever the search
+// box happens to hold by the time the user scrolls.
+let currentQuery = '';
+// Set by whichever scroller is mounted; lets an arriving page repaint it.
+let repaintVisible = null;
 let debounceTimer = null;
 let _settings = {};
 let multiSelectMode = false;
@@ -1673,7 +1697,7 @@ document.querySelectorAll('#image-display-pills .pill').forEach(pill => {
 });
 
 document.getElementById('sel-all').addEventListener('click', () => {
-  for (let i = 0; i < allCards.length; i++) selectedCards.add(i);
+  selectAllLoaded();
   updateSelectionBar();
   render();
 });
@@ -1802,11 +1826,18 @@ function updateSelectionBar() {
   selShareResult.innerHTML = '';
 }
 
+// Selection is by row index, and only fetched rows have one to act on. Every
+// bulk action below reads allCards[i], so an index whose page has not arrived
+// would reach them as `undefined`.
+function selectAllLoaded() {
+  allCards.forEach((card, i) => { if (card) selectedCards.add(i); });
+}
+
 function toggleCardSelection(idx, shiftKey) {
   if (shiftKey && lastSelectedIdx != null) {
     const lo = Math.min(lastSelectedIdx, idx);
     const hi = Math.max(lastSelectedIdx, idx);
-    for (let i = lo; i <= hi; i++) selectedCards.add(i);
+    for (let i = lo; i <= hi; i++) if (allCards[i]) selectedCards.add(i);
   } else {
     if (selectedCards.has(idx)) selectedCards.delete(idx);
     else selectedCards.add(idx);
@@ -1822,7 +1853,8 @@ function handleSortClick(colKey) {
     sortColumn = colKey;
     sortOrder = 'asc';
   }
-  refilterAndRender();
+  // Re-order the whole result, not the pages that happen to be loaded.
+  fetchCollection();
 }
 
 // --- Rarity/set border colors ---
@@ -1954,56 +1986,84 @@ function _destroyGrowthChart() {
   if (_growthChart) { _growthChart.destroy(); _growthChart = null; }
 }
 
+// The growth endpoint now computes only the window it is asked for, so the
+// default range is what the page pays for on open. 3 months is the common case;
+// ALL is one click away. Widening the default again is a one-line change here.
+const GROWTH_DEFAULT_RANGE = 90;
+let _growthReq = 0;
+
 async function renderGrowthChart(primarySource) {
   _destroyGrowthChart();
   const wrap = document.getElementById('growth-chart-wrap');
   if (!wrap) return;
 
-  // Reuse the existing /api/collection query string so the chart respects
-  // the user's current search filter.
-  let data;
-  try {
-    const res = await fetch(`/api/collection/growth?${getFetchParams()}`);
-    if (!res.ok) throw new Error('fetch failed');
-    data = await res.json();
-  } catch {
-    wrap.innerHTML = '<div class="growth-empty">Failed to load growth history</div>';
-    return;
-  }
-
-  if (!data.dates || !data.dates.length) {
-    wrap.innerHTML = '<div class="growth-empty">No acquisition history for the current filter</div>';
-    return;
-  }
-
-  const valSeries = primarySource === 'ck' ? data.ck_values : data.tcg_values;
   const valLabel = primarySource === 'ck' ? 'Card Kingdom value' : 'TCGplayer value';
-
-  const earliest = new Date(data.dates[0]).getTime();
-  const spanDays = (Date.now() - earliest) / 86400000;
   const pills = document.querySelectorAll('#growth-range-pills .price-range-pill');
   const ranges = [30, 90, 180, 365, 0];
-  pills.forEach((pill, i) => {
-    pill.classList.toggle('disabled', ranges[i] > 0 && spanDays < ranges[i]);
-  });
 
-  function filterData(rangeDays) {
-    if (!rangeDays) return { dates: data.dates, counts: data.counts, values: valSeries };
-    const cutoffMs = Date.now() - rangeDays * 86400000;
-    let idx0 = data.dates.findIndex(d => new Date(d).getTime() >= cutoffMs);
-    if (idx0 === -1) idx0 = data.dates.length - 1;
+  // Payloads by range, scoped to this invocation — reopening the modal picks up
+  // the current search filter and starts empty.
+  const cache = new Map();
+
+  // Every point is an absolute value for its own date, so a narrower range is
+  // exactly a tail slice of a wider one. Narrowing therefore never needs the
+  // network; only widening does.
+  //
+  // The cutoff is derived the way the server derives it — whole UTC days back
+  // from the series' own last day — so a sliced range is indistinguishable from
+  // a fetched one. Using Date.now() here instead would carry the current
+  // time-of-day and drop the window's first day, making a sliced 1M one point
+  // shorter than a fetched 1M.
+  function tail(data, rangeDays) {
+    if (!rangeDays) return data;
+    const last = data.dates[data.dates.length - 1];
+    const cutoff = new Date(Date.parse(last + 'T00:00:00Z') - rangeDays * 86400000)
+      .toISOString().slice(0, 10);
+    const i = data.dates.indexOf(cutoff);
+    if (i <= 0) return data;
     return {
-      dates: data.dates.slice(idx0),
-      counts: data.counts.slice(idx0),
-      values: valSeries.slice(idx0),
+      dates: data.dates.slice(i),
+      counts: data.counts.slice(i),
+      tcg_values: data.tcg_values.slice(i),
+      ck_values: data.ck_values.slice(i),
+      earliest: data.earliest,
     };
   }
 
-  function buildDatasets(f) {
+  // Narrowest already-fetched range that fully contains `range` (0 = ALL).
+  function coveringRange(range) {
+    let best = null;
+    for (const r of cache.keys()) {
+      if (r !== 0 && (range === 0 || r < range)) continue;
+      if (best === null || best === 0 || (r !== 0 && r < best)) best = r;
+    }
+    return best;
+  }
+
+  async function load(range) {
+    if (cache.has(range)) return cache.get(range);
+    const cover = coveringRange(range);
+    if (cover !== null) {
+      const sliced = tail(cache.get(cover), range);
+      cache.set(range, sliced);
+      return sliced;
+    }
+    const res = await fetch(`/api/collection/growth?${getFetchParams()}&range=${range}`);
+    if (!res.ok) throw new Error('fetch failed');
+    const data = await res.json();
+    cache.set(range, data);
+    // A window clamped to the first acquisition IS the full history — record it
+    // as ALL so the widest pill is already satisfied.
+    if (data.dates.length && data.dates[0] === data.earliest) cache.set(0, data);
+    return data;
+  }
+
+  function buildDatasets(d) {
+    const values = primarySource === 'ck' ? d.ck_values : d.tcg_values;
     return [
       {
         label: 'Cards',
-        data: f.dates.map((d, i) => ({ x: d, y: f.counts[i] })),
+        data: d.dates.map((x, i) => ({ x, y: d.counts[i] })),
         borderColor: '#7ec8e3',
         backgroundColor: 'transparent',
         borderWidth: 1.5,
@@ -2014,7 +2074,7 @@ async function renderGrowthChart(primarySource) {
       },
       {
         label: valLabel,
-        data: f.dates.map((d, i) => ({ x: d, y: f.values[i] })),
+        data: d.dates.map((x, i) => ({ x, y: values[i] })),
         borderColor: '#e94560',
         backgroundColor: 'transparent',
         borderWidth: 1.5,
@@ -2026,15 +2086,35 @@ async function renderGrowthChart(primarySource) {
     ];
   }
 
-  // Default range: ALL.
-  let activeRange = 0;
+  let activeRange = GROWTH_DEFAULT_RANGE;
+  let data;
+  try {
+    data = await load(activeRange);
+  } catch {
+    wrap.innerHTML = '<div class="growth-empty">Failed to load growth history</div>';
+    return;
+  }
+
+  if (!data.dates || !data.dates.length) {
+    wrap.innerHTML = '<div class="growth-empty">No acquisition history for the current filter</div>';
+    return;
+  }
+
+  // Pills are sized by the whole collection's span, not the fetched window —
+  // `earliest` is the first acquisition regardless of range.
+  const spanDays = (Date.now() - new Date(data.earliest).getTime()) / 86400000;
+  pills.forEach((pill, i) => {
+    pill.classList.toggle('disabled', ranges[i] > 0 && spanDays < ranges[i]);
+  });
+  // Never leave a disabled pill selected: a collection younger than the default
+  // window already has its entire history in hand, so show it as ALL.
+  if (activeRange !== 0 && spanDays < activeRange) activeRange = 0;
   pills.forEach(p => p.classList.toggle('active', parseInt(p.dataset.range) === activeRange));
 
   const canvas = document.getElementById('growth-chart-canvas');
-  const f = filterData(activeRange);
   _growthChart = new Chart(canvas, {
     type: 'line',
-    data: { datasets: buildDatasets(f) },
+    data: { datasets: buildDatasets(data) },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -2076,35 +2156,53 @@ async function renderGrowthChart(primarySource) {
   });
 
   pills.forEach(pill => {
-    pill.addEventListener('click', () => {
+    pill.addEventListener('click', async () => {
       if (pill.classList.contains('disabled')) return;
       pills.forEach(p => p.classList.remove('active'));
       pill.classList.add('active');
       const range = parseInt(pill.dataset.range);
-      const f = filterData(range);
-      _growthChart.data.datasets = buildDatasets(f);
+      // Cached and sliced ranges resolve without awaiting the network; a widening
+      // fetch can still land out of order, so only the newest click may draw.
+      const token = ++_growthReq;
+      let d;
+      try {
+        d = await load(range);
+      } catch {
+        wrap.innerHTML = '<div class="growth-empty">Failed to load growth history</div>';
+        return;
+      }
+      if (token !== _growthReq || !_growthChart) return;
+      _growthChart.data.datasets = buildDatasets(d);
       _growthChart.update();
     });
   });
 }
 
 function openStatsModal() {
-  if (!allCards.length) return;
-  const s = computeResultStats(allCards);
+  if (!totalMatches) return;
+  // These are computed over the rows in memory, which is the pages scrolled
+  // into rather than the whole result. Pass a dense array — computeResultStats
+  // iterates with for..of, which yields undefined for a hole — and say what
+  // the figures cover, rather than presenting a prefix as the whole result.
+  const loaded = allCards.filter(Boolean);
+  const s = computeResultStats(loaded);
   const sources = (_settings.price_sources || 'tcg,ck').split(',');
   const primarySource = sources[0] === 'ck' ? 'ck' : 'tcg';
   const primary = primarySource === 'ck' ? 'Card Kingdom' : 'TCGplayer';
+  const coverage = loaded.length < totalMatches
+    ? ` · over the ${loaded.length.toLocaleString()} of ${totalMatches.toLocaleString()} matches loaded so far`
+    : '';
   statsModalContent.innerHTML = `
     <h2>Result statistics</h2>
-    <div class="stats-subtitle">Default price source: ${primary}</div>
+    <div class="stats-subtitle">Default price source: ${primary}${coverage}</div>
     <div class="modal-section">
       <div class="modal-section-title">Growth over time</div>
       <div class="price-range-pills" id="growth-range-pills">
         <button class="price-range-pill" data-range="30">1M</button>
-        <button class="price-range-pill" data-range="90">3M</button>
+        <button class="price-range-pill active" data-range="90">3M</button>
         <button class="price-range-pill" data-range="180">6M</button>
         <button class="price-range-pill" data-range="365">1Y</button>
-        <button class="price-range-pill active" data-range="0">ALL</button>
+        <button class="price-range-pill" data-range="0">ALL</button>
       </div>
       <div class="growth-chart-wrap" id="growth-chart-wrap">
         <canvas id="growth-chart-canvas"></canvas>
@@ -3154,6 +3252,11 @@ updateViewButtons();
 // --- Fetch ---
 function getFetchParams() {
   const params = new URLSearchParams();
+  // Sorting is the server's. Only part of the result is ever in memory, so
+  // sorting here would order the loaded rows against each other and leave the
+  // rest of the result sorted by whatever the previous query asked for.
+  params.set('sort', COL_SORT_MAP[sortColumn] || 'name');
+  if (sortOrder === 'desc') params.set('order', 'desc');
   if (_sharedCards) {
     params.set('cards', _sharedCards);
     return params.toString();
@@ -3172,66 +3275,17 @@ function getFetchParams() {
   return params.toString();
 }
 
-function applyClientSort(cards) {
-  const sortKey = COL_SORT_MAP[sortColumn] || 'name';
-  const dir = sortOrder === 'desc' ? -1 : 1;
-
-  cards.sort((a, b) => {
-    let va, vb;
-    switch (sortKey) {
-      case 'name': va = (a.name || '').toLowerCase(); vb = (b.name || '').toLowerCase(); break;
-      case 'cmc': va = a.cmc || 0; vb = b.cmc || 0; break;
-      case 'rarity': {
-        const rm = {common:0, uncommon:1, rare:2, mythic:3};
-        va = rm[a.rarity] ?? 4; vb = rm[b.rarity] ?? 4; break;
-      }
-      case 'set': va = a.set_code || ''; vb = b.set_code || ''; break;
-      case 'color': va = a.color_identity || '[]'; vb = b.color_identity || '[]'; break;
-      case 'qty': va = a.qty || 0; vb = b.qty || 0; break;
-      case 'collector_number': va = parseInt(a.collector_number) || 0; vb = parseInt(b.collector_number) || 0; break;
-      case 'date_added': va = a.acquired_at || ''; vb = b.acquired_at || ''; break;
-      case 'price': {
-        const pf = ((_settings.price_sources || 'tcg,ck').split(',')[0] === 'ck') ? 'ck_price' : 'tcg_price';
-        va = parseFloat(a[pf]) || 0; vb = parseFloat(b[pf]) || 0; break;
-      }
-      default:
-        // Price columns
-        if (sortKey === 'tcg_price' || sortColumn === 'tcg_price') { va = parseFloat(a.tcg_price) || 0; vb = parseFloat(b.tcg_price) || 0; }
-        else if (sortKey === 'ck_price' || sortColumn === 'ck_price') { va = parseFloat(a.ck_price) || 0; vb = parseFloat(b.ck_price) || 0; }
-        else { va = (a.name || '').toLowerCase(); vb = (b.name || '').toLowerCase(); }
-    }
-    if (va < vb) return -1 * dir;
-    if (va > vb) return 1 * dir;
-    // Secondary sort by name
-    const na = (a.name || '').toLowerCase(), nb = (b.name || '').toLowerCase();
-    return na < nb ? -1 : na > nb ? 1 : 0;
-  });
-  return cards;
-}
-
-function refilterAndRender() {
-  allCards = applyClientSort([...allCardsUnfiltered]);
-  updateStatusText();
-  render();
-  serializeFiltersToURL();
-}
-
 function updateStatusText() {
-  const sources = (_settings.price_sources || 'tcg,ck').split(',');
-  const priceField = sources[0] === 'ck' ? 'ck_price' : 'tcg_price';
-  const totalQty = allCards.reduce((s, c) => s + (c.qty || 0), 0);
-  const totalValue = allCards.reduce((s, c) => {
-    const p = parseFloat(c[priceField]) || 0;
-    return s + p * (c.qty || 0);
-  }, 0);
+  // Every figure here describes the whole result and comes from the server, so
+  // the line reads the same before and after scrolling loads more pages.
   // Owned queries: count by qty ("45 cards"). Unowned queries: count by row
   // ("3 results") since qty is always 0 for cards not in the collection.
-  const useQty = totalQty > 0;
-  const count = useQty ? totalQty : allCards.length;
+  const useQty = resultTotalQty > 0;
+  const count = useQty ? resultTotalQty : totalMatches;
   const noun = useQty ? (count === 1 ? 'card' : 'cards') : (count === 1 ? 'result' : 'results');
-  const valueSuffix = totalValue > 0 ? `, ${formatPrice(totalValue)}` : '';
+  const valueSuffix = resultTotalValue > 0 ? `, ${formatPrice(resultTotalValue)}` : '';
   statusEl.textContent = `${count.toLocaleString()} ${noun}${valueSuffix}`;
-  statusEl.classList.toggle('empty', allCards.length === 0);
+  statusEl.classList.toggle('empty', totalMatches === 0);
 }
 
 function renderSkeleton() {
@@ -3251,28 +3305,92 @@ function renderSkeleton() {
   main.innerHTML = html;
 }
 
+// --- Windowed fetching ---
+//
+// The first page is fetched here; the rest arrive as the scroller reaches
+// them, so first paint costs one bounded response rather than the catalog.
+
+function pageIndexOf(rowIdx) { return Math.floor(rowIdx / PAGE_SIZE); }
+
+function storePage(rows, offset) {
+  for (let i = 0; i < rows.length; i++) {
+    if (allCards[offset + i] === undefined) loadedRows++;
+    allCards[offset + i] = rows[i];
+  }
+}
+
+async function loadPage(pageIdx, generation) {
+  if (pageState.has(pageIdx)) return;
+  pageState.set(pageIdx, 'loading');
+  const offset = pageIdx * PAGE_SIZE;
+  // currentQuery, not getFetchParams(): the search box may already hold a
+  // query whose fetch is still inside its 300 ms debounce. Reading it here
+  // would page a result that is not the one on screen, and the generation
+  // guard below would wave it through — nothing has bumped the generation yet.
+  const res = await fetch(`/api/collection?${currentQuery}&limit=${PAGE_SIZE}&offset=${offset}`);
+  const data = await res.json();
+  // The query moved on while this was in flight; its rows belong to a result
+  // that is no longer on screen, and allCards has already been replaced.
+  if (generation !== fetchGeneration) return;
+  if (data.error) {
+    pageState.delete(pageIdx);
+    searchErrorEl.textContent = data.error;
+    return;
+  }
+  storePage(data.rows, offset);
+  pageState.set(pageIdx, 'loaded');
+  if (repaintVisible) repaintVisible();
+}
+
+// Request every page the given row range touches, plus one page beyond it so
+// the next screenful is usually already there when the user reaches it.
+function ensurePagesForRange(firstIdx, lastIdx) {
+  if (!totalMatches) return;
+  const first = Math.max(0, firstIdx);
+  const last = Math.min(totalMatches - 1, lastIdx + PAGE_SIZE);
+  for (let p = pageIndexOf(first); p <= pageIndexOf(last); p++) {
+    if (!pageState.has(p)) loadPage(p, fetchGeneration);
+  }
+}
+
 async function fetchCollection() {
   searchErrorEl.textContent = '';
   statusEl.textContent = 'Loading...';
-  if (allCardsUnfiltered.length === 0 && currentView === 'table') renderSkeleton();
+  const hadRows = totalMatches > 0;
+  if (!hadRows && currentView === 'table') renderSkeleton();
 
-  const params = getFetchParams();
-  const res = await fetch(`/api/collection?${params}`);
+  const generation = ++fetchGeneration;
+  pageState.clear();
+  allCards = [];
+  loadedRows = 0;
+  currentQuery = getFetchParams();
+
+  const res = await fetch(`/api/collection?${currentQuery}&limit=${PAGE_SIZE}&offset=0`);
   const data = await res.json();
+  if (generation !== fetchGeneration) return;
 
   if (data.error) {
     searchErrorEl.textContent = data.error;
     statusEl.textContent = `Search error: ${data.error}`;
-    allCardsUnfiltered = [];
+    totalMatches = 0; resultTotalQty = 0; resultTotalValue = 0;
   } else {
-    allCardsUnfiltered = Array.isArray(data) ? data : [];
+    // Page envelope: {rows, total, total_qty, total_value, limit, offset}.
+    totalMatches = data.total;
+    resultTotalQty = data.total_qty;
+    resultTotalValue = data.total_value;
+    allCards = new Array(totalMatches);
+    storePage(data.rows, 0);
+    pageState.set(0, 'loaded');
   }
 
   selectedCards.clear();
   lastSelectedIdx = null;
   updateSelectionBar();
 
-  allCards = applyClientSort([...allCardsUnfiltered]);
+  // A new result starts at the top. Holding the old scroll position would drop
+  // the viewport into the middle of a result the user has not seen, and make
+  // the first fetched page one they never look at.
+  window.scrollTo(0, 0);
   updateStatusText();
   render();
   serializeFiltersToURL();
@@ -3295,7 +3413,7 @@ function renderTable() {
 
   const savedScrollX = window.scrollX;
 
-  if (allCards.length === 0) {
+  if (totalMatches === 0) {
     main.innerHTML = '<div class="empty-state">No cards found</div>';
     return;
   }
@@ -3303,13 +3421,17 @@ function renderTable() {
   const visCols = getVisibleColumns();
   let rowHeight = 49; // initial estimate, measured after first render
   const bufferRows = 5;
-  const totalRows = allCards.length;
+  // Sized to the whole result: the spacers reserve height for rows whose page
+  // has not been fetched, so the scrollbar reflects the result rather than the
+  // part of it in memory, and scroll position stays put as pages arrive.
+  const totalRows = totalMatches;
   const colCount = visCols.length + (multiSelectMode ? 1 : 0);
   const _cellOpts = { priceSources: _settings.price_sources };
 
   let theadHtml = '<tr>';
   if (multiSelectMode) {
-    const allChecked = selectedCards.size === allCards.length && allCards.length > 0;
+    // Selection only ever covers fetched rows, so that is what "all" means.
+    const allChecked = loadedRows > 0 && selectedCards.size === loadedRows;
     theadHtml += `<th class="select-col"><input type="checkbox" class="sel-all-cb" ${allChecked ? 'checked' : ''}></th>`;
   }
   for (const col of visCols) {
@@ -3327,8 +3449,23 @@ function renderTable() {
   const bottomSpacer = document.getElementById('vscroll-bottom');
   let renderedRange = [-1, -1];
 
+  // A row whose page has not arrived. Same cell structure and the same
+  // .skeleton-cell sizing the initial skeleton uses, so it occupies exactly the
+  // height its real row will, and swapping one in shifts nothing.
+  function buildPendingRowHtml(idx) {
+    let h = `<tr class="skeleton-row" data-idx="${idx}" data-pending="1">`;
+    if (multiSelectMode) h += '<td class="select-col"></td>';
+    for (const col of visCols) {
+      h += col.key === 'name'
+        ? `<td data-col="${col.key}"><div class="skeleton-cell thumb"></div><div class="skeleton-cell wide"></div></td>`
+        : `<td data-col="${col.key}"><div class="skeleton-cell narrow"></div></td>`;
+    }
+    return h + '</tr>';
+  }
+
   function buildRowHtml(idx) {
     const card = allCards[idx];
+    if (!card) return buildPendingRowHtml(idx);
     const helpers = prepareCardHelpers(card, { isWanted: isCardWanted });
     const isSelected = selectedCards.has(idx);
     const isUnowned = card.owned === false;
@@ -3362,6 +3499,10 @@ function renderTable() {
 
     const firstRow = Math.max(0, Math.floor(offset / rowHeight) - bufferRows);
     const lastRow = Math.min(totalRows - 1, Math.ceil((offset + viewportHeight) / rowHeight) + bufferRows);
+
+    // Ask for whatever this range needs before the early-out below: the range
+    // can be unchanged while its pages are still in flight.
+    ensurePagesForRange(firstRow, lastRow);
 
     if (firstRow === renderedRange[0] && lastRow === renderedRange[1]) return;
     const [pf, pl] = renderedRange;
@@ -3401,9 +3542,10 @@ function renderTable() {
     topSpacer.firstChild.style.height = firstRow * rowHeight + 'px';
     bottomSpacer.firstChild.style.height = Math.max(0, (totalRows - lastRow - 1) * rowHeight) + 'px';
 
-    // Measure actual row height after first render
+    // Measure actual row height after first render. Measure a real row: a
+    // pending row is built to match, but the real one is the authority.
     if (pf === -1) {
-      const sample = tbody.querySelector('tr[data-idx]');
+      const sample = tbody.querySelector('tr[data-idx]:not([data-pending])') || tbody.querySelector('tr[data-idx]');
       if (sample) rowHeight = sample.offsetHeight || rowHeight;
     }
   }
@@ -3411,6 +3553,10 @@ function renderTable() {
   renderVisibleRows();
 
   if (savedScrollX) window.scrollTo(savedScrollX, window.scrollY);
+
+  // An arriving page has to replace the pending rows already on screen, and
+  // the range has not moved, so force the rebuild the range guard would skip.
+  repaintVisible = () => { renderedRange = [-1, -1]; renderVisibleRows(); };
 
   let ticking = false;
   function onScroll() {
@@ -3420,13 +3566,16 @@ function renderTable() {
     }
   }
   window.addEventListener('scroll', onScroll, { passive: true });
-  _tableScrollCleanup = () => window.removeEventListener('scroll', onScroll);
+  _tableScrollCleanup = () => {
+    window.removeEventListener('scroll', onScroll);
+    repaintVisible = null;
+  };
 
   // Delegated click handler for checkboxes, filterable elements and row->modal
   table.addEventListener('click', (e) => {
     if (e.target.classList.contains('sel-all-cb')) {
       if (e.target.checked) {
-        for (let i = 0; i < allCards.length; i++) selectedCards.add(i);
+        selectAllLoaded();
       } else {
         selectedCards.clear();
       }
@@ -3440,7 +3589,7 @@ function renderTable() {
       if (e.shiftKey) { render(); return; }
       e.target.closest('tr').classList.toggle('selected', selectedCards.has(idx));
       const allCb = main.querySelector('.sel-all-cb');
-      if (allCb) allCb.checked = selectedCards.size === allCards.length;
+      if (allCb) allCb.checked = selectedCards.size === loadedRows;
       return;
     }
     if (e.target.closest('a')) return;
@@ -3451,7 +3600,8 @@ function renderTable() {
       return;
     }
     const tr = e.target.closest('tr[data-idx]');
-    if (tr) showCardModal(allCards[parseInt(tr.dataset.idx)]);
+    const clicked = tr && allCards[parseInt(tr.dataset.idx)];
+    if (clicked) showCardModal(clicked);
   });
 
   main.querySelectorAll('.collection-table th[data-col]').forEach(th => {
@@ -3464,6 +3614,12 @@ let _tableScrollCleanup = null;
 let _gridScrollCleanup = null;
 
 function _buildCardHtml(card, idx) {
+  // Page not arrived yet. aspect-ratio holds the tile's height so the grid
+  // does not reflow when the real card replaces it — the img that normally
+  // sets that height is not there to do it.
+  if (!card) {
+    return `<div class="sheet-card" data-idx="${idx}" data-pending="1"><div class="sheet-card-img-wrap" style="--rarity-color:#111;--set-color:#111;aspect-ratio:488/680"><div class="skeleton-cell" style="width:100%;height:100%"></div></div></div>`;
+  }
   const isUnowned = card.owned === false;
   const isWanted = isUnowned && isCardWanted(card);
   const isOrdered = card.status === 'ordered';
@@ -3481,7 +3637,7 @@ function renderGrid() {
   // Clean up previous scroll listener
   if (_gridScrollCleanup) { _gridScrollCleanup(); _gridScrollCleanup = null; }
 
-  if (allCards.length === 0) {
+  if (totalMatches === 0) {
     main.innerHTML = '<div class="empty-state">No cards found</div>';
     return;
   }
@@ -3500,7 +3656,9 @@ function renderGrid() {
   const cols = gridCols;
   const cardWidth = Math.floor((viewportWidth - (cols - 1) * gap) / cols);
   const cardHeight = Math.round(cardWidth * (680 / 488)) + gap; // aspect ratio + gap
-  const totalRows = Math.ceil(allCards.length / cols);
+  // Sized to the whole result, like the table's spacers — unfetched rows still
+  // occupy their place so the scrollbar means what it says.
+  const totalRows = Math.ceil(totalMatches / cols);
   const totalHeight = totalRows * cardHeight;
   const bufferRows = 3;
 
@@ -3516,11 +3674,15 @@ function renderGrid() {
     const firstRow = Math.max(0, Math.floor(scrollTop / cardHeight) - bufferRows);
     const lastRow = Math.min(totalRows - 1, Math.ceil((scrollTop + viewportHeight) / cardHeight) + bufferRows);
 
+    const startIdx = firstRow * cols;
+    const endIdx = Math.min(totalMatches, (lastRow + 1) * cols);
+
+    // Before the early-out: the range can be unchanged with pages in flight.
+    ensurePagesForRange(startIdx, endIdx - 1);
+
     if (firstRow === renderedRange[0] && lastRow === renderedRange[1]) return;
     renderedRange = [firstRow, lastRow];
 
-    const startIdx = firstRow * cols;
-    const endIdx = Math.min(allCards.length, (lastRow + 1) * cols);
     let html = '';
     for (let idx = startIdx; idx < endIdx; idx++) {
       html += _buildCardHtml(allCards[idx], idx);
@@ -3539,6 +3701,9 @@ function renderGrid() {
 
   renderVisible();
 
+  // Same as the table: an arriving page must replace pending tiles in place.
+  repaintVisible = () => { renderedRange = [-1, -1]; renderVisible(); };
+
   // Scroll listener with requestAnimationFrame throttle
   let ticking = false;
   function onScroll() {
@@ -3548,7 +3713,10 @@ function renderGrid() {
     }
   }
   window.addEventListener('scroll', onScroll, { passive: true });
-  _gridScrollCleanup = () => window.removeEventListener('scroll', onScroll);
+  _gridScrollCleanup = () => {
+    window.removeEventListener('scroll', onScroll);
+    repaintVisible = null;
+  };
 
   // Delegated event listeners on sort bar
   document.getElementById('grid-sort-bar').addEventListener('click', (e) => {
@@ -3565,7 +3733,8 @@ function renderGrid() {
       return;
     }
     const cardEl = e.target.closest('.sheet-card');
-    if (cardEl) showCardModal(allCards[parseInt(cardEl.dataset.idx)]);
+    const clicked = cardEl && allCards[parseInt(cardEl.dataset.idx)];
+    if (clicked) showCardModal(clicked);
   });
 }
 
@@ -3969,7 +4138,9 @@ document.getElementById('wishlist-panel-list').addEventListener('click', async (
   // Click on entry name — open card modal
   const printingId = entryEl.dataset.printingId;
   if (!printingId) return;
-  const card = allCards.find(c => c.printing_id === printingId);
+  // find() visits holes rather than skipping them, so guard the row before
+  // reading it. A row whose page has not arrived falls through to the fetch.
+  const card = allCards.find(c => c && c.printing_id === printingId);
   if (card) {
     toggleWishlistPanel(false);
     showCardModal(card);

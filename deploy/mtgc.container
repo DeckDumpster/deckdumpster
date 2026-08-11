@@ -8,7 +8,9 @@ Image=localhost/mtgc:{{INSTANCE}}
 EnvironmentFile=%h/.config/mtgc/{{INSTANCE}}.env
 Environment=MTGC_HOME=/data
 PublishPort={{PORT}}:8081
+{{HTTP_PUBLISH}}
 Volume=mtgc-{{INSTANCE}}-data:/data:Z
+{{TLS_MOUNT}}
 AutoUpdate=local
 
 [Service]

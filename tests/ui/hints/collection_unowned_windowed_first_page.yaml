@@ -1,0 +1,21 @@
+start_page: /collection?q=is%3Aunowned
+involves:
+  - 'search input (#search-input) with placeholder "Search (e.g. t:creature c:r mv>=3)"'
+  - 'status text (#status) showing the whole-result count'
+  - 'virtual scroll body (#vtbody) holding one window of tr[data-idx] rows'
+  - 'bottom spacer (#vscroll-bottom) reserving height for rows not yet fetched'
+fixture_data:
+  unowned_total_rows: 7603
+  page_size: 250
+  status_text: "7,603 results"
+notes: >
+  /api/collection is bounded at 250 rows per response, so the first paint is
+  one page of a 7,603-row result. The status line reads "7,603 results" from
+  the envelope's `total`, not from the rows in hand. Rows carrying
+  data-pending="1" are placeholders for a page still in flight, so assert on
+  tr[data-idx]:not([data-pending]) to mean "a real rendered row". The number
+  of rows in the DOM is a viewport-sized window (a few dozen at 1280x720),
+  never the 7,603 the result contains — that is the whole point of the
+  scenario, so assert a bound rather than an exact count. #vscroll-bottom's
+  inline height reserves the space of every row not currently rendered, which
+  is what keeps the scrollbar honest about the size of the result.

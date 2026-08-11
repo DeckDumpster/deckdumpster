@@ -229,6 +229,8 @@ let selectedCardIds = new Set();
 let editingBinderId = null;
 let pickerCards = [];
 let pickerSelected = new Set();
+// Matches the server's default page limit.
+const PICKER_PAGE_SIZE = 250;
 
 async function loadBinders() {
   const res = await fetch('/api/binders');
@@ -407,15 +409,23 @@ async function searchPickerCards() {
     document.getElementById('picker-cards').innerHTML = '<div style="padding:12px;color:#888;">Type at least 2 characters...</div>';
     return;
   }
-  const res = await fetch(`/api/collection?q=${encodeURIComponent(q)}&status=owned`);
+  // Same page semantics as the collection. Unlike the deck-builder picker this
+  // one renders every row it fetches — nothing is filtered out afterwards — so
+  // one page always fills the list and there is nothing to keep fetching for.
+  // What is left is honesty: when the search matched more than a page, say so
+  // instead of presenting the page as the whole result.
+  const res = await fetch(`/api/collection?q=${encodeURIComponent(q)}&status=owned&limit=${PICKER_PAGE_SIZE}&offset=0`);
   const data = await res.json();
-  pickerCards = Array.isArray(data) ? data : data.cards || [];
+  pickerCards = data.rows;
   const container = document.getElementById('picker-cards');
   if (pickerCards.length === 0) {
     container.innerHTML = '<div style="padding:12px;color:#888;">No matching cards found</div>';
     return;
   }
-  container.innerHTML = pickerCards.map(c => `
+  const countLine = data.total > pickerCards.length
+    ? `<div style="padding:8px 12px;color:#888;font-size:0.85rem">Showing ${pickerCards.length.toLocaleString()} of ${data.total.toLocaleString()} matches — narrow the search to see the rest</div>`
+    : '';
+  container.innerHTML = countLine + pickerCards.map(c => `
     <div class="picker-card ${pickerSelected.has(c.printing_id + '|' + c.finish) ? 'selected' : ''}"
          onclick="togglePickerCard('${c.printing_id}', '${c.finish}', this)">
       <span>${esc(c.name)}</span>

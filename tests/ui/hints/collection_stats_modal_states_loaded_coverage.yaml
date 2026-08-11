@@ -1,0 +1,20 @@
+start_page: /collection?q=is%3Aunowned
+involves:
+  - 'status text (#status) — clicking it opens the stats modal'
+  - 'stats modal overlay (#stats-modal-overlay.active)'
+  - 'modal subtitle (.stats-subtitle)'
+fixture_data:
+  unowned_total_rows: 7603
+  owned_total_rows: 43
+  page_size: 250
+  coverage_phrase: "of 7,603 matches loaded so far"
+notes: >
+  Card-level statistics are computed in the browser from the rows in memory,
+  which for a windowed result is a prefix rather than the whole thing. The
+  subtitle then reads "Default price source: TCGplayer · over the N of 7,603
+  matches loaded so far". N depends on how many pages have been prefetched,
+  so assert only on the invariant tail "of 7,603 matches loaded so far", never
+  on N.
+  The owned default is 43 rows, which fits in one 250-row page, so everything
+  is loaded and the caveat must be absent — that half is what proves the
+  clause is conditional rather than always printed.

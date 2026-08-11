@@ -9,13 +9,30 @@
 #   loginctl enable-linger $USER
 #
 # Usage:
-#   bash deploy/setup.sh <instance> [port] [--init] [--test]
+#   bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]
 #
 # Examples:
 #   bash deploy/setup.sh prod 8081        # explicit port
 #   bash deploy/setup.sh feature-xyz      # auto-assigns next free port
 #   bash deploy/setup.sh test --init      # build + initialize data volume with demo data
 #   bash deploy/setup.sh ui-test --test   # fast setup from pre-built fixture (~seconds)
+#   bash deploy/setup.sh prod 8081 --http-port 8083   # also publish plain HTTP on 127.0.0.1:8083
+#   bash deploy/setup.sh prod 8081 --tls-certs ~/.config/mtgc/certs   # mount host certs at /certs
+#
+# --http-port publishes the container's plaintext listener on the LOOPBACK
+# interface only (127.0.0.1). It is for a host-local origin such as cloudflared;
+# nothing off-host can reach it. Omit it and the generated unit is unchanged.
+#
+# --tls-certs mounts a host directory of externally-obtained certificates (e.g.
+# from `tailscale cert`) at /certs inside the container, READ-ONLY. The app only
+# ever reads them — point MTGC_TLS_CERT / MTGC_TLS_KEY in the instance env file
+# at paths under /certs to use them. Omit it and the generated unit is unchanged.
+#
+# Both flags are STICKY: they are recorded in the instance env file as
+# MTGC_HTTP_PUBLISH_PORT / MTGC_TLS_CERTS_DIR and re-applied when the flag is
+# omitted, so deploy.sh regenerating a missing Quadlet reproduces the unit
+# rather than silently dropping the publish and the mount. An explicit flag
+# overrides the record; delete the line to drop the setting.
 #
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
@@ -31,20 +48,41 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 INIT=false
 TEST=false
+HTTP_PORT=""
+TLS_CERTS=""
 POSITIONAL=()
-for arg in "$@"; do
-    case $arg in
+while [ $# -gt 0 ]; do
+    case $1 in
         --init) INIT=true ;;
         --test) TEST=true ;;
-        *) POSITIONAL+=("$arg") ;;
+        --http-port)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --http-port requires a port number"
+                exit 1
+            fi
+            HTTP_PORT="$2"
+            shift
+            ;;
+        --tls-certs)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --tls-certs requires a directory"
+                exit 1
+            fi
+            TLS_CERTS="$2"
+            shift
+            ;;
+        *) POSITIONAL+=("$1") ;;
     esac
+    shift
 done
 
 if [ ${#POSITIONAL[@]} -lt 1 ]; then
-    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test]"
+    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]"
     echo "Example: bash deploy/setup.sh prod 8081"
     echo "         bash deploy/setup.sh test --init    # build + init data with demo dataset"
     echo "         bash deploy/setup.sh ui-test --test # fast setup from pre-built fixture"
+    echo "         bash deploy/setup.sh prod 8081 --http-port 8083  # + plain HTTP on 127.0.0.1"
+    echo "         bash deploy/setup.sh prod 8081 --tls-certs ~/.config/mtgc/certs  # + read-only certs at /certs"
     exit 1
 fi
 
@@ -52,9 +90,36 @@ INSTANCE="${POSITIONAL[0]}"
 SERVICE_NAME="mtgc-${INSTANCE}"
 QUADLET_DIR="$HOME/.config/containers/systemd"
 MTGC_CONFIG="$HOME/.config/mtgc"
+ENV_FILE="${MTGC_CONFIG}/${INSTANCE}.env"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# --- Recorded render inputs ---
+#
+# deploy.sh regenerates a missing Quadlet by re-running this script with the
+# instance name and nothing else. --http-port and --tls-certs are inputs to the
+# render, so unless they are recorded the regenerated unit silently loses both
+# the plaintext publish and the cert mount. Record them in the instance env file
+# — the same place MTGC_TLS_CERT / MTGC_TLS_KEY already live — and fall back to
+# the recorded value when the flag is omitted. An explicit flag always wins; to
+# drop a setting, delete its line from the env file and re-run.
+
+recorded() {
+    # Last assignment wins, matching how systemd reads an EnvironmentFile.
+    [ -f "$ENV_FILE" ] || return 0
+    sed -n "s/^$1=//p" "$ENV_FILE" | tail -1
+}
+
+[ -n "$HTTP_PORT" ] || HTTP_PORT="$(recorded MTGC_HTTP_PUBLISH_PORT)"
+[ -n "$TLS_CERTS" ] || TLS_CERTS="$(recorded MTGC_TLS_CERTS_DIR)"
+
+# The directory must already exist: Podman would otherwise create it as an empty
+# root-owned mount point and the container would start with no certificate to read.
+if [ -n "$TLS_CERTS" ] && [ ! -d "${TLS_CERTS/#%h/$HOME}" ]; then
+    echo "ERROR: --tls-certs directory does not exist: $TLS_CERTS"
+    exit 1
+fi
 
 # --- Port assignment ---
 
@@ -71,6 +136,12 @@ if [ "$PORT" = "0" ]; then
     echo "    Port:     (auto-assign)"
 else
     echo "    Port:     $PORT"
+fi
+if [ -n "$HTTP_PORT" ]; then
+    echo "    HTTP:     127.0.0.1:$HTTP_PORT (plaintext, loopback only)"
+fi
+if [ -n "$TLS_CERTS" ]; then
+    echo "    Certs:    $TLS_CERTS -> /certs (read-only)"
 fi
 echo "    Service:  $SERVICE_NAME"
 echo "    Repo:     $REPO_DIR"
@@ -92,7 +163,6 @@ fi
 
 # --- Env file ---
 
-ENV_FILE="${MTGC_CONFIG}/${INSTANCE}.env"
 if [ ! -f "$ENV_FILE" ]; then
     mkdir -p "$MTGC_CONFIG"
     if [ -f "${MTGC_CONFIG}/default.env" ]; then
@@ -108,6 +178,22 @@ if [ ! -f "$ENV_FILE" ]; then
 else
     echo "    $ENV_FILE already exists, skipping"
 fi
+
+# Record the render inputs resolved above so the next regeneration reproduces
+# this unit. Rewriting in place (rather than mv) keeps the file's 600 mode.
+record() {
+    local key="$1" value="$2" tmp
+    tmp="$(mktemp)"
+    grep -v "^${key}=" "$ENV_FILE" > "$tmp" || true
+    if [ -n "$value" ]; then
+        echo "${key}=${value}" >> "$tmp"
+    fi
+    cat "$tmp" > "$ENV_FILE"
+    rm -f "$tmp"
+}
+
+record MTGC_HTTP_PUBLISH_PORT "$HTTP_PORT"
+record MTGC_TLS_CERTS_DIR "$TLS_CERTS"
 
 # --- Build container image ---
 
@@ -130,9 +216,8 @@ else
     PORT_MAPPING="${PORT}:8081"
 fi
 
-sed \
-    -e "s|{{INSTANCE}}|${INSTANCE}|g" \
-    -e "s|{{PORT}}:8081|${PORT_MAPPING}|g" \
+bash "$REPO_DIR/deploy/render-quadlet.sh" \
+    "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
 
 # Conditionally mount shared reference volume if it exists.

@@ -963,6 +963,86 @@ def _recover_pending_images(db_path):
         print(f"[startup] {len(rows)} pending image(s) waiting — ANTHROPIC_API_KEY not set, skipping processing", flush=True)
 
 
+# /api/collection price and Card Kingdom URL enrichment, folded into the main
+# query.  This used to be two follow-up passes whose `IN (...)` clauses were
+# sized by the result set: 112,809 rows built a statement with 225,618 bound
+# parameters, within 11% of this build's SQLITE_MAX_VARIABLE_NUMBER of 250,000.
+# Every join below binds zero parameters and matches at most one row, so neither
+# the SQL text nor the row cardinality depends on how large the result set is.
+#
+# `latest_prices` has PRIMARY KEY (set_code, collector_number, source,
+# price_type), so pinning source and price_type makes each price join
+# single-row.  price_type follows the physical copy's finish (c.finish), not the
+# printing's available finishes, so a foil copy of a printing that also exists
+# in nonfoil gets the foil price; etched copies price as foil.
+_ENRICH_JOINS = [
+    "LEFT JOIN latest_prices _ck_buy ON _ck_buy.set_code = p.set_code"
+    " AND _ck_buy.collector_number = p.collector_number"
+    " AND _ck_buy.source = 'cardkingdom'"
+    " AND _ck_buy.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'buylist_foil' ELSE 'buylist_normal' END",
+    "LEFT JOIN latest_prices _ck_retail ON _ck_retail.set_code = p.set_code"
+    " AND _ck_retail.collector_number = p.collector_number"
+    " AND _ck_retail.source = 'cardkingdom'"
+    " AND _ck_retail.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
+    "LEFT JOIN latest_prices _tcg ON _tcg.set_code = p.set_code"
+    " AND _tcg.collector_number = p.collector_number"
+    " AND _tcg.source = 'tcgplayer'"
+    " AND _tcg.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
+    # printing_id is not unique in mtgjson_printings: MTGJSON emits one row per
+    # face of a double-faced card and both carry the same scryfallId, with a
+    # different Card Kingdom link each.  Resolve to a uuid first so the join
+    # stays single-row, and resolve it the way PackGenerator.get_ck_url() does
+    # — same index seek, same first row — so the collection list and the card
+    # detail page show the same link for the same card.
+    "LEFT JOIN mtgjson_printings _mp ON _mp.uuid ="
+    " (SELECT uuid FROM mtgjson_printings WHERE printing_id = p.printing_id LIMIT 1)",
+]
+
+# The price joins alone — every _ENRICH_JOINS entry that a display price can be
+# built from, without the ck_url lookup.  The totals scan the whole result, so
+# they take this rather than the full set.
+_ENRICH_PRICE_JOINS = _ENRICH_JOINS[:3]
+
+# Card Kingdom publishes a buylist and a retail price; the buylist wins when
+# present.  A foil copy falls back to the nonfoil URL when there is no foil one.
+_ENRICH_COLUMNS = """COALESCE(_ck_buy.price, _ck_retail.price) as ck_price,
+                    _tcg.price as tcg_price,
+                    COALESCE(NULLIF(CASE WHEN c.finish IN ('foil', 'etched') THEN _mp.ck_url_foil END, ''), _mp.ck_url, '') as ck_url"""
+
+
+# Page bounds for /api/collection. Measured on the real payload (108,630 rows
+# for is:unowned): a 250-row page is 212 KB raw / 28 KB gzipped and 434 round
+# trips to walk the catalog; 1000 is 855 KB / 103 KB and 108 trips. There is no
+# unbounded escape hatch and no sentinel — every caller takes these semantics.
+COLLECTION_LIMIT_DEFAULT = 250
+COLLECTION_LIMIT_MAX = 1000
+
+
+class PageParamError(ValueError):
+    """A limit/offset the caller must fix. Surfaced as a 400, never clamped."""
+
+
+def _parse_page_params(params: dict) -> tuple[int, int]:
+    """Return (limit, offset) from query params, or raise PageParamError."""
+    limit = _page_int(params, "limit", COLLECTION_LIMIT_DEFAULT)
+    offset = _page_int(params, "offset", 0)
+    if not 1 <= limit <= COLLECTION_LIMIT_MAX:
+        raise PageParamError(f"limit must be between 1 and {COLLECTION_LIMIT_MAX}")
+    if offset < 0:
+        raise PageParamError("offset must be 0 or greater")
+    return limit, offset
+
+
+def _page_int(params: dict, name: str, default: int) -> int:
+    raw = params.get(name, [""])[0].strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise PageParamError(f"{name} must be an integer") from None
+
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -1072,7 +1152,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path == "/api/collection":
             self._api_collection(params)
         elif path == "/api/search":
-            # Legacy endpoint — redirect to /api/collection
+            # Legacy alias for /api/collection, kept for external callers since
+            # 24fc389. Not a redirect and not a second implementation: the same
+            # handler runs, so both routes take the same params, the same page
+            # bounds and the same response shape, and neither can drift from the
+            # other. tests/integration/test_search_alias.py pins that. Anything
+            # /api/search should do differently belongs in _api_collection.
             self._api_collection(params)
         elif path == "/api/wishlist":
             self._api_wishlist_list(params)
@@ -2009,112 +2094,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         self._send_json(result)
 
-    def _api_search(self, params: dict):
-        """Scryfall-style search endpoint."""
-        import time as _time
-
-        from mtg_collector.search import SearchError, compile_query, execute_search, parse_query
-
-        q = params.get("q", [""])[0]
-        if not q:
-            self._send_json([])
-            return
-
-        include_unowned = params.get("include_unowned", [""])[0]
-        status = params.get("status", ["owned"])[0]
-
-        timings = {}
-
-        # Parse
-        t0 = _time.monotonic()
-        try:
-            ast = parse_query(q)
-        except SearchError as e:
-            self._send_json({"error": str(e), "position": e.position}, 400)
-            return
-        timings["parse_ms"] = round((_time.monotonic() - t0) * 1000, 1)
-
-        # Compile
-        t0 = _time.monotonic()
-        tz = params.get("tz", [""])[0] or None
-        compiled = compile_query(ast, tz=tz)
-        timings["compile_ms"] = round((_time.monotonic() - t0) * 1000, 1)
-
-        # Execute
-        mode = "all" if include_unowned else "collection"
-        conn = self._get_conn()
-        rows, query_timings = execute_search(conn, compiled, mode=mode, status=status)
-        timings.update(query_timings)
-
-        # Format results
-        results = []
-        for row in rows:
-            keys = row.keys()
-            card = {
-                "oracle_id": row["oracle_id"],
-                "name": row["name"],
-                "type_line": row["type_line"],
-                "mana_cost": row["mana_cost"],
-                "cmc": row["cmc"],
-                "colors": row["colors"],
-                "color_identity": row["color_identity"],
-                "set_code": row["set_code"],
-                "set_name": row["set_name"],
-                "collector_number": row["collector_number"],
-                "rarity": row["rarity"],
-                "printing_id": row["printing_id"],
-                "image_uri": row["image_uri"],
-                "artist": row["artist"],
-                "frame_effects": row["frame_effects"],
-                "border_color": row["border_color"],
-                "full_art": bool(row["full_art"]) if row["full_art"] else False,
-                "promo": bool(row["promo"]) if row["promo"] else False,
-                "promo_types": row["promo_types"],
-                "finishes": row["finishes"],
-                "layout": row["layout"] or "normal",
-                "finish": row["finish"],
-                "condition": row["condition"],
-                "status": row["status"],
-                "qty": row["qty"],
-                "acquired_at": row["acquired_at"] if "acquired_at" in keys else None,
-                "owned": row["collection_id"] is not None if include_unowned else True,
-            }
-            if row["flavor_name"]:
-                card["oracle_name"] = row["name"]
-                card["name"] = row["flavor_name"]
-            # Optional fields
-            if "collection_id" in keys and row["collection_id"]:
-                card["collection_id"] = row["collection_id"]
-            if "order_id" in keys and row["order_id"]:
-                card["order_id"] = row["order_id"]
-            if "binder_id" in keys and row["binder_id"]:
-                card["binder_id"] = row["binder_id"]
-
-            results.append(card)
-
-        # Attach prices
-        _bulk_attach_prices(conn, results)
-        conn.close()
-
-        timings["total_ms"] = round(
-            timings.get("parse_ms", 0) + timings.get("compile_ms", 0) + timings.get("query_ms", 0), 1
-        )
-        timings["row_count"] = len(results)
-
-        # Send response with timing headers
-        body = json.dumps(results).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        for key, val in timings.items():
-            self.send_header(f"X-Search-{key.replace('_', '-').title()}", str(val))
-        accept_enc = self.headers.get("Accept-Encoding", "")
-        if "gzip" in accept_enc and len(body) > 1024:
-            body = gzip.compress(body)
-            self.send_header("Content-Encoding", "gzip")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
     def _api_collection(self, params: dict):
         """Return aggregated collection data with Scryfall-style search.
 
@@ -2123,6 +2102,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         When no status: is in the query, defaults to status:owned.
         """
         from mtg_collector.search import SearchError, compile_query, parse_query
+
+        try:
+            limit, offset = _parse_page_params(params)
+        except PageParamError as e:
+            self._send_json({"error": str(e)}, 400)
+            return
 
         q = params.get("q", [""])[0]
         sort = params.get("sort", [""])[0]
@@ -2177,9 +2162,34 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             card_filter = f"({' OR '.join(pair_clauses)})"
             where_sql = f"{card_filter} AND ({where_sql})" if where_sql != "1=1" else card_filter
 
-        # Sort: use search engine order:/direction: if present, else URL params
+        # The price column the client renders follows the price_sources
+        # setting, so sorting and the totals below follow it too — otherwise
+        # the table would order itself by a number it is not showing.
+        price_sources_row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'price_sources'"
+        ).fetchone()
+        first_source = (
+            price_sources_row["value"] if price_sources_row else "tcg,ck"
+        ).split(",")[0]
+        _CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
+        _TCG_PRICE_SQL = "_tcg.price"
+        display_price_sql = _CK_PRICE_SQL if first_source == "ck" else _TCG_PRICE_SQL
+
+        # Sort: use search engine order:/direction: if present, else URL params.
+        # No sort_map value is unique, and neither is the card.name tiebreak
+        # (~3.2 printings share a name), so every template below closes its
+        # ORDER BY with the columns that identify one output row — the GROUP BY
+        # key where there is one, c.id/dc.id for the per-copy template. Without
+        # that the order is not total and paged responses drop and duplicate rows.
         sort_map = {
-            "name": "card.name",
+            # p.card_name, not card.name — same value (it is denormalised from
+            # it), but on the table the grouped templates already drive from, so
+            # idx_printings_card_name(card_name, printing_id) can serve the sort.
+            # Reading it across the join cannot be made fast: GROUP BY
+            # p.printing_id pins printings as the driving table, so cards can
+            # never be the outer loop and idx_cards_name is never reachable for
+            # ordering. Measured on 109,976 rows: 2.3 s -> 8.8 ms.
+            "name": "p.card_name",
             "cmc": "card.cmc",
             "rarity": "CASE p.rarity WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2 WHEN 'mythic' THEN 3 ELSE 4 END",
             "set": "p.set_code",
@@ -2188,12 +2198,26 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "collector_number": "CAST(p.collector_number AS INTEGER)",
             "date_added": "c.acquired_at",
             "added": "c.acquired_at",
-            "price": "_lp.price",
+            # These three are expressions from _ENRICH_COLUMNS, whose joins are
+            # unconditional and single-row, so they need no needs_*_join flag.
+            #
+            # `price` deliberately does NOT use _lp. That join pins price_type
+            # but not source, and latest_prices' key is (set_code,
+            # collector_number, source, price_type) — so with both a TCG and a
+            # Card Kingdom price it matches twice. The GROUP BY templates hide
+            # that by collapsing the duplicate (while making which source you
+            # sorted by a coin toss), but expand=copies has no GROUP BY, and
+            # paging a result with duplicated rows drops and repeats cards.
+            # Nothing sent `sort` before the client began paging, so this was
+            # unreachable rather than fixed.
+            "price": display_price_sql,
+            "tcg_price": _TCG_PRICE_SQL,
+            "ck_price": _CK_PRICE_SQL,
         }
         if compiled and compiled.order_by:
-            sort_col = sort_map.get(compiled.order_by, "card.name")
+            sort_col = sort_map.get(compiled.order_by, "p.card_name")
         else:
-            sort_col = sort_map.get(sort, "card.name")
+            sort_col = sort_map.get(sort, "p.card_name")
         if compiled and compiled.order_dir == "desc":
             order_dir = "DESC"
         elif order:
@@ -2201,13 +2225,54 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         else:
             order_dir = "ASC"
 
+        sorting_by_name = sort_col == "p.card_name"
+
+        def _order_by(*identity_cols: str) -> str:
+            """ORDER BY for a template, given the columns that identify one row.
+
+            The identity columns follow order_dir rather than being pinned ASC.
+            An index can only be read backwards when every term inverts
+            together, so `p.card_name DESC, p.printing_id ASC` falls back to a
+            full sort — measured 4.3 s against 10 ms for `... DESC, ... DESC`.
+            The direction of a tiebreak is arbitrary either way; it is there to
+            make the order total, and it is equally total in either direction.
+
+            The name is added as a secondary sort only when it is not already
+            the primary. Repeating it would break the index prefix for nothing.
+            """
+            terms = [f"{sort_col} {order_dir}"]
+            if not sorting_by_name:
+                terms.append(f"p.card_name {order_dir}")
+            terms.extend(f"{col} {order_dir}" for col in identity_cols)
+            return "ORDER BY " + ", ".join(terms)
+
+        def _group_by(*key_cols: str) -> str:
+            """GROUP BY for a template, given its row-identity key.
+
+            When the sort is by name, the sort column leads the grouping. That
+            is a no-op semantically — printing_id is the primary key and so
+            functionally determines card_name, meaning the finer key groups
+            exactly the same rows — but it is what lets one scan of
+            idx_printings_card_name satisfy the grouping and the ordering at
+            once. Denormalising without this measured no better than not
+            denormalising at all (2.4 s vs 2.7 s); with it, 8.8 ms.
+            """
+            cols = list(key_cols)
+            if sorting_by_name:
+                cols.insert(0, "p.card_name")
+            return "GROUP BY " + ", ".join(cols)
+
         # Conditional JOINs from the search engine
         # Note: expand_copies and default templates already include dc/d/b joins.
         # Only the shared-links (card_pairs) template needs them dynamically.
-        needs_price_join = (compiled and compiled.needs_price_join) or sort_col == "_lp.price"
+        # _lp now serves only the search engine's `price:` keyword — no sort
+        # resolves to it any more, so sorting no longer drags in a join that
+        # can match a card twice.
+        needs_price_join = compiled and compiled.needs_price_join
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
-        def _build_extra_joins(*, has_deck_binder_joins: bool) -> str:
+        def _build_extra_joins(*, has_deck_binder_joins: bool, enrich: str = "full") -> str:
+            """enrich: "full" for the page, "prices" for the totals, "none" for the count."""
             joins = []
             if not has_deck_binder_joins:
                 if compiled and compiled.needs_deck_join:
@@ -2227,11 +2292,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 joins.append(
                     "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
                 )
+            if enrich == "full":
+                joins.extend(_ENRICH_JOINS)
+            elif enrich == "prices":
+                # The totals need a price per row and nothing else. Dropping the
+                # ck_url join drops its correlated scalar subquery, which runs
+                # once per row of the whole result: 2.6 s -> 1.0 s on 109,976.
+                joins.extend(_ENRICH_PRICE_JOINS)
             return "\n                ".join(joins)
 
         if card_pairs or include_unowned:
             # LEFT JOIN template: shared-link cards or is:unowned queries
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2251,20 +2323,28 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     o.seller_name as order_seller,
                     o.order_number as order_number,
                     o.order_date as order_date,
-                    c.purchase_price
+                    c.purchase_price,
+                    {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM printings p
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 LEFT JOIN collection c ON p.printing_id = c.printing_id
                 LEFT JOIN orders o ON c.order_id = o.id
-                {_build_extra_joins(has_deck_binder_joins=False)}
+                {joins}
                 WHERE {where_sql}
-                GROUP BY p.printing_id
-                ORDER BY {sort_col} {order_dir}, card.name ASC
+                {_group_by("p.printing_id")}
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="none"))
+            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="prices"))
+            order_sql = _order_by("p.printing_id")
+            agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2287,7 +2367,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
-                    b.name as binder_name
+                    b.name as binder_name,
+                    {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2296,13 +2380,20 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN deck_cards dc ON dc.collection_id = c.id
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
-                {_build_extra_joins(has_deck_binder_joins=True)}
+                {joins}
                 WHERE {where_sql}
-                ORDER BY {sort_col} {order_dir}, card.name ASC
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="none"))
+            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="prices"))
+            # No GROUP BY on this template: one row per collection entry, so
+            # c.id (plus dc.id, which the deck join can duplicate it by) is what
+            # identifies a row.
+            order_sql = _order_by("p.printing_id", "c.id", "dc.id")
+            agg_qty_sql = "1"
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2324,7 +2415,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
-                    b.name as binder_name
+                    b.name as binder_name,
+                    {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2333,14 +2428,35 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN deck_cards dc ON dc.collection_id = c.id
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
-                {_build_extra_joins(has_deck_binder_joins=True)}
+                {joins}
                 WHERE {where_sql}
-                GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
-                ORDER BY {sort_col} {order_dir}, card.name ASC
+                {_group_by("p.printing_id", "c.finish", "c.condition", "c.status", "c.order_id")}
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="none"))
+            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="prices"))
+            order_sql = _order_by(
+                "p.printing_id", "c.finish", "c.condition", "c.status", "c.order_id"
+            )
+            agg_qty_sql = "COUNT(DISTINCT c.id)"
 
-        cursor = conn.execute(query, sql_params)
+        # order_sql stays per-template: the tiebreak is that template's row
+        # identity, and it differs (the GROUP BY key, or c.id/dc.id per copy).
+        # It is kept out of body_sql so the COUNT below does not sort.
+        #
+        # LIMIT/OFFSET are bound parameters, never formatted into the SQL.
+        cursor = conn.execute(
+            f"{select_sql}{body_sql}{order_sql} LIMIT ? OFFSET ?",
+            [*sql_params, limit, offset],
+        )
         rows = cursor.fetchall()
+
+        # A short page has already answered how big the result is: the query ran
+        # out of rows, so the result ends here. That covers every query whose
+        # result fits in one page — which is most of them — for no extra query
+        # at all. (Not when the page is empty and the offset is past the end:
+        # then the offset says nothing about where the result stopped.)
+        short_page = len(rows) < limit and (rows or offset == 0)
 
         include_unowned = bool(card_pairs) or include_unowned
         results = []
@@ -2399,57 +2515,76 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 card["order_number"] = row["order_number"]
                 card["order_date"] = row["order_date"]
                 card["purchase_price"] = row["purchase_price"]
-            card["tcg_price"] = None
-            card["ck_price"] = None
-            card["ck_url"] = ""
+            # Prices and ck_url come from the main query's enrichment joins
+            # (_ENRICH_COLUMNS); the JSON payload has always carried prices as
+            # strings, so keep formatting them here rather than in SQL.
+            card["tcg_price"] = None if row["tcg_price"] is None else str(row["tcg_price"])
+            card["ck_price"] = None if row["ck_price"] is None else str(row["ck_price"])
+            card["ck_url"] = row["ck_url"]
             results.append(card)
 
-        # Bulk price lookup — one query replaces 3600 individual queries
-        if results:
-            price_keys = []
-            for card in results:
-                # Use the physical copy's actual finish (c.finish), not the
-                # printing's available finishes (p.finishes) — otherwise a foil
-                # copy of a printing that also exists in nonfoil shows the
-                # nonfoil price. Etched copies use foil pricing.
-                price_type = "foil" if card["finish"] in ("foil", "etched") else "normal"
-                sc = card["set_code"].lower()
-                cn = card["collector_number"]
-                price_keys.append((sc, cn, price_type))
+        # total, total_qty and total_value all describe the whole result rather
+        # than the page, and none of them can be summed from the page: the client
+        # fetches windows as it scrolls, so a page-scoped aggregate would climb
+        # as the user scrolled — a collection value that grows while you look at
+        # it is worse than none. Priced the same way the table is
+        # (display_price_sql), so the status line agrees with the price column
+        # beside it.
+        #
+        # total_qty/total_value are computed on the first window only (de-962).
+        # They describe the result, not the window, so every later window used to
+        # recompute a number the client already had — measured at 1.0 s of the
+        # 1.5 s a scroll fetch cost once the page query itself was fixed. The
+        # value on screen still never moves, because the client reads them once
+        # and keeps them; the keys are simply absent from later windows rather
+        # than being present and stale.
+        #
+        # `total` is on every window: deck-builder.js pages the card picker until
+        # `offset >= total`, so dropping it there would turn its loop into a
+        # fixed-cap scan.
+        totals_in_hand = short_page and offset == 0
+        price_key = "ck_price" if first_source == "ck" else "tcg_price"
+        aggregates = {}
 
-            # Collect unique (set_code, collector_number) pairs for batch lookup
-            unique_cards = list({(sc, cn) for sc, cn, _ in price_keys})
-            ph = ",".join("(?,?)" for _ in unique_cards)
-            params = [v for pair in unique_cards for v in pair]
-            price_map: dict[tuple[str, str, str, str], str] = {}
-            for r in conn.execute(
-                f"SELECT set_code, collector_number, source, price_type, price "
-                f"FROM latest_prices WHERE (set_code, collector_number) IN ({ph})",
-                params,
-            ).fetchall():
-                price_map[(r["set_code"], r["collector_number"], r["source"], r["price_type"])] = str(r["price"])
-
-            # Bulk CK URL lookup
-            ck_url_map: dict[str, tuple[str, str]] = {}
-            if self.generator:
-                pids = [card["printing_id"] for card in results]
-                ph = ",".join("?" for _ in pids)
-                for r in conn.execute(
-                    f"SELECT printing_id, ck_url, ck_url_foil FROM mtgjson_printings WHERE printing_id IN ({ph})",
-                    pids,
-                ).fetchall():
-                    ck_url_map[r["printing_id"]] = (r["ck_url"] or "", r["ck_url_foil"] or "")
-
-            for i, card in enumerate(results):
-                sc, cn, pt = price_keys[i]
-                card["ck_price"] = price_map.get((sc, cn, "cardkingdom", f"buylist_{pt}")) or price_map.get((sc, cn, "cardkingdom", pt))
-                card["tcg_price"] = price_map.get((sc, cn, "tcgplayer", pt))
-                foil = card["finish"] in ("foil", "etched")
-                urls = ck_url_map.get(card["printing_id"], ("", ""))
-                card["ck_url"] = (urls[1] if foil else urls[0]) or urls[0]
+        if totals_in_hand:
+            # The page is the whole result, so the rows in hand are the answer.
+            total = len(results)
+            aggregates["total_qty"] = sum(c.get("qty") or 0 for c in results)
+            aggregates["total_value"] = round(sum(
+                float(c[price_key] or 0) * (c.get("qty") or 0) for c in results
+            ), 2)
+        elif offset == 0:
+            # One scan for all three. Counting and summing separately walked the
+            # same grouped body twice: 1.4 s against 1.0 s for this, same answer.
+            agg = conn.execute(
+                f"SELECT COUNT(*), COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
+                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {totals_body_sql})",
+                sql_params,
+            ).fetchone()
+            total = agg[0]
+            aggregates["total_qty"] = agg[1]
+            aggregates["total_value"] = round(agg[2], 2)
+        elif short_page:
+            total = offset + len(rows)
+        else:
+            # Count the body, which carries the GROUP BY and so counts groups,
+            # matching what the page returns. The enrichment joins are left out:
+            # a COUNT has no columns to enrich, and each of them matches at most
+            # one row, so they cannot change the count either.
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
+            ).fetchone()[0]
 
         conn.close()
-        self._send_json(results)
+        self._send_json(
+            {
+                "rows": results,
+                "total": total,
+                **aggregates,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
 
     def _api_card(self, printing_id: str):
         """Return full card data for a single printing by printing_id."""
@@ -2623,6 +2758,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     # Shape, in stages (each a TEMP table so it is computed exactly once):
     #   pop_t     - the filtered population, one row per collection entry.
     #   keys_t    - distinct (set_code, collector_number, price_type); rowid = kid.
+    #   carry_t   - per (key, source), the single most recent price strictly
+    #               before the window. See "Windowing" below.
     #   grp_iv_t  - per key, the cumulative quantity held and the day range that
     #               quantity is valid for (SUM/LEAD windows over acquisition days).
     #   price_iv_t- per (key, source), each price and the day range it is the
@@ -2634,7 +2771,29 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     # running-sums it over the day spine, which is O(segments) rather than
     # O(groups x days).
     #
-    # Days are integer offsets from the first acquisition, not date strings:
+    # Windowing (`?range=` days, 0 = full history)
+    # -------------------------------------------
+    # Day 0 is the window start, not the first acquisition. The series is
+    # cumulative, so the window cannot simply drop everything before it — the
+    # carried-in position has to be reconstructed at day 0:
+    #
+    #   quantity - acquisition day offsets are clamped to >= 0, so every
+    #              pre-window acquisition collapses onto day 0 and the existing
+    #              GROUP BY sums them into the day-0 opening quantity.
+    #   price    - the price in effect at the window start is usually OLDER than
+    #              the window, so `observed_at >= start` alone would zero out
+    #              those cards until their next observation. carry_t adds back
+    #              exactly one row per (key, source): the latest price strictly
+    #              before the window, given sentinel day -1 so it sorts ahead of
+    #              every in-window row and then clamps to day 0. Its real date is
+    #              irrelevant once clamped, which is why only `price` is fetched.
+    #
+    # carry_t is a seek (ORDER BY observed_at DESC LIMIT 1 on the unique index),
+    # so it costs O(keys) regardless of how deep the price history goes; a
+    # GROUP BY ... MAX(observed_at) formulation would instead scan every
+    # pre-window row and reintroduce the O(history) cost this change removes.
+    #
+    # Days are integer offsets from the window start, not date strings:
     # the window sort is the dominant cost and sorting one INTEGER beats sorting
     # five TEXT columns by a wide margin. Dates are rebuilt for the 163-ish
     # output rows only.
@@ -2666,7 +2825,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         CREATE TEMP TABLE grp_iv_t AS
         WITH grp AS (
             SELECT k.rowid AS kid,
-                   MIN(CAST(julianday(pop_t.acq_date) - julianday(?) AS INTEGER), ?) AS day,
+                   MAX(MIN(CAST(julianday(pop_t.acq_date) - julianday(?) AS INTEGER), ?), 0) AS day,
                    COUNT(*) AS qty
             FROM pop_t
             JOIN keys_t k ON k.set_code = pop_t.set_code
@@ -2685,9 +2844,39 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     # `source` is folded to an integer bit (1 = tcgplayer, 0 = cardkingdom) so the
     # window partition is a single INTEGER expression.
+
+    # The carried-in price: per (key, source) the latest observation strictly
+    # before the window start. One index seek per row of `keys_t` x 2 sources --
+    # the correlated ORDER BY ... DESC LIMIT 1 lets SQLite land on the end of the
+    # range and step back once, so this does not scan pre-window history.
+    _GROWTH_CARRY_SQL = """
+        CREATE TEMP TABLE carry_t AS
+        SELECT kid, src, price FROM (
+            SELECT k.rowid AS kid,
+                   s.src AS src,
+                   (SELECT pr.price
+                      FROM prices pr
+                     WHERE pr.set_code = k.set_code
+                       AND pr.collector_number = k.cn
+                       AND pr.source = s.nm
+                       AND pr.price_type = k.price_type
+                       AND pr.observed_at < ?
+                     ORDER BY pr.observed_at DESC
+                     LIMIT 1) AS price
+            FROM keys_t k
+            CROSS JOIN (SELECT 'tcgplayer' AS nm, 1 AS src
+                        UNION ALL SELECT 'cardkingdom', 0) s
+        )
+        WHERE price IS NOT NULL
+    """
+
+    # LEAD orders on the raw (possibly -1) day so the carried-in row is
+    # unambiguously first; only the emitted `from_d` is clamped into the window.
+    # A carried-in row followed by an observation on day 0 yields the empty
+    # interval [0, 0), whose +cents/-cents deltas cancel.
     _GROWTH_PRICE_SQL = """
         CREATE TEMP TABLE price_iv_t AS
-        SELECT kid, src, from_d,
+        SELECT kid, src, MAX(from_d, 0) AS from_d,
                LEAD(from_d) OVER (PARTITION BY kid * 2 + src ORDER BY from_d) AS to_d,
                price
         FROM (
@@ -2701,6 +2890,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                           AND pr.price_type = k.price_type
             WHERE pr.source IN ('tcgplayer', 'cardkingdom')
               AND pr.observed_at >= ?
+            UNION ALL
+            SELECT kid, src, -1 AS from_d, price FROM carry_t
         )
     """
 
@@ -2750,15 +2941,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Return daily (count, tcg_value, ck_value) series for the filtered collection.
 
         Mirrors the search-filter parsing in `/api/collection`, then aggregates
-        every day from the earliest acquisition through today inside SQLite:
+        each day of the requested window inside SQLite:
           - cards acquired by that date (count)
           - historical price on that date for each held card (value)
 
-        Prices forward-fill: the most recent known price <= D is used. Cards
-        with no price on/before D contribute 0 to value but still count.
+        `?range=` is the window length in days (0 / absent = full history). The
+        window is the last `range` days ending today; it is clamped to the first
+        acquisition, so asking for more days than the collection has is the same
+        as asking for everything. The series is cumulative and every point is
+        absolute, so a windowed response is bit-identical to the corresponding
+        slice of the full-history response.
+
+        Prices forward-fill: the most recent known price <= D is used, including
+        observations from before the window. Cards with no price on/before D
+        contribute 0 to value but still count.
 
         Response: {"dates": ["YYYY-MM-DD", ...], "counts": [...],
-                   "tcg_values": [...], "ck_values": [...]}
+                   "tcg_values": [...], "ck_values": [...], "earliest": "..."}
+        `earliest` is the first acquisition in the whole filtered collection,
+        independent of the window, so the UI can size its range pills.
         """
         import datetime as _dt
 
@@ -2766,6 +2967,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         q = params.get("q", [""])[0]
         tz = params.get("tz", [""])[0] or None
+        range_days = int(params.get("range", ["0"])[0] or 0)
 
         where_sql = "1=1"
         sql_params: list = []
@@ -2780,7 +2982,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(e), "position": e.position}, 400)
                 return
 
-        empty = {"dates": [], "counts": [], "tcg_values": [], "ck_values": []}
+        empty = {
+            "dates": [], "counts": [], "tcg_values": [], "ck_values": [], "earliest": None,
+        }
 
         # is:unowned makes no sense for a growth chart — ignore.
         if compiled and compiled.include_unowned:
@@ -2818,18 +3022,29 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 sql_params,
             )
 
-            # Date axis: earliest acquisition -> today (UTC). `acquired_at` is
-            # ISO 8601 UTC, so the first 10 chars are a UTC date.
+            # Date axis: window start -> today (UTC). `acquired_at` is ISO 8601
+            # UTC, so the first 10 chars are a UTC date.
             today = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
-            start_d, end_d = conn.execute(
+            earliest, end_d = conn.execute(
                 "SELECT MIN(acq_date),"
                 " CASE WHEN MIN(acq_date) > ? THEN MIN(acq_date) ELSE ? END"
                 " FROM pop_t",
                 (today, today),
             ).fetchone()
-            if start_d is None:
+            if earliest is None:
                 self._send_json(empty)
                 return
+
+            # The window is the last `range_days` days ending at end_d, clamped
+            # to the first acquisition — a range wider than the collection's own
+            # span degrades to full history rather than padding empty days.
+            start_d = earliest
+            if range_days > 0:
+                win_start = (
+                    _dt.date.fromisoformat(end_d) - _dt.timedelta(days=range_days)
+                ).isoformat()
+                if win_start > start_d:
+                    start_d = win_start
             end_dn = (
                 _dt.date.fromisoformat(end_d) - _dt.date.fromisoformat(start_d)
             ).days
@@ -2838,6 +3053,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "CREATE TEMP TABLE keys_t AS"
                 " SELECT DISTINCT set_code, cn, price_type FROM pop_t"
             )
+            conn.execute(self._GROWTH_CARRY_SQL, (start_d,))
             conn.execute(self._GROWTH_GRP_SQL, (start_d, end_dn))
             conn.execute(self._GROWTH_PRICE_SQL, (start_d, start_d))
             conn.execute(self._GROWTH_SEG_SQL)
@@ -2850,6 +3066,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "counts": [r["n"] for r in rows],
             "tcg_values": [r["tcg_cents"] / 100.0 for r in rows],
             "ck_values": [r["ck_cents"] / 100.0 for r in rows],
+            "earliest": earliest,
         })
 
     def _api_price_history(self, set_code: str, collector_number: str):
@@ -8450,6 +8667,90 @@ def register(subparsers):
     parser.set_defaults(func=run)
 
 
+def _resolve_external_tls_paths():
+    """Resolve an operator-supplied certificate pair from the environment.
+
+    Returns ``(cert_path, key_path)`` when both ``MTGC_TLS_CERT`` and
+    ``MTGC_TLS_KEY`` are set, or ``None`` when neither is (the zero-config
+    self-signed default). Raises when exactly one is set, or when either points
+    at something that is not a readable file — a deployer who believes they are
+    serving a trusted certificate must never be silently downgraded to the
+    self-signed one.
+    """
+    cert = os.environ.get("MTGC_TLS_CERT", "").strip()
+    key = os.environ.get("MTGC_TLS_KEY", "").strip()
+
+    if not cert and not key:
+        return None
+
+    if not cert or not key:
+        set_var, unset_var = ("MTGC_TLS_KEY", "MTGC_TLS_CERT") if not cert else ("MTGC_TLS_CERT", "MTGC_TLS_KEY")
+        raise ValueError(
+            f"{set_var} is set but {unset_var} is not. "
+            "Set both to serve an externally-provided certificate, or neither to auto-generate a self-signed one."
+        )
+
+    paths = {"MTGC_TLS_CERT": Path(cert), "MTGC_TLS_KEY": Path(key)}
+    for var, path in paths.items():
+        if not path.is_file():
+            raise ValueError(f"{var}={path} is not a readable file.")
+        with open(path, "rb"):
+            pass
+
+    return paths["MTGC_TLS_CERT"], paths["MTGC_TLS_KEY"]
+
+
+def _generate_self_signed(cert_file, key_file):
+    """Write a self-signed certificate/key pair to the given paths."""
+    import socket
+    import subprocess
+
+    print("Generating self-signed certificate...")
+    san = "DNS:localhost,IP:127.0.0.1"
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        san += f",IP:{local_ip}"
+    except Exception:
+        pass
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", str(key_file), "-out", str(cert_file),
+            "-days", "3650", "-nodes",
+            "-subj", "/CN=mtgc-local",
+            "-addext", f"subjectAltName={san}",
+        ],
+        check=True,
+    )
+
+
+def _build_tls_context(cert_dir):
+    """Build the server's SSL context.
+
+    Uses the externally-provided certificate when ``MTGC_TLS_CERT`` /
+    ``MTGC_TLS_KEY`` are set; otherwise falls back to the auto-generated
+    self-signed pair under ``cert_dir``.
+    """
+    import ssl
+
+    external = _resolve_external_tls_paths()
+    if external is not None:
+        cert_file, key_file = external
+        print(f"[startup] Using externally-provided certificate: {cert_file}", flush=True)
+    else:
+        cert_file = cert_dir / "server.pem"
+        key_file = cert_dir / "server-key.pem"
+        if not cert_file.exists() or not key_file.exists():
+            _generate_self_signed(cert_file, key_file)
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(str(cert_file), str(key_file))
+    return ctx
+
+
 def run(args):
     """Run the crack-pack-server command."""
     db_path = get_db_path(getattr(args, "db", None))
@@ -8458,6 +8759,10 @@ def run(args):
     _shared_db_path = os.environ.get("MTGC_SHARED_DB")
     if _shared_db_path:
         print(f"[startup] Shared reference DB: {_shared_db_path}", flush=True)
+    # Presence of MTGC_HTTP_PORT is the switch for the second, plain-HTTP listener.
+    # A non-integer value raises out of int() and the process exits non-zero.
+    _http_port_env = os.environ.get("MTGC_HTTP_PORT")
+    http_port = int(_http_port_env) if _http_port_env is not None else None
     _background_db_path = db_path
     _ingest_executor = ThreadPoolExecutor(max_workers=4)
     _recover_pending_images(db_path)
@@ -8483,40 +8788,11 @@ def run(args):
     handler = partial(CrackPackHandler, gen, static_dir, db_path)
 
     server = ThreadingHTTPServer(("", args.port), handler)
+    plain_server = ThreadingHTTPServer(("", http_port), handler) if http_port is not None else None
 
     if args.https:
-        import socket
-        import ssl
-        import subprocess
-
         cert_dir = Path(os.environ.get("MTGC_HOME", Path.home() / ".mtgc"))
-        cert_file = cert_dir / "server.pem"
-        key_file = cert_dir / "server-key.pem"
-
-        if not cert_file.exists() or not key_file.exists():
-            print("Generating self-signed certificate...")
-            san = "DNS:localhost,IP:127.0.0.1"
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-                s.close()
-                san += f",IP:{local_ip}"
-            except Exception:
-                pass
-            subprocess.run(
-                [
-                    "openssl", "req", "-x509", "-newkey", "rsa:2048",
-                    "-keyout", str(key_file), "-out", str(cert_file),
-                    "-days", "3650", "-nodes",
-                    "-subj", "/CN=mtgc-local",
-                    "-addext", f"subjectAltName={san}",
-                ],
-                check=True,
-            )
-
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(str(cert_file), str(key_file))
+        ctx = _build_tls_context(cert_dir)
         server.socket = ctx.wrap_socket(server.socket, server_side=True)
         server.socket.settimeout(10)
         scheme = "https"
@@ -8532,7 +8808,12 @@ def run(args):
     print(f"Disambiguate: {scheme}://localhost:{args.port}/disambiguate")
     print(f"Ingestor (Manual ID): {scheme}://localhost:{args.port}/ingestor-ids")
     print(f"Ingestor (Orders): {scheme}://localhost:{args.port}/ingestor-order")
+    if plain_server is not None:
+        print(f"Plain HTTP listener: http://localhost:{http_port}")
     print("Press Ctrl+C to stop.")
+
+    if plain_server is not None:
+        threading.Thread(target=plain_server.serve_forever, daemon=True).start()
 
     try:
         server.serve_forever()
@@ -8540,3 +8821,5 @@ def run(args):
         print("\nShutting down.")
         _ingest_executor.shutdown(wait=False)
         server.shutdown()
+        if plain_server is not None:
+            plain_server.shutdown()
