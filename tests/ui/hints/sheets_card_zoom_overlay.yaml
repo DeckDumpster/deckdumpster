@@ -1,14 +1,21 @@
-start_page: /sheets
+start_page: "/sheets#set=blb&product=play"
 involves:
   - "card elements .sheet-card (clickable)"
   - "zoom overlay #zoom-overlay (display:none by default, .active to show)"
   - "zoom image #zoom-img"
   - "section headers .section-header (click to expand)"
+  - "status #status showing sheet/card counts (8 sheets for blb play)"
 fixture_data:
   set: "blb"
   product: "play"
 notes: >
-  Load BLB play sheets via deep link. Expand a sheet section by clicking
-  its header. Click the first .sheet-card to trigger showZoom(). Verify
-  #zoom-overlay has .active class. Click #zoom-overlay to dismiss. Verify
-  #zoom-overlay no longer has .active class.
+  Load BLB play sheets via the deep link so the sheet render happens under
+  the page-load budget rather than mid-scenario: reaching play through the
+  set input and the product pills makes the page load the auto-selected
+  first product (collector) and then throw that render away, so the first
+  assertion has to wait out a second full 535 KB fetch and re-render.
+  Wait on "8 sheets" (play has 8, collector has 6) rather than
+  .section-header, which cannot tell the two products apart. Then expand a
+  sheet section by clicking its header, click the first .sheet-card to
+  trigger showZoom(), verify #zoom-overlay has .active, click #zoom-overlay
+  to dismiss, and verify .active is gone.
