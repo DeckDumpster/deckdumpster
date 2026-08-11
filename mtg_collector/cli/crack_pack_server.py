@@ -963,6 +963,48 @@ def _recover_pending_images(db_path):
         print(f"[startup] {len(rows)} pending image(s) waiting — ANTHROPIC_API_KEY not set, skipping processing", flush=True)
 
 
+# /api/collection price and Card Kingdom URL enrichment, folded into the main
+# query.  This used to be two follow-up passes whose `IN (...)` clauses were
+# sized by the result set: 112,809 rows built a statement with 225,618 bound
+# parameters, within 11% of this build's SQLITE_MAX_VARIABLE_NUMBER of 250,000.
+# Every join below binds zero parameters and matches at most one row, so neither
+# the SQL text nor the row cardinality depends on how large the result set is.
+#
+# `latest_prices` has PRIMARY KEY (set_code, collector_number, source,
+# price_type), so pinning source and price_type makes each price join
+# single-row.  price_type follows the physical copy's finish (c.finish), not the
+# printing's available finishes, so a foil copy of a printing that also exists
+# in nonfoil gets the foil price; etched copies price as foil.
+_ENRICH_JOINS = [
+    "LEFT JOIN latest_prices _ck_buy ON _ck_buy.set_code = p.set_code"
+    " AND _ck_buy.collector_number = p.collector_number"
+    " AND _ck_buy.source = 'cardkingdom'"
+    " AND _ck_buy.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'buylist_foil' ELSE 'buylist_normal' END",
+    "LEFT JOIN latest_prices _ck_retail ON _ck_retail.set_code = p.set_code"
+    " AND _ck_retail.collector_number = p.collector_number"
+    " AND _ck_retail.source = 'cardkingdom'"
+    " AND _ck_retail.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
+    "LEFT JOIN latest_prices _tcg ON _tcg.set_code = p.set_code"
+    " AND _tcg.collector_number = p.collector_number"
+    " AND _tcg.source = 'tcgplayer'"
+    " AND _tcg.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
+    # printing_id is not unique in mtgjson_printings: MTGJSON emits one row per
+    # face of a double-faced card and both carry the same scryfallId, with a
+    # different Card Kingdom link each.  Resolve to a uuid first so the join
+    # stays single-row, and resolve it the way PackGenerator.get_ck_url() does
+    # — same index seek, same first row — so the collection list and the card
+    # detail page show the same link for the same card.
+    "LEFT JOIN mtgjson_printings _mp ON _mp.uuid ="
+    " (SELECT uuid FROM mtgjson_printings WHERE printing_id = p.printing_id LIMIT 1)",
+]
+
+# Card Kingdom publishes a buylist and a retail price; the buylist wins when
+# present.  A foil copy falls back to the nonfoil URL when there is no foil one.
+_ENRICH_COLUMNS = """COALESCE(_ck_buy.price, _ck_retail.price) as ck_price,
+                    _tcg.price as tcg_price,
+                    COALESCE(NULLIF(CASE WHEN c.finish IN ('foil', 'etched') THEN _mp.ck_url_foil END, ''), _mp.ck_url, '') as ck_url"""
+
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -2131,6 +2173,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 joins.append(
                     "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
                 )
+            joins.extend(_ENRICH_JOINS)
             return "\n                ".join(joins)
 
         if card_pairs or include_unowned:
@@ -2155,7 +2198,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     o.seller_name as order_seller,
                     o.order_number as order_number,
                     o.order_date as order_date,
-                    c.purchase_price
+                    c.purchase_price,
+                    {_ENRICH_COLUMNS}
                 FROM printings p
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
@@ -2191,7 +2235,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
-                    b.name as binder_name
+                    b.name as binder_name,
+                    {_ENRICH_COLUMNS}
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2228,7 +2273,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
-                    b.name as binder_name
+                    b.name as binder_name,
+                    {_ENRICH_COLUMNS}
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2304,54 +2350,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 card["order_number"] = row["order_number"]
                 card["order_date"] = row["order_date"]
                 card["purchase_price"] = row["purchase_price"]
-            card["tcg_price"] = None
-            card["ck_price"] = None
-            card["ck_url"] = ""
+            # Prices and ck_url come from the main query's enrichment joins
+            # (_ENRICH_COLUMNS); the JSON payload has always carried prices as
+            # strings, so keep formatting them here rather than in SQL.
+            card["tcg_price"] = None if row["tcg_price"] is None else str(row["tcg_price"])
+            card["ck_price"] = None if row["ck_price"] is None else str(row["ck_price"])
+            card["ck_url"] = row["ck_url"]
             results.append(card)
-
-        # Bulk price lookup — one query replaces 3600 individual queries
-        if results:
-            price_keys = []
-            for card in results:
-                # Use the physical copy's actual finish (c.finish), not the
-                # printing's available finishes (p.finishes) — otherwise a foil
-                # copy of a printing that also exists in nonfoil shows the
-                # nonfoil price. Etched copies use foil pricing.
-                price_type = "foil" if card["finish"] in ("foil", "etched") else "normal"
-                sc = card["set_code"].lower()
-                cn = card["collector_number"]
-                price_keys.append((sc, cn, price_type))
-
-            # Collect unique (set_code, collector_number) pairs for batch lookup
-            unique_cards = list({(sc, cn) for sc, cn, _ in price_keys})
-            ph = ",".join("(?,?)" for _ in unique_cards)
-            params = [v for pair in unique_cards for v in pair]
-            price_map: dict[tuple[str, str, str, str], str] = {}
-            for r in conn.execute(
-                f"SELECT set_code, collector_number, source, price_type, price "
-                f"FROM latest_prices WHERE (set_code, collector_number) IN ({ph})",
-                params,
-            ).fetchall():
-                price_map[(r["set_code"], r["collector_number"], r["source"], r["price_type"])] = str(r["price"])
-
-            # Bulk CK URL lookup
-            ck_url_map: dict[str, tuple[str, str]] = {}
-            if self.generator:
-                pids = [card["printing_id"] for card in results]
-                ph = ",".join("?" for _ in pids)
-                for r in conn.execute(
-                    f"SELECT printing_id, ck_url, ck_url_foil FROM mtgjson_printings WHERE printing_id IN ({ph})",
-                    pids,
-                ).fetchall():
-                    ck_url_map[r["printing_id"]] = (r["ck_url"] or "", r["ck_url_foil"] or "")
-
-            for i, card in enumerate(results):
-                sc, cn, pt = price_keys[i]
-                card["ck_price"] = price_map.get((sc, cn, "cardkingdom", f"buylist_{pt}")) or price_map.get((sc, cn, "cardkingdom", pt))
-                card["tcg_price"] = price_map.get((sc, cn, "tcgplayer", pt))
-                foil = card["finish"] in ("foil", "etched")
-                urls = ck_url_map.get(card["printing_id"], ("", ""))
-                card["ck_url"] = (urls[1] if foil else urls[0]) or urls[0]
 
         conn.close()
         self._send_json(results)

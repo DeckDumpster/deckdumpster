@@ -200,6 +200,8 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 - **Test fixture goes stale after schema migrations.** Regenerate with `uv run python scripts/build_test_fixture.py`, then recreate the seed volume with `bash deploy/seed.sh --force`. The full fixture (with sealed product contents) requires `~/.mtgc/AllPrintings.json` — run `mtg data fetch` first.
 - **HTML pages share no JS imports (legacy).** Helpers like `getRarityColor()` and `formatPrice()` are inlined in older pages. New pages should use `shared.css` + `shared.js`. Don't introduce a new ad-hoc price formatter — use `formatPrice` (or copy its body verbatim if the page can't load `shared.js`).
 - **Restoring DB snapshots with `cp` under WAL mode is broken.** See the "WAL mode" patterns section. Use `sqlite3.backup()`.
+- **Never use `rowid` on a shared reference table.** Deployed instances ATTACH `shared.sqlite` and shadow every table in `SHARED_TABLES` with a temp `CREATE VIEW … AS SELECT * FROM shared.<t>`. Views have no rowid, and SQLite resolves `rowid` against one to **NULL rather than an error** — so a join keyed on it silently matches nothing instead of failing loudly. Key on a real unique column (`uuid`, `printing_id`, the PK).
+- **`mtgjson_printings.printing_id` is not unique.** The PK is `uuid`; MTGJSON emits one row per face of a double-faced card, and both faces carry the same Scryfall id with a *different* Card Kingdom link. Anything joining on `printing_id` must resolve to a single row first, the way `PackGenerator.get_ck_url()` and `_ENRICH_JOINS` in `crack_pack_server.py` do, or it multiplies rows.
 
 ## Deployment
 
