@@ -29,6 +29,14 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$REPO_DIR"
 
+# The seed volume is not per-instance, so there is no unit to adopt: it belongs
+# to whichever store the caller names. Unset means Podman's default store, as
+# before (de-3mo). A seed volume built in an alternate store is only visible to
+# `setup.sh --init` runs pointed at that same store.
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
+mtgc_store_activate
+
 if podman volume exists "$SEED_VOLUME" 2>/dev/null; then
     if [ "$FORCE" = "true" ]; then
         echo "==> Removing existing seed volume..."
