@@ -16,7 +16,7 @@ def steps(harness):
         });
         const deck = await res.json();
         const colRes = await fetch('/api/collection?limit=50');
-        const cards = await colRes.json();
+        const cards = (await colRes.json()).rows;  // page envelope: {rows, total, limit, offset}
         if (cards.length > 0) {
             await fetch('/api/decks/' + deck.id + '/expected-cards/add', {
                 method: 'POST',

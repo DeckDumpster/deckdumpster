@@ -1,0 +1,12 @@
+# Scenario: Result stats say how much of the result they cover
+#
+# Related:
+#   issues: [de-6f4]
+#   pull_requests: []
+
+description: >
+  When I open the result statistics for a search far larger than one screen,
+  the modal tells me it is describing only the cards fetched so far rather
+  than quietly presenting them as the whole result. When the result is small
+  enough that everything is already loaded, no such caveat appears, because
+  the figures really are the whole thing.

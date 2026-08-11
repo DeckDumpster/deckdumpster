@@ -17,12 +17,12 @@ import pytest  # noqa: I001
 def _get_unassigned_entry_ids(api, count=1):
     """Get individual collection entry IDs for unassigned cards via /api/collection/copies."""
     # Get some collection entries (grouped by printing)
-    status, collection = api.get("/api/collection?limit=20")
-    if status != 200 or not collection:
+    status, page = api.get("/api/collection?limit=20")
+    if status != 200 or not page["rows"]:
         return []
 
     entry_ids = []
-    for card in collection:
+    for card in page["rows"]:
         pid = card["printing_id"]
         finish = card.get("finish", "nonfoil")
         status, copies = api.get(f"/api/collection/copies?printing_id={pid}&finish={finish}")
@@ -254,7 +254,7 @@ class TestExpectedListRemoval:
     def _pick_printing(self, api):
         status, data = api.get("/api/collection?limit=5")
         assert status == 200
-        cards = data if isinstance(data, list) else data.get("cards", [])
+        cards = data["rows"]
         assert cards, "No cards in collection — cannot run expected-list test"
         card = cards[0]
         return card["printing_id"], card["oracle_id"], card["name"]
@@ -620,7 +620,7 @@ class TestDeleteCascade:
         # Cards should still be in collection (total count should not decrease)
         status, collection = api.get("/api/collection")
         assert status == 200
-        assert len(collection) > 0  # Collection is not empty
+        assert collection["total"] > 0  # Collection is not empty
 
     def test_delete_binder_preserves_cards(self, api):
         card_ids = _get_unassigned_entry_ids(api, count=2)
@@ -638,7 +638,7 @@ class TestDeleteCascade:
         # Cards should still be in collection
         status, collection = api.get("/api/collection")
         assert status == 200
-        assert len(collection) > 0
+        assert collection["total"] > 0
 
 
 # =============================================================================
@@ -725,7 +725,7 @@ class TestCollectionDeckBinderFilters:
     def test_unassigned_filter(self, api):
         status, data = api.get("/api/collection?q=is%3Aunassigned&limit=5")
         assert status == 200
-        for card in data:
+        for card in data["rows"]:
             assert card.get("deck_id") is None
             assert card.get("binder_id") is None
 
@@ -745,8 +745,8 @@ class TestCollectionDeckBinderFilters:
             q = quote(f'deck:"{deck["name"]}"')
             status, filtered = api.get(f"/api/collection?q={q}")
             assert status == 200
-            assert len(filtered) >= 1
-            for card in filtered:
+            assert filtered["total"] >= 1
+            for card in filtered["rows"]:
                 assert card.get("deck_id") == deck["id"]
         finally:
             api.delete(f"/api/decks/{deck['id']}")
@@ -766,8 +766,8 @@ class TestCollectionDeckBinderFilters:
             q = quote(f'binder:"{binder["name"]}"')
             status, filtered = api.get(f"/api/collection?q={q}")
             assert status == 200
-            assert len(filtered) >= 1
-            for card in filtered:
+            assert filtered["total"] >= 1
+            for card in filtered["rows"]:
                 assert card.get("binder_id") == binder["id"]
         finally:
             api.delete(f"/api/binders/{binder['id']}")
