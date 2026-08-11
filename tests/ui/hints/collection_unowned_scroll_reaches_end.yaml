@@ -1,0 +1,19 @@
+start_page: /collection?q=is%3Aunowned
+involves:
+  - 'virtual scroll body (#vtbody) with tr[data-idx] rows'
+  - 'placeholder rows carrying data-pending="1" while their page is in flight'
+  - 'status text (#status)'
+fixture_data:
+  unowned_total_rows: 7603
+  last_row_index: 7602
+  page_size: 250
+notes: >
+  Jump to the bottom with window.scrollTo(0, document.body.scrollHeight). The
+  row range there belongs to a page that has never been fetched, so the rows
+  render first as data-pending placeholders and are replaced when the page
+  arrives — wait on a real row at the final index rather than a fixed sleep.
+  `totalMatches` is a top-level binding in collection.html's script and is
+  readable from page.evaluate. The last row's index is totalMatches-1 (7602);
+  reaching it is what proves paging walks the whole result rather than
+  stopping at the first 250. Keep the DOM bound assertion here too: arriving
+  pages must replace the window, not accumulate into it.

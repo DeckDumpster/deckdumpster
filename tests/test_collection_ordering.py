@@ -199,6 +199,13 @@ def _key_value(term, row, conn):
         return row["acquired_at"]
     if term == "_lp.price":
         return row["tcg_price"]
+    # The sortable price columns resolve to the enrichment expressions rather
+    # than _lp, which pins price_type but not source and so can match a card
+    # once per source. Each of these is exactly the value the payload carries.
+    if term == "_tcg.price":
+        return row["tcg_price"]
+    if term == "COALESCE(_ck_buy.price, _ck_retail.price)":
+        return row["ck_price"]
     if term == "p.printing_id":
         return row["printing_id"]
     if term in ("c.finish", "c.condition", "c.status"):

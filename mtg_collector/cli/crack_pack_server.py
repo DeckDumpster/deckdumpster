@@ -2157,6 +2157,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             card_filter = f"({' OR '.join(pair_clauses)})"
             where_sql = f"{card_filter} AND ({where_sql})" if where_sql != "1=1" else card_filter
 
+        # The price column the client renders follows the price_sources
+        # setting, so sorting and the totals below follow it too — otherwise
+        # the table would order itself by a number it is not showing.
+        price_sources_row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'price_sources'"
+        ).fetchone()
+        first_source = (
+            price_sources_row["value"] if price_sources_row else "tcg,ck"
+        ).split(",")[0]
+        _CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
+        _TCG_PRICE_SQL = "_tcg.price"
+        display_price_sql = _CK_PRICE_SQL if first_source == "ck" else _TCG_PRICE_SQL
+
         # Sort: use search engine order:/direction: if present, else URL params.
         # No sort_map value is unique, and neither is the card.name tiebreak
         # (~3.2 printings share a name), so every template below closes its
@@ -2173,7 +2186,21 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "collector_number": "CAST(p.collector_number AS INTEGER)",
             "date_added": "c.acquired_at",
             "added": "c.acquired_at",
-            "price": "_lp.price",
+            # These three are expressions from _ENRICH_COLUMNS, whose joins are
+            # unconditional and single-row, so they need no needs_*_join flag.
+            #
+            # `price` deliberately does NOT use _lp. That join pins price_type
+            # but not source, and latest_prices' key is (set_code,
+            # collector_number, source, price_type) — so with both a TCG and a
+            # Card Kingdom price it matches twice. The GROUP BY templates hide
+            # that by collapsing the duplicate (while making which source you
+            # sorted by a coin toss), but expand=copies has no GROUP BY, and
+            # paging a result with duplicated rows drops and repeats cards.
+            # Nothing sent `sort` before the client began paging, so this was
+            # unreachable rather than fixed.
+            "price": display_price_sql,
+            "tcg_price": _TCG_PRICE_SQL,
+            "ck_price": _CK_PRICE_SQL,
         }
         if compiled and compiled.order_by:
             sort_col = sort_map.get(compiled.order_by, "card.name")
@@ -2189,7 +2216,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Conditional JOINs from the search engine
         # Note: expand_copies and default templates already include dc/d/b joins.
         # Only the shared-links (card_pairs) template needs them dynamically.
-        needs_price_join = (compiled and compiled.needs_price_join) or sort_col == "_lp.price"
+        # _lp now serves only the search engine's `price:` keyword — no sort
+        # resolves to it any more, so sorting no longer drags in a join that
+        # can match a card twice.
+        needs_price_join = compiled and compiled.needs_price_join
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
         def _build_extra_joins(*, has_deck_binder_joins: bool, enrich: bool = True) -> str:
@@ -2255,6 +2285,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
             count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich=False))
             order_sql = f"ORDER BY {sort_col} {order_dir}, card.name ASC, p.printing_id ASC"
+            agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
             select_sql = f"""
@@ -2302,6 +2333,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 f"ORDER BY {sort_col} {order_dir}, card.name ASC,"
                 " p.printing_id ASC, c.id ASC, dc.id ASC"
             )
+            agg_qty_sql = "1"
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
             select_sql = f"""
@@ -2349,6 +2381,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 f"ORDER BY {sort_col} {order_dir}, card.name ASC,"
                 " p.printing_id ASC, c.finish ASC, c.condition ASC, c.status ASC, c.order_id ASC"
             )
+            agg_qty_sql = "COUNT(DISTINCT c.id)"
 
         # order_sql stays per-template: the tiebreak is that template's row
         # identity, and it differs (the GROUP BY key, or c.id/dc.id per copy).
@@ -2445,8 +2478,40 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             card["ck_url"] = row["ck_url"]
             results.append(card)
 
+        # total_qty / total_value describe the whole result, like total does.
+        #
+        # They cannot be summed from the page. The client fetches windows as it
+        # scrolls, so a page-scoped aggregate would climb as the user scrolled —
+        # a collection value that grows while you look at it is worse than none.
+        #
+        # Priced the same way the table is (display_price_sql), so the status
+        # line agrees with the price column beside it.
+        if offset == 0 and total == len(results):
+            # The page is the whole result, so the rows in hand are the answer.
+            price_key = "ck_price" if first_source == "ck" else "tcg_price"
+            total_qty = sum(c.get("qty") or 0 for c in results)
+            total_value = sum(
+                float(c[price_key] or 0) * (c.get("qty") or 0) for c in results
+            )
+        else:
+            agg = conn.execute(
+                f"SELECT COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
+                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {body_sql})",
+                sql_params,
+            ).fetchone()
+            total_qty, total_value = agg[0], agg[1]
+
         conn.close()
-        self._send_json({"rows": results, "total": total, "limit": limit, "offset": offset})
+        self._send_json(
+            {
+                "rows": results,
+                "total": total,
+                "total_qty": total_qty,
+                "total_value": round(total_value, 2),
+                "limit": limit,
+                "offset": offset,
+            }
+        )
 
     def _api_card(self, printing_id: str):
         """Return full card data for a single printing by printing_id."""
