@@ -2177,7 +2177,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             card_filter = f"({' OR '.join(pair_clauses)})"
             where_sql = f"{card_filter} AND ({where_sql})" if where_sql != "1=1" else card_filter
 
-        # Sort: use search engine order:/direction: if present, else URL params
+        # Sort: use search engine order:/direction: if present, else URL params.
+        # No sort_map value is unique, and neither is the card.name tiebreak
+        # (~3.2 printings share a name), so every template below closes its
+        # ORDER BY with the columns that identify one output row — the GROUP BY
+        # key where there is one, c.id/dc.id for the per-copy template. Without
+        # that the order is not total and paged responses drop and duplicate rows.
         sort_map = {
             "name": "card.name",
             "cmc": "card.cmc",
@@ -2260,7 +2265,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 {_build_extra_joins(has_deck_binder_joins=False)}
                 WHERE {where_sql}
                 GROUP BY p.printing_id
-                ORDER BY {sort_col} {order_dir}, card.name ASC
+                ORDER BY {sort_col} {order_dir}, card.name ASC, p.printing_id ASC
             """
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
@@ -2298,7 +2303,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN binders b ON c.binder_id = b.id
                 {_build_extra_joins(has_deck_binder_joins=True)}
                 WHERE {where_sql}
-                ORDER BY {sort_col} {order_dir}, card.name ASC
+                ORDER BY {sort_col} {order_dir}, card.name ASC, p.printing_id ASC, c.id ASC, dc.id ASC
             """
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
@@ -2336,7 +2341,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 {_build_extra_joins(has_deck_binder_joins=True)}
                 WHERE {where_sql}
                 GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
-                ORDER BY {sort_col} {order_dir}, card.name ASC
+                ORDER BY {sort_col} {order_dir}, card.name ASC,
+                         p.printing_id ASC, c.finish ASC, c.condition ASC, c.status ASC, c.order_id ASC
             """
 
         cursor = conn.execute(query, sql_params)
