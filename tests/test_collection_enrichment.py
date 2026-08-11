@@ -166,7 +166,8 @@ def _collection(db_path, **params):
     handler._api_collection({k: [v] for k, v in params.items()})
     status, body = handler._responses[-1]
     assert status == 200, body
-    return {c["name"]: c for c in body}
+    # Page envelope: {rows, total, limit, offset}.
+    return {c["name"]: c for c in body["rows"]}
 
 
 # ── Enrichment values ──
@@ -283,8 +284,8 @@ def test_enrichment_applies_to_expand_copies_template(enriched_db):
     handler = _make_handler(enriched_db)
     handler._api_collection({"expand": ["copies"]})
     _, body = handler._responses[-1]
-    assert len(body) == 4, [c["name"] for c in body]
-    cards = {c["name"]: c for c in body}
+    assert body["total"] == 4, [c["name"] for c in body["rows"]]
+    cards = {c["name"]: c for c in body["rows"]}
     assert cards["Bravo"]["ck_price"] == "9.0"
     assert cards["Bravo"]["ck_url"] == "https://ck/bravo-front-foil"
 
@@ -294,7 +295,7 @@ def test_enrichment_joins_do_not_multiply_rows(enriched_db):
     handler = _make_handler(enriched_db)
     handler._api_collection({})
     _, body = handler._responses[-1]
-    assert len(body) == 4, [c["name"] for c in body]
+    assert body["total"] == 4, [c["name"] for c in body["rows"]]
 
 
 # ── The assertion that keeps it fixed ──
@@ -305,7 +306,8 @@ def _max_params(db_path, **params):
     handler._api_collection({k: [v] for k, v in params.items()})
     status, body = handler._responses[-1]
     assert status == 200, body
-    return max(c for conn in handler._conns for c in conn.param_counts), len(body)
+    # `total` counts the whole result; the page itself is capped at `limit`.
+    return max(c for conn in handler._conns for c in conn.param_counts), body["total"]
 
 
 def test_no_statement_binds_params_proportional_to_the_result_set(enriched_db):
