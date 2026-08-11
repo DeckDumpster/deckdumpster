@@ -1,30 +1,22 @@
 """
 Hand-written implementation for sheets_card_zoom_overlay.
 
-Loads BLB play sheets, expands a section, clicks a card to open
-the zoom overlay, then clicks the overlay to dismiss it.
+Loads BLB play sheets via the deep link, expands a section, clicks a card
+to open the zoom overlay, then clicks the overlay to dismiss it.
 """
 
 
 def steps(harness):
-    # start_page: /sheets — auto-navigated by test runner.
+    # start_page: /sheets#set=blb&product=play — auto-navigated by test runner.
 
-    # Wait for the set input to be ready
-    harness.wait_for_visible("#set-input:not([disabled])", timeout=500)
-
-    # Select BLB set
-    harness.fill_by_selector("#set-input", "Bloom")
-    harness.wait_for_visible("#set-dropdown li", timeout=500)
-    harness.click_by_selector("#set-dropdown li")
-
-    # Wait for products to load
-    harness.wait_for_visible("#product-radios label", timeout=500)
-
-    # Select play product
-    harness.click_by_text("play", exact=True)
-
-    # Wait for sheet sections to render
-    harness.wait_for_visible(".section-header", timeout=500)
+    # Wait for the play sheets to finish rendering. "8 sheets" rather than
+    # .section-header because the deep link loads two products: loadProducts()
+    # auto-checks the first one (collector, 6 sheets) and fires a sheet load
+    # for it, then setSelectedProduct() switches to play and fires a second.
+    # Both paint .section-header, so only the count tells them apart.
+    # 5 s (as in sheets_deep_link_url_hash) because this is the page load, not
+    # an interaction — every wait below keeps the harness's 500 ms budget.
+    harness.wait_for_text("8 sheets", timeout=5_000)
 
     # Expand the "Common" section to reveal cards (exact match)
     harness.click_by_text("Common", exact=True)
