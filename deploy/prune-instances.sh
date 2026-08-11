@@ -16,10 +16,24 @@
 #
 # Safe to run while other instances are active — the running-container
 # check protects them. Always run --dry-run first if unsure.
+#
+# Container store (de-3mo): image and volume DISCOVERY reads the store named by
+# MTGC_STORE_ROOT, or Podman's default when it is unset, so an alternate store
+# needs its own run:
+#   MTGC_STORE_ROOT=/big/disk/mtgc-nonprod-store bash deploy/prune-instances.sh
+# Everything after discovery is per-instance: the running check and the removals
+# are aimed at the store each instance's own Quadlet unit names, so an instance
+# in an alternate store is never mistaken for an orphan and never has its unit
+# deleted while its image and volume survive somewhere this could not see.
 
 set -euo pipefail
 
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
+mtgc_store_activate
 
 DRY_RUN=false
 for arg in "$@"; do
@@ -39,8 +53,17 @@ is_protected() {
     return 1
 }
 
+# Ask the store the instance's own unit names, not the ambient one. This is the
+# safety check that protects live instances, and getting it wrong is the
+# expensive direction: an instance in a store this shell is not on answers "not
+# running" and is then removed out from under itself. The subshell keeps the
+# PATH shim adoption installs from leaking into the next candidate.
 is_running() {
-    [ "$(podman inspect -f '{{.State.Running}}' "systemd-mtgc-$1" 2>/dev/null)" = "true" ]
+    (
+        mtgc_store_adopt_instance "$1"
+        mtgc_store_activate >/dev/null 2>&1
+        [ "$(podman inspect -f '{{.State.Running}}' "systemd-mtgc-$1" 2>/dev/null)" = "true" ]
+    )
 }
 
 # --- Discover candidate instance names from every artifact location ---
@@ -133,6 +156,18 @@ fi
 for inst in "${ORPHANS[@]}"; do
     echo "==> Removing $inst..."
 
+    # Image and volume go FIRST, from the store this instance's own Quadlet unit
+    # names — the unit is the only record of where they are, and it is deleted
+    # below. Removing the record first and the artifacts second leaves them
+    # unreachable. The subshell contains the PATH shim adoption installs, so the
+    # next orphan starts from the ambient store rather than this one's.
+    (
+        mtgc_store_adopt_instance "$inst"
+        mtgc_store_activate >/dev/null 2>&1
+        podman rmi "mtgc:${inst}" 2>/dev/null || true
+        podman volume rm "mtgc-${inst}-data" 2>/dev/null || true
+    )
+
     # Stop and remove role timers (prices, sealed-catalog, backup, edhrec)
     for ROLE in prices sealed-catalog backup edhrec; do
         systemctl --user stop "mtgc-${ROLE}-${inst}.timer" 2>/dev/null || true
@@ -146,9 +181,8 @@ for inst in "${ORPHANS[@]}"; do
     systemctl --user disable "mtgc-${inst}" 2>/dev/null || true
     rm -f "$HOME/.config/containers/systemd/mtgc-${inst}.container"
 
-    # Remove image tag, data volume, and env file
-    podman rmi "mtgc:${inst}" 2>/dev/null || true
-    podman volume rm "mtgc-${inst}-data" 2>/dev/null || true
+    # Env file (image and volume were removed above, before the unit that
+    # recorded their store went away).
     rm -f "$HOME/.config/mtgc/${inst}.env"
 
     echo "    Done."

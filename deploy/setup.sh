@@ -34,6 +34,15 @@
 # rather than silently dropping the publish and the mount. An explicit flag
 # overrides the record; delete the line to drop the setting.
 #
+# Container storage: rootless Podman's default store lives under $HOME, which on
+# the deployment box is the same disk prod runs from. Set MTGC_STORE_ROOT=<dir>
+# to build this instance's image and volume into an alternate store instead —
+# opt-in, so prod (which never sets it) is unaffected. See deploy/store-lib.sh.
+# This script scaffolds the host-config file that names that directory
+# (~/.config/mtgc/store.env) but deliberately does not read it: prod is installed
+# with this script, and where prod's volumes live is not something a host config
+# file gets to change. .github/workflows/ci.yml is what reads it.
+#
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
 #   with your API key). Falls back to .env.example (needs manual editing).
@@ -156,6 +165,23 @@ fi
 
 echo "    podman: $(podman --version)"
 
+# --- Container store ---
+#
+# Opt-in alternate container store (de-3mo). No-op unless MTGC_STORE_ROOT is set
+# — and prod never sets it.
+#
+# An instance that already exists keeps the store it already lives in, for the
+# same reason it keeps the --http-port and --tls-certs it was created with:
+# re-running setup.sh is how unit-file changes reach it, and that must not
+# silently move its image and volume into whatever store the calling shell had
+# activated, leaving the real ones behind with the unit no longer pointing at
+# them. A store passed explicitly still wins, so moving an instance on purpose
+# still works.
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
+mtgc_store_adopt_instance "$INSTANCE"
+mtgc_store_activate
+
 if ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q "Linger=yes"; then
     echo "WARNING: linger not enabled — services will stop when you log out."
     echo "  Fix with: loginctl enable-linger $USER  (may need sudo)"
@@ -195,6 +221,39 @@ record() {
 record MTGC_HTTP_PUBLISH_PORT "$HTTP_PORT"
 record MTGC_TLS_CERTS_DIR "$TLS_CERTS"
 
+# --- Host-wide container-store config (de-3mo) ---
+#
+# Which disk non-prod container storage belongs on is a fact about THIS box, so
+# it is host config rather than a repo constant — and it is scaffolded
+# commented-out so a new box has the knob visible instead of undiscoverable.
+# Written but never read by this script: setup.sh honours MTGC_STORE_ROOT from
+# its environment only, so a store.env that opts in cannot silently relocate a
+# prod deploy.
+STORE_ENV="${MTGC_CONFIG}/store.env"
+if [ ! -f "$STORE_ENV" ]; then
+    mkdir -p "$MTGC_CONFIG"
+    cat > "$STORE_ENV" <<'EOF'
+# Host-wide container-store config for MTGC (de-3mo).
+#
+# Rootless Podman keeps images, layers and volumes under $HOME. Where $HOME
+# shares a disk with something that must not run out of space — on this
+# project's deployment box, prod itself — name a directory on another
+# filesystem here and non-prod container storage goes there instead.
+#
+# Read by .github/workflows/ci.yml and deploy/store-teardown.sh. An explicit
+# MTGC_STORE_ROOT in the environment wins over this file, including an explicit
+# empty one (that is how a single run opts back out). Left commented out,
+# everything uses Podman's default store — which is what prod uses, always, on
+# every box.
+#
+# To delete the store named here, run deploy/store-teardown.sh. NEVER
+# `podman system reset`: it is not scoped by --root/--runroot, and aimed at a
+# throwaway store it took prod down.
+#MTGC_STORE_ROOT=/big/disk/mtgc-nonprod-store
+EOF
+    echo "    Wrote ${STORE_ENV} (container store; commented out = Podman's default)."
+fi
+
 # --- Build container image ---
 
 echo "==> Building container image (mtgc:latest)..."
@@ -220,6 +279,11 @@ bash "$REPO_DIR/deploy/render-quadlet.sh" \
     "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
 
+# systemd does not inherit our PATH, so the shim that scopes every podman call
+# in this script cannot reach the unit — the flags go in the file. A no-op with
+# no store active, which is what keeps prod's unit byte-identical.
+mtgc_store_stamp_unit "$QUADLET_FILE"
+
 # Conditionally mount shared reference volume if it exists.
 # Skip for --test: test containers manage their own shared DB on the data volume.
 SHARED_REF_VOL="mtgc-shared-ref"
@@ -241,6 +305,12 @@ for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-edhrec; do
             "$REPO_DIR/deploy/${UNIT_PREFIX}.${EXT}" \
             > "${SYSTEMD_USER_DIR}/${UNIT_PREFIX}-${INSTANCE}.${EXT}"
     done
+    # These are rendered per instance, not %i templates, so they can carry the
+    # store. Their ExecStart lines run `podman exec`; without the flags an
+    # alternate-store instance's timers fire against the default store and fail
+    # with "no such container". (mtgc-backup's ExecStart is backup.sh, which
+    # adopts the instance itself — the stamp finds no `podman ` there.)
+    mtgc_store_stamp_service "${SYSTEMD_USER_DIR}/${UNIT_PREFIX}-${INSTANCE}.service"
 done
 
 systemctl --user daemon-reload

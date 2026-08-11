@@ -24,12 +24,23 @@ PURGE="${2:-}"
 SERVICE_NAME="mtgc-${INSTANCE}"
 QUADLET_DIR="$HOME/.config/containers/systemd"
 QUADLET_FILE="${QUADLET_DIR}/${SERVICE_NAME}.container"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [ ! -f "$QUADLET_FILE" ]; then
     echo "ERROR: No Quadlet found for instance '$INSTANCE'"
     echo "    Expected: $QUADLET_FILE"
     exit 1
 fi
+
+# Remove from the store the instance was CREATED in, read from its Quadlet unit
+# (de-3mo) — and read it before the unit is deleted below, since the unit is the
+# only record. A teardown aimed at the wrong store would find nothing to remove,
+# no-op through the `|| true` on every command, and then delete that record,
+# stranding the image and volume with no way left to find them.
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
+mtgc_store_adopt_instance "$INSTANCE"
+mtgc_store_activate
 
 echo "==> Tearing down $SERVICE_NAME..."
 

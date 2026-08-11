@@ -29,6 +29,16 @@ cd "$REPO_DIR"
 # CI runners and non-interactive sessions often lack this.
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
+# Build into the store this instance actually lives in, read from its Quadlet
+# unit (de-3mo). Without this, a deploy run from a shell that had activated an
+# alternate store would build and tag there while the unstamped unit kept
+# systemd on the default store — the restart succeeds and goes on serving the
+# OLD image. prod's unit carries no store, so prod builds where it always did.
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
+mtgc_store_adopt_instance "$INSTANCE"
+mtgc_store_activate
+
 QUADLET_FILE="$HOME/.config/containers/systemd/${SERVICE_NAME}.container"
 
 # If Quadlet doesn't exist yet, delegate to setup.sh for initial install.
