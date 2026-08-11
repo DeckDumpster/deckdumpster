@@ -963,6 +963,81 @@ def _recover_pending_images(db_path):
         print(f"[startup] {len(rows)} pending image(s) waiting — ANTHROPIC_API_KEY not set, skipping processing", flush=True)
 
 
+# /api/collection price and Card Kingdom URL enrichment, folded into the main
+# query.  This used to be two follow-up passes whose `IN (...)` clauses were
+# sized by the result set: 112,809 rows built a statement with 225,618 bound
+# parameters, within 11% of this build's SQLITE_MAX_VARIABLE_NUMBER of 250,000.
+# Every join below binds zero parameters and matches at most one row, so neither
+# the SQL text nor the row cardinality depends on how large the result set is.
+#
+# `latest_prices` has PRIMARY KEY (set_code, collector_number, source,
+# price_type), so pinning source and price_type makes each price join
+# single-row.  price_type follows the physical copy's finish (c.finish), not the
+# printing's available finishes, so a foil copy of a printing that also exists
+# in nonfoil gets the foil price; etched copies price as foil.
+_ENRICH_JOINS = [
+    "LEFT JOIN latest_prices _ck_buy ON _ck_buy.set_code = p.set_code"
+    " AND _ck_buy.collector_number = p.collector_number"
+    " AND _ck_buy.source = 'cardkingdom'"
+    " AND _ck_buy.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'buylist_foil' ELSE 'buylist_normal' END",
+    "LEFT JOIN latest_prices _ck_retail ON _ck_retail.set_code = p.set_code"
+    " AND _ck_retail.collector_number = p.collector_number"
+    " AND _ck_retail.source = 'cardkingdom'"
+    " AND _ck_retail.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
+    "LEFT JOIN latest_prices _tcg ON _tcg.set_code = p.set_code"
+    " AND _tcg.collector_number = p.collector_number"
+    " AND _tcg.source = 'tcgplayer'"
+    " AND _tcg.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
+    # printing_id is not unique in mtgjson_printings: MTGJSON emits one row per
+    # face of a double-faced card and both carry the same scryfallId, with a
+    # different Card Kingdom link each.  Resolve to a uuid first so the join
+    # stays single-row, and resolve it the way PackGenerator.get_ck_url() does
+    # — same index seek, same first row — so the collection list and the card
+    # detail page show the same link for the same card.
+    "LEFT JOIN mtgjson_printings _mp ON _mp.uuid ="
+    " (SELECT uuid FROM mtgjson_printings WHERE printing_id = p.printing_id LIMIT 1)",
+]
+
+# Card Kingdom publishes a buylist and a retail price; the buylist wins when
+# present.  A foil copy falls back to the nonfoil URL when there is no foil one.
+_ENRICH_COLUMNS = """COALESCE(_ck_buy.price, _ck_retail.price) as ck_price,
+                    _tcg.price as tcg_price,
+                    COALESCE(NULLIF(CASE WHEN c.finish IN ('foil', 'etched') THEN _mp.ck_url_foil END, ''), _mp.ck_url, '') as ck_url"""
+
+
+# Page bounds for /api/collection. Measured on the real payload (108,630 rows
+# for is:unowned): a 250-row page is 212 KB raw / 28 KB gzipped and 434 round
+# trips to walk the catalog; 1000 is 855 KB / 103 KB and 108 trips. There is no
+# unbounded escape hatch and no sentinel — every caller takes these semantics.
+COLLECTION_LIMIT_DEFAULT = 250
+COLLECTION_LIMIT_MAX = 1000
+
+
+class PageParamError(ValueError):
+    """A limit/offset the caller must fix. Surfaced as a 400, never clamped."""
+
+
+def _parse_page_params(params: dict) -> tuple[int, int]:
+    """Return (limit, offset) from query params, or raise PageParamError."""
+    limit = _page_int(params, "limit", COLLECTION_LIMIT_DEFAULT)
+    offset = _page_int(params, "offset", 0)
+    if not 1 <= limit <= COLLECTION_LIMIT_MAX:
+        raise PageParamError(f"limit must be between 1 and {COLLECTION_LIMIT_MAX}")
+    if offset < 0:
+        raise PageParamError("offset must be 0 or greater")
+    return limit, offset
+
+
+def _page_int(params: dict, name: str, default: int) -> int:
+    raw = params.get(name, [""])[0].strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise PageParamError(f"{name} must be an integer") from None
+
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -2124,6 +2199,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """
         from mtg_collector.search import SearchError, compile_query, parse_query
 
+        try:
+            limit, offset = _parse_page_params(params)
+        except PageParamError as e:
+            self._send_json({"error": str(e)}, 400)
+            return
+
         q = params.get("q", [""])[0]
         sort = params.get("sort", [""])[0]
         order = params.get("order", [""])[0]
@@ -2177,7 +2258,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             card_filter = f"({' OR '.join(pair_clauses)})"
             where_sql = f"{card_filter} AND ({where_sql})" if where_sql != "1=1" else card_filter
 
-        # Sort: use search engine order:/direction: if present, else URL params
+        # The price column the client renders follows the price_sources
+        # setting, so sorting and the totals below follow it too — otherwise
+        # the table would order itself by a number it is not showing.
+        price_sources_row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'price_sources'"
+        ).fetchone()
+        first_source = (
+            price_sources_row["value"] if price_sources_row else "tcg,ck"
+        ).split(",")[0]
+        _CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
+        _TCG_PRICE_SQL = "_tcg.price"
+        display_price_sql = _CK_PRICE_SQL if first_source == "ck" else _TCG_PRICE_SQL
+
+        # Sort: use search engine order:/direction: if present, else URL params.
+        # No sort_map value is unique, and neither is the card.name tiebreak
+        # (~3.2 printings share a name), so every template below closes its
+        # ORDER BY with the columns that identify one output row — the GROUP BY
+        # key where there is one, c.id/dc.id for the per-copy template. Without
+        # that the order is not total and paged responses drop and duplicate rows.
         sort_map = {
             "name": "card.name",
             "cmc": "card.cmc",
@@ -2188,7 +2287,21 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "collector_number": "CAST(p.collector_number AS INTEGER)",
             "date_added": "c.acquired_at",
             "added": "c.acquired_at",
-            "price": "_lp.price",
+            # These three are expressions from _ENRICH_COLUMNS, whose joins are
+            # unconditional and single-row, so they need no needs_*_join flag.
+            #
+            # `price` deliberately does NOT use _lp. That join pins price_type
+            # but not source, and latest_prices' key is (set_code,
+            # collector_number, source, price_type) — so with both a TCG and a
+            # Card Kingdom price it matches twice. The GROUP BY templates hide
+            # that by collapsing the duplicate (while making which source you
+            # sorted by a coin toss), but expand=copies has no GROUP BY, and
+            # paging a result with duplicated rows drops and repeats cards.
+            # Nothing sent `sort` before the client began paging, so this was
+            # unreachable rather than fixed.
+            "price": display_price_sql,
+            "tcg_price": _TCG_PRICE_SQL,
+            "ck_price": _CK_PRICE_SQL,
         }
         if compiled and compiled.order_by:
             sort_col = sort_map.get(compiled.order_by, "card.name")
@@ -2204,10 +2317,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Conditional JOINs from the search engine
         # Note: expand_copies and default templates already include dc/d/b joins.
         # Only the shared-links (card_pairs) template needs them dynamically.
-        needs_price_join = (compiled and compiled.needs_price_join) or sort_col == "_lp.price"
+        # _lp now serves only the search engine's `price:` keyword — no sort
+        # resolves to it any more, so sorting no longer drags in a join that
+        # can match a card twice.
+        needs_price_join = compiled and compiled.needs_price_join
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
-        def _build_extra_joins(*, has_deck_binder_joins: bool) -> str:
+        def _build_extra_joins(*, has_deck_binder_joins: bool, enrich: bool = True) -> str:
             joins = []
             if not has_deck_binder_joins:
                 if compiled and compiled.needs_deck_join:
@@ -2227,11 +2343,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 joins.append(
                     "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
                 )
+            if enrich:
+                joins.extend(_ENRICH_JOINS)
             return "\n                ".join(joins)
 
         if card_pairs or include_unowned:
             # LEFT JOIN template: shared-link cards or is:unowned queries
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2251,20 +2369,27 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     o.seller_name as order_seller,
                     o.order_number as order_number,
                     o.order_date as order_date,
-                    c.purchase_price
+                    c.purchase_price,
+                    {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM printings p
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 LEFT JOIN collection c ON p.printing_id = c.printing_id
                 LEFT JOIN orders o ON c.order_id = o.id
-                {_build_extra_joins(has_deck_binder_joins=False)}
+                {joins}
                 WHERE {where_sql}
                 GROUP BY p.printing_id
-                ORDER BY {sort_col} {order_dir}, card.name ASC
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich=False))
+            order_sql = f"ORDER BY {sort_col} {order_dir}, card.name ASC, p.printing_id ASC"
+            agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2287,7 +2412,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
-                    b.name as binder_name
+                    b.name as binder_name,
+                    {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2296,13 +2425,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN deck_cards dc ON dc.collection_id = c.id
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
-                {_build_extra_joins(has_deck_binder_joins=True)}
+                {joins}
                 WHERE {where_sql}
-                ORDER BY {sort_col} {order_dir}, card.name ASC
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich=False))
+            order_sql = (
+                f"ORDER BY {sort_col} {order_dir}, card.name ASC,"
+                " p.printing_id ASC, c.id ASC, dc.id ASC"
+            )
+            agg_qty_sql = "1"
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2324,7 +2459,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     dc.deck_id, dc.zone as deck_zone, c.binder_id,
                     d.name as deck_name,
-                    b.name as binder_name
+                    b.name as binder_name,
+                    {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2333,14 +2472,47 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN deck_cards dc ON dc.collection_id = c.id
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
-                {_build_extra_joins(has_deck_binder_joins=True)}
+                {joins}
                 WHERE {where_sql}
                 GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
-                ORDER BY {sort_col} {order_dir}, card.name ASC
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich=False))
+            order_sql = (
+                f"ORDER BY {sort_col} {order_dir}, card.name ASC,"
+                " p.printing_id ASC, c.finish ASC, c.condition ASC, c.status ASC, c.order_id ASC"
+            )
+            agg_qty_sql = "COUNT(DISTINCT c.id)"
 
-        cursor = conn.execute(query, sql_params)
+        # order_sql stays per-template: the tiebreak is that template's row
+        # identity, and it differs (the GROUP BY key, or c.id/dc.id per copy).
+        # It is kept out of body_sql so the COUNT below does not sort.
+        #
+        # LIMIT/OFFSET are bound parameters, never formatted into the SQL.
+        cursor = conn.execute(
+            f"{select_sql}{body_sql}{order_sql} LIMIT ? OFFSET ?",
+            [*sql_params, limit, offset],
+        )
         rows = cursor.fetchall()
+
+        # total is the size of the whole result, not the page.
+        #
+        # A short page has already answered the question: the query ran out of
+        # rows, so the result ends here. That covers every query whose result
+        # fits in one page — which is most of them — for no extra query at all.
+        # (Not when the page is empty and the offset is past the end: then the
+        # offset says nothing about where the result stopped.)
+        #
+        # Otherwise count the body, which carries the GROUP BY and so counts
+        # groups, matching what the page returns. The enrichment joins are left
+        # out: a COUNT has no columns to enrich, and each of them matches at
+        # most one row, so they cannot change the count either.
+        if len(rows) < limit and (rows or offset == 0):
+            total = offset + len(rows)
+        else:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
+            ).fetchone()[0]
 
         include_unowned = bool(card_pairs) or include_unowned
         results = []
@@ -2399,57 +2571,48 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 card["order_number"] = row["order_number"]
                 card["order_date"] = row["order_date"]
                 card["purchase_price"] = row["purchase_price"]
-            card["tcg_price"] = None
-            card["ck_price"] = None
-            card["ck_url"] = ""
+            # Prices and ck_url come from the main query's enrichment joins
+            # (_ENRICH_COLUMNS); the JSON payload has always carried prices as
+            # strings, so keep formatting them here rather than in SQL.
+            card["tcg_price"] = None if row["tcg_price"] is None else str(row["tcg_price"])
+            card["ck_price"] = None if row["ck_price"] is None else str(row["ck_price"])
+            card["ck_url"] = row["ck_url"]
             results.append(card)
 
-        # Bulk price lookup — one query replaces 3600 individual queries
-        if results:
-            price_keys = []
-            for card in results:
-                # Use the physical copy's actual finish (c.finish), not the
-                # printing's available finishes (p.finishes) — otherwise a foil
-                # copy of a printing that also exists in nonfoil shows the
-                # nonfoil price. Etched copies use foil pricing.
-                price_type = "foil" if card["finish"] in ("foil", "etched") else "normal"
-                sc = card["set_code"].lower()
-                cn = card["collector_number"]
-                price_keys.append((sc, cn, price_type))
-
-            # Collect unique (set_code, collector_number) pairs for batch lookup
-            unique_cards = list({(sc, cn) for sc, cn, _ in price_keys})
-            ph = ",".join("(?,?)" for _ in unique_cards)
-            params = [v for pair in unique_cards for v in pair]
-            price_map: dict[tuple[str, str, str, str], str] = {}
-            for r in conn.execute(
-                f"SELECT set_code, collector_number, source, price_type, price "
-                f"FROM latest_prices WHERE (set_code, collector_number) IN ({ph})",
-                params,
-            ).fetchall():
-                price_map[(r["set_code"], r["collector_number"], r["source"], r["price_type"])] = str(r["price"])
-
-            # Bulk CK URL lookup
-            ck_url_map: dict[str, tuple[str, str]] = {}
-            if self.generator:
-                pids = [card["printing_id"] for card in results]
-                ph = ",".join("?" for _ in pids)
-                for r in conn.execute(
-                    f"SELECT printing_id, ck_url, ck_url_foil FROM mtgjson_printings WHERE printing_id IN ({ph})",
-                    pids,
-                ).fetchall():
-                    ck_url_map[r["printing_id"]] = (r["ck_url"] or "", r["ck_url_foil"] or "")
-
-            for i, card in enumerate(results):
-                sc, cn, pt = price_keys[i]
-                card["ck_price"] = price_map.get((sc, cn, "cardkingdom", f"buylist_{pt}")) or price_map.get((sc, cn, "cardkingdom", pt))
-                card["tcg_price"] = price_map.get((sc, cn, "tcgplayer", pt))
-                foil = card["finish"] in ("foil", "etched")
-                urls = ck_url_map.get(card["printing_id"], ("", ""))
-                card["ck_url"] = (urls[1] if foil else urls[0]) or urls[0]
+        # total_qty / total_value describe the whole result, like total does.
+        #
+        # They cannot be summed from the page. The client fetches windows as it
+        # scrolls, so a page-scoped aggregate would climb as the user scrolled —
+        # a collection value that grows while you look at it is worse than none.
+        #
+        # Priced the same way the table is (display_price_sql), so the status
+        # line agrees with the price column beside it.
+        if offset == 0 and total == len(results):
+            # The page is the whole result, so the rows in hand are the answer.
+            price_key = "ck_price" if first_source == "ck" else "tcg_price"
+            total_qty = sum(c.get("qty") or 0 for c in results)
+            total_value = sum(
+                float(c[price_key] or 0) * (c.get("qty") or 0) for c in results
+            )
+        else:
+            agg = conn.execute(
+                f"SELECT COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
+                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {body_sql})",
+                sql_params,
+            ).fetchone()
+            total_qty, total_value = agg[0], agg[1]
 
         conn.close()
-        self._send_json(results)
+        self._send_json(
+            {
+                "rows": results,
+                "total": total,
+                "total_qty": total_qty,
+                "total_value": round(total_value, 2),
+                "limit": limit,
+                "offset": offset,
+            }
+        )
 
     def _api_card(self, printing_id: str):
         """Return full card data for a single printing by printing_id."""

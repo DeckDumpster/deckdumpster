@@ -743,6 +743,40 @@
     document.getElementById('add-cards-modal').classList.add('active');
   }
 
+  // The picker takes the same page semantics as the collection, then filters
+  // what it got: it drops copies already in a deck or binder (or, for a
+  // hypothetical deck, duplicate printings). So a full 250-row page can leave
+  // very few rows to show.
+  //
+  // That is why this keeps fetching until enough rows survive the filter
+  // instead of rendering one page and stopping. Search "Lightning Bolt", own
+  // 300 copies with the first 250 all assigned, and stopping at page one
+  // reports "No unassigned copies found" while a free copy sits on page two —
+  // telling the user they own nothing free when they do, which is the one
+  // question this picker exists to answer. Over-fetching only costs latency;
+  // under-fetching is wrong. The cap bounds the walk, and when it is reached
+  // the count line says what was covered rather than looking complete.
+  const PICKER_PAGE_SIZE = 250;
+  const PICKER_TARGET_ROWS = 100;
+  const PICKER_PAGE_CAP = 8;
+
+  async function fetchFilteredPages(query, keepFrom) {
+    const kept = [];
+    let offset = 0;
+    let total = 0;
+    let exhausted = false;
+    for (let page = 0; page < PICKER_PAGE_CAP; page++) {
+      const res = await fetch(`/api/collection?${query}&limit=${PICKER_PAGE_SIZE}&offset=${offset}`);
+      const data = await res.json();
+      total = data.total;
+      kept.push(...keepFrom(data.rows));
+      offset += data.rows.length;
+      if (!data.rows.length || offset >= total) { exhausted = true; break; }
+      if (kept.length >= PICKER_TARGET_ROWS) break;
+    }
+    return { kept, total, scanned: offset, exhausted };
+  }
+
   async function searchPickerCards() {
     const q = document.getElementById('picker-search').value.trim();
     if (q.length < 2) {
@@ -751,29 +785,33 @@
       return;
     }
     const isVirtual = window._builderData && window._builderData.deck.state !== 'constructed';
-    const res = await fetch('/api/collection?q=' + encodeURIComponent(q) + '&status=owned&expand=copies');
-    const data = await res.json();
-    const allCopies = Array.isArray(data) ? data : data.cards || [];
-    // Hypothetical decks: dedup by printing_id (don't care about individual copies)
-    // Real decks: only show unassigned copies
-    let cards;
-    if (isVirtual) {
-      const seen = new Set();
-      cards = allCopies.filter(c => {
-        if (seen.has(c.printing_id)) return false;
-        seen.add(c.printing_id);
-        return true;
-      });
-    } else {
-      cards = allCopies.filter(c => !c.deck_id && !c.binder_id);
-    }
+    const query = 'q=' + encodeURIComponent(q) + '&status=owned&expand=copies';
+    // Hypothetical decks: dedup by printing_id (don't care about individual
+    // copies). Real decks: only show unassigned copies. `seen` lives outside
+    // the per-page filter so dedup holds across pages, not within one.
+    const seen = new Set();
+    const keepFrom = (rows) => rows.filter(c => {
+      if (!isVirtual) return !c.deck_id && !c.binder_id;
+      if (seen.has(c.printing_id)) return false;
+      seen.add(c.printing_id);
+      return true;
+    });
+    const { kept: cards, total, scanned, exhausted } = await fetchFilteredPages(query, keepFrom);
 
     const container = document.getElementById('picker-cards');
     if (cards.length === 0) {
-      container.innerHTML = '<div style="padding:12px;color:var(--text-secondary);">No unassigned copies found</div>';
+      const msg = exhausted
+        ? 'No unassigned copies found'
+        : `No unassigned copies in the first ${scanned.toLocaleString()} of ${total.toLocaleString()} matches — narrow the search`;
+      container.innerHTML = `<div style="padding:12px;color:var(--text-secondary);">${esc(msg)}</div>`;
       return;
     }
-    container.innerHTML = cards.map(c => {
+    // Only when the walk stopped early: otherwise these are all of them, and a
+    // count would just be noise.
+    const countLine = exhausted
+      ? ''
+      : `<div style="padding:8px 12px;color:var(--text-secondary);font-size:0.85rem">Showing ${cards.length.toLocaleString()} available from the first ${scanned.toLocaleString()} of ${total.toLocaleString()} matches</div>`;
+    container.innerHTML = countLine + cards.map(c => {
       const key = isVirtual ? String(c.printing_id) : String(c.collection_id);
       const cond = c.condition ? ` [${esc(c.condition)}]` : '';
       const price = c.purchase_price ? ` ${formatPrice(c.purchase_price)}` : '';

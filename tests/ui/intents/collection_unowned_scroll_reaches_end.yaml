@@ -1,0 +1,12 @@
+# Scenario: Scrolling reaches the end of a result far larger than one page
+#
+# Related:
+#   issues: [de-6f4]
+#   pull_requests: []
+
+description: >
+  When I scroll down through the thousands of cards an "is:unowned" search
+  matches, more of them keep arriving as I go, and I can reach the very last
+  one instead of hitting an invisible wall where the first batch ran out. The
+  count beside the search box does not change while I scroll — it described
+  the whole result from the start, so it has nothing to revise.
