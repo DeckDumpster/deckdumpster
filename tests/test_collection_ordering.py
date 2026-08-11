@@ -181,7 +181,10 @@ def _cast_int(collector_number):
 
 def _key_value(term, row, conn):
     """The value one ORDER BY term produced for one response row."""
-    if term == "card.name":
+    # p.card_name is cards.name denormalised onto printings so the default sort
+    # can be served by an index; it is the same value, and the payload exposes
+    # it the same way (`name` is the flavor name when there is one).
+    if term in ("card.name", "p.card_name"):
         return row.get("oracle_name") or row["name"]
     if term == "card.cmc":
         return row["cmc"]
@@ -262,8 +265,13 @@ def test_fixture_ties_on_the_old_key(db_path, template, sort):
     no ties at all and prove nothing.
     """
     rows, sql, _ = _call_collection(db_path, _params(template, sort))
-    old_key = _order_terms(sql)[:2]
-    assert old_key[1] == "card.name", old_key
+    # The old key is the sort column plus the name, which is where it stopped
+    # before de-3qg added the identifying tail. Sorting *by* name is its own
+    # old key — the name is not repeated as a secondary term, because doing so
+    # would break the index prefix that now serves it.
+    terms = _order_terms(sql)
+    assert "p.card_name" in terms, terms
+    old_key = terms[: terms.index("p.card_name") + 1]
     keys = _keys(rows, old_key, db_path)
     assert len(set(keys)) < len(keys), (
         f"fixture has no ties for sort={sort} ({template}) — "

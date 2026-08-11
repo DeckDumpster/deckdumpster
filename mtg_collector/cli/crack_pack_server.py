@@ -998,6 +998,11 @@ _ENRICH_JOINS = [
     " (SELECT uuid FROM mtgjson_printings WHERE printing_id = p.printing_id LIMIT 1)",
 ]
 
+# The price joins alone — every _ENRICH_JOINS entry that a display price can be
+# built from, without the ck_url lookup.  The totals scan the whole result, so
+# they take this rather than the full set.
+_ENRICH_PRICE_JOINS = _ENRICH_JOINS[:3]
+
 # Card Kingdom publishes a buylist and a retail price; the buylist wins when
 # present.  A foil copy falls back to the nonfoil URL when there is no foil one.
 _ENRICH_COLUMNS = """COALESCE(_ck_buy.price, _ck_retail.price) as ck_price,
@@ -2177,7 +2182,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # key where there is one, c.id/dc.id for the per-copy template. Without
         # that the order is not total and paged responses drop and duplicate rows.
         sort_map = {
-            "name": "card.name",
+            # p.card_name, not card.name — same value (it is denormalised from
+            # it), but on the table the grouped templates already drive from, so
+            # idx_printings_card_name(card_name, printing_id) can serve the sort.
+            # Reading it across the join cannot be made fast: GROUP BY
+            # p.printing_id pins printings as the driving table, so cards can
+            # never be the outer loop and idx_cards_name is never reachable for
+            # ordering. Measured on 109,976 rows: 2.3 s -> 8.8 ms.
+            "name": "p.card_name",
             "cmc": "card.cmc",
             "rarity": "CASE p.rarity WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2 WHEN 'mythic' THEN 3 ELSE 4 END",
             "set": "p.set_code",
@@ -2203,15 +2215,52 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "ck_price": _CK_PRICE_SQL,
         }
         if compiled and compiled.order_by:
-            sort_col = sort_map.get(compiled.order_by, "card.name")
+            sort_col = sort_map.get(compiled.order_by, "p.card_name")
         else:
-            sort_col = sort_map.get(sort, "card.name")
+            sort_col = sort_map.get(sort, "p.card_name")
         if compiled and compiled.order_dir == "desc":
             order_dir = "DESC"
         elif order:
             order_dir = "DESC" if order == "desc" else "ASC"
         else:
             order_dir = "ASC"
+
+        sorting_by_name = sort_col == "p.card_name"
+
+        def _order_by(*identity_cols: str) -> str:
+            """ORDER BY for a template, given the columns that identify one row.
+
+            The identity columns follow order_dir rather than being pinned ASC.
+            An index can only be read backwards when every term inverts
+            together, so `p.card_name DESC, p.printing_id ASC` falls back to a
+            full sort — measured 4.3 s against 10 ms for `... DESC, ... DESC`.
+            The direction of a tiebreak is arbitrary either way; it is there to
+            make the order total, and it is equally total in either direction.
+
+            The name is added as a secondary sort only when it is not already
+            the primary. Repeating it would break the index prefix for nothing.
+            """
+            terms = [f"{sort_col} {order_dir}"]
+            if not sorting_by_name:
+                terms.append(f"p.card_name {order_dir}")
+            terms.extend(f"{col} {order_dir}" for col in identity_cols)
+            return "ORDER BY " + ", ".join(terms)
+
+        def _group_by(*key_cols: str) -> str:
+            """GROUP BY for a template, given its row-identity key.
+
+            When the sort is by name, the sort column leads the grouping. That
+            is a no-op semantically — printing_id is the primary key and so
+            functionally determines card_name, meaning the finer key groups
+            exactly the same rows — but it is what lets one scan of
+            idx_printings_card_name satisfy the grouping and the ordering at
+            once. Denormalising without this measured no better than not
+            denormalising at all (2.4 s vs 2.7 s); with it, 8.8 ms.
+            """
+            cols = list(key_cols)
+            if sorting_by_name:
+                cols.insert(0, "p.card_name")
+            return "GROUP BY " + ", ".join(cols)
 
         # Conditional JOINs from the search engine
         # Note: expand_copies and default templates already include dc/d/b joins.
@@ -2222,7 +2271,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         needs_price_join = compiled and compiled.needs_price_join
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
-        def _build_extra_joins(*, has_deck_binder_joins: bool, enrich: bool = True) -> str:
+        def _build_extra_joins(*, has_deck_binder_joins: bool, enrich: str = "full") -> str:
+            """enrich: "full" for the page, "prices" for the totals, "none" for the count."""
             joins = []
             if not has_deck_binder_joins:
                 if compiled and compiled.needs_deck_join:
@@ -2242,8 +2292,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 joins.append(
                     "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
                 )
-            if enrich:
+            if enrich == "full":
                 joins.extend(_ENRICH_JOINS)
+            elif enrich == "prices":
+                # The totals need a price per row and nothing else. Dropping the
+                # ck_url join drops its correlated scalar subquery, which runs
+                # once per row of the whole result: 2.6 s -> 1.0 s on 109,976.
+                joins.extend(_ENRICH_PRICE_JOINS)
             return "\n                ".join(joins)
 
         if card_pairs or include_unowned:
@@ -2280,11 +2335,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN orders o ON c.order_id = o.id
                 {joins}
                 WHERE {where_sql}
-                GROUP BY p.printing_id
+                {_group_by("p.printing_id")}
             """
             body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
-            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich=False))
-            order_sql = f"ORDER BY {sort_col} {order_dir}, card.name ASC, p.printing_id ASC"
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="none"))
+            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="prices"))
+            order_sql = _order_by("p.printing_id")
             agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
@@ -2328,11 +2384,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 WHERE {where_sql}
             """
             body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
-            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich=False))
-            order_sql = (
-                f"ORDER BY {sort_col} {order_dir}, card.name ASC,"
-                " p.printing_id ASC, c.id ASC, dc.id ASC"
-            )
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="none"))
+            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="prices"))
+            # No GROUP BY on this template: one row per collection entry, so
+            # c.id (plus dc.id, which the deck join can duplicate it by) is what
+            # identifies a row.
+            order_sql = _order_by("p.printing_id", "c.id", "dc.id")
             agg_qty_sql = "1"
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
@@ -2373,13 +2430,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN binders b ON c.binder_id = b.id
                 {joins}
                 WHERE {where_sql}
-                GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
+                {_group_by("p.printing_id", "c.finish", "c.condition", "c.status", "c.order_id")}
             """
             body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
-            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich=False))
-            order_sql = (
-                f"ORDER BY {sort_col} {order_dir}, card.name ASC,"
-                " p.printing_id ASC, c.finish ASC, c.condition ASC, c.status ASC, c.order_id ASC"
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="none"))
+            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="prices"))
+            order_sql = _order_by(
+                "p.printing_id", "c.finish", "c.condition", "c.status", "c.order_id"
             )
             agg_qty_sql = "COUNT(DISTINCT c.id)"
 
@@ -2394,24 +2451,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         )
         rows = cursor.fetchall()
 
-        # total is the size of the whole result, not the page.
-        #
-        # A short page has already answered the question: the query ran out of
-        # rows, so the result ends here. That covers every query whose result
-        # fits in one page — which is most of them — for no extra query at all.
-        # (Not when the page is empty and the offset is past the end: then the
-        # offset says nothing about where the result stopped.)
-        #
-        # Otherwise count the body, which carries the GROUP BY and so counts
-        # groups, matching what the page returns. The enrichment joins are left
-        # out: a COUNT has no columns to enrich, and each of them matches at
-        # most one row, so they cannot change the count either.
-        if len(rows) < limit and (rows or offset == 0):
-            total = offset + len(rows)
-        else:
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
-            ).fetchone()[0]
+        # A short page has already answered how big the result is: the query ran
+        # out of rows, so the result ends here. That covers every query whose
+        # result fits in one page — which is most of them — for no extra query
+        # at all. (Not when the page is empty and the offset is past the end:
+        # then the offset says nothing about where the result stopped.)
+        short_page = len(rows) < limit and (rows or offset == 0)
 
         include_unowned = bool(card_pairs) or include_unowned
         results = []
@@ -2478,36 +2523,64 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             card["ck_url"] = row["ck_url"]
             results.append(card)
 
-        # total_qty / total_value describe the whole result, like total does.
+        # total, total_qty and total_value all describe the whole result rather
+        # than the page, and none of them can be summed from the page: the client
+        # fetches windows as it scrolls, so a page-scoped aggregate would climb
+        # as the user scrolled — a collection value that grows while you look at
+        # it is worse than none. Priced the same way the table is
+        # (display_price_sql), so the status line agrees with the price column
+        # beside it.
         #
-        # They cannot be summed from the page. The client fetches windows as it
-        # scrolls, so a page-scoped aggregate would climb as the user scrolled —
-        # a collection value that grows while you look at it is worse than none.
+        # total_qty/total_value are computed on the first window only (de-962).
+        # They describe the result, not the window, so every later window used to
+        # recompute a number the client already had — measured at 1.0 s of the
+        # 1.5 s a scroll fetch cost once the page query itself was fixed. The
+        # value on screen still never moves, because the client reads them once
+        # and keeps them; the keys are simply absent from later windows rather
+        # than being present and stale.
         #
-        # Priced the same way the table is (display_price_sql), so the status
-        # line agrees with the price column beside it.
-        if offset == 0 and total == len(results):
+        # `total` is on every window: deck-builder.js pages the card picker until
+        # `offset >= total`, so dropping it there would turn its loop into a
+        # fixed-cap scan.
+        totals_in_hand = short_page and offset == 0
+        price_key = "ck_price" if first_source == "ck" else "tcg_price"
+        aggregates = {}
+
+        if totals_in_hand:
             # The page is the whole result, so the rows in hand are the answer.
-            price_key = "ck_price" if first_source == "ck" else "tcg_price"
-            total_qty = sum(c.get("qty") or 0 for c in results)
-            total_value = sum(
+            total = len(results)
+            aggregates["total_qty"] = sum(c.get("qty") or 0 for c in results)
+            aggregates["total_value"] = round(sum(
                 float(c[price_key] or 0) * (c.get("qty") or 0) for c in results
-            )
-        else:
+            ), 2)
+        elif offset == 0:
+            # One scan for all three. Counting and summing separately walked the
+            # same grouped body twice: 1.4 s against 1.0 s for this, same answer.
             agg = conn.execute(
-                f"SELECT COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
-                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {body_sql})",
+                f"SELECT COUNT(*), COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
+                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {totals_body_sql})",
                 sql_params,
             ).fetchone()
-            total_qty, total_value = agg[0], agg[1]
+            total = agg[0]
+            aggregates["total_qty"] = agg[1]
+            aggregates["total_value"] = round(agg[2], 2)
+        elif short_page:
+            total = offset + len(rows)
+        else:
+            # Count the body, which carries the GROUP BY and so counts groups,
+            # matching what the page returns. The enrichment joins are left out:
+            # a COUNT has no columns to enrich, and each of them matches at most
+            # one row, so they cannot change the count either.
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
+            ).fetchone()[0]
 
         conn.close()
         self._send_json(
             {
                 "rows": results,
                 "total": total,
-                "total_qty": total_qty,
-                "total_value": round(total_value, 2),
+                **aggregates,
                 "limit": limit,
                 "offset": offset,
             }

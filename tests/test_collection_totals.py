@@ -154,13 +154,29 @@ class TestWholeResultTotals:
         assert body["total_value"] == TOTAL_VALUE_TCG
 
     def test_totals_hold_while_walking_the_result(self, priced_db):
-        """Every window reports the same totals, so the line does not move as
-        pages arrive."""
-        seen = []
-        for offset in range(0, TOTAL_ROWS + 1):
+        """The line does not move as pages arrive.
+
+        The first window carries the totals; later windows carry none, so the
+        client keeps the figures it already has (de-962 — recomputing them per
+        window cost 1.0 s of the 1.5 s a scroll fetch took).  What must never
+        happen is a *different* value arriving later and moving the line, so
+        this asserts absence, not a stale repeat.
+
+        `total` stays on every window: deck-builder.js pages its card picker
+        until `offset >= total`.
+        """
+        first = _page(priced_db, limit=1, offset=0)
+        assert (first["total"], first["total_qty"], first["total_value"]) == (
+            TOTAL_ROWS,
+            TOTAL_QTY,
+            TOTAL_VALUE_TCG,
+        )
+
+        for offset in range(1, TOTAL_ROWS + 1):
             body = _page(priced_db, limit=1, offset=offset)
-            seen.append((body["total"], body["total_qty"], body["total_value"]))
-        assert set(seen) == {(TOTAL_ROWS, TOTAL_QTY, TOTAL_VALUE_TCG)}
+            assert body["total"] == TOTAL_ROWS, offset
+            assert "total_qty" not in body, offset
+            assert "total_value" not in body, offset
 
     def test_short_page_and_counted_page_agree(self, priced_db):
         """A page that holds the whole result is summed from the rows in hand;

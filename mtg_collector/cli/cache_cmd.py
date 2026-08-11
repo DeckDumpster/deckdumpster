@@ -6,7 +6,7 @@ import sys
 
 from mtg_collector.db import get_connection, get_shared_write_path, init_db
 from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
-from mtg_collector.db.schema import rebuild_fts
+from mtg_collector.db.schema import rebuild_card_names, rebuild_fts
 from mtg_collector.services.bulk_import import resolve_reversible_oracle_id
 from mtg_collector.services.scryfall import ScryfallAPI
 from mtg_collector.utils import get_mtgc_home
@@ -258,9 +258,14 @@ def cache_all(db_path: str):
     if non_en_count:
         print(f"  Added {non_en_count} non-English-only cards")
 
-    # Step 8: Rebuild full-text search index
+    # Step 8: Rebuild the indexes derived from cards.name
     print("Rebuilding full-text search index...")
     rebuild_fts(conn)
+    # printings.card_name is the other thing derived from cards.name. This pass
+    # is where an upstream rename arrives, so it is where the copy is repaired.
+    renamed = rebuild_card_names(conn)
+    if renamed:
+        print(f"  Resynced card_name on {renamed} printing(s)")
 
     # Step 9: Clean up temp file
     tmp_path.unlink(missing_ok=True)
