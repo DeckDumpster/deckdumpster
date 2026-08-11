@@ -1,0 +1,21 @@
+start_page: /collection?q=is%3Aunowned
+involves:
+  - 'sortable column headers (.collection-table th[data-col]) — name, type, mana, set, collector_number, price'
+  - 'card name cell (.card-name) in each row'
+  - 'status text (#status)'
+fixture_data:
+  unowned_total_rows: 7603
+  first_row_ascending: "A Killer Among Us"
+  first_row_descending: "Zur's Weirding"
+  page_size: 250
+notes: >
+  The page loads sorted by name ascending, so the first row is "A Killer
+  Among Us". One click on th[data-col="name"] toggles to descending and
+  refetches from the server at offset 0.
+  This is the discriminating case: the loaded window is the first 250 rows,
+  every one of them an early-alphabet name. Reversing those in the browser
+  would leave another "A..." name on top. Only an ordering applied across all
+  7,603 rows can put "Zur's Weirding" there, so that string is the assertion.
+  Do not use the price column for this — the fixture has no prices at all for
+  unowned printings (0 of 7,603), so every row ties and asc and desc return
+  the identical order.

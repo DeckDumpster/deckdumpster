@@ -1,0 +1,12 @@
+# Scenario: A huge result paints one window, not the whole catalog
+#
+# Related:
+#   issues: [de-6f4]
+#   pull_requests: []
+
+description: >
+  When I search "is:unowned", which matches thousands of printings I don't
+  own, the table appears straight away rather than making me wait for the
+  whole catalog. The count beside the search box tells me how many cards
+  matched in total, and the scrollbar is sized for all of them, but the page
+  has only fetched and rendered the screenful I am actually looking at.
