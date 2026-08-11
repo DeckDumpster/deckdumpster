@@ -1,0 +1,12 @@
+# Scenario: Sorting orders the whole result, not the part already fetched
+#
+# Related:
+#   issues: [de-6f4]
+#   pull_requests: []
+
+description: >
+  When I sort a search that matched far more cards than are on screen, I get
+  the first card of the whole result. Searching "is:unowned" and clicking the
+  Card header to reverse the order puts a card at the very end of the
+  alphabet at the top — not merely the last of the batch that happened to be
+  loaded, which would still be a card near the start of the alphabet.
