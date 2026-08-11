@@ -143,17 +143,21 @@ def _call_collection(db_path, params):
     handler._send_json = lambda obj, status=200: sent.append((obj, status))
 
     handler._api_collection(params)
-    rows, status = sent[0]
-    assert status == 200, rows
+    page, status = sent[0]
+    assert status == 200, page
     ordered = [(sql, p) for sql, p in calls if "ORDER BY" in sql]
     assert len(ordered) == 1, f"expected one ordered query, got {len(ordered)}"
-    return rows, ordered[0][0], ordered[0][1]
+    # Page envelope: {rows, total, limit, offset}. The fixture is 20 rows, so
+    # the default page holds all of them unless the caller asked for fewer.
+    return page["rows"], ordered[0][0], ordered[0][1]
 
 
 def _order_terms(sql):
     """The ORDER BY expressions of the emitted query, stripped of direction."""
     terms = []
-    for term in sql.rsplit("ORDER BY", 1)[1].split(","):
+    # The query is paged, so the ORDER BY runs to the LIMIT clause, not the end.
+    tail = sql.rsplit("ORDER BY", 1)[1].rsplit("LIMIT", 1)[0]
+    for term in tail.split(","):
         term = " ".join(term.split())
         for suffix in (" ASC", " DESC"):
             if term.endswith(suffix):
@@ -268,20 +272,15 @@ def test_paging_returns_every_row_exactly_once(db_path, template):
     ties consistently while the plan is unchanged — but it is the failure the
     total order exists to prevent, so it stays as a regression guard.
     """
-    rows, sql, sql_params = _call_collection(db_path, _params(template, "cmc"))
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        unpaged = [r["printing_id"] for r in conn.execute(sql, sql_params)]
-        page = 7
-        paged = []
-        for offset in range(0, len(unpaged), page):
-            paged += [
-                r["printing_id"]
-                for r in conn.execute(f"{sql} LIMIT {page} OFFSET {offset}", sql_params)
-            ]
-    finally:
-        conn.close()
+    rows, _sql, _p = _call_collection(db_path, _params(template, "cmc"))
+    unpaged = [r["printing_id"] for r in rows]
+
+    page = 7
+    paged = []
+    for offset in range(0, _TOTAL, page):
+        window = _params(template, "cmc") | {"limit": [str(page)], "offset": [str(offset)]}
+        paged += [r["printing_id"] for r in _call_collection(db_path, window)[0]]
+
     assert len(rows) == _TOTAL
     assert paged == unpaged
     assert len(paged) == _TOTAL

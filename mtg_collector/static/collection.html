@@ -1517,6 +1517,8 @@ let sortOrder = 'asc';
 let sortColumn = 'name';
 let allCards = [];
 let allCardsUnfiltered = [];
+// Rows matching the query server-side, which is >= what a page holds.
+let totalMatches = 0;
 let debounceTimer = null;
 let _settings = {};
 let multiSelectMode = false;
@@ -3288,7 +3290,12 @@ function updateStatusText() {
   const count = useQty ? totalQty : allCards.length;
   const noun = useQty ? (count === 1 ? 'card' : 'cards') : (count === 1 ? 'result' : 'results');
   const valueSuffix = totalValue > 0 ? `, ${formatPrice(totalValue)}` : '';
-  statusEl.textContent = `${count.toLocaleString()} ${noun}${valueSuffix}`;
+  // The response is one page. Say so rather than reporting the page as if it
+  // were the whole result — the counts above are page-scoped.
+  const pageSuffix = totalMatches > allCardsUnfiltered.length
+    ? ` (showing ${allCardsUnfiltered.length.toLocaleString()} of ${totalMatches.toLocaleString()} matches)`
+    : '';
+  statusEl.textContent = `${count.toLocaleString()} ${noun}${valueSuffix}${pageSuffix}`;
   statusEl.classList.toggle('empty', allCards.length === 0);
 }
 
@@ -3322,8 +3329,12 @@ async function fetchCollection() {
     searchErrorEl.textContent = data.error;
     statusEl.textContent = `Search error: ${data.error}`;
     allCardsUnfiltered = [];
+    totalMatches = 0;
   } else {
-    allCardsUnfiltered = Array.isArray(data) ? data : [];
+    // Page envelope: {rows, total, limit, offset}. `total` counts the whole
+    // result, so it is what the status line reports — rows is one page of it.
+    allCardsUnfiltered = data.rows;
+    totalMatches = data.total;
   }
 
   selectedCards.clear();

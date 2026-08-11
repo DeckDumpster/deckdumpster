@@ -753,7 +753,9 @@
     const isVirtual = window._builderData && window._builderData.deck.state !== 'constructed';
     const res = await fetch('/api/collection?q=' + encodeURIComponent(q) + '&status=owned&expand=copies');
     const data = await res.json();
-    const allCopies = Array.isArray(data) ? data : data.cards || [];
+    // Page envelope: {rows, total, limit, offset}. The picker searches
+    // server-side, so a page is the search result, not a slice of the pool.
+    const allCopies = data.rows;
     // Hypothetical decks: dedup by printing_id (don't care about individual copies)
     // Real decks: only show unassigned copies
     let cards;
