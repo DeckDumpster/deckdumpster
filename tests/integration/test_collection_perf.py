@@ -55,11 +55,13 @@ class TestCollectionApiPerformance:
 
         # Measured request
         elapsed_ms, status, body, _ = _timed_get(url, _ssl_ctx)
-        cards = json.loads(body)
+        page = json.loads(body)
 
         assert status == 200
-        assert isinstance(cards, list)
-        print(f"\n  /api/collection: {len(cards)} cards in {elapsed_ms:.0f} ms")
+        # Page envelope, not a bare array: {rows, total, limit, offset}.
+        assert set(page) >= {"rows", "total", "limit", "offset"}
+        cards = page["rows"]
+        print(f"\n  /api/collection: {len(cards)} of {page['total']} cards in {elapsed_ms:.0f} ms")
         assert elapsed_ms < API_RESPONSE_BUDGET_MS, (
             f"Collection API took {elapsed_ms:.0f} ms (budget: {API_RESPONSE_BUDGET_MS} ms)"
         )
@@ -75,8 +77,8 @@ class TestCollectionApiPerformance:
         if len(raw) > 1024 or encoding == "gzip":
             assert encoding == "gzip", "Expected gzip Content-Encoding"
             body = gzip.decompress(raw)
-            cards = json.loads(body)
-            assert isinstance(cards, list)
+            page = json.loads(body)
+            assert isinstance(page["rows"], list)
             ratio = len(raw) / len(body) if body else 1
             print(f"\n  gzip: {len(body)} -> {len(raw)} bytes ({ratio:.1%})")
 
@@ -84,7 +86,7 @@ class TestCollectionApiPerformance:
         """Cards include price fields (verifies bulk lookup works)."""
         url = f"{base_url}/api/collection"
         _, status, body, _ = _timed_get(url, _ssl_ctx)
-        cards = json.loads(body)
+        cards = json.loads(body)["rows"]
 
         assert status == 200
         if not cards:
@@ -101,7 +103,7 @@ class TestCollectionApiPerformance:
         url = f"{base_url}/api/collection?search=mountain"
         _timed_get(url, _ssl_ctx)  # warm-up
         elapsed_ms, status, body, _ = _timed_get(url, _ssl_ctx)
-        cards = json.loads(body)
+        cards = json.loads(body)["rows"]
 
         assert status == 200
         print(f"\n  /api/collection?search=mountain: {len(cards)} cards in {elapsed_ms:.0f} ms")

@@ -1005,6 +1005,39 @@ _ENRICH_COLUMNS = """COALESCE(_ck_buy.price, _ck_retail.price) as ck_price,
                     COALESCE(NULLIF(CASE WHEN c.finish IN ('foil', 'etched') THEN _mp.ck_url_foil END, ''), _mp.ck_url, '') as ck_url"""
 
 
+# Page bounds for /api/collection. Measured on the real payload (108,630 rows
+# for is:unowned): a 250-row page is 212 KB raw / 28 KB gzipped and 434 round
+# trips to walk the catalog; 1000 is 855 KB / 103 KB and 108 trips. There is no
+# unbounded escape hatch and no sentinel — every caller takes these semantics.
+COLLECTION_LIMIT_DEFAULT = 250
+COLLECTION_LIMIT_MAX = 1000
+
+
+class PageParamError(ValueError):
+    """A limit/offset the caller must fix. Surfaced as a 400, never clamped."""
+
+
+def _parse_page_params(params: dict) -> tuple[int, int]:
+    """Return (limit, offset) from query params, or raise PageParamError."""
+    limit = _page_int(params, "limit", COLLECTION_LIMIT_DEFAULT)
+    offset = _page_int(params, "offset", 0)
+    if not 1 <= limit <= COLLECTION_LIMIT_MAX:
+        raise PageParamError(f"limit must be between 1 and {COLLECTION_LIMIT_MAX}")
+    if offset < 0:
+        raise PageParamError("offset must be 0 or greater")
+    return limit, offset
+
+
+def _page_int(params: dict, name: str, default: int) -> int:
+    raw = params.get(name, [""])[0].strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise PageParamError(f"{name} must be an integer") from None
+
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -2166,6 +2199,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """
         from mtg_collector.search import SearchError, compile_query, parse_query
 
+        try:
+            limit, offset = _parse_page_params(params)
+        except PageParamError as e:
+            self._send_json({"error": str(e)}, 400)
+            return
+
         q = params.get("q", [""])[0]
         sort = params.get("sort", [""])[0]
         order = params.get("order", [""])[0]
@@ -2254,7 +2293,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         needs_price_join = (compiled and compiled.needs_price_join) or sort_col == "_lp.price"
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
-        def _build_extra_joins(*, has_deck_binder_joins: bool) -> str:
+        def _build_extra_joins(*, has_deck_binder_joins: bool, enrich: bool = True) -> str:
             joins = []
             if not has_deck_binder_joins:
                 if compiled and compiled.needs_deck_join:
@@ -2274,12 +2313,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 joins.append(
                     "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
                 )
-            joins.extend(_ENRICH_JOINS)
+            if enrich:
+                joins.extend(_ENRICH_JOINS)
             return "\n                ".join(joins)
 
         if card_pairs or include_unowned:
             # LEFT JOIN template: shared-link cards or is:unowned queries
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2301,19 +2341,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     o.order_date as order_date,
                     c.purchase_price,
                     {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM printings p
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
                 LEFT JOIN collection c ON p.printing_id = c.printing_id
                 LEFT JOIN orders o ON c.order_id = o.id
-                {_build_extra_joins(has_deck_binder_joins=False)}
+                {joins}
                 WHERE {where_sql}
                 GROUP BY p.printing_id
-                ORDER BY {sort_col} {order_dir}, card.name ASC, p.printing_id ASC
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich=False))
+            order_sql = f"ORDER BY {sort_col} {order_dir}, card.name ASC, p.printing_id ASC"
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2338,6 +2383,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     d.name as deck_name,
                     b.name as binder_name,
                     {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2346,13 +2394,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN deck_cards dc ON dc.collection_id = c.id
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
-                {_build_extra_joins(has_deck_binder_joins=True)}
+                {joins}
                 WHERE {where_sql}
-                ORDER BY {sort_col} {order_dir}, card.name ASC, p.printing_id ASC, c.id ASC, dc.id ASC
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich=False))
+            order_sql = (
+                f"ORDER BY {sort_col} {order_dir}, card.name ASC,"
+                " p.printing_id ASC, c.id ASC, dc.id ASC"
+            )
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
-            query = f"""
+            select_sql = f"""
                 SELECT
                     card.oracle_id, card.name, card.type_line, card.mana_cost, card.cmc,
                     card.colors, card.color_identity,
@@ -2376,6 +2429,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     d.name as deck_name,
                     b.name as binder_name,
                     {_ENRICH_COLUMNS}
+            """
+            def _body(joins: str) -> str:
+                return f"""
                 FROM collection c
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
@@ -2384,15 +2440,46 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN deck_cards dc ON dc.collection_id = c.id
                 LEFT JOIN decks d ON dc.deck_id = d.id
                 LEFT JOIN binders b ON c.binder_id = b.id
-                {_build_extra_joins(has_deck_binder_joins=True)}
+                {joins}
                 WHERE {where_sql}
                 GROUP BY p.printing_id, c.finish, c.condition, c.status, c.order_id
-                ORDER BY {sort_col} {order_dir}, card.name ASC,
-                         p.printing_id ASC, c.finish ASC, c.condition ASC, c.status ASC, c.order_id ASC
             """
+            body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
+            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich=False))
+            order_sql = (
+                f"ORDER BY {sort_col} {order_dir}, card.name ASC,"
+                " p.printing_id ASC, c.finish ASC, c.condition ASC, c.status ASC, c.order_id ASC"
+            )
 
-        cursor = conn.execute(query, sql_params)
+        # order_sql stays per-template: the tiebreak is that template's row
+        # identity, and it differs (the GROUP BY key, or c.id/dc.id per copy).
+        # It is kept out of body_sql so the COUNT below does not sort.
+        #
+        # LIMIT/OFFSET are bound parameters, never formatted into the SQL.
+        cursor = conn.execute(
+            f"{select_sql}{body_sql}{order_sql} LIMIT ? OFFSET ?",
+            [*sql_params, limit, offset],
+        )
         rows = cursor.fetchall()
+
+        # total is the size of the whole result, not the page.
+        #
+        # A short page has already answered the question: the query ran out of
+        # rows, so the result ends here. That covers every query whose result
+        # fits in one page — which is most of them — for no extra query at all.
+        # (Not when the page is empty and the offset is past the end: then the
+        # offset says nothing about where the result stopped.)
+        #
+        # Otherwise count the body, which carries the GROUP BY and so counts
+        # groups, matching what the page returns. The enrichment joins are left
+        # out: a COUNT has no columns to enrich, and each of them matches at
+        # most one row, so they cannot change the count either.
+        if len(rows) < limit and (rows or offset == 0):
+            total = offset + len(rows)
+        else:
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
+            ).fetchone()[0]
 
         include_unowned = bool(card_pairs) or include_unowned
         results = []
@@ -2460,7 +2547,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             results.append(card)
 
         conn.close()
-        self._send_json(results)
+        self._send_json({"rows": results, "total": total, "limit": limit, "offset": offset})
 
     def _api_card(self, printing_id: str):
         """Return full card data for a single printing by printing_id."""
