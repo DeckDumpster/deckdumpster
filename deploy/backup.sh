@@ -46,6 +46,17 @@
 set -euo pipefail
 
 INSTANCE="${1:-prod}"
+
+# Look the data volume up in the store the instance lives in (de-3mo). Wrong
+# store and `podman volume exists` says no — which this script correctly treats
+# as a hard error, but one that names the volume rather than the store. prod's
+# unit carries no store, so prod resolves against Podman's default as always.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
+mtgc_store_adopt_instance "$INSTANCE"
+mtgc_store_activate
+
 BACKUP_DIR="${MTGC_BACKUP_DIR:-$HOME/mtgc-backups}"
 INSTANCE_DIR="${BACKUP_DIR}/${INSTANCE}"
 DAILY_DIR="${INSTANCE_DIR}/daily"

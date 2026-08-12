@@ -77,6 +77,157 @@ bash deploy/teardown.sh feature-xyz         # keeps data volume
 bash deploy/teardown.sh feature-xyz --purge  # removes everything
 ```
 
+## Container storage: keeping non-prod off the prod disk
+
+Rootless Podman keeps images, layers and volumes under `$HOME`. On the box that
+runs `prod`, `$HOME` is on the 98G LVM root **that `prod` itself runs from** —
+34G of the 74G used on `/` was podman's store when this was measured (2026-08-11)
+— while the 938G disk holding the checkouts sits nearly empty. So every throwaway
+`--test` instance and every CI image build eats the disk prod serves from. `/` has
+hit 100% twice, once producing `ld terminated with signal 7 [Bus error]`, which
+reads as a toolchain bug and not a disk problem.
+
+**Non-prod storage is opt-in-relocatable; prod's never moves.**
+
+```bash
+# Build this instance's image and volume into an alternate store:
+MTGC_STORE_ROOT=/big/disk/mtgc-nonprod-store bash deploy/setup.sh scratch --test
+
+# Podman's default store (what prod uses, and the default everywhere else):
+bash deploy/setup.sh prod 8081
+```
+
+- **Unset is a strict no-op.** With no `MTGC_STORE_ROOT`, the generated Quadlet,
+  the timer units and every podman call are exactly what they were before this
+  existed. `tests/test_deploy_store.py` asserts that, call by call.
+- **Which disk is host config, not a repo constant.** Uncomment
+  `MTGC_STORE_ROOT` in `~/.config/mtgc/store.env` — the same directory
+  `default.env` and the per-instance env files live in — and CI builds there.
+  `setup.sh` scaffolds that file commented out, so the knob is visible on a new
+  box without changing anything. An explicit `MTGC_STORE_ROOT` in the environment
+  wins over the file, and an explicit `MTGC_STORE_ROOT=` (empty) is how one run
+  opts back out on a box that opts in. The store is never *inferred* from the
+  box's disk layout: a rule like "the checkout is on a different filesystem from
+  `$HOME`" describes one machine, and on any other it quietly starts a container
+  store at the top of whatever external drive or network mount the checkout
+  happens to sit on.
+- **Only CI reads `store.env`.** `setup.sh` — which is also how prod is installed
+  — honours the environment and nothing else, so a host that opts in cannot
+  relocate a prod deploy.
+- **The unit is the record.** The generated Quadlet carries a `GlobalArgs=` key
+  naming the store, and `deploy.sh`, `teardown.sh`, `restore.sh`, `backup.sh` and
+  `prune-instances.sh` read it back — so a bare `bash deploy/teardown.sh <name>`
+  removes from the store the instance was *created* in, and a deploy builds into
+  the one systemd will look in. An **unstamped** unit says "the default store"
+  just as definitely, so an inherited activation is dropped rather than fallen
+  through.
+- The per-instance price / sealed-catalog / EDHREC timer units carry the same
+  flags on their `podman exec` lines, because systemd does not inherit the
+  `PATH` shim that scopes the scripts.
+- `--root`/`--runroot` per invocation, never a `storage.conf`: the choice cannot
+  leak into unrelated podman use on the box.
+- **`prod` never sets the variable**, so prod's generated unit is byte-identical
+  to the pre-existing one and prod's volumes never move.
+- Not covered: `deploy/mac-setup.sh` and friends. On macOS the store lives inside
+  the `podman machine` VM, not in the host `$HOME` this is about.
+
+Mechanism and rationale: [`deploy/store-lib.sh`](store-lib.sh).
+
+### The gate that keeps this true
+
+Everything above is a mechanism. What made this a recurring bug is that the rule
+around it was a convention — *set this variable, remember that flag* — and
+conventions decay without anyone noticing. So CI runs the whole thing for real,
+on every PR:
+
+```bash
+bash deploy/store-isolation-gate.sh          # ~one image build
+```
+
+It brings up a `--test` instance with `MTGC_STORE_ROOT` pointed at a throwaway
+probe store, and asserts four things about Podman's **default** store and the
+probe: no `mtgc:<instance>` image, `mtgc-<instance>-data` volume or
+`systemd-mtgc-<instance>` container in the default store; no image ID the build
+produced arriving there; no meaningful growth under `~/.local/share/containers`;
+*and* that both objects and an image build's worth of bytes are in the probe
+store instead. Then it tears both down and re-checks.
+
+The positives are the half that is easy to leave out. A bring-up that silently
+did nothing also writes nothing to the default store, so a gate checking only for
+the leak would go green on a machine that never built anything.
+
+Names alone would miss a leaked build. `setup.sh` builds `mtgc:latest` before it
+tags the instance, and `mtgc:latest` is a name prod's own deploy writes too — so
+the tag proves nothing, and the stage commits behind it carry no tag at all.
+What the build does have is IDs: the gate reads them back out of the probe store
+(walking `podman image history`) and looks for them in the default store,
+ignoring anything that was already there at baseline, since the base image
+legitimately lives in it.
+
+**The byte delta is conditional, because `~/.local/share/containers` is not
+ours.** On the deployment box it is shared with every other project: prod, the
+sibling pokedumpster deployment and its litestream sidecar, that project's
+lakehouse pipeline, and any instance nobody relocated. `du` reports bytes and
+cannot report a writer. This gate's first CI run went red on 820 MB, none of it
+this repo's — a neighbouring prod deploy that built and restarted inside the
+gate's four-minute window (de-dk3). So the delta is still measured and still
+hard, but only when the default store's inventory of images, containers and
+volumes is unchanged across the run, which is the evidence that nobody else was
+writing. When something else was, the gate names it and reports the number
+instead of asserting it. The checks above do not depend on any of that.
+
+The tolerance is not zero, and that is measured. On the deployment box
+(podman 4.9.3, 2026-08-12) one `--test` bring-up moved 1.87 GiB into the probe
+store and **24 KB** into `~/.local/share/containers` — podman's user-scope
+bookkeeping, chiefly the containers/image blob-info cache, which `--root` does
+not relocate. The default ceiling is 64 MiB: far above that bookkeeping, far
+below a single image layer. `MTGC_STORE_GATE_TOLERANCE_KB` and
+`MTGC_STORE_GATE_FLOOR_KB` override it.
+
+The probe store goes in `MTGC_STORE_GATE_ROOT` if set, else beside the store
+`store.env` names (`<store>.gate`), else `$TMPDIR`. Never the configured store
+itself — a warm store would make the positive assertions meaningless, and the
+teardown would take real instances' images with it.
+
+`tests/test_store_isolation_gate.py` drives the gate against a stubbed podman
+told to leak, to leak under a name prod also uses, to spill bytes nothing is
+named after, and to build nothing, and checks it goes red every way. It also
+drives one where a *neighbour* writes to the shared store, and checks the gate
+goes green — a required check that fails at random is one whose tolerance gets
+raised until it stops meaning anything. A gate never observed failing is not
+known to work, and one never observed staying green under noise is not known to
+be usable.
+
+### Deleting a store — never `podman system reset`
+
+Everything above teaches you to aim `--root`/`--runroot` at a second store.
+`podman system reset` is the one subcommand that ignores them — it resets podman
+storage "back to default state", and on 4.9.3 that included `/run/user/$UID/libpod`
+and the rootless SHM lock, which no flag pointed at and every store on the box
+shares. Run against a throwaway probe store on the sibling project, it took *that*
+project's prod down: HTTP 000, podman answering `container state improper` while
+the server process was still alive, other instances stuck in state `Created` —
+serving but unmanageable. Data survived; the damage was runtime state, repaired
+with `systemctl --user restart mtgc-<instance>` per affected instance.
+
+Remove a store with the command that does it correctly:
+
+```bash
+bash deploy/store-teardown.sh    # the store store.env names; refuses if there is none
+MTGC_STORE_ROOT=/big/disk/mtgc-nonprod-store bash deploy/store-teardown.sh
+```
+
+It stops and removes what the store owns *from inside that store*, then `rm -rf`s
+the store root and its runroot — a path deletes exactly the path, however podman
+resolves things. `teardown.sh` removes an *instance* and leaves the store
+standing, because the store is shared by every instance on the box; without this
+one accumulates forever. With no alternate store configured it exits non-zero
+rather than defaulting to Podman's — that one is prod's. It reports a failure
+rather than claiming success when something in the store is still mounted.
+
+`tests/test_deploy_store.py` greps `deploy/` and fails on a `podman system reset`
+anywhere in it, so this cannot be reintroduced by hand.
+
 ## Cloudflare Tunnel origin
 
 A tunnel connector (`cloudflared`) runs on the host and reaches the container over loopback. TLS on that hop protects nothing — it is `127.0.0.1` — and terminating it with the auto-generated self-signed cert forces the tunnel route to carry `noTLSVerify: true` permanently. The instance can instead serve the connector over **plain HTTP on a second listener**, while direct-LAN clients keep hitting HTTPS on 8081 exactly as before. One instance, two access paths.
@@ -308,12 +459,19 @@ is `s3api list-objects-v2`.
 | `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
 | `deploy.sh <name>` | Rebuild image and restart one instance. Regenerates the Quadlet via `setup.sh` if it has gone missing — `--http-port` / `--tls-certs` are re-applied from the env file, so the unit is reproduced rather than downgraded |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
+| `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
+| `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
+| `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or the IDs its build produced, turn up in Podman's default store, or if nothing was built. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 
 ## CI
 
 Push to main auto-deploys `prod`. Use workflow_dispatch to deploy other instances by name.
+
+CI builds honour `~/.config/mtgc/store.env`, so on a box that opts in, nothing
+the test job builds lands on the disk prod runs from. `deploy.yml` — the workflow
+that deploys `prod` — deliberately does not read it.
 
 ## Troubleshooting
 
