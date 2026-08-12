@@ -10,18 +10,33 @@ goes red when it should, and "I unset the variable once and watched it fail" is
 a fact about an afternoon, not a property of the repo. So these drive the real
 gate script with podman stubbed, and the stub is told where to put the bytes:
 
-    honoured   podman respects --root         -> the gate passes
-    ignored    podman writes to $HOME anyway  -> the gate fails, naming the leak
-    nothing    the build silently no-ops      -> the gate fails as vacuous
+    honoured     podman respects --root           -> the gate passes
+    ignored      podman writes to $HOME anyway    -> fails, naming the leak
+    nothing      the build silently no-ops        -> fails as vacuous
+    latest_only  the build leaks, tagged only
+                 `mtgc:latest` — a name prod
+                 writes too                       -> fails on the image ID
+    spill        bytes appear in the default
+                 store with no object to name     -> fails on the byte delta
+    neighbour    another project writes to the
+                 shared default store while we
+                 measure                          -> PASSES (de-dk3)
 
-The third is the one that is easy to leave out and the reason the gate asserts
+`nothing` is the one that is easy to leave out and the reason the gate asserts
 positives at all: a bring-up that did nothing writes nothing to the default
 store either, and would sail through a gate that only checked for the leak.
 
+`neighbour` is the inverse, and it is a real regression rather than a
+hypothetical: the gate's first CI run failed on 820 MB that a sibling project's
+prod deploy wrote to the same shared store during our window. A gate that goes
+red when someone else builds is a gate that gets its tolerance raised until it
+stops meaning anything. `spill` is what keeps that fix honest — the byte delta
+is still hard when nothing else touched the store.
+
 Same shape as tests/test_deploy_store.py — stubbed podman/systemctl/loginctl and
 a throwaway $HOME, so the real scripts run end to end. The stub keeps a registry
-of which store it "created" each image and volume in, which is what lets
-`podman image exists` answer differently per store.
+of which store it "created" each image, volume and container in, which is what
+lets `podman image exists` answer differently per store.
 """
 
 import os
@@ -38,7 +53,16 @@ GATE = REPO_ROOT / "deploy" / "store-isolation-gate.sh"
 # round, so the arithmetic under test is the same arithmetic.
 STUB_MB = 8
 
-# Records every call, then acts out one of three worlds. $STUB_MODE picks which.
+# Image IDs the stub hands out. The build's is what the gate reads back out of
+# the probe store and hunts for in the default one; the base image's is there to
+# prove the hunt ignores what the box already had, since a real
+# `image history` lists the base layers too and python:3.12-slim legitimately
+# lives in the default store.
+BUILT_ID = "b" * 64
+BASE_ID = "ba5e" + "0" * 60
+NEIGHBOUR_ID = "17" * 32
+
+# Records every call, then acts out one of the worlds above. $STUB_MODE picks.
 #
 # The `--root=`/`--runroot=` prefix is what store-lib.sh's shim prepends; the
 # graph root it names is this call's store, and no prefix means Podman's
@@ -60,21 +84,31 @@ done
 
 [ "$STUB_MODE" = "ignored" ] && GRAPH=""
 
+DEFAULT_STORAGE="$HOME/.local/share/containers/storage"
+
 # One registry file per store, outside every store so it is never mistaken for
-# store bytes by the gate's `du`.
+# store bytes by the gate's `du`. Lines are "<kind> <name> <id>".
 reg() {
     printf '%s/%s' "$STUB_STATE" "$(printf '%s' "${GRAPH:-default}" | tr -c 'A-Za-z0-9' _)"
 }
 
-record()   { [ "$STUB_MODE" = "nothing" ] && return 0; echo "$1/$2" >> "$(reg)"; }
-unrecord() { r="$(reg)"; [ -f "$r" ] || return 0; grep -vxF "$1/$2" "$r" > "$r.new" || true; mv "$r.new" "$r"; }
-has()      { r="$(reg)"; [ -f "$r" ] && grep -qxF "$1/$2" "$r"; }
+record()   { [ "$STUB_MODE" = "nothing" ] && return 0; printf '%s %s %s\n' "$1" "$2" "${3:--}" >> "$(reg)"; }
+unrecord() { r="$(reg)"; [ -f "$r" ] || return 0; awk -v k="$1" -v n="$2" '!($1==k && $2==n)' "$r" > "$r.new" || true; mv "$r.new" "$r"; }
+has()      { r="$(reg)"; [ -f "$r" ] || return 1; awk -v k="$1" -v n="$2" '$1==k && ($2==n || $3==n) {f=1} END{exit !f}' "$r"; }
+id_of()    { r="$(reg)"; [ -f "$r" ] || return 0; awk -v n="$1" '$1=="image" && $2==n {print $3; exit}' "$r"; }
 
 layers() {
     [ "$STUB_MODE" = "nothing" ] && return 0
-    target="${GRAPH:-$HOME/.local/share/containers/storage}"
+    target="${GRAPH:-$DEFAULT_STORAGE}"
     mkdir -p "$target"
     dd if=/dev/zero of="$target/stub-layer" bs=1M count=$STUB_MB status=none
+}
+
+# Bytes into the default store that the honoured path never puts there. Which
+# of them also registers an OBJECT is the whole distinction the gate now draws.
+leak_into_default() {
+    mkdir -p "$DEFAULT_STORAGE"
+    dd if=/dev/zero of="$DEFAULT_STORAGE/$1" bs=1M count=$STUB_MB status=none
 }
 
 # `podman cp` out of a container is how setup.sh gets the fixture onto the host
@@ -91,15 +125,44 @@ fake_cp() {
 
 case "${1:-}" in
     --version) echo "podman version 0.0.0-stub" ;;
-    build)  record image mtgc:latest; layers ;;
-    tag)    record image "$3" ;;
+    build)
+        record image mtgc:latest "$STUB_BUILT_ID"
+        layers
+        case "$STUB_MODE" in
+            latest_only)
+                printf 'image %s %s\n' mtgc:latest "$STUB_BUILT_ID" >> "$STUB_STATE/default"
+                leak_into_default leaked-layer ;;
+            neighbour)
+                printf 'image %s %s\n' neighbour:prod "$STUB_NEIGHBOUR_ID" >> "$STUB_STATE/default"
+                leak_into_default neighbour-layer ;;
+            spill)
+                leak_into_default spilled-blobs ;;
+        esac
+        ;;
+    tag)    record image "$3" "$(id_of "$2")" ;;
     rmi)    unrecord image "$2" ;;
-    image)  [ "${2:-}" = "exists" ] && { has image "$3" || exit 1; } ;;
+    ps)     r="$(reg)"; [ -f "$r" ] && awk '$1=="container" {print "container " $2 " " $2}' "$r" ;;
+    # --no-trunc renders an ID as sha256:<hex> here and bare hex from `inspect`
+    # and `history`, which is a difference the gate has to reconcile and so has
+    # to be reproduced.
+    images) r="$(reg)"; [ -f "$r" ] && awk '$1=="image" {print "image sha256:" $3 " " $2}' "$r" ;;
+    container) [ "${2:-}" = "exists" ] && { has container "$3" || exit 1; } ;;
+    image)
+        case "${2:-}" in
+            exists) has image "$3" || exit 1 ;;
+            inspect) has image "${!#}" && id_of "${!#}" ;;
+            # A real history lists the stages, then the base image's layers,
+            # then the ones that came in with the base and have no image of
+            # their own.
+            history) has image "${!#}" && printf '%s\n<missing>\n%s\n' "$STUB_BUILT_ID" "$STUB_BASE_ID" ;;
+        esac
+        ;;
     volume)
         case "${2:-}" in
             create) record volume "$3" ;;
             rm) unrecord volume "$3" ;;
             exists) has volume "$3" || exit 1 ;;
+            ls) r="$(reg)"; [ -f "$r" ] && awk '$1=="volume" {print "volume " $2}' "$r" ;;
         esac
         ;;
     cp) fake_cp "$2" "$3" ;;
@@ -133,6 +196,10 @@ def run_gate(tmp_path, mode):
 
     state = tmp_path / "stub-state"
     state.mkdir()
+    # The default store already holds the build's base image, as the real one
+    # does. The gate must not mistake it for a leak just because it turns up in
+    # our image's history.
+    (state / "default").write_text(f"image docker.io/library/python:3.12-slim {BASE_ID}\n")
 
     env = dict(os.environ)
     env.update(
@@ -143,6 +210,9 @@ def run_gate(tmp_path, mode):
         STUB_MODE=mode,
         STUB_STATE=str(state),
         STUB_MB=str(STUB_MB),
+        STUB_BUILT_ID=BUILT_ID,
+        STUB_BASE_ID=BASE_ID,
+        STUB_NEIGHBOUR_ID=NEIGHBOUR_ID,
         MTGC_STORE_GATE_ROOT=str(tmp_path / "probe"),
         # Scaled to STUB_MB: half of one lump is over the tolerance and under
         # the floor, so a lump in the wrong place trips the negative and a
@@ -186,6 +256,44 @@ def test_it_fails_when_the_bytes_land_in_the_default_store(tmp_path):
     assert result.returncode != 0
     output = result.stdout + result.stderr
     assert "Podman's default store" in output, output
+
+
+def test_it_fails_when_the_leak_is_tagged_only_mtgc_latest(tmp_path):
+    """Names cannot catch this one. setup.sh builds `mtgc:latest` before it tags
+    the instance, and prod's own deploy writes that same tag — so a build that
+    leaked is recognisable only by the ID it produced."""
+    result = run_gate(tmp_path, "latest_only")
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "A build leaked" in output, output
+
+
+def test_it_fails_when_bytes_appear_with_no_object_to_name(tmp_path):
+    """The byte delta is the instrument that catches a spill nothing is named
+    after, and it is still hard when nothing else touched the store."""
+    result = run_gate(tmp_path, "spill")
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "over the" in output and "tolerance" in output, output
+
+
+def test_a_neighbour_writing_to_the_shared_store_does_not_fail_it(tmp_path):
+    """de-dk3. $HOME/.local/share/containers is shared with every other project
+    on the deployment box, and `du` cannot say who wrote what. The gate's first
+    CI run went red on 820 MB of a sibling project's prod deploy. It must report
+    the neighbour and go green, because the alternative is a required check that
+    fails at random until someone raises the tolerance."""
+    result = run_gate(tmp_path, "neighbour")
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "PASS" in output, output
+    # Reported, not silently swallowed: the delta is over tolerance and the gate
+    # says so, along with who else was writing.
+    assert "reported, not" in output, output
+    assert "neighbour:prod" in output, output
 
 
 def test_it_fails_when_nothing_was_built_at_all(tmp_path):

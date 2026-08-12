@@ -145,23 +145,44 @@ bash deploy/store-isolation-gate.sh          # ~one image build
 ```
 
 It brings up a `--test` instance with `MTGC_STORE_ROOT` pointed at a throwaway
-probe store, and asserts four things: no `mtgc:<instance>` image and no
-`mtgc-<instance>-data` volume in Podman's **default** store, no meaningful growth
-under `~/.local/share/containers`, *and* that both objects and an image build's
-worth of bytes are in the probe store instead. Then it tears both down and
-re-checks.
+probe store, and asserts four things about Podman's **default** store and the
+probe: no `mtgc:<instance>` image, `mtgc-<instance>-data` volume or
+`systemd-mtgc-<instance>` container in the default store; no image ID the build
+produced arriving there; no meaningful growth under `~/.local/share/containers`;
+*and* that both objects and an image build's worth of bytes are in the probe
+store instead. Then it tears both down and re-checks.
 
 The positives are the half that is easy to leave out. A bring-up that silently
 did nothing also writes nothing to the default store, so a gate checking only for
 the leak would go green on a machine that never built anything.
 
+Names alone would miss a leaked build. `setup.sh` builds `mtgc:latest` before it
+tags the instance, and `mtgc:latest` is a name prod's own deploy writes too — so
+the tag proves nothing, and the stage commits behind it carry no tag at all.
+What the build does have is IDs: the gate reads them back out of the probe store
+(walking `podman image history`) and looks for them in the default store,
+ignoring anything that was already there at baseline, since the base image
+legitimately lives in it.
+
+**The byte delta is conditional, because `~/.local/share/containers` is not
+ours.** On the deployment box it is shared with every other project: prod, the
+sibling pokedumpster deployment and its litestream sidecar, that project's
+lakehouse pipeline, and any instance nobody relocated. `du` reports bytes and
+cannot report a writer. This gate's first CI run went red on 820 MB, none of it
+this repo's — a neighbouring prod deploy that built and restarted inside the
+gate's four-minute window (de-dk3). So the delta is still measured and still
+hard, but only when the default store's inventory of images, containers and
+volumes is unchanged across the run, which is the evidence that nobody else was
+writing. When something else was, the gate names it and reports the number
+instead of asserting it. The checks above do not depend on any of that.
+
 The tolerance is not zero, and that is measured. On the deployment box
 (podman 4.9.3, 2026-08-12) one `--test` bring-up moved 1.87 GiB into the probe
 store and **24 KB** into `~/.local/share/containers` — podman's user-scope
 bookkeeping, chiefly the containers/image blob-info cache, which `--root` does
-not relocate. The default ceiling is 64 MiB: far above that bookkeeping and the
-background writes of whatever else is live on the box, far below a single image
-layer. `MTGC_STORE_GATE_TOLERANCE_KB` and `MTGC_STORE_GATE_FLOOR_KB` override it.
+not relocate. The default ceiling is 64 MiB: far above that bookkeeping, far
+below a single image layer. `MTGC_STORE_GATE_TOLERANCE_KB` and
+`MTGC_STORE_GATE_FLOOR_KB` override it.
 
 The probe store goes in `MTGC_STORE_GATE_ROOT` if set, else beside the store
 `store.env` names (`<store>.gate`), else `$TMPDIR`. Never the configured store
@@ -169,8 +190,13 @@ itself — a warm store would make the positive assertions meaningless, and the
 teardown would take real instances' images with it.
 
 `tests/test_store_isolation_gate.py` drives the gate against a stubbed podman
-told to leak, and to build nothing, and checks it goes red both ways. A gate
-never observed failing is not known to work.
+told to leak, to leak under a name prod also uses, to spill bytes nothing is
+named after, and to build nothing, and checks it goes red every way. It also
+drives one where a *neighbour* writes to the shared store, and checks the gate
+goes green — a required check that fails at random is one whose tolerance gets
+raised until it stops meaning anything. A gate never observed failing is not
+known to work, and one never observed staying green under noise is not known to
+be usable.
 
 ### Deleting a store — never `podman system reset`
 

@@ -223,6 +223,10 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   whole thing end to end on every PR with `deploy/store-isolation-gate.sh` (de-3a0), which
   brings up a real `--test` instance in a probe store and fails if the bytes landed under
   `$HOME` instead — or if nothing got built, which would pass a leak-only check vacuously.
+  **`$HOME/.local/share/containers` is shared with every other project on the box**, so the
+  gate identifies this instance's own objects by name and by built image ID, and only
+  asserts on the raw `du` delta when the store's object inventory shows nobody else was
+  writing (de-dk3). Do not re-express any of it as a plain before/after byte comparison.
   See `deploy/README.md` → "Container storage" and `deploy/store-lib.sh`.
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
 - Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
