@@ -3,6 +3,15 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Also on push to main. Branch protection now requires the `test` check and
+  # enforces it for admins, so normally everything reaching main has already
+  # been tested as a PR and this is redundant. It exists for the case that
+  # actually happened on 2026-08-11 (de-x5c): a Gas Town refinery merge landed
+  # a whole epic on main directly, CI never ran because there was no push
+  # trigger, and prod deployed content whose last CI run was RED.
+  # Protection is the lock; this is the smoke alarm. Keep both.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 # After merging, enable branch protection on `main` in GitHub repo settings:
