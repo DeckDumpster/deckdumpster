@@ -37,10 +37,19 @@
 # drive or a network mount on any other box.
 #
 # Only the callers that MAY use an alternate store read that file:
-# .github/workflows/ci.yml and deploy/store-teardown.sh. setup.sh, deploy.sh and
-# teardown.sh honour the environment and nothing else, because setup.sh is also
-# how prod is installed and a host config file does not get to decide where
-# prod's volumes live.
+# .github/workflows/ci.yml, deploy/store-teardown.sh, and deploy/setup.sh for
+# every instance except prod. deploy.sh and teardown.sh never read it — they
+# operate on an EXISTING instance, whose unit already records the store it lives
+# in, and that record outranks host config in both directions.
+#
+# setup.sh excludes prod BY NAME rather than by not reading the file, which is a
+# change from de-3mo's original scoping; see de-oqu and the "Container store"
+# block in setup.sh. The short version: scoping the read to CI meant the
+# variable was enforced only on the CI path, while the documented by-hand
+# `bash deploy/setup.sh <inst> --test` — the single largest non-prod producer of
+# container bytes on the box — kept writing to the disk prod runs from unless
+# each caller remembered to export it. A guarantee that holds by name is still a
+# guarantee, and it is the same boundary the rest of the repo already draws.
 #
 # HOW IT IS APPLIED
 #
@@ -140,9 +149,9 @@
 # Sourced, not executed.
 
 # mtgc_store_load_config — take MTGC_STORE_ROOT from host config when the caller
-# has not set it. Called only by the scripts that MAY use an alternate store;
-# never by the ones prod runs, so prod cannot pick one up from a file it did not
-# ask about.
+# has not set it. Called only where an alternate store is permissible; setup.sh
+# guards the call with an instance-name check so prod cannot pick one up from a
+# file it did not ask about.
 #
 # Precedence, and the distinction is load-bearing:
 #

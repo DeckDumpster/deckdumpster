@@ -102,18 +102,25 @@ bash deploy/setup.sh prod 8081
   existed. `tests/test_deploy_store.py` asserts that, call by call.
 - **Which disk is host config, not a repo constant.** Uncomment
   `MTGC_STORE_ROOT` in `~/.config/mtgc/store.env` — the same directory
-  `default.env` and the per-instance env files live in — and CI builds there.
-  `setup.sh` scaffolds that file commented out, so the knob is visible on a new
-  box without changing anything. An explicit `MTGC_STORE_ROOT` in the environment
-  wins over the file, and an explicit `MTGC_STORE_ROOT=` (empty) is how one run
-  opts back out on a box that opts in. The store is never *inferred* from the
-  box's disk layout: a rule like "the checkout is on a different filesystem from
-  `$HOME`" describes one machine, and on any other it quietly starts a container
-  store at the top of whatever external drive or network mount the checkout
-  happens to sit on.
-- **Only CI reads `store.env`.** `setup.sh` — which is also how prod is installed
-  — honours the environment and nothing else, so a host that opts in cannot
-  relocate a prod deploy.
+  `default.env` and the per-instance env files live in — and every non-prod
+  bring-up builds there, CI's and yours. `setup.sh` scaffolds that file
+  commented out, so the knob is visible on a new box without changing anything.
+  An explicit `MTGC_STORE_ROOT` in the environment wins over the file, and an
+  explicit `MTGC_STORE_ROOT=` (empty) is how one run opts back out on a box that
+  opts in. The store is never *inferred* from the box's disk layout: a rule like
+  "the checkout is on a different filesystem from `$HOME`" describes one machine,
+  and on any other it quietly starts a container store at the top of whatever
+  external drive or network mount the checkout happens to sit on.
+- **`setup.sh` reads `store.env` for every instance except `prod`.** The name is
+  the boundary. Originally `setup.sh` did not read the file at all — it is also
+  how prod is installed, and where prod's 19 G volume lives is not a host
+  config's decision — but that scoped enforcement to the CI path, and the
+  documented way to bring an instance up is a by-hand
+  `bash deploy/setup.sh <name> --test`, which never goes through CI. So agents
+  and humans validating changes, between them the largest non-prod producer of
+  container bytes on the box, kept writing them to the disk prod runs from
+  unless each one remembered to export the variable (de-oqu). An existing
+  instance still keeps the store its unit names, in either direction.
 - **The unit is the record.** The generated Quadlet carries a `GlobalArgs=` key
   naming the store, and `deploy.sh`, `teardown.sh`, `restore.sh`, `backup.sh` and
   `prune-instances.sh` read it back — so a bare `bash deploy/teardown.sh <name>`
@@ -147,10 +154,11 @@ bash deploy/store-isolation-gate.sh          # ~one image build
 It brings up a `--test` instance with `MTGC_STORE_ROOT` pointed at a throwaway
 probe store, and asserts four things about Podman's **default** store and the
 probe: no `mtgc:<instance>` image, `mtgc-<instance>-data` volume or
-`systemd-mtgc-<instance>` container in the default store; no image ID the build
-produced arriving there; no meaningful growth under `~/.local/share/containers`;
+`systemd-mtgc-<instance>` container in the default store; no image the build
+labelled arriving there; no meaningful growth under `~/.local/share/containers`;
 *and* that both objects and an image build's worth of bytes are in the probe
-store instead. Then it tears both down and re-checks.
+store instead. Then it tears both down and re-checks — on both paths, because a
+run that just leaked is the run whose cleanup matters most.
 
 The positives are the half that is easy to leave out. A bring-up that silently
 did nothing also writes nothing to the default store, so a gate checking only for
@@ -159,10 +167,28 @@ the leak would go green on a machine that never built anything.
 Names alone would miss a leaked build. `setup.sh` builds `mtgc:latest` before it
 tags the instance, and `mtgc:latest` is a name prod's own deploy writes too — so
 the tag proves nothing, and the stage commits behind it carry no tag at all.
-What the build does have is IDs: the gate reads them back out of the probe store
-(walking `podman image history`) and looks for them in the default store,
-ignoring anything that was already there at baseline, since the base image
-legitimately lives in it.
+What every one of them does carry is `cards.dumpster.mtgc.build`, a label the
+`Containerfile` applies as the first instruction of each stage (a layer commit
+inherits the labels declared before it, not the ones after). The gate enumerates
+the default store by that label and ignores anything that was already there at
+baseline — `mtgc:prod`, the base image, other instances' images all legitimately
+live in it — so only what arrived during the run can fail.
+
+Walking `podman image history` from the tag, which is what this did first, has a
+983 MB blind spot: the `Containerfile` is multi-stage, and the **builder stage**
+is a full image that is untagged and is *not* an ancestor of the runtime image,
+so it appears in neither. Measured while reproducing de-y5g — a leaked build
+left fifteen images in the default store and a history walk accounted for five.
+
+**The gate cleans up what it catches.** The list above is also what its cleanup
+removes, so it cannot detect a leak and then leave it on the disk. That used to
+be exactly what happened: a failing run `exit 1`'d before its own
+leave-nothing-behind check, and the teardown it did run removed only
+`mtgc:<instance>` — a *tag*, off an image `mtgc:latest` still held. Measured at
+983 MB left on prod's disk per failing run, and CI's `podman image prune -f`
+never collected it because that runs after store selection and is shim-scoped to
+the alternate store (de-y5g). A PR that failed the gate repeatedly added about a
+gigabyte a run.
 
 **The byte delta is conditional, because `~/.local/share/containers` is not
 ours.** On the deployment box it is shared with every other project: prod, the
@@ -191,7 +217,11 @@ teardown would take real instances' images with it.
 
 `tests/test_store_isolation_gate.py` drives the gate against a stubbed podman
 told to leak, to leak under a name prod also uses, to spill bytes nothing is
-named after, and to build nothing, and checks it goes red every way. It also
+named after, and to build nothing, and checks it goes red every way. The leaking
+run is then asked what it left behind: the stub gives each image its own byte
+lump, so a test can measure the default store *directory* afterwards rather than
+trust the gate's own report of itself, and check that the untagged builder stage
+is named on a `FAIL:` line and not merely mentioned. It also
 drives one where a *neighbour* writes to the shared store, and checks the gate
 goes green — a required check that fails at random is one whose tolerance gets
 raised until it stops meaning anything. A gate never observed failing is not
@@ -461,7 +491,7 @@ is `s3api list-objects-v2`.
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
-| `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or the IDs its build produced, turn up in Podman's default store, or if nothing was built. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
+| `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or any image its build labelled, turn up in Podman's default store, or if nothing was built. Removes what it catches, on both paths. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 

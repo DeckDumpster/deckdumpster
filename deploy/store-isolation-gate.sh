@@ -17,9 +17,9 @@
 #   1. NEGATIVE, by name.      The default store holds no mtgc:<instance> image,
 #      no mtgc-<instance>-data volume and no systemd-mtgc-<instance> container
 #      afterwards.
-#   2. NEGATIVE, by identity.  No image that appeared in the default store
-#      during the run shares an ID with the image this bring-up built or with
-#      any of its build stages (see "Naming is not enough" below).
+#   2. NEGATIVE, by identity.  No image carrying the Containerfile's build label
+#      arrived in the default store during the run — runtime image, builder
+#      stage or intermediate commit (see "Naming is not enough" below).
 #   3. POSITIVE, exact.  The probe store holds both, and the generated Quadlet
 #      names that store in GlobalArgs=.
 #   4. POSITIVE, bulk.   The probe store is at least
@@ -33,17 +33,26 @@
 # anything.
 #
 # Finally it tears the instance and the probe store down and re-checks, because
-# a gate that fills a disk every run is its own version of the bug.
+# a gate that fills a disk every run is its own version of the bug. That teardown
+# and its re-check run on BOTH paths — see "...and leave nothing behind" at the
+# bottom, and reap_leaked_build. A run that FAILS is a run that just put an image
+# build somewhere it should not be, so it is the run whose cleanup matters most,
+# and it was the one that used to skip the check entirely (de-y5g).
 #
 # NAMING IS NOT ENOUGH, hence 2. setup.sh builds `mtgc:latest` and then tags
 # `mtgc:<instance>`, and `mtgc:latest` is a name prod's own deploy writes too —
-# so a leaked build cannot be recognised by that tag, and its untagged stage
-# commits have no name at all. What it does have is IDs. Every ID the build
-# produced is read back out of the probe store (`image history` walks the
-# stages) and looked for in the default store; anything already there at
-# baseline — python:3.12-slim, say, which the box legitimately holds — is
-# ignored, so only IDs that ARRIVED during the run can fail. That is exact, and
-# it does not care what the leak was called.
+# so a leaked build cannot be recognised by that tag, its untagged stage commits
+# have no name at all, and the Containerfile's BUILDER STAGE is a full 983 MB
+# image that is neither tagged nor an ancestor of the runtime image, so walking
+# `image history` from the tag does not reach it either. All of them do carry a
+# label the Containerfile applies as the first instruction of each stage, which
+# is what this looks for. Anything already in the default store at baseline —
+# python:3.12-slim, mtgc:prod, the other instances' images — is ignored, so only
+# what ARRIVED during the run can fail. That is exact, and it does not care what
+# the leak was called.
+#
+# The same list is what cleanup removes, so the gate cannot detect a leak it
+# then leaves on the disk (de-y5g).
 #
 # THE BYTE DELTA IS A SECOND INSTRUMENT, AND IT IS CONDITIONAL (de-dk3).
 # $HOME/.local/share/containers is not ours. On the deployment box it is a
@@ -234,20 +243,30 @@ probe_store_has() {
     podman $args "$1" exists "$2" >/dev/null 2>&1
 }
 
-# Every image ID this bring-up produced: the image itself, plus the stage
-# commits behind it. `image history -q` walks those; `<missing>` is what it
-# prints for a layer that arrived inside a pulled base image and has no image of
-# its own, so there is nothing to look for.
-built_image_ids() {
-    local args
-    args="$(probe_args)"
-    [ -n "$args" ] || return 0
-    {
-        # shellcheck disable=SC2086
-        podman $args image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true
-        # shellcheck disable=SC2086
-        podman $args image history -q --no-trunc "$IMAGE" 2>/dev/null || true
-    } | grep -vx '<missing>' | grep -v '^$' | sort -u
+# Every image an MTGC build produced in a given store: the runtime image, the
+# builder stage, and every intermediate layer commit in both. They carry a label
+# the Containerfile applies as the first instruction of each stage, which is the
+# only thing that finds all of them.
+#
+# Walking `image history` from mtgc:<instance> does NOT, and that was a 983 MB
+# blind spot rather than a stylistic difference: the Containerfile is
+# multi-stage, and the builder stage is a full image that is untagged and is not
+# an ancestor of the runtime image, so it appears in neither the tag nor the
+# history. Measured while reproducing de-y5g — a leaked build left fifteen
+# images in the default store and a history walk accounted for five of them.
+#
+# `--all` because most of these are untagged; `--no-trunc` because these IDs are
+# compared against `default_store_inventory`, which prints them in full. Bare
+# `podman`, deliberately: like the two functions above, this is the default
+# store — the one under test.
+#
+# One row per TAG comes back, so a leaked build reports its runtime image twice
+# — once as mtgc:<instance>, once as mtgc:latest. Deduped, or the failure output
+# names it twice and the reap counts it twice.
+mtgc_build_image_ids() {
+    podman images --all --no-trunc --filter label=cards.dumpster.mtgc.build=1 \
+        --format '{{.ID}}' 2>/dev/null |
+        sed -E 's/^sha256://' | grep -v '^$' | awk '!seen[$0]++' || true
 }
 
 IMAGE="mtgc:${INSTANCE}"
@@ -261,8 +280,66 @@ STORE_ENV_WAS_THERE=true
 
 WORK="$(mktemp -d)"
 
+# MTGC build images that ARRIVED in the default store during this run — the
+# leak, if there is one. Both halves matter: the label says "an MTGC build built
+# this", and absence from the baseline says "during our window". The box
+# legitimately holds mtgc:prod and older instances' images, and they are none of
+# our business.
+#
+# What makes "an MTGC build" mean "this run's" is that only one thing on this
+# box builds them: deckdumpster's CI and its prod deploy share a single
+# self-hosted runner, which runs one job at a time. The neighbouring projects
+# that DO write to this store continuously (see "The byte delta" above) do not
+# build MTGC images. If that ever stops being true, this over-reports rather
+# than under-reports — it would fail a gate run and remove an image the box
+# would rebuild, not miss a leak.
+leaked_image_ids() {
+    [ -f "$WORK/image-ids-before" ] || return 0
+    mtgc_build_image_ids | grep -vxF -f "$WORK/image-ids-before" || true
+}
+
+# reap_leaked_build — if this run's build landed in the DEFAULT store, remove it
+# from there (de-y5g).
+#
+# On a PASSING run this finds nothing: the build went into the probe store,
+# which is `rm -rf`'d wholesale. It only ever bites on a FAILING run — which is
+# exactly the case the gate exists to detect, and exactly the case that used to
+# leave ~1 GB behind on the disk prod runs from. Compounded by CI: ci.yml's
+# `podman image prune -f` runs AFTER store selection, so it is shim-scoped to
+# the alternate store and never collects these. A PR that fails the gate
+# repeatedly added about a gigabyte per run.
+#
+# With no baseline recorded — cleanup firing before the measurement was taken —
+# nothing can be attributed to this run, so nothing is removed.
+#
+# Removal is iterated rather than done in one pass because these images are a
+# parent chain: `podman rmi` refuses an image another image is built on, and the
+# listing order is not a topological one. Each pass strips the current leaves.
+# Bounded, so a genuinely unremovable image is reported by the assertions below
+# instead of spinning here.
+reap_leaked_build() {
+    local before after remaining=0 pass id
+    before="$(size_kb "$DEFAULT_STORE")"
+
+    for pass in 1 2 3 4 5; do
+        remaining=0
+        while read -r id; do
+            [ -n "$id" ] || continue
+            remaining=$((remaining + 1))
+            podman rmi -f "$id" >/dev/null 2>&1 || true
+        done < <(leaked_image_ids)
+        [ "$remaining" -gt 0 ] || break
+    done
+
+    after="$(size_kb "$DEFAULT_STORE")"
+    [ "$after" -lt "$before" ] || return 0
+    echo "    Removed the images this run left in $DEFAULT_STORE" \
+         "(freed $((before - after)) KB)."
+}
+
 cleanup() {
     echo "==> Cleaning up"
+    reap_leaked_build
     bash "$REPO_DIR/deploy/teardown.sh" "$INSTANCE" --purge >/dev/null 2>&1 || true
     MTGC_STORE_ROOT="$PROBE" bash "$REPO_DIR/deploy/store-teardown.sh" >/dev/null 2>&1 || true
     rm -rf "$PROBE"
@@ -281,6 +358,9 @@ BEFORE_KB="$(size_kb "$DEFAULT_STORE")"
 # afterwards, and telling an image the box already had (the build's base image,
 # most obviously) from one that arrived during the run.
 default_store_inventory | sort > "$WORK/inventory-before"
+# Split out here rather than at the assertion, because the cleanup that reaps a
+# leaked build needs it too and may fire before the assertions are ever reached.
+awk '$1 == "image" { print $2 }' "$WORK/inventory-before" > "$WORK/image-ids-before"
 echo "    Default store before: ${BEFORE_KB} KB, $(wc -l < "$WORK/inventory-before") objects"
 
 # --- The thing being gated --------------------------------------------------
@@ -321,20 +401,14 @@ if default_store_has container "$CONTAINER"; then
 fi
 
 # 2. NEGATIVE, by identity. Names would miss a leaked build: its only tag is
-#    mtgc:latest, which prod's own deploy writes too, and its stage commits have
-#    no tag at all. IDs are unambiguous. Only IDs that were NOT in the default
-#    store at baseline count — the base image legitimately lives there.
-awk '$1 == "image" { print $2 }' "$WORK/inventory-before" > "$WORK/image-ids-before"
+#    mtgc:latest, which prod's own deploy writes too, and its stage commits and
+#    builder stage have no tag at all. The Containerfile's build label is what
+#    finds them, and the baseline is what dates them to this run.
 while read -r id; do
     [ -n "$id" ] || continue
-    if grep -qxF "$id" "$WORK/image-ids-before"; then
-        continue
-    fi
-    if default_store_has image "$id"; then
-        fail "image ${id:0:12} — built by this bring-up — arrived in Podman's" \
-             "default store during the run. A build leaked onto the disk prod runs from."
-    fi
-done < <(built_image_ids)
+    fail "image ${id:0:12} — an MTGC build image — arrived in Podman's default" \
+         "store during this run. A build leaked onto the disk prod runs from."
+done < <(leaked_image_ids)
 
 # THE BYTE DELTA, the second instrument — hard, but only while it is
 # attributable. $HOME/.local/share/containers is shared with every other project
@@ -379,10 +453,17 @@ if [ "$FAILED" = true ]; then
     echo "Non-prod container bytes are landing on the disk prod runs from, or"
     echo "the bring-up they were supposed to come from did not happen."
     echo "See deploy/store-lib.sh and deploy/README.md -> Container storage."
-    exit 1
 fi
 
 # --- ...and leave nothing behind -------------------------------------------
+#
+# THIS RUNS ON BOTH PATHS, and that is the fix for de-y5g rather than a tidiness
+# preference. It used to sit under an `exit 1`, so the one kind of run where
+# leftovers were possible — one that had just put a build in the default store —
+# was the one kind of run that never checked for them. cleanup() itself did fire
+# (it is the EXIT trap), but it removed only mtgc:<instance>, which was a tag on
+# an image mtgc:latest still held; measured, that left 983 MB on / per failing
+# run. reap_leaked_build in cleanup() is the other half.
 
 cleanup
 trap 'rm -rf "$WORK"' EXIT
@@ -393,24 +474,35 @@ echo "    Default store after cleanup: ${FINAL_KB} KB  (${LEFT_KB} KB vs baselin
 
 # Same two instruments, same order of trust: what teardown left behind of OURS
 # is a fact about the names, and the byte figure is only evidence when nothing
-# else touched the store.
+# else touched the store. `fail`, not `exit`, so a leaked run reports both what
+# it leaked and what it then failed to clean up, in one output.
 if default_store_has image "$IMAGE" || default_store_has volume "$VOLUME" \
    || default_store_has container "$CONTAINER"; then
-    echo "FAIL: teardown left this instance's objects in $DEFAULT_STORE." >&2
-    exit 1
+    fail "cleanup left this instance's objects in $DEFAULT_STORE."
 fi
 default_store_inventory | sort > "$WORK/inventory-final"
-if cmp -s "$WORK/inventory-before" "$WORK/inventory-final" \
-   && [ "$LEFT_KB" -gt "$TOLERANCE_KB" ]; then
-    echo "FAIL: teardown left ${LEFT_KB} KB behind in $DEFAULT_STORE." >&2
-    exit 1
+if cmp -s "$WORK/inventory-before" "$WORK/inventory-final"; then
+    if [ "$LEFT_KB" -gt "$TOLERANCE_KB" ]; then
+        fail "cleanup left ${LEFT_KB} KB behind in $DEFAULT_STORE."
+    fi
+else
+    # Two ways to get here, and they read the same in `du`: a neighbouring
+    # project wrote during our window, or our own leaked build displaced an
+    # image the box already had to <none>:<none> — a dangling image that was
+    # there at baseline, so not ours to remove. Report, do not assert.
+    echo "    NOTE: the default store's inventory differs from baseline, so the"
+    echo "          ${LEFT_KB} KB figure above is reported, not asserted. The"
+    echo "          check by name directly above is unaffected. What changed:"
+    comm -3 "$WORK/inventory-before" "$WORK/inventory-final" | head -n 20 | sed 's/^/            /'
 fi
 if [ -e "$PROBE" ]; then
-    echo "FAIL: the probe store is still on disk: $PROBE" >&2
-    exit 1
+    fail "the probe store is still on disk: $PROBE"
 fi
 if [ -f "$QUADLET_FILE" ]; then
-    echo "FAIL: teardown left the Quadlet behind: $QUADLET_FILE" >&2
+    fail "cleanup left the Quadlet behind: $QUADLET_FILE"
+fi
+
+if [ "$FAILED" = true ]; then
     exit 1
 fi
 
