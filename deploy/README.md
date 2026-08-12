@@ -145,23 +145,44 @@ bash deploy/store-isolation-gate.sh          # ~one image build
 ```
 
 It brings up a `--test` instance with `MTGC_STORE_ROOT` pointed at a throwaway
-probe store, and asserts four things: no `mtgc:<instance>` image and no
-`mtgc-<instance>-data` volume in Podman's **default** store, no meaningful growth
-under `~/.local/share/containers`, *and* that both objects and an image build's
-worth of bytes are in the probe store instead. Then it tears both down and
-re-checks.
+probe store, and asserts four things about Podman's **default** store and the
+probe: no `mtgc:<instance>` image, `mtgc-<instance>-data` volume or
+`systemd-mtgc-<instance>` container in the default store; no image ID the build
+produced arriving there; no meaningful growth under `~/.local/share/containers`;
+*and* that both objects and an image build's worth of bytes are in the probe
+store instead. Then it tears both down and re-checks.
 
 The positives are the half that is easy to leave out. A bring-up that silently
 did nothing also writes nothing to the default store, so a gate checking only for
 the leak would go green on a machine that never built anything.
 
+Names alone would miss a leaked build. `setup.sh` builds `mtgc:latest` before it
+tags the instance, and `mtgc:latest` is a name prod's own deploy writes too — so
+the tag proves nothing, and the stage commits behind it carry no tag at all.
+What the build does have is IDs: the gate reads them back out of the probe store
+(walking `podman image history`) and looks for them in the default store,
+ignoring anything that was already there at baseline, since the base image
+legitimately lives in it.
+
+**The byte delta is conditional, because `~/.local/share/containers` is not
+ours.** On the deployment box it is shared with every other project: prod, the
+sibling pokedumpster deployment and its litestream sidecar, that project's
+lakehouse pipeline, and any instance nobody relocated. `du` reports bytes and
+cannot report a writer. This gate's first CI run went red on 820 MB, none of it
+this repo's — a neighbouring prod deploy that built and restarted inside the
+gate's four-minute window (de-dk3). So the delta is still measured and still
+hard, but only when the default store's inventory of images, containers and
+volumes is unchanged across the run, which is the evidence that nobody else was
+writing. When something else was, the gate names it and reports the number
+instead of asserting it. The checks above do not depend on any of that.
+
 The tolerance is not zero, and that is measured. On the deployment box
 (podman 4.9.3, 2026-08-12) one `--test` bring-up moved 1.87 GiB into the probe
 store and **24 KB** into `~/.local/share/containers` — podman's user-scope
 bookkeeping, chiefly the containers/image blob-info cache, which `--root` does
-not relocate. The default ceiling is 64 MiB: far above that bookkeeping and the
-background writes of whatever else is live on the box, far below a single image
-layer. `MTGC_STORE_GATE_TOLERANCE_KB` and `MTGC_STORE_GATE_FLOOR_KB` override it.
+not relocate. The default ceiling is 64 MiB: far above that bookkeeping, far
+below a single image layer. `MTGC_STORE_GATE_TOLERANCE_KB` and
+`MTGC_STORE_GATE_FLOOR_KB` override it.
 
 The probe store goes in `MTGC_STORE_GATE_ROOT` if set, else beside the store
 `store.env` names (`<store>.gate`), else `$TMPDIR`. Never the configured store
@@ -169,8 +190,13 @@ itself — a warm store would make the positive assertions meaningless, and the
 teardown would take real instances' images with it.
 
 `tests/test_store_isolation_gate.py` drives the gate against a stubbed podman
-told to leak, and to build nothing, and checks it goes red both ways. A gate
-never observed failing is not known to work.
+told to leak, to leak under a name prod also uses, to spill bytes nothing is
+named after, and to build nothing, and checks it goes red every way. It also
+drives one where a *neighbour* writes to the shared store, and checks the gate
+goes green — a required check that fails at random is one whose tolerance gets
+raised until it stops meaning anything. A gate never observed failing is not
+known to work, and one never observed staying green under noise is not known to
+be usable.
 
 ### Deleting a store — never `podman system reset`
 
@@ -357,6 +383,73 @@ systemctl --user restart mtgc-<name>
 
 The instance regenerates and serves the self-signed certificate again — browsers warn, `curl -ks` works, nothing else changes. To also drop the mount, re-run `setup.sh` without `--tls-certs` and `systemctl --user daemon-reload`.
 
+## Backup freshness check
+
+The nightly backup is a cron job. A cron job can exit 0 having uploaded nothing —
+bad credentials, a full disk, an empty tarball, a truncated dump — and log success
+every night forever. The bucket already carries the evidence: `gantt-mtgc-backup`
+has no object at all for 2026-08-08 or 2026-08-11, and nothing said so.
+
+`backup-check.sh` is the dead-man's switch. It does not ask whether the job ran;
+it asks S3 what is actually there, and goes red when:
+
+| Condition | Why it is a failure |
+|---|---|
+| the bucket cannot be listed | broken credentials or network. "We could not ask" is not "the answer is fine" |
+| the prefix is empty | the instance is not backed up |
+| newest object older than `MTGC_BACKUP_MAX_AGE_HOURS` (30) | the upload stopped |
+| newest object under `MTGC_BACKUP_MIN_BYTES` (1 MiB) | a 0-byte object is not a backup |
+| newest object >`MTGC_BACKUP_MAX_SHRINK_PCT`% (10) smaller than the previous one | content went missing; a truncated dump has a plausible mtime and a plausible size |
+| `MTGC_BACKUP_S3_BUCKET` unset | nothing off-box to be fresh — a failure, never a skip |
+
+Only when all of those pass does it ping the off-box monitor. The ping lives here
+rather than in `backup.sh` because pinging from inside the backup job proves the
+job ran, which is the thing already not in question — and because a monitor that
+lives off the box also catches a dead box or a timer nobody enabled.
+
+**Nothing in the configuration can turn it into a pass.** An unset
+`MTGC_BACKUP_PING_URL` disables the ping and nothing else: freshness is still
+verified and a stale backup still exits 1, it just cannot arm the dead-man.
+
+### Arming an instance
+
+`setup.sh` installs `mtgc-backup-check-<instance>.{service,timer}` (6-hourly) and
+`mtgc-alert-<instance>@.service`, but enables nothing. To arm one:
+
+```bash
+# 1. Pushover credentials for the alert channel (host-wide).
+cat > ~/.config/mtgc/alerts.env <<'EOF'
+PUSHOVER_TOKEN=CHANGE_ME
+PUSHOVER_USER=CHANGE_ME
+EOF
+chmod 600 ~/.config/mtgc/alerts.env
+
+# 2. A healthchecks.io check with period ~6h and a few hours of grace, so one
+#    missed run alerts. Put its ping URL in the instance env file:
+#      MTGC_BACKUP_PING_URL=https://hc-ping.com/<uuid>
+
+# 3. Enable the timer.
+systemctl --user enable --now mtgc-backup-check-<instance>.timer
+
+# 4. Prove it goes RED before trusting it green — point it at a prefix with no
+#    recent object and confirm the failure and the alert:
+MTGC_BACKUP_S3_PREFIX=mtgc-<instance>/no-such-prefix/ bash deploy/backup-check.sh <instance>
+```
+
+Arming **prod** is Ryan's decision, not an agent's.
+
+### Credentials
+
+The check needs `s3:ListBucket` on the backup bucket and nothing else — verified
+by running it under an STS session scoped to exactly that, which passes the check
+and still gets 403 on `HeadObject`. Give it read-only credentials: a checker that
+could damage what it watches is a liability, and the only AWS call in the script
+is `s3api list-objects-v2`.
+
+```json
+{ "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::gantt-mtgc-backup" }
+```
+
 ## Scripts
 
 | Script | Purpose |
@@ -368,7 +461,9 @@ The instance regenerates and serves the self-signed certificate again — browse
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
-| `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if the bytes landed under `$HOME` instead, or if nothing was built. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
+| `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or the IDs its build produced, turn up in Podman's default store, or if nothing was built. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
+| `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
+| `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 
 ## CI
 

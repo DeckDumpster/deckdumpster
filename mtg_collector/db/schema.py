@@ -3,7 +3,7 @@
 import re
 import sqlite3
 
-SCHEMA_VERSION = 45
+SCHEMA_VERSION = 46
 
 
 class SchemaIntegrityError(Exception):
@@ -74,6 +74,10 @@ CREATE TABLE IF NOT EXISTS printings (
     games TEXT,            -- JSON array: ["paper", "mtgo", "arena"]
     face0_mana_cost TEXT,
     face1_mana_cost TEXT,
+    -- Denormalised copy of cards.name, so the collection's default sort can be
+    -- served by an index.  See idx_printings_card_name below for why this has
+    -- to live on printings rather than being read across the join.
+    card_name TEXT,
     UNIQUE(set_code, collector_number)
 );
 
@@ -458,6 +462,20 @@ CREATE INDEX IF NOT EXISTS idx_collection_status ON collection(status);
 CREATE INDEX IF NOT EXISTS idx_printings_oracle ON printings(oracle_id);
 CREATE INDEX IF NOT EXISTS idx_printings_set ON printings(set_code);
 CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name);
+
+-- The collection's default sort, in one index scan.
+--
+-- /api/collection groups by p.printing_id, which pins printings as the driving
+-- table: cards can never become the outer loop, so idx_cards_name can never
+-- serve `ORDER BY card.name` no matter what the tiebreak is.  Measured at
+-- catalogue scale (109,976 rows) the plan ended in USE TEMP B-TREE FOR ORDER BY
+-- and the page query took 2.3 s — with the tiebreak, and also without it.
+--
+-- Sorting on the denormalised p.card_name and *also* leading the GROUP BY with
+-- it lets this one index satisfy the grouping and the ordering together, and
+-- LIMIT then stops the scan early: 2.3 s -> 8.8 ms.  Both halves are needed;
+-- denormalising while still grouping by p.printing_id alone measured 2.4 s.
+CREATE INDEX IF NOT EXISTS idx_printings_card_name ON printings(card_name, printing_id);
 
 -- Full-text search on cards (external content mode — no data duplication)
 CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
@@ -870,6 +888,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v43_to_v44(conn)
         if current < 45:
             _migrate_v44_to_v45(conn)
+        if current < 46:
+            _migrate_v45_to_v46(conn)
 
     # Record schema version
     conn.execute(
@@ -2851,6 +2871,49 @@ def _migrate_v44_to_v45(conn: sqlite3.Connection):
             WHERE p2.tcgplayer_product_id = p.tcgplayer_product_id
         )
     """)
+
+
+def _migrate_v45_to_v46(conn: sqlite3.Connection):
+    """Denormalise cards.name onto printings so the default sort has an index.
+
+    See idx_printings_card_name in SCHEMA_SQL for the measurement this exists
+    for.  Backfilling ~110k rows and building the index takes a few seconds.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(printings)")}
+    if "card_name" not in columns:
+        conn.execute("ALTER TABLE printings ADD COLUMN card_name TEXT")
+    rebuild_card_names(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_printings_card_name "
+        "ON printings(card_name, printing_id)"
+    )
+
+
+def rebuild_card_names(conn):
+    """Resync printings.card_name from cards.name.
+
+    Returns the number of rows corrected.
+
+    printings.card_name is a denormalised copy, so an upstream rename lands in
+    `cards` and leaves `printings` stale.  This is the repair, and it is called
+    beside rebuild_fts() after `mtg cache` for the same reason: both are derived
+    from `cards`, and the refresh that delivers a rename is the moment to rebuild
+    what was derived from the old name.  Between refreshes a renamed card sorts
+    under its previous name — the sort is the only thing that reads this column,
+    never the name displayed.
+    """
+    cursor = conn.execute(
+        """
+        UPDATE printings SET card_name = (
+            SELECT c.name FROM cards c WHERE c.oracle_id = printings.oracle_id
+        )
+        WHERE card_name IS NOT (
+            SELECT c.name FROM cards c WHERE c.oracle_id = printings.oracle_id
+        )
+        """
+    )
+    conn.commit()
+    return cursor.rowcount
 
 
 def rebuild_fts(conn):
