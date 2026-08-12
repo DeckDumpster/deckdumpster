@@ -232,11 +232,61 @@ systemctl --user restart mtgc-<name>
 
 The instance regenerates and serves the self-signed certificate again — browsers warn, `curl -ks` works, nothing else changes. To also drop the mount, re-run `setup.sh` without `--tls-certs` and `systemctl --user daemon-reload`.
 
+## Backup freshness check
+
+`backup.sh` can exit 0 having uploaded nothing — bad credentials, a full disk, an
+empty tarball — and the cron log reads "success" every night regardless. Checking
+that the job *ran* proves the thing that was never in doubt. `backup-check.sh`
+asks S3 what actually landed:
+
+```bash
+bash deploy/backup-check.sh <instance>
+```
+
+It lists `s3://$MTGC_BACKUP_S3_BUCKET/mtgc-<instance>/daily/` (the tier
+`backup.sh` writes to every night — `weekly/` and `monthly/` are promotion tiers
+and go long stretches untouched), then fails if the listing errors, if there are
+no objects, if the newest is older than the threshold, or if it is implausibly
+small in absolute terms or against the previous night's. It is **read-only**:
+list plus object metadata, no put and no delete, so read-only credentials are
+enough and it cannot damage what it is watching.
+
+Configure in `~/.config/mtgc/<instance>.env` — the same file `backup.sh`'s cron
+entry sources:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MTGC_BACKUP_S3_BUCKET` | — | Unset means no off-site backup to verify: the check exits 0 without doing anything, so dev/test instances stay silent |
+| `MTGC_BACKUP_PING_URL` | — | healthchecks.io-style monitor. Pinged **only** when genuinely fresh; `<url>/fail` on staleness. Unset just skips the ping — the freshness assertions still run |
+| `MTGC_BACKUP_MAX_AGE_HOURS` | `36` | Clears one 24h interval plus the run itself plus margin, so one late night doesn't false-alarm but two consecutive misses do |
+| `MTGC_BACKUP_MIN_SIZE_PCT` | `50` | Fail if the newest object is under this percentage of the previous one |
+| `MTGC_BACKUP_MIN_SIZE_BYTES` | `1048576` | Absolute floor, for when there is no previous object to compare against |
+
+Alerts go to Pushover via `alert.sh`, reading `PUSHOVER_TOKEN` / `PUSHOVER_USER`
+from host-wide `~/.config/mtgc/alerts.env`. Unset means no push — nothing else
+changes. `mtgc-alert-<instance>@.service` is a generic `OnFailure=` handler that
+pushes any failed unit's journal tail; `setup.sh` installs it alongside the
+timers.
+
+The monitor is the part that survives the box: a dead checker, a dead host or a
+disabled timer all stop the pings and trip it. Pushover is the fast, detailed
+signal while the box is still up.
+
+`setup.sh` installs `mtgc-backup-check-<instance>.{service,timer}` but does not
+enable them — arming is deliberate:
+
+```bash
+systemctl --user enable --now mtgc-backup-check-<name>.timer
+systemctl --user start mtgc-backup-check-<name>.service   # run once by hand
+```
+
 ## Scripts
 
 | Script | Purpose |
 |---|---|
 | `seed.sh [--force]` | Create reusable seed data volume. Run once, all future `--init` clones from it |
+| `backup-check.sh <name>` | Verify the newest S3 backup is fresh and plausibly sized. Read-only — see [Backup freshness check](#backup-freshness-check) |
+| `alert.sh "<title>" ["<message>"]` | Push a Pushover notification (message on stdin if omitted). No-op when creds are unset |
 | `setup.sh <name> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]` | Create instance. `--test` uses pre-built fixture (fast, no network). `--init` clones seed volume. Port auto-assigned if omitted. `--http-port` adds a loopback-only plaintext publish — see [Cloudflare Tunnel origin](#cloudflare-tunnel-origin). `--tls-certs` mounts a host cert directory read-only at `/certs` — see [Trusted certificates](#trusted-certificates) |
 | `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
 | `deploy.sh <name>` | Rebuild image and restart one instance. Regenerates the Quadlet via `setup.sh` if it has gone missing — `--http-port` / `--tls-certs` are re-applied from the env file, so the unit is reproduced rather than downgraded |

@@ -1,0 +1,14 @@
+[Unit]
+Description=MTGC backup freshness check ({{INSTANCE}})
+# Verifies what actually landed in S3, not that the nightly job ran — see
+# deploy/backup-check.sh. Needs the network to reach S3.
+After=network-online.target
+Wants=network-online.target
+# The script alerts on staleness itself; this catches the checker erroring out
+# some other way (missing env, a bug), which would otherwise be silent.
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mtgc-{{INSTANCE}}/deploy/backup-check.sh {{INSTANCE}}
+TimeoutStartSec=120

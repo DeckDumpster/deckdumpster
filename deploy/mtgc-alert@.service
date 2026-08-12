@@ -1,0 +1,18 @@
+[Unit]
+Description=MTGC failure alert for %i
+# Generic OnFailure= handler: pushes the failed unit's journal tail to Pushover
+# the moment it fails. Fast, detailed, on-box — it does NOT catch never-ran or
+# box-down, which is what the off-box monitor in backup-check.sh is for.
+#
+# %i is the FULL failed unit name (units reference it as mtgc-alert-<inst>@%n.service),
+# so one template alerts for any unit. deploy/setup.sh substitutes the instance
+# into the checkout path below and installs this as mtgc-alert-<instance>@.service:
+# the '@' slot is already spent on the failed unit's name, so the per-instance
+# checkout path has to be carried by the unit's own filename instead.
+
+[Service]
+Type=oneshot
+# '-' makes the file optional so the unit installs cleanly before alerts.env
+# exists (alert.sh then no-ops on unset creds).
+EnvironmentFile=-%h/.config/mtgc/alerts.env
+ExecStart=/bin/sh -c 'journalctl --user -u %i -n 20 --no-pager | /opt/mtgc-{{INSTANCE}}/deploy/alert.sh "MTGC unit FAILED: %i"'

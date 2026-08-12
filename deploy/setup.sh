@@ -234,7 +234,7 @@ fi
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_USER_DIR"
 
-for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-edhrec; do
+for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-edhrec; do
     echo "==> Installing ${UNIT_PREFIX} timer"
     for EXT in service timer; do
         sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
@@ -242,6 +242,15 @@ for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-edhrec; do
             > "${SYSTEMD_USER_DIR}/${UNIT_PREFIX}-${INSTANCE}.${EXT}"
     done
 done
+
+# The OnFailure= alert handler is a systemd template unit, so it can't join the
+# loop above: its '@' instance slot carries the FAILED unit's name, leaving the
+# instance name to be baked into the filename. No timer — it only ever fires
+# from another unit's OnFailure=.
+echo "==> Installing mtgc-alert handler"
+sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
+    "$REPO_DIR/deploy/mtgc-alert@.service" \
+    > "${SYSTEMD_USER_DIR}/mtgc-alert-${INSTANCE}@.service"
 
 systemctl --user daemon-reload
 
@@ -370,5 +379,6 @@ echo "  Logs:       journalctl --user -u $SERVICE_NAME -f"
 echo "  Prices:     systemctl --user enable --now mtgc-prices-${INSTANCE}.timer"
 echo "  Sealed:     systemctl --user enable --now mtgc-sealed-catalog-${INSTANCE}.timer"
 echo "  Backup:     systemctl --user enable --now mtgc-backup-${INSTANCE}.timer"
+echo "  Bkp check:  systemctl --user enable --now mtgc-backup-check-${INSTANCE}.timer"
 echo "  EDHREC:     systemctl --user enable --now mtgc-edhrec-${INSTANCE}.timer"
 echo "  Teardown:   bash deploy/teardown.sh $INSTANCE"

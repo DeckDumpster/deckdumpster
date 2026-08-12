@@ -35,12 +35,13 @@ echo "==> Tearing down $SERVICE_NAME..."
 
 # Stop and disable timers
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-for PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-edhrec; do
+for PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-edhrec; do
     systemctl --user stop "${PREFIX}-${INSTANCE}.timer" 2>/dev/null || true
     systemctl --user disable "${PREFIX}-${INSTANCE}.timer" 2>/dev/null || true
     rm -f "${SYSTEMD_USER_DIR}/${PREFIX}-${INSTANCE}.service" \
           "${SYSTEMD_USER_DIR}/${PREFIX}-${INSTANCE}.timer"
 done
+rm -f "${SYSTEMD_USER_DIR}/mtgc-alert-${INSTANCE}@.service"
 
 # Stop and disable
 systemctl --user stop "$SERVICE_NAME" 2>/dev/null || true

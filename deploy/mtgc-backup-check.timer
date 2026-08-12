@@ -1,0 +1,13 @@
+[Unit]
+Description=MTGC backup freshness check timer ({{INSTANCE}})
+
+[Timer]
+# Every 6h — deliberately more frequent than the nightly backup. A credentials
+# break makes the freshness query itself fail, and that is worth catching the
+# same day rather than at the next 03:00 run.
+OnCalendar=*-*-* 00,06,12,18:00:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
