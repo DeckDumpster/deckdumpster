@@ -133,6 +133,45 @@ bash deploy/setup.sh prod 8081
 
 Mechanism and rationale: [`deploy/store-lib.sh`](store-lib.sh).
 
+### The gate that keeps this true
+
+Everything above is a mechanism. What made this a recurring bug is that the rule
+around it was a convention — *set this variable, remember that flag* — and
+conventions decay without anyone noticing. So CI runs the whole thing for real,
+on every PR:
+
+```bash
+bash deploy/store-isolation-gate.sh          # ~one image build
+```
+
+It brings up a `--test` instance with `MTGC_STORE_ROOT` pointed at a throwaway
+probe store, and asserts four things: no `mtgc:<instance>` image and no
+`mtgc-<instance>-data` volume in Podman's **default** store, no meaningful growth
+under `~/.local/share/containers`, *and* that both objects and an image build's
+worth of bytes are in the probe store instead. Then it tears both down and
+re-checks.
+
+The positives are the half that is easy to leave out. A bring-up that silently
+did nothing also writes nothing to the default store, so a gate checking only for
+the leak would go green on a machine that never built anything.
+
+The tolerance is not zero, and that is measured. On the deployment box
+(podman 4.9.3, 2026-08-12) one `--test` bring-up moved 1.87 GiB into the probe
+store and **24 KB** into `~/.local/share/containers` — podman's user-scope
+bookkeeping, chiefly the containers/image blob-info cache, which `--root` does
+not relocate. The default ceiling is 64 MiB: far above that bookkeeping and the
+background writes of whatever else is live on the box, far below a single image
+layer. `MTGC_STORE_GATE_TOLERANCE_KB` and `MTGC_STORE_GATE_FLOOR_KB` override it.
+
+The probe store goes in `MTGC_STORE_GATE_ROOT` if set, else beside the store
+`store.env` names (`<store>.gate`), else `$TMPDIR`. Never the configured store
+itself — a warm store would make the positive assertions meaningless, and the
+teardown would take real instances' images with it.
+
+`tests/test_store_isolation_gate.py` drives the gate against a stubbed podman
+told to leak, and to build nothing, and checks it goes red both ways. A gate
+never observed failing is not known to work.
+
 ### Deleting a store — never `podman system reset`
 
 Everything above teaches you to aim `--root`/`--runroot` at a second store.
@@ -329,6 +368,7 @@ The instance regenerates and serves the self-signed certificate again — browse
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
+| `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if the bytes landed under `$HOME` instead, or if nothing was built. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
 
 ## CI
 
