@@ -53,12 +53,15 @@ GATE = REPO_ROOT / "deploy" / "store-isolation-gate.sh"
 # round, so the arithmetic under test is the same arithmetic.
 STUB_MB = 8
 
-# Image IDs the stub hands out. The build's is what the gate reads back out of
-# the probe store and hunts for in the default one; the base image's is there to
-# prove the hunt ignores what the box already had, since a real
-# `image history` lists the base layers too and python:3.12-slim legitimately
-# lives in the default store.
+# Image IDs the stub hands out. The build produces two: the runtime image, which
+# gets tagged, and the BUILDER STAGE, which does not — a real multi-stage build
+# commits it as a full ~1 GB image that is untagged and is not an ancestor of
+# the runtime image, so neither a tag nor `image history` reaches it. Only the
+# Containerfile's build label does, which is why the gate looks for that
+# (de-y5g). The base image's ID is there to prove the hunt ignores what the box
+# already had; python:3.12-slim legitimately lives in the default store.
 BUILT_ID = "b" * 64
+STAGE_ID = "5a9e" + "0" * 60
 BASE_ID = "ba5e" + "0" * 60
 NEIGHBOUR_ID = "17" * 32
 
