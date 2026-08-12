@@ -90,21 +90,32 @@ done
 DEFAULT_STORAGE="$HOME/.local/share/containers/storage"
 
 # One registry file per store, outside every store so it is never mistaken for
-# store bytes by the gate's `du`. Lines are "<kind> <name> <id>".
+# store bytes by the gate's `du`. Lines are "<kind> <name> <id> <ours>", where
+# `ours` is 1 for an image an MTGC build produced — the stub's stand-in for the
+# Containerfile's `cards.dumpster.mtgc.build` label, which is what the gate
+# filters on. The base image and the neighbouring project's are 0, and that is
+# what makes "a build leaked" distinguishable from "the box already had this".
 reg() {
     printf '%s/%s' "$STUB_STATE" "$(printf '%s' "${GRAPH:-default}" | tr -c 'A-Za-z0-9' _)"
 }
 
-record()   { [ "$STUB_MODE" = "nothing" ] && return 0; printf '%s %s %s\n' "$1" "$2" "${3:--}" >> "$(reg)"; }
-unrecord() { r="$(reg)"; [ -f "$r" ] || return 0; awk -v k="$1" -v n="$2" '!($1==k && $2==n)' "$r" > "$r.new" || true; mv "$r.new" "$r"; }
+record()   { [ "$STUB_MODE" = "nothing" ] && return 0; printf '%s %s %s %s\n' "$1" "$2" "${3:--}" "${4:-0}" >> "$(reg)"; }
+# By name OR id, because `rmi` is given an ID and the rows it has to take out
+# are tagged: one image with two tags is two rows.
+unrecord() { r="$(reg)"; [ -f "$r" ] || return 0; awk -v k="$1" -v n="$2" '!($1==k && ($2==n || $3==n))' "$r" > "$r.new" || true; mv "$r.new" "$r"; }
 has()      { r="$(reg)"; [ -f "$r" ] || return 1; awk -v k="$1" -v n="$2" '$1==k && ($2==n || $3==n) {f=1} END{exit !f}' "$r"; }
-id_of()    { r="$(reg)"; [ -f "$r" ] || return 0; awk -v n="$1" '$1=="image" && $2==n {print $3; exit}' "$r"; }
+id_of()    { r="$(reg)"; [ -f "$r" ] || return 0; awk -v n="$1" '$1=="image" && ($2==n || $3==n) {print $3; exit}' "$r"; }
+ours_of()  { r="$(reg)"; [ -f "$r" ] || return 0; awk -v n="$1" '$1=="image" && ($2==n || $3==n) {print $4; exit}' "$r"; }
 
-layers() {
+# One byte lump per image, named after its ID, so `rmi` frees exactly that
+# image's bytes and a run can be measured for what its cleanup got back. Still
+# $STUB_MB each, so the tolerance and floor arithmetic is the arithmetic under
+# test.
+lump() {
     [ "$STUB_MODE" = "nothing" ] && return 0
-    target="${GRAPH:-$DEFAULT_STORAGE}"
+    target="${2:-${GRAPH:-$DEFAULT_STORAGE}}"
     mkdir -p "$target"
-    dd if=/dev/zero of="$target/stub-layer" bs=1M count=$STUB_MB status=none
+    dd if=/dev/zero of="$target/stub-layer-$1" bs=1M count=$STUB_MB status=none
 }
 
 # Bytes into the default store that the honoured path never puts there. Which
@@ -129,26 +140,52 @@ fake_cp() {
 case "${1:-}" in
     --version) echo "podman version 0.0.0-stub" ;;
     build)
-        record image mtgc:latest "$STUB_BUILT_ID"
-        layers
+        # A real multi-stage build commits TWO images: the runtime one, which
+        # setup.sh then tags, and the builder stage, which nothing names and
+        # which is not an ancestor of the runtime image. Both carry the label.
+        record image mtgc:latest "$STUB_BUILT_ID" 1
+        record image '<none>:<none>' "$STUB_STAGE_ID" 1
+        lump "$STUB_BUILT_ID"
+        lump "$STUB_STAGE_ID"
         case "$STUB_MODE" in
             latest_only)
-                printf 'image %s %s\n' mtgc:latest "$STUB_BUILT_ID" >> "$STUB_STATE/default"
-                leak_into_default leaked-layer ;;
+                printf 'image %s %s 1\n' mtgc:latest "$STUB_BUILT_ID" >> "$STUB_STATE/default"
+                lump "$STUB_BUILT_ID" "$DEFAULT_STORAGE" ;;
             neighbour)
-                printf 'image %s %s\n' neighbour:prod "$STUB_NEIGHBOUR_ID" >> "$STUB_STATE/default"
+                printf 'image %s %s 0\n' neighbour:prod "$STUB_NEIGHBOUR_ID" >> "$STUB_STATE/default"
                 leak_into_default neighbour-layer ;;
             spill)
                 leak_into_default spilled-blobs ;;
         esac
         ;;
-    tag)    record image "$3" "$(id_of "$2")" ;;
-    rmi)    unrecord image "$2" ;;
+    tag)    record image "$3" "$(id_of "$2")" "$(ours_of "$2")" ;;
+    rmi)
+        shift
+        while [ $# -gt 0 ]; do
+            case "$1" in -f|--force) shift ;; *) break ;; esac
+        done
+        rmi_id="$(id_of "$1")"
+        [ -n "$rmi_id" ] || rmi_id="$1"
+        unrecord image "$1"
+        rm -f "${GRAPH:-$DEFAULT_STORAGE}/stub-layer-$rmi_id"
+        ;;
     ps)     r="$(reg)"; [ -f "$r" ] && awk '$1=="container" {print "container " $2 " " $2}' "$r" ;;
     # --no-trunc renders an ID as sha256:<hex> here and bare hex from `inspect`
     # and `history`, which is a difference the gate has to reconcile and so has
     # to be reproduced.
-    images) r="$(reg)"; [ -f "$r" ] && awk '$1=="image" {print "image sha256:" $3 " " $2}' "$r" ;;
+    #
+    # Under the label filter only the images an MTGC build produced come back,
+    # and undeduped: one image with two tags is two rows, which is what makes
+    # the gate's own dedup worth having.
+    images)
+        r="$(reg)"; [ -f "$r" ] || exit 0
+        case "$*" in
+            *label=cards.dumpster.mtgc.build=1*)
+                awk '$1=="image" && $4=="1" {print "sha256:" $3}' "$r" ;;
+            *)
+                awk '$1=="image" {print "image sha256:" $3 " " $2}' "$r" ;;
+        esac
+        ;;
     container) [ "${2:-}" = "exists" ] && { has container "$3" || exit 1; } ;;
     image)
         case "${2:-}" in
@@ -202,7 +239,9 @@ def run_gate(tmp_path, mode):
     # The default store already holds the build's base image, as the real one
     # does. The gate must not mistake it for a leak just because it turns up in
     # our image's history.
-    (state / "default").write_text(f"image docker.io/library/python:3.12-slim {BASE_ID}\n")
+    # Trailing 0: not an MTGC build image, so the label filter must not return
+    # it however often it turns up in our own build's history.
+    (state / "default").write_text(f"image docker.io/library/python:3.12-slim {BASE_ID} 0\n")
 
     env = dict(os.environ)
     env.update(
@@ -214,6 +253,7 @@ def run_gate(tmp_path, mode):
         STUB_STATE=str(state),
         STUB_MB=str(STUB_MB),
         STUB_BUILT_ID=BUILT_ID,
+        STUB_STAGE_ID=STAGE_ID,
         STUB_BASE_ID=BASE_ID,
         STUB_NEIGHBOUR_ID=NEIGHBOUR_ID,
         MTGC_STORE_GATE_ROOT=str(tmp_path / "probe"),
@@ -237,9 +277,25 @@ def run_gate(tmp_path, mode):
     )
 
 
+def default_store_kb(tmp_path):
+    """What is actually on the disk afterwards, rather than what the gate says
+    is. The gate reports its own byte figure, and de-y5g was a run that reported
+    honestly and still left the bytes there."""
+    store = tmp_path / "home/.local/share/containers/storage"
+    return sum(f.stat().st_size for f in store.rglob("*") if f.is_file()) // 1024
+
+
 @pytest.fixture(scope="module")
 def honoured(tmp_path_factory):
     return run_gate(tmp_path_factory.mktemp("honoured"), "honoured")
+
+
+@pytest.fixture(scope="module")
+def ignored(tmp_path_factory):
+    """The failing run, kept so several things can be asked of one of them —
+    what it said, and what it left behind."""
+    tmp_path = tmp_path_factory.mktemp("ignored")
+    return run_gate(tmp_path, "ignored"), tmp_path
 
 
 def test_it_passes_when_podman_honours_the_store(honoured):
@@ -252,13 +308,53 @@ def test_it_leaves_neither_store_behind(honoured):
     assert "Default store after cleanup" in honoured.stdout, honoured.stdout
 
 
-def test_it_fails_when_the_bytes_land_in_the_default_store(tmp_path):
+def test_it_fails_when_the_bytes_land_in_the_default_store(ignored):
     """The regression itself: podman writing to $HOME despite --root."""
-    result = run_gate(tmp_path, "ignored")
+    result, _ = ignored
 
     assert result.returncode != 0
     output = result.stdout + result.stderr
     assert "Podman's default store" in output, output
+
+
+def test_a_failing_run_leaves_nothing_in_the_default_store(ignored):
+    """de-y5g. The gate used to `exit 1` before its own leave-nothing-behind
+    check, and its cleanup removed only the mtgc:<instance> TAG — off an image
+    mtgc:latest still held. So the one kind of run that had just put a build on
+    the disk prod runs from was the one kind that left it there: measured, 983
+    MB per failing run, and CI's `podman image prune -f` never collected them
+    because it is shim-scoped to the alternate store.
+
+    Measured off the directory, not off the gate's report."""
+    result, tmp_path = ignored
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    # The 4 MB the store already held, and not one lump more.
+    assert default_store_kb(tmp_path) < (4 * 1024) + (STUB_MB * 1024 // 2)
+
+
+def test_a_failing_run_names_the_untagged_builder_stage(ignored):
+    """The 983 MB blind spot. A multi-stage build's builder stage is a full
+    image that nothing tags and that is not an ancestor of the runtime image, so
+    neither the tag nor `image history` reaches it — only the Containerfile's
+    label does.
+
+    On a FAIL line specifically: the stage turns up in the inventory diff the
+    gate prints either way, and a gate that merely mentions an image it did not
+    fail on is the gate this replaces."""
+    result, _ = ignored
+    output = result.stdout + result.stderr
+
+    failures = [ln for ln in output.splitlines() if ln.startswith("FAIL:")]
+    assert any(STAGE_ID[:12] in ln for ln in failures), output
+
+
+def test_a_failing_run_still_reports_what_it_cleaned_up(ignored):
+    """The check itself moved below the FAILED branch, so both paths reach it.
+    A failing run is the one whose leftovers matter."""
+    result, _ = ignored
+
+    assert "Default store after cleanup" in result.stdout, result.stdout
 
 
 def test_it_fails_when_the_leak_is_tagged_only_mtgc_latest(tmp_path):
