@@ -1,0 +1,17 @@
+[Unit]
+Description=MTGC backup freshness check ({{INSTANCE}})
+# The dead-man's switch for the nightly backup (de-d8v). Verifies against S3
+# that a recent, plausibly-sized object actually landed, then pings the off-box
+# monitor. It does NOT run the backup and never writes to the bucket.
+After=network-online.target
+Wants=network-online.target
+# If the checker itself errors out — as opposed to finding a stale backup, which
+# it reports through its own channels — push the journal tail too.
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'exec bash {{REPO_DIR}}/deploy/backup-check.sh {{INSTANCE}}'
+# One S3 list plus two curls. Generous, but a hung network call must eventually
+# fail the unit rather than sit there looking like a run in progress.
+TimeoutStartSec=120

@@ -383,6 +383,73 @@ systemctl --user restart mtgc-<name>
 
 The instance regenerates and serves the self-signed certificate again — browsers warn, `curl -ks` works, nothing else changes. To also drop the mount, re-run `setup.sh` without `--tls-certs` and `systemctl --user daemon-reload`.
 
+## Backup freshness check
+
+The nightly backup is a cron job. A cron job can exit 0 having uploaded nothing —
+bad credentials, a full disk, an empty tarball, a truncated dump — and log success
+every night forever. The bucket already carries the evidence: `gantt-mtgc-backup`
+has no object at all for 2026-08-08 or 2026-08-11, and nothing said so.
+
+`backup-check.sh` is the dead-man's switch. It does not ask whether the job ran;
+it asks S3 what is actually there, and goes red when:
+
+| Condition | Why it is a failure |
+|---|---|
+| the bucket cannot be listed | broken credentials or network. "We could not ask" is not "the answer is fine" |
+| the prefix is empty | the instance is not backed up |
+| newest object older than `MTGC_BACKUP_MAX_AGE_HOURS` (30) | the upload stopped |
+| newest object under `MTGC_BACKUP_MIN_BYTES` (1 MiB) | a 0-byte object is not a backup |
+| newest object >`MTGC_BACKUP_MAX_SHRINK_PCT`% (10) smaller than the previous one | content went missing; a truncated dump has a plausible mtime and a plausible size |
+| `MTGC_BACKUP_S3_BUCKET` unset | nothing off-box to be fresh — a failure, never a skip |
+
+Only when all of those pass does it ping the off-box monitor. The ping lives here
+rather than in `backup.sh` because pinging from inside the backup job proves the
+job ran, which is the thing already not in question — and because a monitor that
+lives off the box also catches a dead box or a timer nobody enabled.
+
+**Nothing in the configuration can turn it into a pass.** An unset
+`MTGC_BACKUP_PING_URL` disables the ping and nothing else: freshness is still
+verified and a stale backup still exits 1, it just cannot arm the dead-man.
+
+### Arming an instance
+
+`setup.sh` installs `mtgc-backup-check-<instance>.{service,timer}` (6-hourly) and
+`mtgc-alert-<instance>@.service`, but enables nothing. To arm one:
+
+```bash
+# 1. Pushover credentials for the alert channel (host-wide).
+cat > ~/.config/mtgc/alerts.env <<'EOF'
+PUSHOVER_TOKEN=CHANGE_ME
+PUSHOVER_USER=CHANGE_ME
+EOF
+chmod 600 ~/.config/mtgc/alerts.env
+
+# 2. A healthchecks.io check with period ~6h and a few hours of grace, so one
+#    missed run alerts. Put its ping URL in the instance env file:
+#      MTGC_BACKUP_PING_URL=https://hc-ping.com/<uuid>
+
+# 3. Enable the timer.
+systemctl --user enable --now mtgc-backup-check-<instance>.timer
+
+# 4. Prove it goes RED before trusting it green — point it at a prefix with no
+#    recent object and confirm the failure and the alert:
+MTGC_BACKUP_S3_PREFIX=mtgc-<instance>/no-such-prefix/ bash deploy/backup-check.sh <instance>
+```
+
+Arming **prod** is Ryan's decision, not an agent's.
+
+### Credentials
+
+The check needs `s3:ListBucket` on the backup bucket and nothing else — verified
+by running it under an STS session scoped to exactly that, which passes the check
+and still gets 403 on `HeadObject`. Give it read-only credentials: a checker that
+could damage what it watches is a liability, and the only AWS call in the script
+is `s3api list-objects-v2`.
+
+```json
+{ "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::gantt-mtgc-backup" }
+```
+
 ## Scripts
 
 | Script | Purpose |
@@ -394,7 +461,9 @@ The instance regenerates and serves the self-signed certificate again — browse
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
-| `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if the bytes landed under `$HOME` instead, or if nothing was built. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
+| `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or the IDs its build produced, turn up in Podman's default store, or if nothing was built. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
+| `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
+| `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 
 ## CI
 
