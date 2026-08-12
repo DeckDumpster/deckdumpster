@@ -102,18 +102,25 @@ bash deploy/setup.sh prod 8081
   existed. `tests/test_deploy_store.py` asserts that, call by call.
 - **Which disk is host config, not a repo constant.** Uncomment
   `MTGC_STORE_ROOT` in `~/.config/mtgc/store.env` — the same directory
-  `default.env` and the per-instance env files live in — and CI builds there.
-  `setup.sh` scaffolds that file commented out, so the knob is visible on a new
-  box without changing anything. An explicit `MTGC_STORE_ROOT` in the environment
-  wins over the file, and an explicit `MTGC_STORE_ROOT=` (empty) is how one run
-  opts back out on a box that opts in. The store is never *inferred* from the
-  box's disk layout: a rule like "the checkout is on a different filesystem from
-  `$HOME`" describes one machine, and on any other it quietly starts a container
-  store at the top of whatever external drive or network mount the checkout
-  happens to sit on.
-- **Only CI reads `store.env`.** `setup.sh` — which is also how prod is installed
-  — honours the environment and nothing else, so a host that opts in cannot
-  relocate a prod deploy.
+  `default.env` and the per-instance env files live in — and every non-prod
+  bring-up builds there, CI's and yours. `setup.sh` scaffolds that file
+  commented out, so the knob is visible on a new box without changing anything.
+  An explicit `MTGC_STORE_ROOT` in the environment wins over the file, and an
+  explicit `MTGC_STORE_ROOT=` (empty) is how one run opts back out on a box that
+  opts in. The store is never *inferred* from the box's disk layout: a rule like
+  "the checkout is on a different filesystem from `$HOME`" describes one machine,
+  and on any other it quietly starts a container store at the top of whatever
+  external drive or network mount the checkout happens to sit on.
+- **`setup.sh` reads `store.env` for every instance except `prod`.** The name is
+  the boundary. Originally `setup.sh` did not read the file at all — it is also
+  how prod is installed, and where prod's 19 G volume lives is not a host
+  config's decision — but that scoped enforcement to the CI path, and the
+  documented way to bring an instance up is a by-hand
+  `bash deploy/setup.sh <name> --test`, which never goes through CI. So agents
+  and humans validating changes, between them the largest non-prod producer of
+  container bytes on the box, kept writing them to the disk prod runs from
+  unless each one remembered to export the variable (de-oqu). An existing
+  instance still keeps the store its unit names, in either direction.
 - **The unit is the record.** The generated Quadlet carries a `GlobalArgs=` key
   naming the store, and `deploy.sh`, `teardown.sh`, `restore.sh`, `backup.sh` and
   `prune-instances.sh` read it back — so a bare `bash deploy/teardown.sh <name>`
