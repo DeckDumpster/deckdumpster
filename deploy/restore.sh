@@ -41,6 +41,17 @@ SERVICE_NAME="mtgc-${INSTANCE}"
 CONTAINER="systemd-${SERVICE_NAME}"
 VOLUME_NAME="${SERVICE_NAME}-data"
 
+# Restore into the store the instance lives in (de-3mo). setup.sh calls this as
+# a child and PATH already carries its shim, so this is a no-op there; it is
+# here for the standalone case, where a restore into the wrong store would
+# create a SECOND, empty data volume and then start the instance against the
+# original one — reporting success over data it never touched.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
+mtgc_store_adopt_instance "$INSTANCE"
+mtgc_store_activate
+
 echo "==> MTGC restore"
 echo "    Backup:    $BACKUP_FILE"
 echo "    Instance:  $INSTANCE"

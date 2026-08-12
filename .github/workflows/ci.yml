@@ -20,10 +20,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Nothing this job builds belongs on the disk prod runs from (de-3mo).
+      # Which disk that is on the runner box is host config, not a repo
+      # constant, so it comes from ~/.config/mtgc/store.env; unconfigured, this
+      # is a no-op and everything uses Podman's default store exactly as before.
+      #
+      # Exported through GITHUB_PATH/GITHUB_ENV rather than activated per step:
+      # the mechanism is a `podman` shim on PATH, and GitHub Actions runs each
+      # step in a fresh shell. This is how the later steps inherit it — including
+      # `uv run pytest`, whose conftests shell out to `podman port` and
+      # `podman exec` and would otherwise look in the default store.
+      - name: Select container store
+        run: |
+          . deploy/store-lib.sh
+          mtgc_store_load_config
+          mtgc_store_activate
+          if [ -n "${MTGC_STORE_ROOT:-}" ]; then
+            echo "${MTGC_STORE_ROOT}/bin" >> "$GITHUB_PATH"
+            {
+              echo "MTGC_STORE_ROOT=${MTGC_STORE_ROOT}"
+              echo "MTGC_STORE_GLOBAL_ARGS=${MTGC_STORE_GLOBAL_ARGS}"
+              echo "TMPDIR=${TMPDIR}"
+            } >> "$GITHUB_ENV"
+          fi
+
       - name: Clean up stale containers and images
         run: |
           bash deploy/teardown.sh $INSTANCE --purge 2>/dev/null || true
           podman image prune -f 2>/dev/null || true
+
+      # Before the job writes several more gigabytes of its own: a --test
+      # bring-up must put nothing under $HOME, which on the deployment box is
+      # the disk prod runs from (de-3a0). de-3mo gave those bytes somewhere
+      # else to live, but nothing checked that it holds, and a rule nobody
+      # tests is not enforced — / has hit 100% from non-prod container bytes
+      # twice. Costs one image build; see deploy/store-isolation-gate.sh for
+      # what it asserts and why the tolerance is not zero.
+      - name: Container-store isolation gate
+        run: bash deploy/store-isolation-gate.sh
 
       - name: Install dependencies
         run: uv sync
