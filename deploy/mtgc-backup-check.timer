@@ -1,0 +1,15 @@
+[Unit]
+Description=MTGC backup freshness check timer ({{INSTANCE}})
+
+[Timer]
+# Every 6h. The off-box monitor expects a ping each run, so configure its period
+# at ~6h with a few hours of grace: one missed run — or a dead box, or a timer
+# nobody enabled — then alerts on its own. More frequent than the nightly backup
+# so a credentials break, which makes the freshness query itself fail, surfaces
+# within 6h instead of at the next 03:00.
+OnCalendar=*-*-* 00,06,12,18:30:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

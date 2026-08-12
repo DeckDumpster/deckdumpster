@@ -234,14 +234,25 @@ fi
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_USER_DIR"
 
-for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-edhrec; do
+for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-edhrec; do
     echo "==> Installing ${UNIT_PREFIX} timer"
     for EXT in service timer; do
         sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
+            -e "s|{{REPO_DIR}}|${REPO_DIR}|g" \
             "$REPO_DIR/deploy/${UNIT_PREFIX}.${EXT}" \
             > "${SYSTEMD_USER_DIR}/${UNIT_PREFIX}-${INSTANCE}.${EXT}"
     done
 done
+
+# The alert unit is a systemd instance template, not a timer: its %i is the name
+# of the unit that failed, supplied by the OnFailure= that fires it. Rendered
+# per MTGC instance like everything else, so setting up a test instance cannot
+# repoint prod's alerting at a test checkout.
+echo "==> Installing mtgc-alert template"
+sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
+    -e "s|{{REPO_DIR}}|${REPO_DIR}|g" \
+    "$REPO_DIR/deploy/mtgc-alert@.service" \
+    > "${SYSTEMD_USER_DIR}/mtgc-alert-${INSTANCE}@.service"
 
 systemctl --user daemon-reload
 
@@ -370,5 +381,6 @@ echo "  Logs:       journalctl --user -u $SERVICE_NAME -f"
 echo "  Prices:     systemctl --user enable --now mtgc-prices-${INSTANCE}.timer"
 echo "  Sealed:     systemctl --user enable --now mtgc-sealed-catalog-${INSTANCE}.timer"
 echo "  Backup:     systemctl --user enable --now mtgc-backup-${INSTANCE}.timer"
+echo "  Bkp check:  systemctl --user enable --now mtgc-backup-check-${INSTANCE}.timer"
 echo "  EDHREC:     systemctl --user enable --now mtgc-edhrec-${INSTANCE}.timer"
 echo "  Teardown:   bash deploy/teardown.sh $INSTANCE"
