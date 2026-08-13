@@ -36,12 +36,13 @@
 #
 # Container storage: rootless Podman's default store lives under $HOME, which on
 # the deployment box is the same disk prod runs from. Set MTGC_STORE_ROOT=<dir>
-# to build this instance's image and volume into an alternate store instead —
-# opt-in, so prod (which never sets it) is unaffected. See deploy/store-lib.sh.
-# This script scaffolds the host-config file that names that directory
-# (~/.config/mtgc/store.env) but deliberately does not read it: prod is installed
-# with this script, and where prod's volumes live is not something a host config
-# file gets to change. .github/workflows/ci.yml is what reads it.
+# to build this instance's image and volume into an alternate store instead.
+# With no store named anywhere this script behaves exactly as it did before
+# deploy/store-lib.sh existed. See deploy/store-lib.sh.
+#
+# A box can name its non-prod store once, in ~/.config/mtgc/store.env, and this
+# script reads it for every instance EXCEPT prod — see "Container store" below
+# for why the exception is by name rather than by not reading the file at all.
 #
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
@@ -167,8 +168,8 @@ echo "    podman: $(podman --version)"
 
 # --- Container store ---
 #
-# Opt-in alternate container store (de-3mo). No-op unless MTGC_STORE_ROOT is set
-# — and prod never sets it.
+# Alternate container store (de-3mo). No-op unless a store is named, by the
+# environment or by the box's ~/.config/mtgc/store.env.
 #
 # An instance that already exists keeps the store it already lives in, for the
 # same reason it keeps the --http-port and --tls-certs it was created with:
@@ -177,9 +178,40 @@ echo "    podman: $(podman --version)"
 # activated, leaving the real ones behind with the unit no longer pointing at
 # them. A store passed explicitly still wins, so moving an instance on purpose
 # still works.
+#
+# PROD IS EXCLUDED BY NAME (de-oqu). Where prod's 19 G data volume lives is not
+# something a host config file gets to change, and de-3mo bought that guarantee
+# by having this script never read store.env at all — CI was the only reader.
+# The cost was that MTGC_STORE_ROOT was enforced on the CI path only: the
+# documented, and by far the most common, way to bring an instance up is a
+# by-hand
+#
+#     bash deploy/setup.sh <instance> --test
+#
+# which does not go through .github/workflows/ci.yml and so kept writing a
+# gigabyte per build to the disk prod runs from unless the caller remembered to
+# export the variable. "Remember to export it" is the same convention-decays
+# failure mode the store work exists to kill, and it decayed in the direction
+# that fills /.
+#
+# So the guarantee is now made positively — `prod` never reads the file — rather
+# than by the file being unreadable. It is the same boundary the rest of the
+# repo already draws (deploy/README.md and CLAUDE.md both say any instance name
+# except `prod` is safe), and it is checked in tests/test_deploy_store.py. An
+# explicit MTGC_STORE_ROOT in the environment still wins for every instance
+# including prod, so a deliberate relocation is still possible and an explicit
+# empty value is still how a single run opts back out.
+#
+# Order matters. adopt runs FIRST so that an existing instance's unit — which
+# answers "the default store" as positively as it answers "that one over there"
+# — outranks the host config; store.env only gets a say when nothing else has
+# decided, which is exactly the fresh-instance case.
 # shellcheck source=deploy/store-lib.sh
 . "$SCRIPT_DIR/store-lib.sh"
 mtgc_store_adopt_instance "$INSTANCE"
+if [ "$INSTANCE" != "prod" ]; then
+    mtgc_store_load_config
+fi
 mtgc_store_activate
 
 if ! loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q "Linger=yes"; then
@@ -226,9 +258,7 @@ record MTGC_TLS_CERTS_DIR "$TLS_CERTS"
 # Which disk non-prod container storage belongs on is a fact about THIS box, so
 # it is host config rather than a repo constant — and it is scaffolded
 # commented-out so a new box has the knob visible instead of undiscoverable.
-# Written but never read by this script: setup.sh honours MTGC_STORE_ROOT from
-# its environment only, so a store.env that opts in cannot silently relocate a
-# prod deploy.
+# Read above for every instance except prod (de-oqu).
 STORE_ENV="${MTGC_CONFIG}/store.env"
 if [ ! -f "$STORE_ENV" ]; then
     mkdir -p "$MTGC_CONFIG"
@@ -240,11 +270,12 @@ if [ ! -f "$STORE_ENV" ]; then
 # project's deployment box, prod itself — name a directory on another
 # filesystem here and non-prod container storage goes there instead.
 #
-# Read by .github/workflows/ci.yml and deploy/store-teardown.sh. An explicit
+# Read by deploy/setup.sh for every instance EXCEPT prod, and by
+# .github/workflows/ci.yml and deploy/store-teardown.sh. An explicit
 # MTGC_STORE_ROOT in the environment wins over this file, including an explicit
 # empty one (that is how a single run opts back out). Left commented out,
 # everything uses Podman's default store — which is what prod uses, always, on
-# every box.
+# every box, whatever this file says.
 #
 # To delete the store named here, run deploy/store-teardown.sh. NEVER
 # `podman system reset`: it is not scoped by --root/--runroot, and aimed at a

@@ -8,8 +8,9 @@ Two properties carry the whole design, and both are tested here:
 
 * **Unset is a strict no-op.** Prod never opts in, so prod's generated units and
   every podman call must come out exactly as they did before `deploy/store-lib.sh`
-  existed. A host `store.env` that opts in must not change that either —
-  `setup.sh` installs prod, and it honours the environment and nothing else.
+  existed. A host `store.env` that opts in must not change that either: `setup.sh`
+  reads that file for every instance except `prod`, which it excludes by name
+  (de-oqu).
 * **The unit is the record.** An instance's Quadlet names the store it lives in,
   and `teardown.sh` / `prune-instances.sh` read it back, so they never remove the
   record while leaving the image and volume somewhere they can no longer be found.
@@ -150,16 +151,69 @@ def test_unset_leaves_the_timer_units_unflagged(host):
     assert "ExecStart=podman exec systemd-mtgc-inst mtg data fetch-prices --force" in text
 
 
-def test_setup_ignores_a_store_env_that_opts_in(host):
-    """THE PROD GUARANTEE. setup.sh installs prod, so a host config file does
-    not get to decide where prod's volumes live — only the environment does."""
+def _opt_in(host):
     conf = host.store_env()
     conf.parent.mkdir(parents=True, exist_ok=True)
     conf.write_text(f"MTGC_STORE_ROOT={host.store}\n")
+    return conf
+
+
+def test_setup_ignores_a_store_env_that_opts_in_for_prod(host):
+    """THE PROD GUARANTEE. setup.sh installs prod, so a host config file does
+    not get to decide where prod's 19 G data volume lives. de-3mo bought this by
+    having setup.sh never read store.env at all; de-oqu makes it an
+    instance-name check instead, because the file-is-unreadable version enforced
+    the store on the CI path only. Same guarantee, stated positively."""
+    _opt_in(host)
+
+    host.setup("prod", "8081")
+
+    assert "GlobalArgs" not in host.quadlet("prod").read_text()
+    for call in host.calls():
+        assert "--root=" not in call
+
+
+def test_setup_reads_a_store_env_that_opts_in_for_non_prod(host):
+    """de-oqu. The documented way to bring an instance up is a by-hand
+    `bash deploy/setup.sh <inst> --test`, which never goes through ci.yml. If
+    that path ignores the box's store.env then MTGC_STORE_ROOT is enforced on
+    the CI path only, and the largest non-prod producer of container bytes on
+    the box keeps writing them to the disk prod runs from."""
+    _opt_in(host)
 
     host.setup("inst", "8083")
 
+    unit = host.quadlet("inst").read_text()
+    assert f"GlobalArgs=--root={host.store}/storage" in unit
+    assert _flags(host), host.calls()
+
+
+def test_an_explicit_empty_store_root_overrides_the_host_config(host):
+    """How a single run opts back out on a box that opted in. An explicit value
+    wins over the file even when it is empty — `unset` and `set to nothing` are
+    different statements, and only the first one means "no opinion"."""
+    _opt_in(host)
+
+    host.setup("inst", "8083", store="")
+
     assert "GlobalArgs" not in host.quadlet("inst").read_text()
+    for call in host.calls():
+        assert "--root=" not in call
+
+
+def test_an_existing_default_store_instance_ignores_a_later_opt_in(host):
+    """The unit is the record, and it outranks host config. Adopting an
+    unstamped unit is a positive statement — "the default store" — so a
+    store.env added after the instance was created must not move its image and
+    volume out from under it, leaving the unit pointing at neither."""
+    host.setup("inst", "8083")
+    original = host.quadlet("inst").read_text()
+    _opt_in(host)
+    host.log.write_text("")
+
+    host.setup("inst", "8083")
+
+    assert host.quadlet("inst").read_text() == original
     for call in host.calls():
         assert "--root=" not in call
 
@@ -176,13 +230,16 @@ def test_setup_scaffolds_store_env_commented_out(host):
 
 
 def test_setup_does_not_clobber_an_existing_store_env(host):
+    # A real (writable) directory, because setup.sh now acts on what it reads
+    # here rather than only scaffolding it.
+    chosen = host.tmp_path / "chosen"
     conf = host.store_env()
     conf.parent.mkdir(parents=True, exist_ok=True)
-    conf.write_text("MTGC_STORE_ROOT=/somewhere/chosen\n")
+    conf.write_text(f"MTGC_STORE_ROOT={chosen}\n")
 
     host.setup("inst", "8083")
 
-    assert conf.read_text() == "MTGC_STORE_ROOT=/somewhere/chosen\n"
+    assert conf.read_text() == f"MTGC_STORE_ROOT={chosen}\n"
 
 
 # --- Set means the store is used, everywhere -------------------------------
