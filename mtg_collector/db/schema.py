@@ -3,7 +3,7 @@
 import re
 import sqlite3
 
-SCHEMA_VERSION = 46
+SCHEMA_VERSION = 47
 
 
 class SchemaIntegrityError(Exception):
@@ -641,9 +641,74 @@ LEFT JOIN binders b ON c.binder_id = b.id
 LEFT JOIN batches bat ON c.batch_id = bat.id;
 """
 
+# The growth cache, kept as its own constant because _migrate_v46_to_v47 applies
+# the identical text.  The triggers below are load-bearing for correctness — a
+# copy that drifted from this one would leave an upgraded database serving a
+# stored series that never notices the collection changing.
+GROWTH_CACHE_SQL = """
+-- Materialized daily series for the UNFILTERED collection: one row per day,
+-- cumulative, absolute.  Built by mtg_collector/db/growth.py, which is also
+-- where the reason it can only serve the unfiltered case is written down.
+-- Money is INTEGER cents, exactly as the computed route sums it.
+CREATE TABLE IF NOT EXISTS collection_value_history (
+    d TEXT PRIMARY KEY,            -- YYYY-MM-DD (UTC)
+    n INTEGER NOT NULL,            -- cards held on that day
+    tcg_cents INTEGER NOT NULL,
+    ck_cents INTEGER NOT NULL
+);
 
+-- What the table above was built from.  Every column is a staleness test:
+-- read them back and the answer "is this still true?" is a fact, not a guess.
+CREATE TABLE IF NOT EXISTS collection_value_history_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    built_at TEXT NOT NULL,
+    collection_rev INTEGER NOT NULL,
+    price_log_id INTEGER NOT NULL,
+    earliest TEXT,                 -- NULL when the collection was empty
+    through_d TEXT                 -- last day stored; NULL alongside earliest
+);
+
+-- Revision stamp for `collection`, bumped by the triggers below and read by
+-- nothing but the growth cache.  A materialized series cannot notice that a
+-- card was added, sold, refinished or re-attributed to another printing, so
+-- the table says when it changed.  The UPDATE trigger names only the columns
+-- the series is computed from: a binder move or an edited note leaves the
+-- numbers alone and must not throw the cache away.  It fires on any statement
+-- that assigns one of those columns, changed value or not — invalidating one
+-- time too many costs a rebuild, invalidating one time too few serves a lie.
+CREATE TABLE IF NOT EXISTS collection_rev (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    rev INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO collection_rev (id, rev) VALUES (1, 0);
+
+CREATE TRIGGER IF NOT EXISTS collection_rev_on_insert
+AFTER INSERT ON collection
+BEGIN
+    UPDATE collection_rev SET rev = rev + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS collection_rev_on_delete
+AFTER DELETE ON collection
+BEGIN
+    UPDATE collection_rev SET rev = rev + 1 WHERE id = 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS collection_rev_on_update
+AFTER UPDATE OF printing_id, finish, acquired_at, status ON collection
+BEGIN
+    UPDATE collection_rev SET rev = rev + 1 WHERE id = 1;
+END;
+"""
+
+SCHEMA_SQL = SCHEMA_SQL + GROWTH_CACHE_SQL
+
+
+# TRIGGER is in here with the rest: the growth cache's invalidation triggers are
+# the difference between a stale chart and a correct one, and a database missing
+# them looks perfectly healthy until it quietly serves last week's numbers.
 _CREATE_RE = re.compile(
-    r"CREATE\s+(?:VIRTUAL\s+)?(?:TABLE|VIEW|INDEX)\s+"
+    r"CREATE\s+(?:VIRTUAL\s+)?(?:TABLE|VIEW|INDEX|TRIGGER)\s+"
     r"(?:IF\s+NOT\s+EXISTS\s+)?\[?([A-Za-z_][A-Za-z0-9_]*)\]?",
     re.IGNORECASE,
 )
@@ -890,6 +955,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v44_to_v45(conn)
         if current < 46:
             _migrate_v45_to_v46(conn)
+        if current < 47:
+            _migrate_v46_to_v47(conn)
 
     # Record schema version
     conn.execute(
@@ -2889,6 +2956,19 @@ def _migrate_v45_to_v46(conn: sqlite3.Connection):
     )
 
 
+def _migrate_v46_to_v47(conn: sqlite3.Connection):
+    """Add the materialized growth series and the trigger that invalidates it.
+
+    Creates the tables empty and the revision stamp at 0.  Nothing backfills the
+    series here: `collection_value_history_meta` is left with no row, which
+    growth.history_is_current() reads as "never built", so the first unfiltered
+    chart request builds it — the same path that rebuilds it after any later
+    collection edit.  Doing it at migration time would put a full-history
+    aggregation in front of every `mtg` command on the upgrade run.
+    """
+    conn.executescript(GROWTH_CACHE_SQL)
+
+
 def rebuild_card_names(conn):
     """Resync printings.card_name from cards.name.
 
@@ -2969,6 +3049,9 @@ def drop_all_tables(conn: sqlite3.Connection):
         DROP TABLE IF EXISTS batches;
         DROP TABLE IF EXISTS ingest_cache;
         DROP TABLE IF EXISTS collection_views;
+        DROP TABLE IF EXISTS collection_value_history;
+        DROP TABLE IF EXISTS collection_value_history_meta;
+        DROP TABLE IF EXISTS collection_rev;
         DROP TABLE IF EXISTS collection;
         DROP TABLE IF EXISTS decks;
         DROP TABLE IF EXISTS deck_states;
