@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 48
+SCHEMA_VERSION = 49
 
 
 class SchemaIntegrityError(Exception):
@@ -43,7 +43,17 @@ CREATE TABLE IF NOT EXISTS sets (
     set_type TEXT,
     released_at TEXT,
     digital INTEGER NOT NULL DEFAULT 0,  -- 1 if MTGO/Arena-only set
-    cards_fetched_at TEXT  -- NULL = card list not cached, otherwise ISO timestamp
+    cards_fetched_at TEXT,  -- NULL = card list not cached, otherwise ISO timestamp
+    -- Where the base set ends and boosterfun begins, and how big the set is in
+    -- total.  Both are stored rather than derived: the base/boosterfun boundary
+    -- cannot be read off the treatment columns, because frame_effects=["legendary"]
+    -- is an ordinary base-set frame and any rule keyed on frame_effects puts fin's
+    -- boundary at #6 instead of #309.  Populated at ingest only -- base_set_size
+    -- from MTGJSON's baseSetSize, total_set_size from Scryfall's card_count.
+    -- NULL is permanent and legitimate for a set with no AllPrintings match; the
+    -- UI hides the completion bar rather than rendering 0/0.
+    base_set_size INTEGER,
+    total_set_size INTEGER
 );
 
 -- Specific printings
@@ -985,6 +995,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v46_to_v47(conn)
         if current < 48:
             _migrate_v47_to_v48(conn)
+        if current < 49:
+            _migrate_v48_to_v49(conn)
 
     # Record schema version
     conn.execute(
@@ -3039,6 +3051,25 @@ def rebuild_number_sortable(conn):
     )
     conn.commit()
     return len(stale)
+
+
+def _migrate_v48_to_v49(conn: sqlite3.Connection):
+    """Add sets.base_set_size and sets.total_set_size.
+
+    Additive only.  Both values come from outside SQLite -- base_set_size from
+    MTGJSON's AllPrintings.json, total_set_size from Scryfall's per-set
+    card_count -- so there is nothing here to backfill them from without either
+    a network call or a ~500 MB JSON parse, and init_db runs in front of every
+    `mtg` command.  The eager backfill is `mtg data backfill-set-sizes`, and
+    both ingest paths (`mtg cache all`, `mtg data import`) populate the columns
+    as a side effect of data they already hold.  Until one of those runs the
+    columns are NULL, which is the value the UI is built to degrade on anyway.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sets)")}
+    if "base_set_size" not in columns:
+        conn.execute("ALTER TABLE sets ADD COLUMN base_set_size INTEGER")
+    if "total_set_size" not in columns:
+        conn.execute("ALTER TABLE sets ADD COLUMN total_set_size INTEGER")
 
 
 def rebuild_card_names(conn):

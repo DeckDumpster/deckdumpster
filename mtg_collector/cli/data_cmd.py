@@ -155,6 +155,11 @@ def register(subparsers):
         help="Import downloaded EDHREC data into SQLite",
     )
 
+    data_sub.add_parser(
+        "backfill-set-sizes",
+        help="Populate sets.base_set_size / total_set_size over every cached set",
+    )
+
     parser.set_defaults(func=run)
 
 
@@ -192,8 +197,12 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         import_edhrec(db_path)
+    elif args.data_command == "backfill-set-sizes":
+        from mtg_collector.db.connection import get_db_path
+        db_path = get_db_path(getattr(args, "db_path", None))
+        backfill_set_sizes(db_path)
     else:
-        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec} [options]")
+        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-set-sizes} [options]")
         sys.exit(1)
 
 
@@ -245,6 +254,7 @@ def fetch_allprintings(force: bool = False):
 def import_mtgjson(db_path: str):
     """Import AllPrintings.json into SQLite (printings, booster sheets, configs)."""
     from mtg_collector.db.schema import init_db
+    from mtg_collector.db.set_sizes import apply_base_set_sizes
 
     t0 = time.time()
 
@@ -459,6 +469,13 @@ def import_mtgjson(db_path: str):
             (sc, sn),
         )
 
+    # baseSetSize is on every set object we just walked and was being dropped.
+    # Applied here rather than inside the loop so the rows the block above just
+    # created are covered too.  This is the eager backfill for base_set_size:
+    # AllPrintings carries every set at once, so one import populates the lot.
+    base_sized = apply_base_set_sizes(conn, data)
+    print(f"  Base set sizes updated: {base_sized}")
+
     print(f"  Inserting {len(sheet_rows)} booster sheet rows ...")
     conn.executemany(
         "INSERT INTO mtgjson_booster_sheets "
@@ -554,6 +571,62 @@ def import_mtgjson(db_path: str):
     print(f"  Sealed product cards: {len(sealed_card_rows)}")
     print(f"  MTGJSON decks: {len(deck_rows)}")
     print(f"  Elapsed: {elapsed:.1f}s")
+
+
+
+def backfill_set_sizes(db_path: str):
+    """Populate base_set_size / total_set_size over every locally cached set.
+
+    The entry point for an existing database that predates schema 48.  Both
+    ingest paths write these columns as a side effect now, but neither is a
+    backfill: `mtg cache all` re-downloads ~500 MB of bulk data and reprocesses
+    112k printings, and `mtg data import` rebuilds five tables.  This reads the
+    two size sources and nothing else.
+
+    Idempotent by construction -- see db/set_sizes.py.  Re-running writes zero
+    rows and reports zero.
+    """
+    from mtg_collector.db.schema import init_db
+    from mtg_collector.db.set_sizes import apply_base_set_sizes, apply_total_set_sizes
+    from mtg_collector.services.scryfall import ScryfallAPI
+
+    conn = sqlite3.connect(get_shared_write_path(db_path))
+    init_db(conn)
+
+    cached = conn.execute("SELECT COUNT(*) FROM sets").fetchone()[0]
+    print(f"Backfilling set sizes over {cached} cached set(s) ...")
+
+    print("Fetching set list from Scryfall ...")
+    scryfall_sets = ScryfallAPI().get_all_sets()
+    if not scryfall_sets:
+        # get_all_sets() turns a request failure into an empty list.  Writing
+        # zero rows and reporting success would look exactly like an already
+        # current database.
+        print("Scryfall returned no sets — cannot backfill total_set_size.", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+    total_changed = apply_total_set_sizes(conn, scryfall_sets)
+    print(f"  total_set_size: {total_changed} row(s) updated from {len(scryfall_sets)} Scryfall sets")
+
+    path = get_allprintings_path()
+    if path.exists():
+        print(f"Loading {path} ...")
+        with open(path) as f:
+            raw = json.load(f)
+        base_changed = apply_base_set_sizes(conn, raw.get("data", {}))
+        print(f"  base_set_size: {base_changed} row(s) updated")
+    else:
+        # Not an error and not a fallback: base_set_size stays NULL, which is a
+        # value this column is defined to carry, and the UI hides the base
+        # completion bar rather than inventing one.
+        print(f"AllPrintings.json not found at {path} — base_set_size left as-is.")
+        print("Run: mtg data fetch")
+
+    remaining = conn.execute(
+        "SELECT SUM(base_set_size IS NULL), SUM(total_set_size IS NULL) FROM sets"
+    ).fetchone()
+    conn.close()
+    print(f"  Still NULL: base_set_size {remaining[0]}, total_set_size {remaining[1]}")
 
 
 def _fetch_mtgjson_version() -> str | None:

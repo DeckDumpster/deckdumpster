@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 import requests
 
 from mtg_collector.db.models import Card, Printing, Set
+from mtg_collector.db.set_sizes import clean_size
 
 
 def resolve_reversible_oracle_id(card_data: Dict) -> bool:
@@ -235,6 +236,10 @@ class ScryfallBulkClient:
             set_type=data.get("set_type"),
             released_at=data.get("released_at"),
             digital=1 if data.get("digital") else 0,
+            # card_count is the whole reason `mtg cache all` can tell a set is
+            # under-populated; it was read and thrown away.  Kept now, so the
+            # binder's "all printings" meter costs nothing at request time.
+            total_set_size=clean_size(data.get("card_count")),
         )
 
     def to_printing_model(self, data: Dict) -> Printing:
