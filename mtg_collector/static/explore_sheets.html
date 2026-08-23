@@ -567,16 +567,29 @@ function onSelectionChange() {
   loadSheets();
 }
 
+// Bumped per load so a response that arrives after a newer one can be told
+// apart from the current one. Two loads really are in flight on a deep link:
+// loadProducts() checks the first product and loads it, and only then does
+// the hash select the requested one. Without this the slower of the two wins
+// the DOM, so /sheets#set=blb&product=play rendered `collector` about 40% of
+// the time on a warm container.
+let _sheetsRequest = 0;
+
 async function loadSheets() {
   const setCode = selectedSetCode;
   const product = getSelectedProduct();
   if (!setCode || !product) return;
+
+  const request = ++_sheetsRequest;
 
   content.innerHTML = '<div class="empty-state">Loading sheets...</div>';
   statusEl.textContent = 'Loading...';
 
   const res = await fetch(`/api/sheets?set=${encodeURIComponent(setCode)}&product=${encodeURIComponent(product)}`);
   const data = await res.json();
+
+  // A newer load started while this one was in flight; it owns the DOM now.
+  if (request !== _sheetsRequest) return;
 
   if (data.error) {
     content.innerHTML = `<div class="empty-state">${data.error}</div>`;
