@@ -84,21 +84,36 @@ function buildCardTileBadges(card, priceSources) {
  * The pips are the binder's one-click add target, so each is a real <button>
  * carrying its finish in a data attribute; binding the click is the caller's job.
  */
+const FINISH_LABELS = {nonfoil: 'NF', foil: 'Foil', etched: 'Etch'};
+
 function buildFinishPips(card) {
   const finishes = parseJsonField(card.finishes);
   if (!finishes.length) return '';
-  const owned = {};
-  for (const o of (card.owned || [])) owned[o.finish] = o.qty;
+  const owned = ownedByFinish(card);
 
   let html = '<div class="pip-row">';
   for (const finish of finishes) {
     const qty = owned[finish] || 0;
-    const label = qty > 1 ? `${finish.slice(0, 4)} ${qty}` : finish.slice(0, 4);
+    const short = FINISH_LABELS[finish] || finish;
+    const label = qty > 1 ? `${short} ${qty}` : short;
     const cls = qty > 0 ? 'finish-pip filled' : 'finish-pip';
     const color = qty > 0 ? ` style="--pip-color:${getRarityColor(card.rarity)}"` : '';
     html += `<button type="button" class="${cls}" data-finish="${esc(finish)}"${color}>${esc(label)}</button>`;
   }
   return html + '</div>';
+}
+
+/* `owned` arrives in two shapes: a boolean from the collection endpoints, and
+   the binder's per-finish [{finish, qty}] array. Read it in one place. */
+function ownedByFinish(card) {
+  const out = {};
+  if (Array.isArray(card.owned)) for (const o of card.owned) out[o.finish] = o.qty;
+  return out;
+}
+
+function isCardUnowned(card) {
+  if (Array.isArray(card.owned)) return !card.owned.some(o => o.qty > 0);
+  return card.owned === false;
 }
 
 /**
@@ -122,7 +137,7 @@ function buildFinishPips(card) {
  */
 function buildCardTile(card, opts) {
   opts = opts || {};
-  const isUnowned = card.owned === false;
+  const isUnowned = isCardUnowned(card);
   const isWanted = isUnowned && (card.wishlist_id != null || card.wanted === true);
   const isOrdered = card.status === 'ordered';
 
