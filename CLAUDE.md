@@ -130,6 +130,9 @@ collection_views (id PK)         — saved filters + column layout for the colle
 - `mtgjson_uuid_map`, `mtgjson_printings`, `mtgjson_booster_sheets`, `mtgjson_booster_configs`, `tcgplayer_groups` — MTGJSON / TCGPlayer reference data.
 - `edhrec_recommendations` — populated by the `mtgc-edhrec` timer.
 - `prices`, `price_fetch_log` — append-only price time series and ingest log.
+- `collection_value_history`, `collection_value_history_meta`, `collection_rev` — the
+  materialized growth series, what it was built from, and the trigger-maintained stamp
+  that says when the collection last changed. See "Growth chart" under Key patterns.
 
 Schema version is `SCHEMA_VERSION` in `db/schema.py` — read the constant, never a
 number written down elsewhere. Auto-migrations live in the same file, and
@@ -151,6 +154,27 @@ Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB`)
 All filtering is one Scryfall-style query bar (`?q=...`). Standard Scryfall keywords (`c`, `id`, `t`, `o`, `m`, `mv`, `pow`, `tou`, `loy`, `r`, `s`, `cn`, `a`, `ft`, `kw`, `f`, `year`, `layout`, `produces`, `is:`, `has:`) plus collection-only extensions (`status:`, `added:`, `price:`, `deck:`, `binder:`, `order:`, `direction:`, `is:unassigned` / `is:decked` / `is:bindered` / `is:wanted` / `is:unowned`). Default when no `status:` is present: `status:owned OR status:ordered`. `is:unowned` flips the query to a LEFT JOIN against `printings` so unowned cards appear (lets users add a card from the modal). Operators `:`, `=`, `!=`, `>`, `>=`, `<`, `<=` are accepted on numeric/date keywords; the autocomplete suggests both keywords and per-keyword values, with corpus-driven suggestions (artist names, set codes, year/month buckets present in the user's collection) served by `/api/search-suggest`. `added:` resolves dates in the browser's local timezone (the page sends `Intl.DateTimeFormat().resolvedOptions().timeZone` on every `/api/collection` request).
 
 Search compiler lives in `mtg_collector/search/`: `grammar.py` (tokeniser), `transformer.py` (parser → AST), `compiler.py` (AST → SQL), `keywords.py` (canonical name registry), `dates.py` (timezone-aware date parsing).
+
+### Growth chart
+`/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
+holds both. A **query** is aggregated day by day inside SQLite from `collection` + `prices`;
+its cost is dominated by reading every price row every held card has ever had, which grows
+with the day axis. The **unfiltered** series is instead read out of `collection_value_history`
+— O(days), measured 15.4 s → 0.5 ms on a 5.1 M-price-row / 15 k-card / 365-day rig, output
+bit-identical.
+
+The materialized table serves the unfiltered case *only*: a filter changes which collection
+rows are summed, and there is no materializing one table per filter. That is an explicit
+branch on "was a query supplied?", not a fast path with a fallback — a filtered request
+never consults the table and so never has a miss to recover from. **Do not add a rule that
+tries to serve some filters from it.**
+
+Staleness is decided against three recorded facts, never a heuristic: `collection_rev`
+(bumped by triggers on `collection`, and only for `printing_id` / `finish` / `acquired_at` /
+`status` — a binder move or an edited note is not in the series), the last `price_fetch_log`
+id, and the last day stored. `mtg data fetch-prices` rebuilds after each import; the endpoint
+rebuilds on the request that first finds the table stale, because otherwise one added card
+would leave the chart on the slow route until the next 06:00 timer run.
 
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.

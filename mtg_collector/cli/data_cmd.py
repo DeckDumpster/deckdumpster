@@ -627,12 +627,28 @@ def _fetch_prices(force: bool = False):
     print(f"Done! AllPricesToday.json ({size_mb:.0f} MB) saved to: {dest}")
 
     # Auto-import into SQLite
+    from mtg_collector.db.connection import get_db_path
+    db_path = get_db_path()
     try:
-        from mtg_collector.db.connection import get_db_path
-        db_path = get_db_path()
         import_prices(db_path)
     except Exception as e:
         print(f"Warning: auto-import failed: {e}", file=sys.stderr)
+
+    # Rebuild the materialized growth series. The import above is exactly what
+    # makes it stale — new observations change what the collection was worth on
+    # the days already plotted — and this is a scheduled job, so it is the right
+    # place to pay for a full-history aggregation instead of leaving it to the
+    # first person to open the chart. Goes through get_connection() rather than
+    # import_prices' connection: prices are written to the shared reference DB,
+    # which has no `collection` to aggregate.
+    from mtg_collector.db.connection import get_connection
+    from mtg_collector.db.growth import rebuild_history
+    from mtg_collector.db.schema import init_db
+
+    conn = get_connection(db_path)
+    init_db(conn)
+    days = rebuild_history(conn)
+    print(f"  Collection value history: {days} day(s) materialized")
 
 
 def _ensure_uuid_map(conn: sqlite3.Connection):
