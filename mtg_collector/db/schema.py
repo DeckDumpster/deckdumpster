@@ -3,7 +3,9 @@
 import re
 import sqlite3
 
-SCHEMA_VERSION = 47
+from mtg_collector.db.collector_number import number_sortable
+
+SCHEMA_VERSION = 48
 
 
 class SchemaIntegrityError(Exception):
@@ -78,6 +80,10 @@ CREATE TABLE IF NOT EXISTS printings (
     -- served by an index.  See idx_printings_card_name below for why this has
     -- to live on printings rather than being read across the join.
     card_name TEXT,
+    -- collector_number encoded as an integer that sorts, computed at ingest.
+    -- See mtg_collector/db/collector_number.py for the encoding, and
+    -- idx_printings_set_sortable below for why the column has to exist.
+    number_sortable INTEGER,
     UNIQUE(set_code, collector_number)
 );
 
@@ -476,6 +482,26 @@ CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name);
 -- LIMIT then stops the scan early: 2.3 s -> 8.8 ms.  Both halves are needed;
 -- denormalising while still grouping by p.printing_id alone measured 2.4 s.
 CREATE INDEX IF NOT EXISTS idx_printings_card_name ON printings(card_name, printing_id);
+
+-- A set in binder order, in one index scan.
+--
+-- The binder grid is `WHERE set_code = ? ORDER BY number_sortable`, closed on
+-- printing_id so the order is total (number_sortable is not unique within a
+-- set: `A-150e` and anything else exotic share the `other` bucket).  Closing on
+-- printing_id is also what keeps paging honest — see idx_printings_card_name
+-- above and de-3qg.
+--
+-- printing_id is the third column for that reason.  Without it the plan reads
+-- SEARCH ... USING INDEX idx_printings_set_sortable (set_code=?) followed by
+-- USE TEMP B-TREE FOR RIGHT PART OF ORDER BY: SQLite satisfies the leading
+-- terms from the index and then sorts each group of equal number_sortable by
+-- hand.  With it, the whole ORDER BY comes off the index and LIMIT stops the
+-- scan early.
+--
+-- The tiebreak must invert with the sort, as everywhere else here: SQLite only
+-- scans an index backwards when every ORDER BY term inverts together.
+CREATE INDEX IF NOT EXISTS idx_printings_set_sortable
+    ON printings(set_code, number_sortable, printing_id);
 
 -- Full-text search on cards (external content mode — no data duplication)
 CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
@@ -957,6 +983,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v45_to_v46(conn)
         if current < 47:
             _migrate_v46_to_v47(conn)
+        if current < 48:
+            _migrate_v47_to_v48(conn)
 
     # Record schema version
     conn.execute(
@@ -2967,6 +2995,50 @@ def _migrate_v46_to_v47(conn: sqlite3.Connection):
     aggregation in front of every `mtg` command on the upgrade run.
     """
     conn.executescript(GROWTH_CACHE_SQL)
+
+
+def _migrate_v47_to_v48(conn: sqlite3.Connection):
+    """Add printings.number_sortable and the index the binder grid sorts on.
+
+    Backfilling 112,809 rows and building the index takes a few seconds.  The
+    value is a pure function of collector_number, which is half of
+    UNIQUE(set_code, collector_number) and so never changes for a row — the
+    backfill is the only time the whole catalogue has to be walked.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(printings)")}
+    if "number_sortable" not in columns:
+        conn.execute("ALTER TABLE printings ADD COLUMN number_sortable INTEGER")
+    rebuild_number_sortable(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_printings_set_sortable "
+        "ON printings(set_code, number_sortable, printing_id)"
+    )
+
+
+def rebuild_number_sortable(conn):
+    """Recompute printings.number_sortable from collector_number.
+
+    Returns the number of rows corrected.
+
+    PrintingRepository.upsert fills this at ingest, which is where it belongs
+    and where every catalogue refresh goes through.  This is the backfill the
+    v48 migration runs, and the repair for anything that wrote `printings` by
+    hand.  It is idempotent: the encoding reads the collector number and
+    nothing else, so running it twice corrects nothing the second time.
+    """
+    rows = conn.execute(
+        "SELECT printing_id, collector_number, number_sortable FROM printings"
+    ).fetchall()
+    stale = []
+    for pid, cn, current in rows:
+        encoded = number_sortable(cn)
+        if current != encoded:
+            stale.append((encoded, pid))
+    conn.executemany(
+        "UPDATE printings SET number_sortable = ? WHERE printing_id = ?", stale
+    )
+    conn.commit()
+    return len(stale)
 
 
 def rebuild_card_names(conn):

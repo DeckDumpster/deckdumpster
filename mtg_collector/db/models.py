@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from mtg_collector.db.collector_number import number_sortable
 from mtg_collector.utils import now_iso, parse_json_array, to_json_array
 
 
@@ -533,6 +534,12 @@ class PrintingRepository:
         by the caller because this is the only writer of printings.  A printing
         cached before its card leaves it NULL until the next
         rebuild_card_names(), which `mtg cache` runs at the end of every pass.
+
+        number_sortable is filled here for the same reason and no other: the
+        binder grid orders a set by it, and ingest is the only moment it may
+        cost anything.  Unlike card_name it can never go stale — it reads
+        collector_number, which is half of UNIQUE(set_code, collector_number)
+        and so cannot change under a row.
         """
         self.conn.execute(
             """
@@ -542,9 +549,9 @@ class PrintingRepository:
              finishes, artist, image_uri, raw_json,
              power, toughness, loyalty, layout, flavor_text, flavor_name,
              watermark, digital, reserved, reprint, produced_mana, games,
-             face0_mana_cost, face1_mana_cost, card_name)
+             face0_mana_cost, face1_mana_cost, number_sortable, card_name)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     (SELECT name FROM cards WHERE oracle_id = ?))
             ON CONFLICT(set_code, collector_number) DO UPDATE SET
                 printing_id = excluded.printing_id,
@@ -573,7 +580,8 @@ class PrintingRepository:
                 produced_mana = excluded.produced_mana,
                 games = excluded.games,
                 face0_mana_cost = excluded.face0_mana_cost,
-                face1_mana_cost = excluded.face1_mana_cost
+                face1_mana_cost = excluded.face1_mana_cost,
+                number_sortable = excluded.number_sortable
             """,
             (
                 p.printing_id,
@@ -604,6 +612,7 @@ class PrintingRepository:
                 to_json_array(p.games),
                 p.face0_mana_cost,
                 p.face1_mana_cost,
+                number_sortable(p.collector_number),
                 p.oracle_id,
             ),
         )
