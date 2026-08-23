@@ -1,0 +1,235 @@
+/* shared-card-tile.css — The card tile: grid, gradient border, foil, badges,
+   ownership states. Paired with shared-card-tile.js.
+
+   Extracted verbatim from explore_sheets.html, which is the visual contract
+   (TODO.md 7.5: "card display should be the same as the Sheet interface").
+   The ownership states below are copied from collection.html:1014-1061 rather
+   than moved — collection.html does not load this file yet, and migrating it
+   is deliberately out of scope. That duplication ends when it migrates.
+
+   Not to be confused with shared-card-table.js, which renders table CELLS. */
+
+/* --- Grid ------------------------------------------------------------- */
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--grid-cols, 6), 1fr);
+  gap: 8px;
+}
+
+/* --- Tile ------------------------------------------------------------- */
+
+.sheet-card {
+  width: 100%;
+  position: relative;
+  cursor: pointer;
+}
+
+.sheet-card-img-wrap {
+  width: 100%;
+  aspect-ratio: 488 / 680;
+  border-radius: 8px;
+  position: relative;
+  overflow: hidden;
+  --rarity-color: #111;
+  --set-color: #111;
+  background: linear-gradient(to bottom, var(--rarity-color), var(--set-color));
+}
+
+.sheet-card-img-wrap img {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
+  object-fit: cover;
+  border-radius: 6px;
+  image-rendering: high-quality;
+}
+
+/* Foil: rainbow wash */
+.sheet-card-img-wrap.foil::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(255,0,0,0.08),
+    rgba(255,165,0,0.08) 5%,
+    rgba(255,255,0,0.08) 10%,
+    rgba(0,200,0,0.08) 15%,
+    rgba(0,140,255,0.08) 20%,
+    rgba(130,0,255,0.08) 25%,
+    rgba(255,0,200,0.08) 30%,
+    rgba(255,0,0,0.08) 33.33%
+  );
+  mix-blend-mode: color;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Foil: animated light streak */
+.sheet-card-img-wrap.foil::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background:
+    linear-gradient(135deg, transparent 46%, rgba(255,255,255,0.12) 49%, rgba(255,255,255,0.12) 51%, transparent 54%)
+    100% 100% / 240% 240%;
+  pointer-events: none;
+  z-index: 2;
+  animation: foil-streak 3s ease-in-out infinite;
+}
+
+@keyframes foil-streak {
+  0% { background-position: 100% 100%; }
+  15%, 100% { background-position: 0 0; }
+}
+
+/* --- Badge row -------------------------------------------------------- */
+
+.sheet-card-info {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.badge.pull-rate { background: rgba(0,0,0,0.6); border: 1px solid rgba(126,200,227,0.3); color: #7ec8e3; font-variant-numeric: tabular-nums; }
+.badge.treatment { background: linear-gradient(135deg, #0f2a3e, #0f3460); border: 1px solid #1a5276; color: #7ec8e3; }
+a.badge.link { background: #333; border: 1px solid #555; color: #aaa; text-decoration: none; font-variant-numeric: tabular-nums; }
+a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
+
+/* Foil kind (surgefoil, galaxyfoil, ripplefoil, …) — the third axis, distinct
+   from both the .foil wash on the art and the .foil-tag finish label. */
+.badge.foil-kind {
+  background: linear-gradient(135deg, #2a1a3e, #1a2a4e);
+  border: 1px solid #5c2d91;
+  color: #c8a0e8;
+}
+
+.foil-tag {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #2a1a3e, #1a2a4e);
+  border: 1px solid #5c2d91;
+  color: #c8a0e8;
+}
+
+/* --- Overlays --------------------------------------------------------- */
+
+.qty-badge {
+  position: absolute;
+  top: 6px; right: 6px;
+  background: rgba(233, 69, 96, 0.9);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  z-index: 3;
+}
+
+.wanted-badge {
+  position: absolute;
+  top: 6px; left: 6px;
+  background: rgba(42, 140, 90, 0.9);
+  color: #7ee8b0;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+  z-index: 3;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ordered-badge {
+  position: absolute;
+  bottom: 6px; left: 6px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #f0a030;
+  box-shadow: 0 0 4px rgba(240, 160, 48, 0.6);
+  pointer-events: none;
+}
+
+.select-checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 4;
+  accent-color: #e94560;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* --- Ownership states ------------------------------------------------- */
+
+.sheet-card.unowned .sheet-card-img-wrap {
+  filter: grayscale(85%) brightness(0.55);
+  opacity: 0.6;
+}
+.sheet-card.unowned .sheet-card-img-wrap.foil::before,
+.sheet-card.unowned .sheet-card-img-wrap.foil::after {
+  display: none;
+}
+
+.sheet-card.ordered .sheet-card-img-wrap {
+  filter: brightness(0.8);
+  opacity: 0.8;
+}
+
+.sheet-card.unowned.wanted .sheet-card-img-wrap {
+  filter: grayscale(30%) brightness(0.75);
+  opacity: 0.85;
+}
+
+/* --- Finish pips ------------------------------------------------------ */
+
+/* One pip per entry in printings.finishes, filled when that finish is owned.
+   Rendered as buttons OUTSIDE the tile's clickable art so a consumer can bind
+   "add one copy" to the pip and "open modal" to the image without nesting
+   interactive elements. Fill colour comes from shared.js:RARITY_COLORS. */
+.pip-row {
+  display: flex;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.finish-pip {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #666;
+  background: transparent;
+  border: 1px solid #333;
+  border-radius: 3px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.finish-pip:hover { border-color: #666; color: #aaa; }
+
+.finish-pip.filled {
+  background: var(--pip-color, #111);
+  border-color: var(--pip-color, #111);
+  color: #fff;
+}
