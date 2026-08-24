@@ -1,0 +1,14 @@
+# Scenario: A foil-only printing gets one stepper row and its foil-kind badge
+#
+# Related:
+#   issues: [de-6ds]
+#   pull_requests: []
+
+description: >
+  Reconciling the Special Guests binder I reach the neon-ink Mana Crypts, which
+  were never printed in nonfoil. Opening one, the modal offers a single Foil row
+  — there is no nonfoil pocket to fill, so it does not pretend there is — and
+  badges the printing NeonInk. The ordinary Mana Crypt beside it carries no such
+  badge and offers both finishes. That badge is the distinction I would
+  otherwise lose: the two look alike in the grid, and filing one as the other is
+  exactly the mistake this page exists to prevent.

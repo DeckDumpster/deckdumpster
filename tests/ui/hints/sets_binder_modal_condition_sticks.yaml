@@ -1,0 +1,22 @@
+start_page: "/sets/spg?filter=need"
+involves:
+  - "card art .sheet-card-img-wrap on two different tiles"
+  - "modal .card-modal-overlay.active"
+  - "condition select #binder-condition"
+  - "modal close button .card-modal-close"
+fixture_data:
+  set: "spg"
+  needed_printings: 164
+  first_card: "Lord of Atlantis"
+  second_card: "Malcolm, Keen-Eyed Navigator"
+  conditions: ["Near Mint", "Lightly Played", "Moderately Played", "Heavily Played", "Damaged"]
+notes: >
+  The select is rebuilt from scratch every time the modal opens, so its value on
+  the second card can only come from page state — that is the whole assertion.
+  Close the first modal with the × (.card-modal-close) rather than clicking the
+  backdrop, which is a larger and less certain target.
+  The five options are the five the schema accepts; a sixth would 400 on the
+  first add, and offering four would put one out of reach of the binder.
+  The DB half — that a later pip add is actually filed under the sticky
+  condition — is covered by tests/test_binder_card_modal.py; nothing in the
+  page renders a copy's condition, so it cannot be asserted here.

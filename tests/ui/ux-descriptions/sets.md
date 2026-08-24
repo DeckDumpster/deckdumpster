@@ -28,7 +28,9 @@ collector-number order, at a caller-chosen number of cards per row, with owned p
 bright and unowned pockets dimmed. Under each card is a row of finish pips (NF / Foil /
 Etch), and **one click on a pip adds one copy of that finish** — no modal, no form, no
 refetch. Every add of a visit is filed under one batch, created lazily by the first
-click, so the whole pass is reviewable afterwards at `/batches/:id`. The page exists to
+click, so the whole pass is reviewable afterwards at `/batches/:id`. Clicking the *art*
+instead opens the card modal, which is where the finishes get a `−`/count/`+` stepper and
+where the condition every add of the visit is filed under is chosen. The page exists to
 make reconciling a physical binder against the digital collection cost one click per
 card. It is deliberately not a faster search:
 `/collection?q=s:fin is:unowned` already answers the query, but it does not lay the set
@@ -109,6 +111,25 @@ rather than a link. The only in-app way out is the browser back button or a card
 Anchors inside a tile (the SF and CK badges) are excluded from the tile's click handler,
 so a badge click links out instead of opening the modal.
 
+### `/sets/:set_code` — card modal (dynamically generated)
+
+Everything below is rendered by the page's `renderBinderControls()` and handed to the
+shared modal through its `renderExtra` hook. The modal itself is **not** forked; its other
+caller, `deck_builder.html`, passes no `renderExtra` and sees none of this.
+
+| Element | Class / id | Type | Description |
+|---------|-----------|------|-------------|
+| Foil-kind badges | `.badge.foil-kind` | `<span>` | One per entry in `foil_kinds`, under a "Foil kind" section title. Absent when the printing has none |
+| Condition select | `#binder-condition` | `<select>` | The five conditions the schema accepts. **Sticky for the whole page visit** — see Flow 2 |
+| Finish row | `.binder-finish` | `<div>` | One per entry in the row's `owned` array, i.e. one per finish the printing exists in, empty pockets included |
+| Step buttons | `.binder-step` | `<button data-finish data-delta>` | `−` and `+`. The `−` is `disabled` while that finish is held in no copy |
+| Finish count | `.binder-count` | `<span data-finish>` | The copies held in that finish; updated in place, never by re-rendering the panel |
+| Step failure note | `.binder-error` | `<div>` | Empty (and `display:none`) until a step is rejected; carries the server's message |
+
+The card-detail and CK/TCG links are **not** repeated in this block: the shared modal
+already renders "Full page →", SF and CK above it, and a second copy of each would be two
+links to the same page.
+
 ---
 
 ## 4. User Flows
@@ -133,7 +154,8 @@ so a badge click links out instead of opening the modal.
 4. The pip fills immediately, the copy count on it rises, and — if the pocket was empty —
    the header meters advance by one. No refetch, no page movement.
 5. The `POST /api/collection` request follows in the background, carrying the visit's
-   session batch.
+   session batch and the sticky condition (Near Mint unless the user changed it in the
+   modal — see Flow 3a).
 6. On the first add a "Review this pass →" link appears in the header; every later add in
    the same visit joins that same batch, and the link does not move.
 7. The user works down the grid at one click per card.
@@ -141,14 +163,32 @@ so a badge click links out instead of opening the modal.
    set, badged **Binder** — which is what makes an optimistic add safe: if client and
    server ever drift, the pass is auditable rather than an untracked run of writes.
 
-### Flow 3: Inspect a pocket
+### Flow 3: Inspect a pocket, and step its copies
 
 1. User clicks a card's art (not a pip, not a badge).
 2. The shared card modal opens with the large image, mana cost, type, mana value, set,
    collector number, rarity, condition, finish, treatment tags, SF/CK price links, and a
-   "Full page →" link.
-3. A double-faced card shows the flip button; clicking it turns the card over.
-4. Escape, the `×`, or a backdrop click dismisses the modal.
+   "Full page →" link — then the binder's own block: foil-kind badges, the condition
+   select, and one `−`/count/`+` row per finish.
+3. `+` adds one copy of that finish, `−` removes one. Both are the same optimistic path a
+   pip click takes: the count moves in the modal **and** on the tile behind it, the meters
+   move if the pocket crossed between empty and filled, and the request follows. A `−`
+   gives the copy's slot back to the visit's batch, so the review page's count stays equal
+   to the copies still in the pass.
+4. A double-faced card shows the flip button; clicking it turns the card over. The binder
+   block re-renders with it and keeps its state, because it reads that state from the page
+   rather than holding any.
+5. Escape, the `×`, or a backdrop click dismisses the modal.
+
+### Flow 3a: The condition sticks
+
+1. User opens any card and sets the condition select to "Lightly Played".
+2. Every add for the rest of the visit is filed under it — the modal's `+` on this card,
+   the modal's `+` on the next card, **and every pip click in the grid**. The select is one
+   page-scope variable, not per-card state.
+3. This is the point of it: a physical binder is usually uniform, so re-picking the
+   condition per card is the tax that makes a reconciliation pass not worth doing.
+4. A reload is a new pass, and starts again at Near Mint.
 
 ### Flow 4: Narrow the view
 
@@ -183,6 +223,9 @@ so a badge click links out instead of opening the modal.
    uppercase red `.pip-error` note appears **on that tile** carrying the server's message
    (or "Network error"). Nothing page-wide changes; the rest of the binder pass is
    unaffected.
+4. A step taken in the modal is rolled back the same way and also writes the message into
+   the modal's `.binder-error` line, because the tile it happened to may well be behind the
+   backdrop or off screen.
 
 ### Flow 8: An uncached or unknown set
 
@@ -274,11 +317,25 @@ Driven by the data present on the row, not by flags:
   which is precisely the reconciliation error the page exists to prevent.
 - No pull-rate badge: binder rows carry no `pull_rate`.
 
-### `/sets/:set_code` — optimistic one-click add
+### `/sets/:set_code` — optimistic stepping
 
-- `addOneCopy(tile, finish)` increments the matching `owned` entry and `card.qty` locally,
-  bumps the meters if the pocket had been empty, and repaints the tile — **then** issues
-  `POST /api/collection` with `{printing_id, finish, source: 'binder', batch}`.
+- `changeCopies(card, finish, delta)` is the single path: `+1` from a pip click or the
+  modal's `+`, `−1` from the modal's `−`. It moves the matching `owned` entry and
+  `card.qty` locally, bumps the meters if the pocket crossed between empty and filled,
+  repaints the tile and syncs the open modal — **then** issues the request.
+- `+1` is `POST /api/collection` with
+  `{printing_id, finish, condition, source: 'binder', batch}`.
+- `−1` is two requests, because there is no "remove one copy of this printing" endpoint and
+  should not be: a copy is a row with its own condition, price, order and history, so the
+  copy to remove has to be named. `GET /api/collection/copies?printing_id&finish&status=owned`
+  is ordered `acquired_at DESC`, so `copies[0]` is the copy the `+` just added; that id goes
+  to `DELETE /api/collection/:id?confirm=true`. A mis-step undoes itself.
+- `condition` is `_condition`, one page-scope variable set by the modal's select and read
+  by every add of the visit, pips included. The endpoint 400s an unrecognised value rather
+  than coercing it to Near Mint — a sticky select that silently downgraded would mislabel a
+  whole binder rather than one copy.
+- `repaintCard(card)` finds the tile by `data-printing-id` rather than taking an element,
+  because a repaint replaces the node and the modal outlives several of them.
 - `sessionBatch()` supplies that `batch`: `{batch_uuid, batch_type: 'binder_click', name:
   "{set name} binder", set_code}`. The uuid is minted on the **first add** and reused for
   the rest of the visit; the batch row is created server-side by the request that first
@@ -288,8 +345,9 @@ Driven by the data present on the row, not by flags:
   clicks fast enough to race both end up in one batch rather than two.
 - Optimistic on purpose: a binder pass is a run of adds, and waiting on each one is what
   makes the four-click `/collection` flow unusable for it.
-- On failure the local state is reverted, the tile is repainted again, and a `.pip-error`
-  note is appended to it.
+- On failure the local state is reverted, the tile is repainted again, a `.pip-error` note
+  is appended to it, and — when the step came from the modal — the message is also written
+  into the modal's `.binder-error` line.
 - `bumpCompletion()` moves the meters by one only on an empty→filled (or filled→empty)
   transition, and touches `owned_base` only for a `base`-section card. The meters count
   printings, never copies: a second copy of a card already held fills no new pocket.
@@ -306,6 +364,16 @@ The pips are real `<button>`s rendered *outside* the clickable art rather than o
 was considered and rejected — it makes the largest target on the page destructive-ish and
 cannot say which finish it means.
 
+Two more delegated listeners sit on the modal overlay, which is created once at page init
+and outlives every card shown in it:
+
+1. `change` on `#binder-condition` writes `_condition`.
+2. `click` on `.binder-step` steps `_modalCard` by the button's `data-delta`.
+
+`_modalCard` is *not* cleared when the modal closes — the shared modal has three ways to
+close and announces none of them — so anything reading it also checks that the overlay
+still carries `.active`.
+
 ---
 
 ## 6. Data Dependencies
@@ -317,7 +385,9 @@ cannot say which finish it means.
 | `/api/sets/index` | GET | `/sets` | Page load | Bare JSON **array**, one object per cached set, newest release first |
 | `/api/settings` | GET | `/sets/:set_code` | Page load, before the first grid fetch | `{key: value}` over the whole `settings` table; only `price_sources` is read |
 | `/api/set-browse/:set_code` | GET | `/sets/:set_code` | Page load and every control change | Page envelope `{rows, total, limit, offset}` plus `set` and the four completion counts when `offset == 0` |
-| `/api/collection` | POST | `/sets/:set_code` | One click on a finish pip | `{id, batch_id}` for the created entry, or `{error}` with a non-2xx status |
+| `/api/collection` | POST | `/sets/:set_code` | A pip click, or the modal's `+` | `{id, batch_id}` for the created entry, or `{error}` with a non-2xx status. Body carries `condition`; an unrecognised one is a 400 |
+| `/api/collection/copies` | GET | `/sets/:set_code` | The modal's `−`, to name the copy | A bare JSON **array** of copies, ordered `acquired_at DESC` |
+| `/api/collection/:id?confirm=true` | DELETE | `/sets/:set_code` | The modal's `−`, once the copy is named | `{ok: true}`, or `{error}` with a non-2xx status |
 
 ### `/api/sets/index` row
 
@@ -453,4 +523,6 @@ Contract points the page relies on:
 | **Empty result** | "No printings match this view." — reached by a `q` or `filter` that excludes everything, while the header meters still show the whole set |
 | **Uncached set (404)** | Status turns accent-red with the message; content shows the same text as an empty state; header still reads "Loading…" |
 | **Bad parameter (400)** | Same treatment, with the endpoint's explanation, e.g. "sort must be one of number, name, rarity, price, qty" |
-| **Modal open** | `.card-modal-overlay.active` — dark full-viewport backdrop, large card image with a flip button, and a details column (type, mana value, set, number, rarity, condition, finish, treatment tags, SF/CK links, "Full page →") |
+| **Modal open** | `.card-modal-overlay.active` — dark full-viewport backdrop, large card image with a flip button, and a details column (type, mana value, set, number, rarity, condition, finish, treatment tags, SF/CK links, "Full page →"), then the binder block: foil-kind badges, the condition select, and one `−`/count/`+` row per finish |
+| **Empty pocket in the modal** | Its count reads `0` and its `−` is `disabled` at 30% opacity; the `+` is always live |
+| **Modal step failure** | `.binder-error` fills with the server's message in small uppercase accent-red under the finish rows, and the counts snap back |

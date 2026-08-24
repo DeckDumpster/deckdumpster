@@ -38,6 +38,18 @@ def to_json_array(value: Optional[list]) -> Optional[str]:
     return json.dumps(value)
 
 
+#: The five values `collection.condition` accepts.  The CHECK constraint in
+#: schema.py is the authority; this mirrors it so a caller can reject an
+#: unknown condition with a 400 instead of taking an IntegrityError.
+CONDITIONS = (
+    "Near Mint",
+    "Lightly Played",
+    "Moderately Played",
+    "Heavily Played",
+    "Damaged",
+)
+
+
 def normalize_condition(condition: str) -> str:
     """Normalize condition strings to standard format."""
     condition = condition.strip()
@@ -63,8 +75,7 @@ def normalize_condition(condition: str) -> str:
         return abbrevs[upper]
 
     # Already in full form
-    valid = ["Near Mint", "Lightly Played", "Moderately Played", "Heavily Played", "Damaged"]
-    for v in valid:
+    for v in CONDITIONS:
         if v.lower() == condition.lower():
             return v
 

@@ -231,6 +231,72 @@ button.toggle.on {
   text-align: center;
 }
 
+/* --- Modal binder controls -------------------------------------------- */
+
+/* Rendered into the shared card modal through its renderExtra hook — this page
+   is that hook's first user, deck_builder.html (the other caller) passes none
+   and so is untouched by everything below. */
+
+.binder-controls { border-top: 1px solid #0f3460; }
+
+.binder-controls select {
+  width: 100%;
+  margin-bottom: 4px;
+}
+
+.binder-finish {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+.binder-finish .label { color: #888; }
+
+.binder-stepper { display: flex; align-items: center; }
+
+.binder-step {
+  width: 28px; height: 28px;
+  border: 1px solid #0f3460;
+  background: #1a1a2e;
+  color: #888;
+  font-size: 1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  padding: 0;
+}
+.binder-step:first-child { border-radius: 6px 0 0 6px; }
+.binder-step:last-child { border-radius: 0 6px 6px 0; }
+.binder-step:hover { border-color: #e94560; color: #e0e0e0; }
+.binder-step:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.binder-count {
+  min-width: 30px; height: 28px;
+  border: 1px solid #0f3460; border-left: none; border-right: none;
+  background: #16213e;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A step the server rejected, said in the modal it was clicked in — the tile
+   behind it may well be off screen. */
+.binder-error {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #e94560;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.binder-error:empty { display: none; }
+
 /* A pip add that the server rejected: the local increment is rolled back and
    the failure is said on the tile it happened on, not page-wide. */
 .pip-error {
@@ -344,7 +410,27 @@ let _setName = '';
    response so a pip add can move them without a refetch. */
 let _completion = {};
 
+/* The condition every add of this page visit is filed under. It is chosen in
+   the card modal and STICKS: the next pip click anywhere in the grid uses it
+   too, for the rest of the visit. A binder is usually uniform — the whole
+   thing is Lightly Played, or the whole thing is Near Mint — so re-picking it
+   per card is the tax that makes a reconciliation pass not worth doing.
+   Page-scope on purpose: a reload is a new pass and starts at Near Mint. */
+const CONDITIONS = ['Near Mint', 'Lightly Played', 'Moderately Played',
+                    'Heavily Played', 'Damaged'];
+let _condition = CONDITIONS[0];
+
+/* Full words here, where there is room for them; the pips under the art use
+   the abbreviations in shared-card-tile.js because a tile has none. */
+const FINISH_NAMES = {nonfoil: 'Nonfoil', foil: 'Foil', etched: 'Etched'};
+
 const modal = createCardModal();
+
+/* The row the modal last opened on, so a stepper click knows what it is
+   stepping. It is not cleared on close — the shared modal has three ways to
+   close and announces none of them — so anything reading it also checks that
+   the overlay is still active. */
+let _modalCard = null;
 
 // --- View state -------------------------------------------------------
 
@@ -559,10 +645,13 @@ function buildTile(card) {
   return el;
 }
 
-/* Repaint one tile in place after its counts changed, so an add costs no
-   refetch. */
-function repaintTile(el) {
-  const card = el._card;
+/* Repaint one card's tile in place after its counts changed, so a step costs no
+   refetch. Looked up by printing_id rather than taken as an element, because a
+   repaint replaces the node and the modal outlives several of them. */
+function repaintCard(card) {
+  const el = content.querySelector(
+    `.sheet-card[data-printing-id="${CSS.escape(card.printing_id)}"]`);
+  if (!el) return null;
   const fresh = buildTile(card);
   el.replaceWith(fresh);
   return fresh;
@@ -581,12 +670,104 @@ content.addEventListener('click', (e) => {
   if (!tile) return;
 
   const pip = e.target.closest('.finish-pip');
-  if (pip) { addOneCopy(tile, pip.dataset.finish); return; }
+  if (pip) { changeCopies(tile._card, pip.dataset.finish, +1); return; }
 
-  if (e.target.closest('.sheet-card-img-wrap')) {
-    modal.show({...tile._card, set_name: _setName});
-  }
+  if (e.target.closest('.sheet-card-img-wrap')) openModal(tile._card);
 });
+
+// --- The card modal ---------------------------------------------------
+
+/* Built on shared-card-modal.js through its renderExtra hook, NOT forked. The
+   other caller (deck_builder.html) passes no renderExtra, so nothing below can
+   reach it.
+
+   The copy handed to show() carries the sticky condition, so the modal's
+   read-only "Condition" row agrees with the select rather than contradicting
+   it. `owned` is shared by reference with the row in _rows, which is what lets
+   a stepper move the count in the grid and in here at once. */
+function openModal(card) {
+  _modalCard = card;
+  modal.show({...card, set_name: _setName, condition: _condition},
+             {renderExtra: renderBinderControls});
+}
+
+/* Everything the binder adds to the modal. A DFC flip re-runs this, so it reads
+   its state from _condition and from the live row rather than holding any.
+
+   The card-detail link and the CK/TCG price links are NOT repeated here: the
+   shared modal already renders "Full page →", SF and CK above this block, and a
+   second copy of each would be two links to the same page. */
+function renderBinderControls(card) {
+  const options = CONDITIONS.map(c =>
+    `<option value="${esc(c)}"${c === _condition ? ' selected' : ''}>${esc(c)}</option>`
+  ).join('');
+
+  // One row per finish the printing exists in — including the ones held in no
+  // copy, because an empty pocket is the one this page exists to fill.
+  const rows = card.owned.map(o => `
+      <div class="binder-finish">
+        <span class="label">${esc(FINISH_NAMES[o.finish] || o.finish)}</span>
+        <div class="binder-stepper">
+          <button type="button" class="binder-step" data-finish="${esc(o.finish)}"
+                  data-delta="-1"${o.qty ? '' : ' disabled'}>&minus;</button>
+          <span class="binder-count" data-finish="${esc(o.finish)}">${o.qty}</span>
+          <button type="button" class="binder-step" data-finish="${esc(o.finish)}"
+                  data-delta="1">+</button>
+        </div>
+      </div>`).join('');
+
+  // The third treatment axis: `finishes` says a foil exists, promo_types says
+  // what kind of foil it is. A badge, never a pip — you cannot own "surge".
+  const kinds = parseJsonField(card.foil_kinds);
+  const kindsHtml = kinds.length
+    ? `<div class="modal-section"><span class="modal-section-title">Foil kind</span>`
+      + `<div class="modal-tags">`
+      + kinds.map(k => `<span class="badge foil-kind">${esc(foilKindLabel(k))}</span>`).join('')
+      + `</div></div>`
+    : '';
+
+  return kindsHtml + `
+    <div class="modal-section binder-controls">
+      <span class="modal-section-title">Add to collection</span>
+      <select id="binder-condition" aria-label="Condition">${options}</select>
+      ${rows}
+      <div class="binder-error" id="binder-error"></div>
+    </div>`;
+}
+
+/* Sticky, and sticky beyond this card: the pips consume it too. */
+modal.overlay.addEventListener('change', (e) => {
+  if (e.target.id === 'binder-condition') _condition = e.target.value;
+});
+
+modal.overlay.addEventListener('click', (e) => {
+  const btn = e.target.closest('.binder-step');
+  if (!btn || !_modalCard) return;
+  changeCopies(_modalCard, btn.dataset.finish, Number(btn.dataset.delta));
+});
+
+/* Repaint the open modal's counts in place. Re-rendering the whole details
+   panel would work too and would also throw away the select's focus and any
+   flip state, for no gain. */
+function syncModal(card) {
+  if (_modalCard !== card) return;
+  // Closing is the shared modal's business — it has three ways to do it and
+  // tells nobody. Identity plus this is enough: a step on some other card is
+  // filtered above, and a step on this one while it is hidden writes counts
+  // that reopening would have rendered anyway.
+  if (!modal.overlay.classList.contains('active')) return;
+  for (const o of card.owned) {
+    const count = modal.overlay.querySelector(`.binder-count[data-finish="${CSS.escape(o.finish)}"]`);
+    if (!count) continue;
+    count.textContent = o.qty;
+    count.previousElementSibling.disabled = o.qty === 0;
+  }
+}
+
+function modalError(message) {
+  const el = document.getElementById('binder-error');
+  if (el) el.textContent = message;
+}
 
 /* The session batch — every add of this page visit, filed under one batch so a
    whole binder pass is reviewable at /batches/:id afterwards. That review is
@@ -622,23 +803,52 @@ function showBatchLink(batchId) {
   link.hidden = false;
 }
 
-/* One click on a pip adds one copy of that finish. Optimistic: the count moves
-   first and the request follows, because a binder pass is a run of adds and
-   waiting on each one is what makes the existing four-click flow unusable for
-   it. A failure rolls the increment back and says so on the tile. */
-async function addOneCopy(tile, finish) {
-  const card = tile._card;
+/* One step of one finish: +1 from a pip click or the modal's +, -1 from the
+   modal's -. Optimistic, because a binder pass is a run of these and waiting on
+   each one is what makes the existing four-click flow unusable for it. A
+   failure rolls the step back and says so where it was clicked. */
+async function changeCopies(card, finish, delta) {
   const entry = card.owned.find(o => o.finish === finish);
   if (!entry) return;
+  if (delta < 0 && entry.qty === 0) return;
 
+  modalError('');
+  applyDelta(card, entry, delta);
+  let tile = repaintCard(card);
+  syncModal(card);
+
+  const result = delta > 0 ? await postAdd(card, finish) : await postRemove(card, finish);
+  if (result.ok) {
+    if (result.batch_id != null) showBatchLink(result.batch_id);
+    return;
+  }
+
+  applyDelta(card, entry, -delta);
+  tile = repaintCard(card);
+  syncModal(card);
+
+  if (_modalCard === card && modal.overlay.classList.contains('active')) {
+    modalError(result.message);
+  }
+  if (tile) {
+    const note = document.createElement('div');
+    note.className = 'pip-error';
+    note.textContent = result.message;
+    tile.appendChild(note);
+  }
+}
+
+/* Move the local counts by one step. The meters move only when a pocket
+   crosses between empty and filled — they count printings, never copies, so a
+   second copy of a card you already had fills nothing new. */
+function applyDelta(card, entry, delta) {
   const wasEmpty = card.qty === 0;
-  entry.qty += 1;
-  card.qty += 1;
-  if (wasEmpty) bumpCompletion(card, +1);
-  tile = repaintTile(tile);
+  entry.qty += delta;
+  card.qty += delta;
+  if (wasEmpty !== (card.qty === 0)) bumpCompletion(card, wasEmpty ? +1 : -1);
+}
 
-  let ok = false;
-  let message = '';
+async function postAdd(card, finish) {
   try {
     const res = await fetch('/api/collection', {
       method: 'POST',
@@ -646,29 +856,40 @@ async function addOneCopy(tile, finish) {
       body: JSON.stringify({
         printing_id: card.printing_id,
         finish,
+        condition: _condition,
         source: 'binder',
         batch: sessionBatch(),
       }),
     });
     const body = await res.json();
-    ok = res.ok;
-    message = body.error || `HTTP ${res.status}`;
-    if (ok) showBatchLink(body.batch_id);
+    if (!res.ok) return {ok: false, message: body.error || `HTTP ${res.status}`};
+    return {ok: true, batch_id: body.batch_id};
   } catch (err) {
-    message = 'Network error';
+    return {ok: false, message: 'Network error'};
   }
+}
 
-  if (ok) return;
+/* The minus step. There is no "remove one copy of this printing" endpoint and
+   there should not be one: a copy is a row with its own condition, price,
+   order and history, so the copy to remove has to be named. Name the most
+   recently acquired one of that finish — /api/collection/copies orders by
+   acquired_at DESC — which is the copy the plus step just added, so a mis-step
+   undoes itself. */
+async function postRemove(card, finish) {
+  const p = new URLSearchParams({printing_id: card.printing_id, finish, status: 'owned'});
+  try {
+    const res = await fetch(`/api/collection/copies?${p}`);
+    const copies = await res.json();
+    if (!res.ok) return {ok: false, message: copies.error || `HTTP ${res.status}`};
+    if (!copies.length) return {ok: false, message: 'No copy to remove'};
 
-  entry.qty -= 1;
-  card.qty -= 1;
-  if (wasEmpty) bumpCompletion(card, -1);
-  tile = repaintTile(tile);
-
-  const note = document.createElement('div');
-  note.className = 'pip-error';
-  note.textContent = message;
-  tile.appendChild(note);
+    const del = await fetch(`/api/collection/${copies[0].id}?confirm=true`, {method: 'DELETE'});
+    const body = await del.json();
+    if (!del.ok) return {ok: false, message: body.error || `HTTP ${del.status}`};
+    return {ok: true};
+  } catch (err) {
+    return {ok: false, message: 'Network error'};
+  }
 }
 
 /* A pocket that just went from empty to filled (or back) moves the meters by

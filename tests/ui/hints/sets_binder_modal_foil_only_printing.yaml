@@ -1,0 +1,25 @@
+start_page: "/sets/spg?q=Mana%20Crypt"
+involves:
+  - "card art .sheet-card-img-wrap on tiles carrying data-printing-id"
+  - "modal .card-modal-overlay.active"
+  - "finish rows .binder-finish and their .binder-count[data-finish]"
+  - "foil-kind badge .badge.foil-kind in the modal"
+fixture_data:
+  set: "spg"
+  query: "Mana Crypt"
+  matching_printings: 7
+  plain_printing_id: "ecb293d5-b13b-400f-ac7b-162a1e127ec7"
+  plain_collector_number: "17"
+  plain_finishes: ["nonfoil", "foil"]
+  neonink_printing_id: "b3ce1be9-8ee7-4956-a895-ca22759ccf65"
+  neonink_collector_number: "17a"
+  neonink_finishes: ["foil"]
+  neonink_label: "NeonInk"
+notes: >
+  Address the tiles by data-printing-id, not by position: the two are adjacent
+  in collector-number order and identical in name, so a positional selector
+  would be one sort change away from silently testing the wrong card.
+  Foil kind is the third treatment axis — `finishes` says a foil exists,
+  promo_types says what kind of foil it is — and it is a badge, never a pip,
+  because there is no such thing as owning "neon ink" separately from owning the
+  foil.

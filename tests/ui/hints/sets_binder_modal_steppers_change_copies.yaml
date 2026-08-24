@@ -1,0 +1,24 @@
+start_page: "/sets/spg?q=Lord%20of%20Atlantis&filter=need"
+involves:
+  - "card art .sheet-card-img-wrap (opens the modal)"
+  - "modal .card-modal-overlay.active"
+  - "stepper buttons .binder-step[data-finish][data-delta]"
+  - "stepper counts .binder-count[data-finish]"
+  - "finish pips .finish-pip on the tile behind the modal"
+  - "header meter #meter-all-count"
+fixture_data:
+  set: "spg"
+  query: "Lord of Atlantis"
+  matching_printings: 1
+  finishes: ["nonfoil", "foil"]
+  meter_all_before: "1 / 165"
+  meter_all_after: "2 / 165"
+notes: >
+  The q narrows the grid to the single printing, so there is exactly one tile
+  and one modal to reason about; filter=need guarantees it starts empty.
+  Every step is optimistic — the count moves before the request lands — so the
+  assertions need a short settle, not a reload. Nothing here reloads the page:
+  a repaint replaces the tile node in place, which is why the pip is re-read
+  from the DOM after each step rather than held.
+  The meter counts printings, never copies: the first + fills the pocket and
+  moves it, the second + does not, and the − leaves it filled.
