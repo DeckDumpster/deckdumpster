@@ -1128,6 +1128,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("disambiguate.html")
         elif path == "/api/sets":
             self._api_sets()
+        elif path == "/api/sets/index":
+            self._api_sets_index()
         elif path == "/api/cached-sets":
             self._api_cached_sets()
         elif path == "/api/search-suggest":
@@ -1915,11 +1917,48 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         return data
 
     def _api_sets(self):
+        """Sets that have MTGJSON **booster data** — not every set that exists.
+
+        `PackGenerator.list_sets()` reads `mtgjson_booster_configs`, so a set
+        with no booster config is silently absent: Commander decks, Secret
+        Lairs, Jumpstart-style products, most supplemental releases. That is
+        correct for the two callers, which both need a set you can open a pack
+        from — `crack_pack.html:812` (/crack) and `explore_sheets.html:488`
+        (/sheets). Both would break on a rename, which is why this endpoint
+        kept its path when `/api/sets/index` was added under it.
+
+        For "every set the app has cards for", use `/api/sets/index` (whole
+        rows, completion counts) or `/api/cached-sets` (code + name only).
+        Neither goes through MTGJSON booster data.
+        """
         if not self.generator:
             self._send_json({"error": "AllPrintings.json not loaded — run: mtg data fetch"}, 503)
             return
         sets = self.generator.list_sets()
         self._send_json([{"code": code, "name": name} for code, name in sets])
+
+    def _api_sets_index(self):
+        """Every locally cached set with its completion counts, newest first.
+
+        Backs the `/sets` page. Unpaginated: 993 sets qualify in prod and the
+        set count is small and bounded, unlike collection rows.
+
+        The population is `cards_fetched_at IS NOT NULL`, *not* `/api/sets` —
+        that one is booster-data-only and drops any set without a booster
+        config, which is most of what a binder holds.
+
+        The query does no per-set work; see `db/set_index.py` for why that is
+        load-bearing (21,460 ms as correlated subqueries, 39 ms aggregated
+        once and joined).
+        """
+        from mtg_collector.db import set_index
+
+        conn = self._get_conn()
+        try:
+            rows = set_index.set_index(conn)
+        finally:
+            conn.close()
+        self._send_json(rows)
 
     def _api_cached_sets(self):
         """Return all sets whose card list has been fully cached."""
