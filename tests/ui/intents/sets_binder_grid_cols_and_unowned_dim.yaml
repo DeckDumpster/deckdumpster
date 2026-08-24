@@ -1,0 +1,12 @@
+# Scenario: The binder grid lays out at the requested cards-per-row, empty pockets dimmed
+#
+# Related:
+#   issues: [de-emz]
+#   pages: [sets]
+
+description: >
+  I open a set's binder page with cols=3 in the URL and see the set laid out
+  three cards to a row under a "Base set" heading, with the cards-per-row
+  control reading 3. Almost every pocket is empty, and those tiles are visibly
+  dimmed rather than merely tagged — the one card I own is the only bright one
+  on the page, which is what makes a binder pass readable at a glance.

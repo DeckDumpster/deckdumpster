@@ -1,0 +1,12 @@
+# Scenario: One click on a finish pip adds a copy, in place
+#
+# Related:
+#   issues: [de-emz]
+#   pages: [sets]
+
+description: >
+  Looking at the pockets I have already filled in a set, I click the nonfoil
+  pip on a card I own one copy of. The pip immediately reads two, without the
+  page reloading and without a modal or a form appearing. The completion meter
+  in the header does not move, because a second copy of a card I already had
+  fills no new pocket.

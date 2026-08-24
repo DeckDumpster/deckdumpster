@@ -1,0 +1,22 @@
+start_page: "/sets/spg"
+involves:
+  - "cards-per-row control #col-plus / #col-count"
+  - "sort select #sort (Number | Name | Rarity | Price | Copies)"
+  - "the query string itself — cols and sort, defaults elided"
+fixture_data:
+  set: "spg"
+  default_cols: 6
+  target_cols: 8
+  sort_label: "Name"
+notes: >
+  Start from the bare /sets/spg: cols defaults to 6 and the URL carries
+  nothing. Each browser context is fresh, so localStorage['setsGridCols'] is
+  empty and the default is not inherited from another scenario.
+  Two clicks on #col-plus take it to 8 and the sort select to name. Both are
+  written to the query string by the change handler before the refetch starts,
+  so the URL can be read without waiting on the fetch.
+  Reload by navigating to that exact query string and check the restored view
+  on the layout as well as the controls: getComputedStyle(.card-grid)
+  .gridTemplateColumns resolves to one track per column.
+  cols=6 and sort=number are the defaults and must NOT appear in the URL —
+  eliding them is what keeps a shared link readable.

@@ -464,7 +464,13 @@ async function load() {
   }
 
   render();
-  statusEl.textContent = `${body.total} printing${body.total === 1 ? '' : 's'}`;
+  // The whole set fits in one page today -- the largest real one is 779
+  // printings against a 1000 cap -- so this line normally just counts them.
+  // If a set ever outgrows the cap, say so rather than render a short grid
+  // under a full count, which reads as a set with cards missing.
+  const shown = _rows.length < body.total ? `, showing ${_rows.length}` : '';
+  statusEl.textContent =
+    `${body.total} printing${body.total === 1 ? '' : 's'}${shown}`;
 }
 
 function renderMeters() {

@@ -1,0 +1,20 @@
+start_page: "/sets/spg?filter=need"
+involves:
+  - "card art .sheet-card-img-wrap (opens the modal)"
+  - "modal .card-modal-overlay.active with .card-modal-details h2"
+  - "finish pips .finish-pip.filled (must stay at zero)"
+  - "header meter #meter-all-count"
+fixture_data:
+  set: "spg"
+  needed_printings: 164
+  first_needed_card: "Fatal Push"
+  meter_all: "1 / 165"
+notes: >
+  filter=need leaves only empty pockets, so a filled pip anywhere on the page
+  after the click would mean the art added something.
+  The pips are separate <button> elements rendered outside the art, so clicking
+  .sheet-card-img-wrap cannot land on one — that separation is the point of the
+  markup and this scenario is what holds it.
+  The modal is the shared card modal (shared-card-modal.js); assert on its
+  overlay and heading rather than on any binder-specific content, which item 8b
+  adds later.
