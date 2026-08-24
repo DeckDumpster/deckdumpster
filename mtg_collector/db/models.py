@@ -727,6 +727,26 @@ class PrintingRepository:
         )
 
 
+def _release_batch_slot(conn: sqlite3.Connection, entry_id: int) -> None:
+    """Give a deleted copy's slot back to its batch, if it was in one.
+
+    `batches.card_count` is a stored counter, incremented by every path that
+    files a copy under a batch; nothing decremented it before, because nothing
+    routinely deleted a batch-filed copy.  The binder grid's modal does -- its
+    `-` step is how a mis-click is taken back -- and the batch is what makes an
+    optimistic add safe, so a counter that only ever went up would leave the
+    review page overstating a pass it exists to be trusted about.
+
+    The subquery reads `batch_id` off the row about to go, so a copy in no
+    batch matches no batch and this is a no-op.  Call it BEFORE the DELETE.
+    """
+    conn.execute(
+        "UPDATE batches SET card_count = card_count - 1"
+        " WHERE id = (SELECT batch_id FROM collection WHERE id = ?)",
+        (entry_id,),
+    )
+
+
 class CollectionRepository:
     """CRUD operations for collection table."""
 
@@ -1119,6 +1139,7 @@ class CollectionRepository:
         self.conn.execute(
             "DELETE FROM ingest_lineage WHERE collection_id = ?", (entry_id,)
         )
+        _release_batch_slot(self.conn, entry_id)
         return self.delete(entry_id)
 
     def bulk_delete(self, ids: List[int]) -> Dict[str, List[int]]:
@@ -1137,6 +1158,7 @@ class CollectionRepository:
                 "DELETE FROM ingest_lineage WHERE collection_id = ?",
                 (entry_id,),
             )
+            _release_batch_slot(self.conn, entry_id)
             self.delete(entry_id)
             deleted.append(entry_id)
         return {"deleted": deleted, "skipped": skipped}

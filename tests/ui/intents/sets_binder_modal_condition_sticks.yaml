@@ -1,0 +1,14 @@
+# Scenario: The condition I pick in one card's modal is still set on the next
+#
+# Related:
+#   issues: [de-6ds]
+#   pull_requests: []
+
+description: >
+  My whole binder is Lightly Played, so I open the first card, set the modal's
+  condition to Lightly Played, and close it. Opening a different card, the
+  select still reads Lightly Played — it is one choice for the whole browsing
+  pass, not something I re-pick per card. That is what makes reconciling a
+  bindered set tolerable: I say the condition once and every copy I add for the
+  rest of the visit, from this modal or from a pip in the grid, is filed under
+  it.

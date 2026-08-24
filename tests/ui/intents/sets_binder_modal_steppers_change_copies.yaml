@@ -1,0 +1,15 @@
+# Scenario: The modal's steppers add and remove copies of one finish
+#
+# Related:
+#   issues: [de-6ds]
+#   pull_requests: []
+
+description: >
+  I open a card I still need by clicking its art, and the modal gives me a
+  −/count/+ row for each finish the printing exists in. Both counts start at
+  zero and neither − is live, because there is nothing to take away yet. I press
+  + on the nonfoil row twice and the count reads 2 straight away — the pip under
+  the art behind the modal fills and reads the same, and the set's completion
+  meter has advanced by the one pocket I just filled, not by the two copies.
+  Pressing − once takes a copy back and the count reads 1; the meter does not
+  move, because the pocket is still filled.

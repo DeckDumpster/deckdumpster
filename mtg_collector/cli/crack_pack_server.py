@@ -7618,6 +7618,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         the first add that carries the uuid and joining it on every later one.
         The binder grid's session batch works this way: browsing posts nothing
         and so creates nothing, and one pip click is still one request.
+
+        `condition` is optional and defaults to Near Mint.  An unrecognised one
+        is a 400 rather than a coercion to the default: the binder grid's
+        condition select sticks for a whole browsing pass, so silently filing a
+        binder of Lightly Played cards as Near Mint would mislabel the lot.
         """
         from mtg_collector.db.models import (
             Batch,
@@ -7627,6 +7632,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             WishlistRepository,
         )
         from mtg_collector.db.schema import init_db
+        from mtg_collector.utils import CONDITIONS
 
         printing_id = data.get("printing_id", "").strip()
         if not printing_id:
@@ -7634,6 +7640,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         finish = data.get("finish", "nonfoil")
+        condition = data.get("condition") or "Near Mint"
+        if condition not in CONDITIONS:
+            self._send_json({"error": f"Unknown condition: {condition}"}, 400)
+            return
         acquired_at = data.get("acquired_at")
         purchase_price = data.get("purchase_price")
         source = data.get("source", "manual")
@@ -7675,6 +7685,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 id=None,
                 printing_id=printing_id,
                 finish=finish,
+                condition=condition,
                 acquired_at=acquired_at,
                 purchase_price=purchase_price,
                 source=source,
