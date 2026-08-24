@@ -1043,6 +1043,46 @@ def _page_int(params: dict, name: str, default: int) -> int:
         raise PageParamError(f"{name} must be an integer") from None
 
 
+def _parse_set_browse_params(params: dict):
+    """Return the /api/set-browse view params, or raise PageParamError.
+
+    Every unknown value is a 400 rather than a fallback to the default. A view
+    that quietly ignored `sort=collector` would hand back a grid in the wrong
+    order and look like the endpoint was broken; the caller can fix a typo, and
+    cannot fix a silent one.
+    """
+    from mtg_collector.db.set_browse import (
+        DEFAULT_SECTIONS,
+        FILTERS,
+        SECTIONS,
+        SORT_KEYS,
+        BrowseParams,
+    )
+
+    def _one(name: str, default: str, allowed) -> str:
+        value = params.get(name, [""])[0].strip() or default
+        if value not in allowed:
+            raise PageParamError(f"{name} must be one of {', '.join(allowed)}")
+        return value
+
+    raw_sections = params.get("sections", [""])[0].strip()
+    if raw_sections:
+        sections = tuple(s.strip() for s in raw_sections.split(",") if s.strip())
+        unknown = [s for s in sections if s not in SECTIONS]
+        if unknown or not sections:
+            raise PageParamError(f"sections must be a comma-separated subset of {', '.join(SECTIONS)}")
+    else:
+        sections = DEFAULT_SECTIONS
+
+    return BrowseParams(
+        sort=_one("sort", "number", SORT_KEYS),
+        order=_one("order", "asc", ("asc", "desc")),
+        filter=_one("filter", "all", FILTERS),
+        sections=sections,
+        q=params.get("q", [""])[0].strip(),
+    )
+
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -7484,71 +7524,46 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Not found"}, 404)
 
     def _api_set_browse(self, set_code: str, params: dict):
-        """Browse all printings in a set with owned/wanted annotations."""
+        """One set as a binder page: every printing, owned counts, prices."""
         from mtg_collector.db.models import SetRepository
         from mtg_collector.db.schema import init_db
+        from mtg_collector.db.set_browse import browse_set
 
         set_code = set_code.lower()
 
-        conn = self._get_conn()
-        init_db(conn)
-
-        set_repo = SetRepository(conn)
-
-        # Check if set is cached locally
-        if not set_repo.is_cards_cached(set_code):
-            conn.close()
-            self._send_json({"error": f"Set '{set_code}' not cached (run `mtg cache all` to populate)"}, 404)
+        try:
+            limit, offset = _parse_page_params(params)
+            view = _parse_set_browse_params(params)
+        except PageParamError as e:
+            self._send_json({"error": str(e)}, 400)
             return
 
-        query = """
-            SELECT p.printing_id, p.collector_number, p.rarity, p.image_uri, p.artist,
-                   p.frame_effects, p.border_color, p.full_art, p.promo, p.promo_types, p.finishes,
-                   card.name, card.type_line, card.mana_cost, card.colors, card.color_identity,
-                   c.id as collection_id, c.status, c.finish as owned_finish, c.condition,
-                   w.id as wishlist_id, w.priority
-            FROM printings p
-            JOIN cards card ON p.oracle_id = card.oracle_id
-            LEFT JOIN collection c ON p.printing_id = c.printing_id AND c.status = 'owned'
-            LEFT JOIN wishlist w ON (
-                w.printing_id = p.printing_id
-                OR (w.printing_id IS NULL AND w.oracle_id = p.oracle_id)
-            ) AND w.fulfilled_at IS NULL
-            WHERE p.set_code = ?
-            ORDER BY CAST(p.collector_number AS INTEGER), p.collector_number
-        """
-        cursor = conn.execute(query, (set_code,))
-        rows = cursor.fetchall()
+        conn = self._get_conn()
+        try:
+            init_db(conn)
 
-        results = []
-        for row in rows:
-            results.append({
-                "printing_id": row["printing_id"],
-                "collector_number": row["collector_number"],
-                "rarity": row["rarity"],
-                "image_uri": row["image_uri"],
-                "artist": row["artist"],
-                "name": row["name"],
-                "type_line": row["type_line"],
-                "mana_cost": row["mana_cost"],
-                "colors": row["colors"],
-                "color_identity": row["color_identity"],
-                "frame_effects": row["frame_effects"],
-                "border_color": row["border_color"],
-                "full_art": bool(row["full_art"]),
-                "promo": bool(row["promo"]),
-                "promo_types": row["promo_types"],
-                "finishes": row["finishes"],
-                "collection_id": row["collection_id"],
-                "status": row["status"],
-                "owned_finish": row["owned_finish"],
-                "condition": row["condition"],
-                "wishlist_id": row["wishlist_id"],
-                "wishlist_priority": row["priority"],
-            })
+            # A set with no cached card list has no binder to render, and
+            # inventing an empty one would read as a set you own none of.
+            if not SetRepository(conn).is_cards_cached(set_code):
+                self._send_json(
+                    {"error": f"Set '{set_code}' not cached (run `mtg cache all` to populate)"},
+                    404,
+                )
+                return
 
-        conn.close()
-        self._send_json(results)
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = 'price_sources'"
+            ).fetchone()
+            first_source = (row["value"] if row else "tcg,ck").split(",")[0]
+
+            payload = browse_set(
+                conn, set_code, view,
+                limit=limit, offset=offset, display_source=first_source,
+            )
+        finally:
+            conn.close()
+
+        self._send_json(payload)
 
     def _api_collection_add(self, data: dict):
         """Add a card to the collection manually."""

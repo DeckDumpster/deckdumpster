@@ -205,6 +205,38 @@ id, and the last day stored. `mtg data fetch-prices` rebuilds after each import;
 rebuilds on the request that first finds the table stale, because otherwise one added card
 would leave the chart on the slow route until the next 06:00 timer run.
 
+### Binder browse (`/api/set-browse/:set_code`)
+
+One set laid out as a binder page. `mtg_collector/db/set_browse.py` holds the query;
+`crack_pack_server._api_set_browse` is a thin handler over it. **One row per printing,
+never per copy** — `qty` is the total and `owned` breaks it down per finish, which is the
+pip row the grid draws.
+
+**Copies are pre-aggregated in a subquery, and that is not a style choice.** The obvious
+`LEFT JOIN collection c ON c.printing_id = p.printing_id AND c.status = 'owned'` fans out
+one row per copy (2.41x on `sos` against prod), and the `status` term also hands the
+planner a second index to choose between. **Nothing in this app runs `ANALYZE`**, so with
+no `sqlite_stat1` SQLite picks `idx_collection_status` and rescans every owned row once
+per printing: measured 1,141 ms against 25 ms once statistics exist. Aggregating first
+leaves `printing_id` as the only join term, so the plan does not depend on statistics that
+are not there — 44 ms with none at all. Do not "simplify" it back to a direct join.
+
+**Prices key on the printing's `finishes`, not on a copy's `c.finish`** the way
+`_ENRICH_JOINS` does. The pocket this view exists to show you is the one you have *not*
+filled, and it has no copy to take a finish from; a printing that exists in nonfoil is
+priced in nonfoil, a foil-only or etched-only one in foil.
+
+**Sections** are `base` | `extended` | `promo`, decided by `sets.base_set_size` and nothing
+else (see "Set sizes"). Promos are off by default. With `base_set_size` NULL the set is one
+contiguous run — everything non-promo is `base`, which is also every pre-2019 set's shape —
+and `owned_base`/`total_base` are **null**, not 0/0, so the UI hides the bar.
+
+**Completion counts are computed before `q`, `filter` and `sections`**, so the header meters
+do not move when the view is filtered. Both count printings, never copies.
+
+`limit` defaults to 250 and caps at `COLLECTION_LIMIT_MAX`; a bad `limit`, `sort`, `order`,
+`filter` or `sections` is a 400 via `PageParamError`, never a silent clamp or fallback.
+
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
 
