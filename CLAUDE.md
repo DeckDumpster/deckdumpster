@@ -106,7 +106,8 @@ cards (oracle_id PK)             — abstract card identity (name, colours, mana
             ├─ decks (id PK)     — named deck (format, sleeve, deck box, zones)
             └─ binders (id PK)   — named binder (colour, type)
 
-sets (set_code PK)               — set metadata, `cards_fetched_at` cache marker
+sets (set_code PK)               — set metadata, `cards_fetched_at` cache marker,
+                                   `base_set_size` / `total_set_size` (see Set sizes)
 collection_views (id PK)         — saved filters + column layout for the collection page
 ```
 
@@ -154,6 +155,34 @@ Default DB location: `~/.mtgc/collection.sqlite` (override: `--db` or `MTGC_DB`)
 All filtering is one Scryfall-style query bar (`?q=...`). Standard Scryfall keywords (`c`, `id`, `t`, `o`, `m`, `mv`, `pow`, `tou`, `loy`, `r`, `s`, `cn`, `a`, `ft`, `kw`, `f`, `year`, `layout`, `produces`, `is:`, `has:`) plus collection-only extensions (`status:`, `added:`, `price:`, `deck:`, `binder:`, `order:`, `direction:`, `is:unassigned` / `is:decked` / `is:bindered` / `is:wanted` / `is:unowned`). Default when no `status:` is present: `status:owned OR status:ordered`. `is:unowned` flips the query to a LEFT JOIN against `printings` so unowned cards appear (lets users add a card from the modal). Operators `:`, `=`, `!=`, `>`, `>=`, `<`, `<=` are accepted on numeric/date keywords; the autocomplete suggests both keywords and per-keyword values, with corpus-driven suggestions (artist names, set codes, year/month buckets present in the user's collection) served by `/api/search-suggest`. `added:` resolves dates in the browser's local timezone (the page sends `Intl.DateTimeFormat().resolvedOptions().timeZone` on every `/api/collection` request).
 
 Search compiler lives in `mtg_collector/search/`: `grammar.py` (tokeniser), `transformer.py` (parser → AST), `compiler.py` (AST → SQL), `keywords.py` (canonical name registry), `dates.py` (timezone-aware date parsing).
+
+### Set sizes
+
+`sets.base_set_size` and `sets.total_set_size` are stored, never derived, and populated at
+ingest only. `base_set_size` is MTGJSON's `baseSetSize` (where the base set ends and
+boosterfun begins); `total_set_size` is Scryfall's per-set `card_count`.
+
+**The boundary cannot be read off the treatment columns.** The obvious heuristic — plain
+integer collector number, `border_color='black'`, empty `frame_effects`, not promo — puts
+`fin`'s boundary at **#6**, because `frame_effects=["legendary"]` is a perfectly ordinary
+base-set frame. MTGJSON says **309**, and 309 is where borderless actually starts. Any rule
+built on `frame_effects` inherits that false positive.
+
+**A size is a boundary, not a count.** `fin` has `base_set_size = 309` but **311** printings
+at or below it, because suffixed numbers (`123a`, `123b`) sit inside the base range. Base
+completion counts printings at or below the boundary; using the boundary value as the
+denominator reads 309/309 on a binder with two empty pockets.
+
+**NULL is permanent and legitimate** for a set no source reports a size for (2 of the
+fixture's 192). The UI hides the completion bar rather than rendering 0/0 = NaN%. Nothing
+here writes NULL over a stored size, and nothing inserts a `sets` row that was not already
+cached.
+
+Both ingest paths populate the columns from data they already held — `mtg cache all` from
+the `card_count` it fetches to size its own backfill, `mtg data import` from the set objects
+it already walks. Neither runs on a timer, so an existing database is brought forward by
+`mtg data backfill-set-sizes` (one Scryfall `/sets` call plus local `AllPrintings.json`,
+batched, and idempotent: a second run writes zero rows). See `mtg_collector/db/set_sizes.py`.
 
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`

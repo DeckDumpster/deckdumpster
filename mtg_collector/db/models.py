@@ -33,6 +33,9 @@ class Set:
     released_at: Optional[str] = None
     digital: int = 0  # 1 if MTGO/Arena-only set
     cards_fetched_at: Optional[str] = None  # When full card list was cached
+    # Both nullable and permanently so for a set no source reports a size for.
+    base_set_size: Optional[int] = None   # MTGJSON baseSetSize: last base-set number
+    total_set_size: Optional[int] = None  # Scryfall card_count: printings in the set
 
 
 @dataclass
@@ -400,19 +403,30 @@ class SetRepository:
         self.conn = conn
 
     def upsert(self, s: Set) -> None:
-        """Insert or update a set."""
+        """Insert or update a set.
+
+        The sizes COALESCE the way cards_fetched_at does, because the two
+        sources fill different columns: a Scryfall upsert knows total_set_size
+        and nothing about base_set_size, and `mtg data import` is the reverse.
+        Assigning excluded directly would have each ingest path blank the
+        other's column on every run.
+        """
         self.conn.execute(
             """
-            INSERT INTO sets (set_code, set_name, set_type, released_at, digital, cards_fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO sets (set_code, set_name, set_type, released_at, digital,
+                              cards_fetched_at, base_set_size, total_set_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(set_code) DO UPDATE SET
                 set_name = excluded.set_name,
                 set_type = excluded.set_type,
                 released_at = excluded.released_at,
                 digital = excluded.digital,
-                cards_fetched_at = COALESCE(excluded.cards_fetched_at, sets.cards_fetched_at)
+                cards_fetched_at = COALESCE(excluded.cards_fetched_at, sets.cards_fetched_at),
+                base_set_size = COALESCE(excluded.base_set_size, sets.base_set_size),
+                total_set_size = COALESCE(excluded.total_set_size, sets.total_set_size)
             """,
-            (s.set_code, s.set_name, s.set_type, s.released_at, s.digital, s.cards_fetched_at),
+            (s.set_code, s.set_name, s.set_type, s.released_at, s.digital,
+             s.cards_fetched_at, s.base_set_size, s.total_set_size),
         )
 
     def get(self, set_code: str) -> Optional[Set]:
@@ -431,6 +445,8 @@ class SetRepository:
             released_at=row["released_at"],
             digital=row["digital"] if "digital" in row.keys() else 0,
             cards_fetched_at=row["cards_fetched_at"],
+            base_set_size=row["base_set_size"],
+            total_set_size=row["total_set_size"],
         )
 
     def get_by_name(self, name: str) -> Optional[Set]:
@@ -464,6 +480,8 @@ class SetRepository:
             released_at=row["released_at"],
             digital=row["digital"] if "digital" in row.keys() else 0,
             cards_fetched_at=row["cards_fetched_at"],
+            base_set_size=row["base_set_size"],
+            total_set_size=row["total_set_size"],
         )
 
     def exists(self, set_code: str) -> bool:

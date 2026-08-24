@@ -73,7 +73,10 @@ def cache_all(db_path: str):
     printing_repo = PrintingRepository(conn)
     api = ScryfallAPI()
 
-    # Step 1: Fetch and upsert all sets
+    # Step 1: Fetch and upsert all sets.
+    # This is also where total_set_size is populated, for every set at once:
+    # to_set_model() now keeps the card_count that Step 6 below reads to size
+    # its backfill, instead of that number being used once and dropped.
     print("Fetching set list from Scryfall...")
     all_sets = api.get_all_sets()
     print(f"  {len(all_sets)} sets found")
