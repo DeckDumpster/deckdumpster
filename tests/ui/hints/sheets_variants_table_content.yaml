@@ -9,7 +9,14 @@ fixture_data:
   product: "play"
   variant_count: 4
 notes: >
-  Load BLB play via deep link. Variants section is .section.open by
-  default. Verify .variants-table is visible inside it. Verify
-  .variant-pill elements exist. Verify status shows "8 sheets".
-  The table has columns: #, Probability, Contents.
+  Load BLB play via the deep link so the sheet render happens under the
+  page-load budget; do not navigate again inside the scenario, which pays
+  the whole 535 KB fetch and ~1000-card render a second time.
+  Wait on "8 sheets" first (5 s, page load): the deep link renders the
+  auto-selected first product (collector, 6 sheets) before switching to
+  play, and both renders paint .variants-table and .variant-pill, so any
+  assertion made before that wait can pass against collector's render.
+  #status is written after the section loop, so the count is what tells
+  the two apart. Then verify .variants-table is visible, .variant-pill
+  elements exist, and % values are shown. The table has columns:
+  #, Probability, Contents.
