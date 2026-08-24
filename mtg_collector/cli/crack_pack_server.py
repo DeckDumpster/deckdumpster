@@ -1155,6 +1155,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._serve_static("search-help.html")
         elif path == "/set-value":
             self._serve_static("set_value.html")
+        elif path == "/sets":
+            self._serve_static("sets.html")
         elif path.startswith("/sets/"):
             # /sets/:set_code → the binder grid. The set code is read from the
             # path by the page itself, the way /card/:set/:cn does it.

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sets</title>
+<link rel="stylesheet" href="/static/vendor/keyrune/keyrune.min.css">
+<link rel="stylesheet" href="/static/shared.css">
+<link rel="stylesheet" href="/static/sets.css">
+</head>
+<body>
+
+<div class="site-header">
+  <h1><a href="/" style="color:inherit;text-decoration:none;">DeckDumpster</a></h1>
+  <a href="/collection">Collection</a>
+  <a href="/decks">Decks</a>
+  <a href="/deck-builder">Build</a>
+  <a href="/binders">Binders</a>
+  <a href="/sealed">Sealed</a>
+</div>
+
+<div class="sets-controls">
+  <input type="text" id="set-filter" placeholder="Filter by set name or code" autocomplete="off" spellcheck="false">
+  <span class="sets-count" id="sets-count"></span>
+</div>
+
+<div class="sets-body" id="sets-body">
+  <div class="empty-state"><span class="spinner"></span> Loading sets…</div>
+</div>
+
+<script src="/static/shared.js"></script>
+<script src="/static/shared-card-table.js"></script>
+<script src="/static/sets.js"></script>
+</body>
+</html>

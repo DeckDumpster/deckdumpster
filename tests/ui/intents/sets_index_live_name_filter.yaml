@@ -1,0 +1,16 @@
+# Scenario: The set index filters live, in the browser, by name or code
+#
+# Related:
+#   issues: [de-k5o]
+#   pull_requests: []
+
+description: >
+  I type into the filter box at the top of /sets and the list narrows as I
+  type, with no page reload and no waiting. Typing a set's name keeps only
+  the sets whose name matches, and the blocks that lost every set disappear
+  rather than sitting there empty; the count next to the box tells me how
+  many of the total are showing, and each remaining block's header count
+  drops to match. Typing a set code works the same way, so I can reach a
+  set by "fin" as readily as by "Final Fantasy". If nothing matches I am
+  told so instead of being left with a blank page, and clearing the box
+  brings every set back.
