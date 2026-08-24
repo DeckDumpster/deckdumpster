@@ -1,0 +1,18 @@
+start_page: /sets
+involves:
+  - "div.set-meters inside each a.set-tile"
+  - "div.set-meter — one per drawn meter; label span.set-meter-label ('Set' or 'All')"
+  - "span.set-meter-bar > span.set-meter-fill, width set as a percentage"
+  - "span.set-meter-count — 'owned / total', e.g. '12 / 771'"
+fixture_data:
+  base_set_size: "NULL for all 18 cached sets, so total_base is NULL and no 'Set' meter is drawn"
+  meters_expected: "18 — exactly one 'All' meter per set, never two"
+  fdn: "Foundations owns 12 of 771 printings"
+notes: >
+  The base meter always renders before the All meter inside the same
+  div.set-meters, so '.set-meter + .set-meter' counts exactly the tiles
+  showing both. With the fixture's sizes all NULL that count must be 0 while
+  .set-meter itself is 18 — one meter per set, none of them a 0/0 bar.
+  1. Assert 18 a.set-tile and 18 div.set-meter. 2. Assert 0 for
+  '.set-meter + .set-meter'. 3. Assert 'NaN' appears nowhere on the page.
+  4. Assert Foundations' meter reads '12 / 771' and its fill element exists.
