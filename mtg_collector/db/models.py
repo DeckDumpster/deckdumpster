@@ -2918,7 +2918,19 @@ class BatchRepository:
         row = self.get_by_uuid(batch.batch_uuid)
         if row:
             return row["id"]
-        return self.create(batch)
+        try:
+            return self.create(batch)
+        except sqlite3.IntegrityError:
+            # Two clicks fast enough that both read no batch. The server is
+            # threaded and a binder pass is a run of clicks, so this is the
+            # one ordering the uuid has to survive: the loser of the race
+            # takes the winner's row rather than 500ing the add. Its INSERT
+            # waited on the winner's write lock, so by now the row is
+            # committed and visible.
+            row = self.get_by_uuid(batch.batch_uuid)
+            if row is None:
+                raise
+            return row["id"]
 
     def list_all(self, batch_type: Optional[str] = None) -> List[Dict[str, Any]]:
         # Order batches are represented as a peer top-level resource at

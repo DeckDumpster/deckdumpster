@@ -229,6 +229,41 @@ class TestGetOrCreate:
         assert first == second
         assert len(_batches(db_path)) == 1
 
+    def test_a_racing_first_add_takes_the_winners_row(self, db_path):
+        """The server is threaded and a binder pass is a run of clicks, so two
+        adds can both read no batch before either has written one. The loser's
+        INSERT then waits on the winner's write lock, wakes to a committed row
+        and violates UNIQUE(batch_uuid); it has to take that row rather than
+        500 the add. Keying on the uuid is only worth anything if a fast pass
+        cannot open two batches.
+
+        The stale read is injected rather than raced for: the ordering is real
+        but a threaded test of it would be timing-dependent, and this is the
+        branch that has to work when it happens.
+        """
+        conn, repo = self._repo(db_path)
+        won = repo.get_or_create(Batch(id=None, batch_uuid=UUID, batch_type="binder_click"))
+        conn.commit()
+
+        real_get_by_uuid = repo.get_by_uuid
+        stale = [True]
+
+        def one_stale_read(batch_uuid):
+            """The read the loser made before the winner committed."""
+            if stale:
+                stale.pop()
+                return None
+            return real_get_by_uuid(batch_uuid)
+
+        repo.get_by_uuid = one_stale_read
+
+        lost = repo.get_or_create(Batch(id=None, batch_uuid=UUID, batch_type="binder_click"))
+        conn.commit()
+        conn.close()
+
+        assert lost == won
+        assert len(_batches(db_path)) == 1
+
     def test_a_different_uuid_is_a_different_row(self, db_path):
         conn, repo = self._repo(db_path)
 
