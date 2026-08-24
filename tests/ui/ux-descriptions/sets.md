@@ -27,8 +27,10 @@ close to finishing?".
 collector-number order, at a caller-chosen number of cards per row, with owned pockets
 bright and unowned pockets dimmed. Under each card is a row of finish pips (NF / Foil /
 Etch), and **one click on a pip adds one copy of that finish** — no modal, no form, no
-refetch. The page exists to make reconciling a physical binder against the digital
-collection cost one click per card. It is deliberately not a faster search:
+refetch. Every add of a visit is filed under one batch, created lazily by the first
+click, so the whole pass is reviewable afterwards at `/batches/:id`. The page exists to
+make reconciling a physical binder against the digital collection cost one click per
+card. It is deliberately not a faster search:
 `/collection?q=s:fin is:unowned` already answers the query, but it does not lay the set
 out as a fixed grid or make adding one copy cheap.
 
@@ -90,6 +92,7 @@ rather than a link. The only in-app way out is the browser back button or a card
 | Cards-per-row count | `#col-count` | `<span>` | Read-only current column count |
 | Cards-per-row plus | `#col-plus` | `<button class="col-btn">` | Increments columns; disabled at 12 |
 | Status | `#status` | `<div>` | Read-only, right-aligned (`margin-left: auto`). "Loading…", then `"{N} printings"`. Gains class `error` (accent red) on a failed load |
+| Review link | `#batch-link` | `<a>` | "Review this pass →". `hidden` until the first add of the visit lands, then points at `/batches/{id}` for that visit's session batch |
 
 ### `/sets/:set_code` — grid (dynamically generated)
 
@@ -129,8 +132,14 @@ so a badge click links out instead of opening the modal.
    finish pip once.
 4. The pip fills immediately, the copy count on it rises, and — if the pocket was empty —
    the header meters advance by one. No refetch, no page movement.
-5. The `POST /api/collection` request follows in the background.
-6. The user works down the grid at one click per card.
+5. The `POST /api/collection` request follows in the background, carrying the visit's
+   session batch.
+6. On the first add a "Review this pass →" link appears in the header; every later add in
+   the same visit joins that same batch, and the link does not move.
+7. The user works down the grid at one click per card.
+8. Afterwards the whole pass is one reviewable batch at `/batches/{id}` — named for the
+   set, badged **Binder** — which is what makes an optimistic add safe: if client and
+   server ever drift, the pass is auditable rather than an untracked run of writes.
 
 ### Flow 3: Inspect a pocket
 
@@ -269,7 +278,14 @@ Driven by the data present on the row, not by flags:
 
 - `addOneCopy(tile, finish)` increments the matching `owned` entry and `card.qty` locally,
   bumps the meters if the pocket had been empty, and repaints the tile — **then** issues
-  `POST /api/collection` with `{printing_id, finish, source: 'binder'}`.
+  `POST /api/collection` with `{printing_id, finish, source: 'binder', batch}`.
+- `sessionBatch()` supplies that `batch`: `{batch_uuid, batch_type: 'binder_click', name:
+  "{set name} binder", set_code}`. The uuid is minted on the **first add** and reused for
+  the rest of the visit; the batch row is created server-side by the request that first
+  carries it (`BatchRepository.get_or_create`) and joined by every later one. Browsing,
+  filtering and paging post nothing, so they create no batch — the laziness is a
+  consequence of that, not a rule enforced anywhere. `batch_uuid` is UNIQUE, so two
+  clicks fast enough to race both end up in one batch rather than two.
 - Optimistic on purpose: a binder pass is a run of adds, and waiting on each one is what
   makes the four-click `/collection` flow unusable for it.
 - On failure the local state is reverted, the tile is repainted again, and a `.pip-error`
@@ -301,7 +317,7 @@ cannot say which finish it means.
 | `/api/sets/index` | GET | `/sets` | Page load | Bare JSON **array**, one object per cached set, newest release first |
 | `/api/settings` | GET | `/sets/:set_code` | Page load, before the first grid fetch | `{key: value}` over the whole `settings` table; only `price_sources` is read |
 | `/api/set-browse/:set_code` | GET | `/sets/:set_code` | Page load and every control change | Page envelope `{rows, total, limit, offset}` plus `set` and the four completion counts when `offset == 0` |
-| `/api/collection` | POST | `/sets/:set_code` | One click on a finish pip | The created entry, or `{error}` with a non-2xx status |
+| `/api/collection` | POST | `/sets/:set_code` | One click on a finish pip | `{id, batch_id}` for the created entry, or `{error}` with a non-2xx status |
 
 ### `/api/sets/index` row
 
