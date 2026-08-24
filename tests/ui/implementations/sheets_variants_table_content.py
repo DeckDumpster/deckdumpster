@@ -7,11 +7,18 @@ table with probability values and pill-shaped sheet labels.
 
 
 def steps(harness):
-    # Navigate directly to BLB play via deep link
-    harness.navigate("/sheets#set=blb&product=play")
+    # start_page: /sheets#set=blb&product=play — auto-navigated by test runner.
 
-    # Wait for sections to render
-    harness.wait_for_visible(".section-header")
+    # Wait for the play render before asserting anything. The deep link loads
+    # two products: loadProducts() auto-checks the first one (collector,
+    # 6 sheets) and fires a sheet load for it, then setSelectedProduct()
+    # switches to play and fires a second. Both paint .variants-table and
+    # .variant-pill, so an assertion made before this wait can be satisfied by
+    # collector's render. #status is written last, after the ~1000-card section
+    # loop, so the count is the only thing that tells the two renders apart.
+    # 5 s (as in the sibling sheets scenarios) because this is the page load,
+    # not an interaction — every assertion below keeps the 500 ms budget.
+    harness.wait_for_text("8 sheets", timeout=5_000)
 
     # Variants section is expanded by default -- verify table is visible
     harness.assert_visible(".variants-table")
@@ -21,10 +28,5 @@ def steps(harness):
 
     # Verify probability percentages are shown (table has % values)
     harness.assert_text_present("%")
-
-    # Verify status text shows sheet count. The status text is set after
-    # the sheets render, so wait for it explicitly rather than racing the
-    # 500ms default in assert_text_present.
-    harness.wait_for_text("8 sheets", timeout=3000)
 
     harness.screenshot("final_state")
