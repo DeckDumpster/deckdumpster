@@ -1,0 +1,137 @@
+/* sets.css — the /sets index. Pairs with sets.js; loads after shared.css. */
+
+.sets-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px 0;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.sets-controls input[type="text"] {
+  flex: 1;
+  max-width: 420px;
+}
+
+.sets-count {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.sets-body {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px 24px 48px;
+}
+
+/* One block per set_type, in the order the types first appear in the
+   newest-first response — so the group holding the newest set leads. */
+.set-group { margin-bottom: 28px; }
+
+.set-group[hidden] { display: none; }
+
+.set-group h2 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-bottom: 6px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.set-group h2 .group-count {
+  color: var(--text-secondary);
+  font-weight: 400;
+  letter-spacing: 0;
+  margin-left: 8px;
+}
+
+.set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.set-tile {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.set-tile:hover { border-color: var(--accent); }
+
+.set-tile[hidden] { display: none; }
+
+.set-tile .set-symbol {
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--text-primary);
+  width: 1.6em;
+  text-align: center;
+}
+
+.set-tile .set-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-tile .set-sub {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The meters span the full tile width, under the symbol as well. */
+.set-meters {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.set-meter {
+  display: grid;
+  grid-template-columns: 3.2rem 1fr auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+}
+
+.set-meter-label { color: var(--text-secondary); }
+
+.set-meter-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+/* display:block, not the span default: an inline box ignores `height`, which
+   left the fill zero-tall inside a bar that had a height of its own. */
+.set-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.set-meter-fill.complete { background: var(--success); }
+
+.set-meter-count {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}

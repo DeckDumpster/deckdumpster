@@ -1,0 +1,22 @@
+start_page: /sets
+involves:
+  - "input#set-filter, placeholder 'Filter by set name or code'"
+  - "span#sets-count — '18 sets' unfiltered, 'N of 18 sets' while filtering"
+  - "a.set-tile gains the hidden attribute when it does not match"
+  - "section.set-group gains hidden when all its tiles do; its span.group-count is rewritten to the visible number"
+  - "div#sets-no-match — 'No set matches that filter.', hidden until nothing matches"
+fixture_data:
+  foundations_matches: "2 — Foundations (fdn, core) and Foundations Jumpstart (j25, draft_innovation)"
+  fin_matches: "1 — Final Fantasy (fin, expansion), matched on the set code"
+  total: "18 cached sets"
+notes: >
+  Filtering is synchronous on the input event, so no waits are needed.
+  assert_text_absent counts DOM nodes regardless of visibility and a
+  filtered-out tile stays in the DOM, so filtered-away content is checked
+  with assert_hidden and ':not([hidden])' counts, never with text absence.
+  1. Fill #set-filter with 'foundations'; assert 2 visible tiles, '2 of 18
+  sets', both Foundations tiles visible, and the expansion group hidden.
+  2. Fill 'fin'; assert 1 visible tile and that it is the fin tile — a code
+  match. 3. Fill 'zzzz'; assert 0 visible tiles and #sets-no-match visible.
+  4. Fill ''; assert 18 visible tiles, #sets-no-match hidden, and the count
+  back to the unfiltered form.

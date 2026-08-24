@@ -1,0 +1,15 @@
+# Scenario: The set index lists every cached set, grouped by type, newest first
+#
+# Related:
+#   issues: [de-k5o]
+#   pull_requests: []
+
+description: >
+  I navigate to /sets and see every set the app has cached, laid out in
+  blocks by set type. The block holding the most recently released set
+  comes first, and inside each block the sets run newest-first, so the
+  Expansion block leads with Lorwyn Eclipsed. Each set shows its own
+  keyrune set symbol next to its name, with the set code and release date
+  underneath, and the whole tile is a link to that set's binder page at
+  /sets/:set_code. A count in the controls row tells me how many sets
+  there are.
