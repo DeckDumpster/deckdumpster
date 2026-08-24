@@ -1,0 +1,12 @@
+# Scenario: Clicking a card's price badge link does not also open the zoom overlay
+#
+# Related:
+#   issues: [de-1ag]
+#
+# Prerequisites: none — BLB play sheets come from the test fixture.
+
+description: >
+  On the sheets page, each card tile carries SF / CK price badges that are
+  links to the vendor's page. When I click one of those badges I expect only
+  the link to be followed — the card's zoom overlay must stay closed, because
+  I asked for one action and should get one.

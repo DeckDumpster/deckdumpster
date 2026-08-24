@@ -1,0 +1,20 @@
+start_page: "/sheets#set=blb&product=play"
+involves:
+  - "card tiles .sheet-card (whole tile is the zoom click target)"
+  - "price badge links .sheet-card a.badge.link (SF / CK, target=_blank)"
+  - "zoom overlay #zoom-overlay (gains .active when showZoom() runs)"
+  - "section headers .section-header (click to expand)"
+  - "status #status showing sheet/card counts (8 sheets for blb play)"
+fixture_data:
+  set: "blb"
+  product: "play"
+notes: >
+  Load BLB play sheets via the deep link so the render lands under the
+  page-load budget, then expand the "Common" section — same opening as
+  sheets_card_zoom_overlay, which covers the positive case (clicking the
+  card image does open the overlay). Here, click the first
+  .sheet-card a.badge.link instead. The badge is an <a target="_blank">, so
+  the browser opens a background tab; the assertion is on the original page,
+  which must not have #zoom-overlay.active. assert_hidden passes both when
+  the overlay element is absent from the DOM and when it lacks .active, and
+  fails when showZoom() has run — which is exactly the bug (de-1ag).

@@ -702,7 +702,10 @@ async function loadSheets() {
           priceSources: _settings.price_sources,
         });
         const cardEl = tile.firstElementChild;
-        cardEl.addEventListener('click', () => showZoom(card.image_uri));
+        cardEl.addEventListener('click', (e) => {
+          if (e.target.closest('a')) return;
+          showZoom(card.image_uri);
+        });
         grid.appendChild(cardEl);
       }
 
