@@ -24,6 +24,7 @@ All navigation links are organized into three groups within a `.nav-row` flex co
 |-----------|------|-------------|
 | Crack-a-Pack | `/crack` | Open virtual boosters with prices |
 | Explore Sheets | `/sheets` | Booster structure and pull rates |
+| Browse Sets | `/sets` | Every set as a binder grid, with completion |
 | Set Value | `/set-value` | Value distribution across sets |
 
 ### Add Cards Group
