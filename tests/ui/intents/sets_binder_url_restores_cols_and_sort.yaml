@@ -1,0 +1,11 @@
+# Scenario: The view is the URL — cols and sort survive a reload
+#
+# Related:
+#   issues: [de-emz]
+#   pages: [sets]
+
+description: >
+  I widen the grid and switch the sort to name, and the address bar picks both
+  up. Reloading that address gives me the same view back: the same cards per
+  row, the same sort. The defaults stay out of the URL, so the plain address is
+  still the plain view.

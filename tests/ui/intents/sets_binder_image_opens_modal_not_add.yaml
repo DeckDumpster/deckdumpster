@@ -1,0 +1,12 @@
+# Scenario: Clicking the card art opens the modal and adds nothing
+#
+# Related:
+#   issues: [de-emz]
+#   pages: [sets]
+
+description: >
+  Browsing the pockets I still need, I click a card's artwork and the card
+  modal opens on that card. Nothing is added to my collection by the click:
+  the pip under the art is still empty and the completion meter has not moved.
+  Only the pips add; the art is the largest target on the page and is
+  deliberately not one.

@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="/static/favicon.ico" type="image/x-icon">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browse Set</title>
+<link rel="stylesheet" href="/static/vendor/keyrune/keyrune.min.css">
+<link rel="stylesheet" href="/static/shared-card-tile.css">
+<link rel="stylesheet" href="/static/shared-card-modal.css">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+header {
+  background: #16213e;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 2px solid #0f3460;
+}
+
+header h1 {
+  font-size: 1.3rem;
+  color: #e94560;
+  white-space: nowrap;
+}
+
+header h1 .set-code {
+  color: #888;
+  font-size: 0.9rem;
+  font-weight: 400;
+  margin-left: 6px;
+}
+
+/* --- Completion meters ------------------------------------------------ */
+
+/* Two, both counting printings, both computed before q/filter — with base
+   completion alone the header would read 309/311 while 599 tiles are on
+   screen, and the extended printings would be counted by nothing. */
+.meters {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.meter {
+  min-width: 150px;
+}
+
+.meter-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.75rem;
+  color: #888;
+  margin-bottom: 3px;
+}
+
+.meter-label .count {
+  color: #e0e0e0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #0f3460;
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  background: #e94560;
+  width: 0;
+}
+
+/* A set no source reports a base size for gets no bar at all, rather than
+   0/0 rendered as NaN%. */
+.meter.hidden { display: none; }
+
+/* --- Controls --------------------------------------------------------- */
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+select, button, input[type="search"] {
+  padding: 8px 14px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+select:focus, button:focus, input[type="search"]:focus { outline: 2px solid #e94560; }
+
+input[type="search"] {
+  width: 200px;
+  cursor: text;
+}
+
+button.toggle {
+  background: #1a1a2e;
+  border-color: #0f3460;
+  color: #888;
+  font-weight: 600;
+}
+button.toggle:hover { border-color: #e94560; color: #e0e0e0; }
+button.toggle.on {
+  background: #e94560;
+  border-color: #e94560;
+  color: #fff;
+}
+
+.pill-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.col-controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.col-btn {
+  width: 28px; height: 28px;
+  border: 1px solid #0f3460;
+  background: #16213e;
+  color: #888;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  padding: 0;
+}
+.col-btn:first-child { border-radius: 6px 0 0 6px; }
+.col-btn:last-child { border-radius: 0 6px 6px 0; }
+.col-btn + .col-btn { border-left: none; }
+.col-btn:hover { border-color: #e94560; color: #e0e0e0; }
+.col-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.col-count {
+  width: 28px; height: 28px;
+  border: 1px solid #0f3460; border-left: none; border-right: none;
+  background: #16213e;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+#status {
+  font-size: 0.85rem;
+  color: #888;
+  margin-left: auto;
+}
+
+#status.error { color: #e94560; }
+
+/* --- Content ---------------------------------------------------------- */
+
+.content { padding: 12px; }
+
+.section { margin-bottom: 16px; }
+
+.section-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid #0f3460;
+  margin-bottom: 10px;
+}
+
+.section-header h2 {
+  font-size: 1rem;
+  color: #e0e0e0;
+}
+
+.section-header .meta {
+  font-size: 0.8rem;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty-state {
+  color: #555;
+  font-style: italic;
+  font-size: 0.9rem;
+  padding: 32px;
+  text-align: center;
+}
+
+/* A pip add that the server rejected: the local increment is rolled back and
+   the failure is said on the tile it happened on, not page-wide. */
+.pip-error {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #e94560;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-top: 2px;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span id="set-name">Loading…</span><span class="set-code" id="set-code"></span></h1>
+
+  <div class="meters">
+    <div class="meter hidden" id="meter-base">
+      <div class="meter-label"><span>Set</span><span class="count" id="meter-base-count"></span></div>
+      <div class="meter-bar"><div class="meter-fill" id="meter-base-fill"></div></div>
+    </div>
+    <div class="meter hidden" id="meter-all">
+      <div class="meter-label"><span>All printings</span><span class="count" id="meter-all-count"></span></div>
+      <div class="meter-bar"><div class="meter-fill" id="meter-all-fill"></div></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <input type="search" id="q" placeholder="Search this set…" autocomplete="off">
+
+    <select id="filter">
+      <option value="all">All pockets</option>
+      <option value="have">Have</option>
+      <option value="need">Need</option>
+    </select>
+
+    <select id="sort">
+      <option value="number">Number</option>
+      <option value="name">Name</option>
+      <option value="rarity">Rarity</option>
+      <option value="price">Price</option>
+      <option value="qty">Copies</option>
+    </select>
+    <button type="button" class="toggle" id="order" title="Sort direction">Asc</button>
+
+    <div class="pill-group" id="sections">
+      <button type="button" class="toggle" data-section="base">Base</button>
+      <button type="button" class="toggle" data-section="extended">Extended</button>
+      <button type="button" class="toggle" data-section="promo">Promos</button>
+    </div>
+
+    <div class="col-controls">
+      <button type="button" class="col-btn" id="col-minus">&minus;</button>
+      <span class="col-count" id="col-count">6</span>
+      <button type="button" class="col-btn" id="col-plus">+</button>
+    </div>
+  </div>
+
+  <div id="status"></div>
+</header>
+
+<div class="content" id="content">
+  <div class="empty-state">Loading…</div>
+</div>
+
+<script src="/static/shared.js"></script>
+<script src="/static/shared-card-table.js"></script>
+<script src="/static/shared-card-tile.js"></script>
+<script src="/static/shared-card-modal.js"></script>
+<script>
+/* /sets/:set_code — one set laid out as a binder page.
+
+   The whole set arrives in one request: a set is bounded (779 printings is the
+   largest real one) where a collection is not, so this asks for limit=1000 and
+   renders the lot, instead of /collection's virtual scroller.
+
+   URL IS THE STATE. Every control writes back to the query string with its
+   default elided, so a view is a link and a reload restores it. */
+
+const SET_CODE = decodeURIComponent(location.pathname.split('/')[2] || '').toLowerCase();
+
+const PAGE_LIMIT = 1000;
+const COL_MIN = 1, COL_MAX = 12;
+
+/* Defaults, elided from the URL. `sections` is a set rather than a string so
+   toggling one is not string surgery; it serialises back in SECTION_ORDER. */
+const DEFAULTS = {cols: 6, sort: 'number', order: 'asc', q: '', filter: 'all',
+                  sections: 'base,extended'};
+
+const SECTION_ORDER = ['base', 'extended', 'promo'];
+const SECTION_TITLES = {base: 'Base set', extended: 'Extended', promo: 'Promos'};
+
+const SORT_KEYS = ['number', 'name', 'rarity', 'price', 'qty'];
+const FILTERS = ['all', 'have', 'need'];
+
+const statusEl = document.getElementById('status');
+const content = document.getElementById('content');
+const qInput = document.getElementById('q');
+const filterSel = document.getElementById('filter');
+const sortSel = document.getElementById('sort');
+const orderBtn = document.getElementById('order');
+const sectionsEl = document.getElementById('sections');
+
+let _settings = {};
+let _rows = [];
+let _setName = '';
+/* The two header meters. Held on the page rather than re-read from each
+   response so a pip add can move them without a refetch. */
+let _completion = {};
+
+const modal = createCardModal();
+
+// --- View state -------------------------------------------------------
+
+/* cards-per-row is the one control that is also remembered across sets, the
+   same way its four siblings are (collectionGridCols, crackPackGridCols,
+   exploreGridCols, recentGridCols). The URL wins when it says something. */
+function storedCols() {
+  const n = parseInt(localStorage.getItem('setsGridCols'), 10);
+  return Number.isInteger(n) && n >= COL_MIN && n <= COL_MAX ? n : DEFAULTS.cols;
+}
+
+function readUrl() {
+  const p = new URLSearchParams(location.search);
+  const cols = parseInt(p.get('cols'), 10);
+  const sections = (p.get('sections') || DEFAULTS.sections)
+    .split(',').filter(s => SECTION_ORDER.includes(s));
+  return {
+    cols: Number.isInteger(cols) && cols >= COL_MIN && cols <= COL_MAX ? cols : storedCols(),
+    sort: SORT_KEYS.includes(p.get('sort')) ? p.get('sort') : DEFAULTS.sort,
+    order: p.get('order') === 'desc' ? 'desc' : DEFAULTS.order,
+    q: p.get('q') || DEFAULTS.q,
+    filter: FILTERS.includes(p.get('filter')) ? p.get('filter') : DEFAULTS.filter,
+    sections: sections.length ? sections : DEFAULTS.sections.split(','),
+  };
+}
+
+let view = readUrl();
+
+function writeUrl() {
+  const p = new URLSearchParams();
+  const sections = SECTION_ORDER.filter(s => view.sections.includes(s)).join(',');
+  const current = {...view, sections};
+  for (const key of ['cols', 'sort', 'order', 'q', 'filter', 'sections']) {
+    if (String(current[key]) !== String(DEFAULTS[key])) p.set(key, current[key]);
+  }
+  const qs = p.toString();
+  history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+}
+
+// --- Cards per row ----------------------------------------------------
+
+function applyGridCols() {
+  document.documentElement.style.setProperty('--grid-cols', view.cols);
+  document.getElementById('col-count').textContent = view.cols;
+  document.getElementById('col-minus').disabled = view.cols <= COL_MIN;
+  document.getElementById('col-plus').disabled = view.cols >= COL_MAX;
+  localStorage.setItem('setsGridCols', view.cols);
+}
+
+document.getElementById('col-minus').addEventListener('click', () => {
+  if (view.cols > COL_MIN) { view.cols--; applyGridCols(); writeUrl(); }
+});
+document.getElementById('col-plus').addEventListener('click', () => {
+  if (view.cols < COL_MAX) { view.cols++; applyGridCols(); writeUrl(); }
+});
+
+// --- Controls ---------------------------------------------------------
+
+function syncControls() {
+  qInput.value = view.q;
+  filterSel.value = view.filter;
+  sortSel.value = view.sort;
+  orderBtn.textContent = view.order === 'desc' ? 'Desc' : 'Asc';
+  orderBtn.classList.toggle('on', view.order === 'desc');
+  for (const btn of sectionsEl.querySelectorAll('button')) {
+    btn.classList.toggle('on', view.sections.includes(btn.dataset.section));
+  }
+  applyGridCols();
+}
+
+let _qTimer = null;
+qInput.addEventListener('input', () => {
+  clearTimeout(_qTimer);
+  _qTimer = setTimeout(() => { view.q = qInput.value.trim(); writeUrl(); load(); }, 250);
+});
+
+filterSel.addEventListener('change', () => { view.filter = filterSel.value; writeUrl(); load(); });
+sortSel.addEventListener('change', () => { view.sort = sortSel.value; writeUrl(); load(); });
+
+orderBtn.addEventListener('click', () => {
+  view.order = view.order === 'desc' ? 'asc' : 'desc';
+  syncControls();
+  writeUrl();
+  load();
+});
+
+sectionsEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-section]');
+  if (!btn) return;
+  const section = btn.dataset.section;
+  const next = view.sections.includes(section)
+    ? view.sections.filter(s => s !== section)
+    : view.sections.concat([section]);
+  // The endpoint rejects an empty `sections`, and a binder with no sections is
+  // not a view anyone asked for — the last one on stays on.
+  if (!next.length) return;
+  view.sections = next;
+  syncControls();
+  writeUrl();
+  load();
+});
+
+// --- Loading ----------------------------------------------------------
+
+async function load() {
+  statusEl.classList.remove('error');
+  statusEl.textContent = 'Loading…';
+
+  const p = new URLSearchParams({
+    limit: PAGE_LIMIT,
+    sort: view.sort,
+    order: view.order,
+    filter: view.filter,
+    sections: SECTION_ORDER.filter(s => view.sections.includes(s)).join(','),
+  });
+  if (view.q) p.set('q', view.q);
+
+  const res = await fetch(`/api/set-browse/${encodeURIComponent(SET_CODE)}?${p}`);
+  const body = await res.json();
+  if (!res.ok) {
+    statusEl.classList.add('error');
+    statusEl.textContent = body.error || `HTTP ${res.status}`;
+    content.innerHTML = `<div class="empty-state">${esc(body.error || 'Could not load this set.')}</div>`;
+    return;
+  }
+
+  _rows = body.rows;
+  if (body.set) {
+    _setName = body.set.set_name || SET_CODE.toUpperCase();
+    document.title = `${_setName} — Browse Set`;
+    document.getElementById('set-name').textContent = _setName;
+    document.getElementById('set-code').textContent = SET_CODE.toUpperCase();
+    _completion = {
+      owned_base: body.owned_base, total_base: body.total_base,
+      owned_all: body.owned_all, total_all: body.total_all,
+    };
+    renderMeters();
+  }
+
+  render();
+  // The whole set fits in one page today -- the largest real one is 779
+  // printings against a 1000 cap -- so this line normally just counts them.
+  // If a set ever outgrows the cap, say so rather than render a short grid
+  // under a full count, which reads as a set with cards missing.
+  const shown = _rows.length < body.total ? `, showing ${_rows.length}` : '';
+  statusEl.textContent =
+    `${body.total} printing${body.total === 1 ? '' : 's'}${shown}`;
+}
+
+function renderMeters() {
+  setMeter('base', _completion.owned_base, _completion.total_base);
+  setMeter('all', _completion.owned_all, _completion.total_all);
+}
+
+/* A null pair is a set no source reports a base size for. Hide the bar rather
+   than render 0/0 as NaN%. */
+function setMeter(name, owned, total) {
+  const el = document.getElementById(`meter-${name}`);
+  if (owned == null || total == null) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  document.getElementById(`meter-${name}-count`).textContent = `${owned} / ${total}`;
+  const pct = total > 0 ? (owned / total) * 100 : 0;
+  document.getElementById(`meter-${name}-fill`).style.width = `${pct}%`;
+}
+
+// --- Rendering --------------------------------------------------------
+
+function render() {
+  content.innerHTML = '';
+  if (!_rows.length) {
+    content.innerHTML = '<div class="empty-state">No printings match this view.</div>';
+    return;
+  }
+
+  // Sections are rendered in binder order whatever the sort is; the sort
+  // orders the tiles inside each one, and the server has already applied it.
+  for (const section of SECTION_ORDER) {
+    const rows = _rows.filter(r => r.section === section);
+    if (!rows.length) continue;
+
+    const el = document.createElement('div');
+    el.className = 'section';
+    el.dataset.section = section;
+
+    const header = document.createElement('div');
+    header.className = 'section-header';
+    header.innerHTML = `<h2>${SECTION_TITLES[section]}</h2>`
+      + `<span class="meta">${rows.length} printing${rows.length === 1 ? '' : 's'}</span>`;
+    el.appendChild(header);
+
+    const grid = document.createElement('div');
+    grid.className = 'card-grid';
+    for (const card of rows) grid.appendChild(buildTile(card));
+    el.appendChild(grid);
+
+    content.appendChild(el);
+  }
+}
+
+function buildTile(card) {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = buildCardTile(card, {
+    showQty: true,
+    showBadges: true,
+    showPips: true,
+    packSetCode: SET_CODE,
+    priceSources: _settings.price_sources,
+    attrs: `data-printing-id="${esc(card.printing_id)}"`,
+  });
+  const el = wrap.firstElementChild;
+  el._card = card;
+  return el;
+}
+
+/* Repaint one tile in place after its counts changed, so an add costs no
+   refetch. */
+function repaintTile(el) {
+  const card = el._card;
+  const fresh = buildTile(card);
+  el.replaceWith(fresh);
+  return fresh;
+}
+
+// --- Interaction ------------------------------------------------------
+
+/* Two targets on one tile, deliberately separate elements: the pips are their
+   own <button>s (one-click add), the art opens the modal and adds nothing.
+   Click-to-add on the art was considered and rejected — it makes the largest
+   target on the page destructive-ish and cannot say which finish it means. */
+content.addEventListener('click', (e) => {
+  if (e.target.closest('a')) return;
+
+  const tile = e.target.closest('.sheet-card');
+  if (!tile) return;
+
+  const pip = e.target.closest('.finish-pip');
+  if (pip) { addOneCopy(tile, pip.dataset.finish); return; }
+
+  if (e.target.closest('.sheet-card-img-wrap')) {
+    modal.show({...tile._card, set_name: _setName});
+  }
+});
+
+/* One click on a pip adds one copy of that finish. Optimistic: the count moves
+   first and the request follows, because a binder pass is a run of adds and
+   waiting on each one is what makes the existing four-click flow unusable for
+   it. A failure rolls the increment back and says so on the tile. */
+async function addOneCopy(tile, finish) {
+  const card = tile._card;
+  const entry = card.owned.find(o => o.finish === finish);
+  if (!entry) return;
+
+  const wasEmpty = card.qty === 0;
+  entry.qty += 1;
+  card.qty += 1;
+  if (wasEmpty) bumpCompletion(card, +1);
+  tile = repaintTile(tile);
+
+  let ok = false;
+  let message = '';
+  try {
+    const res = await fetch('/api/collection', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({printing_id: card.printing_id, finish, source: 'binder'}),
+    });
+    const body = await res.json();
+    ok = res.ok;
+    message = body.error || `HTTP ${res.status}`;
+  } catch (err) {
+    message = 'Network error';
+  }
+
+  if (ok) return;
+
+  entry.qty -= 1;
+  card.qty -= 1;
+  if (wasEmpty) bumpCompletion(card, -1);
+  tile = repaintTile(tile);
+
+  const note = document.createElement('div');
+  note.className = 'pip-error';
+  note.textContent = message;
+  tile.appendChild(note);
+}
+
+/* A pocket that just went from empty to filled (or back) moves the meters by
+   one. They still count printings, never copies: a second copy of a card you
+   already had fills nothing new. */
+function bumpCompletion(card, delta) {
+  if (_completion.owned_all != null) _completion.owned_all += delta;
+  if (card.section === 'base' && _completion.owned_base != null) {
+    _completion.owned_base += delta;
+  }
+  renderMeters();
+}
+
+// --- Init -------------------------------------------------------------
+
+syncControls();
+writeUrl();
+
+fetch('/api/settings')
+  .then(r => r.json())
+  .then(s => { _settings = s; })
+  .then(load);
+</script>
+
+</body>
+</html>

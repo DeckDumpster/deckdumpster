@@ -1,0 +1,28 @@
+start_page: "/sets/spg?cols=3"
+involves:
+  - "card grid .card-grid (grid-template-columns follows --grid-cols)"
+  - "tiles .sheet-card, unowned ones carrying .unowned"
+  - "cards-per-row readout #col-count"
+  - "section heading .section-header h2"
+  - "status #status showing the printing count"
+fixture_data:
+  set: "spg"
+  set_name: "Special Guests"
+  total_printings: 165
+  owned_printings: 1
+  owned_card: "Condemn"
+  cols: 3
+notes: >
+  spg is the smallest cached set in the fixture (165 printings) and holds
+  exactly one owned card, so the owned/unowned contrast is a count of one
+  against 164 and the page renders quickly.
+  The fixture records no base_set_size for any set, so every printing lands in
+  the single "Base set" section and the Set completion meter stays hidden —
+  that is the documented NULL degradation, not a missing feature. Assert on the
+  "All printings" meter only.
+  Cards-per-row is checked on the computed grid rather than the readout alone:
+  getComputedStyle(.card-grid).gridTemplateColumns resolves to one track per
+  column, so a count of 3 proves the layout, where #col-count only proves the
+  label. The dim is checked the same way — the computed filter on
+  .sheet-card.unowned .sheet-card-img-wrap carries grayscale — because a class
+  name is not a visible difference.
