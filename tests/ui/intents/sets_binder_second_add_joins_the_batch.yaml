@@ -1,0 +1,12 @@
+# Scenario: A second pip add in the same visit joins the first one's batch
+#
+# Related:
+#   issues: [de-vxl]
+#   pages: [sets, batches]
+
+description: >
+  Reconciling a binder, I click a pip on one card and then a pip on another.
+  The link to review the pass still points at the same batch after the second
+  add as it did after the first, and the batches page shows one Binder batch
+  holding both cards rather than one batch per click. A binder pass is one
+  reviewable batch, however many pockets I fill in it.

@@ -1,0 +1,29 @@
+start_page: "/sets/spg?filter=need"
+involves:
+  - "in-set search #q, sort #sort, direction toggle #order — browsing only"
+  - "review link #batch-link, hidden until the first add lands"
+  - "finish pips .finish-pip, one per finish, the binder's add target"
+  - "/batches list .batch-card, .batch-name, .batch-count, .batch-type-badge"
+fixture_data:
+  set: "spg"
+  set_name: "Special Guests"
+  needed_printings: 164
+  first_needed_card: "Lord of Atlantis"
+  search_term: "Atlantis"
+  search_matches: 1
+  batch_name: "Special Guests binder"
+  existing_batches: 2
+  existing_binder_batches: 0
+notes: >
+  filter=need leaves only empty pockets, so the first tile's first pip is an
+  unambiguous add target.
+  The browsing half is asserted twice over: #batch-link stays hidden through a
+  sort, a search and a direction toggle, and the batches page afterwards holds
+  exactly ONE Binder batch with exactly ONE card — had browsing opened batches
+  of its own there would be several.
+  The fixture ships two Corner batches, so the Binder count is read off the
+  type badges rather than off the raw .batch-card count. The badge text is
+  exactly "Binder"; the batch NAME also contains the word, so match on the
+  badge element, not on page text.
+  Per-test DB restore removes the batch and the copy, so this leaves nothing
+  behind.

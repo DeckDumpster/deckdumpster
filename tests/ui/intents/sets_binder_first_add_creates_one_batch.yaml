@@ -1,0 +1,12 @@
+# Scenario: The first pip add of a visit opens one batch; browsing opens none
+#
+# Related:
+#   issues: [de-vxl]
+#   pages: [sets, batches]
+
+description: >
+  I browse a set's empty pockets, sorting and searching my way around it
+  without adding anything, and nothing is recorded — no link to review a pass
+  appears while I am only looking. Then I click one finish pip. A link to
+  review the pass appears, and on the batches page there is now exactly one
+  Binder batch, named for the set I am browsing, holding the one card I added.
