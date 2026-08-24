@@ -2903,6 +2903,23 @@ class BatchRepository:
         ).fetchone()
         return dict(row) if row else None
 
+    def get_or_create(self, batch: "Batch") -> int:
+        """Return the id of the batch with this uuid, creating it if absent.
+
+        The binder grid's session batch has no moment that owns its creation —
+        a page visit that adds nothing must leave no batch behind — so the
+        first add carrying the uuid creates it and every later one joins it.
+        `batch_uuid` is UNIQUE, which is what makes the identity the uuid and
+        not the request.
+
+        An existing row's metadata is left alone: the batch was described when
+        it was created, and a later add is not a rename.
+        """
+        row = self.get_by_uuid(batch.batch_uuid)
+        if row:
+            return row["id"]
+        return self.create(batch)
+
     def list_all(self, batch_type: Optional[str] = None) -> List[Dict[str, Any]]:
         # Order batches are represented as a peer top-level resource at
         # /orders, so they're excluded from the generic batches list. If a

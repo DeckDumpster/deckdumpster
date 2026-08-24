@@ -170,11 +170,30 @@ button.toggle.on {
   font-variant-numeric: tabular-nums;
 }
 
+/* Appears with the first add that lands, not on page load — before that there
+   is no batch to review. */
+#batch-link {
+  font-size: 0.8rem;
+  color: #e94560;
+  text-decoration: none;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+  padding: 6px 12px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+#batch-link:hover { border-color: #e94560; }
+#batch-link[hidden] { display: none; }
+
 #status {
   font-size: 0.85rem;
   color: #888;
   margin-left: auto;
 }
+
+/* Two things claim the right-hand end of the header; only the first of them
+   should push. */
+#batch-link:not([hidden]) + #status { margin-left: 0; }
 
 #status.error { color: #e94560; }
 
@@ -270,6 +289,8 @@ button.toggle.on {
       <button type="button" class="col-btn" id="col-plus">+</button>
     </div>
   </div>
+
+  <a id="batch-link" href="/batches" hidden>Review this pass →</a>
 
   <div id="status"></div>
 </header>
@@ -567,6 +588,40 @@ content.addEventListener('click', (e) => {
   }
 });
 
+/* The session batch — every add of this page visit, filed under one batch so a
+   whole binder pass is reviewable at /batches/:id afterwards. That review is
+   what makes an optimistic add safe: if client and server ever drift, the pass
+   is auditable rather than an untracked run of writes.
+
+   It is LAZY, and the laziness is server-side. The uuid is minted on the first
+   add; the row is created by the request that first carries it and joined by
+   every later one (the uuid is the batch's identity — `batch_uuid` is UNIQUE).
+   So browsing, filtering and paging create no batch, because they post
+   nothing, and a rapid run of clicks cannot race two batches into existence
+   the way a create-then-add pair would. One pip click stays one request. */
+let _batchUuid = null;
+let _batchId = null;
+
+function sessionBatch() {
+  if (!_batchUuid) _batchUuid = crypto.randomUUID();
+  return {
+    batch_uuid: _batchUuid,
+    batch_type: 'binder_click',
+    name: `${_setName || SET_CODE.toUpperCase()} binder`,
+    set_code: SET_CODE,
+  };
+}
+
+/* The batch is only reachable once it exists, so the link appears with the
+   first add that lands rather than sitting dead on page load. */
+function showBatchLink(batchId) {
+  if (batchId == null || _batchId === batchId) return;
+  _batchId = batchId;
+  const link = document.getElementById('batch-link');
+  link.href = `/batches/${batchId}`;
+  link.hidden = false;
+}
+
 /* One click on a pip adds one copy of that finish. Optimistic: the count moves
    first and the request follows, because a binder pass is a run of adds and
    waiting on each one is what makes the existing four-click flow unusable for
@@ -588,11 +643,17 @@ async function addOneCopy(tile, finish) {
     const res = await fetch('/api/collection', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({printing_id: card.printing_id, finish, source: 'binder'}),
+      body: JSON.stringify({
+        printing_id: card.printing_id,
+        finish,
+        source: 'binder',
+        batch: sessionBatch(),
+      }),
     });
     const body = await res.json();
     ok = res.ok;
     message = body.error || `HTTP ${res.status}`;
+    if (ok) showBatchLink(body.batch_id);
   } catch (err) {
     message = 'Network error';
   }
