@@ -1,0 +1,24 @@
+start_page: "/sets/spg?filter=need"
+involves:
+  - "finish pips .finish-pip on two different .sheet-card tiles"
+  - "review link #batch-link — its href is the batch's identity"
+  - "/batches list .batch-count, .batch-type-badge"
+fixture_data:
+  set: "spg"
+  set_name: "Special Guests"
+  needed_printings: 164
+  first_card: "Lord of Atlantis"
+  second_card: "Malcolm, Keen-Eyed Navigator"
+  batch_name: "Special Guests binder"
+  existing_binder_batches: 0
+notes: >
+  Both adds happen in ONE page visit — no navigation between them — because the
+  batch is scoped to the visit: the page mints a uuid on the first add and the
+  server creates the batch for it, so a second add carrying the same uuid joins
+  rather than creates.
+  #batch-link's href is read after each add. Identical hrefs is the in-page
+  proof that no second batch was opened; the batches page then confirms it from
+  the server's side, one Binder batch holding 2 cards.
+  Click the pips on two DIFFERENT tiles so the second add cannot be mistaken
+  for a repeat of the first.
+  Per-test DB restore removes the batch and both copies.

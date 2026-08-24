@@ -7611,8 +7611,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(payload)
 
     def _api_collection_add(self, data: dict):
-        """Add a card to the collection manually."""
+        """Add a card to the collection manually.
+
+        An optional `batch` descriptor — `{batch_uuid, batch_type, name,
+        set_code}` — files the new copy under a batch, creating that batch on
+        the first add that carries the uuid and joining it on every later one.
+        The binder grid's session batch works this way: browsing posts nothing
+        and so creates nothing, and one pip click is still one request.
+        """
         from mtg_collector.db.models import (
+            Batch,
+            BatchRepository,
             CollectionEntry,
             CollectionRepository,
             WishlistRepository,
@@ -7629,12 +7638,37 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         purchase_price = data.get("purchase_price")
         source = data.get("source", "manual")
 
+        # Both halves of the descriptor are required when it is present: the
+        # uuid is the batch's identity, and a missing type would file the copy
+        # under the schema's 'corner' default and mislabel it forever.
+        batch_spec = data.get("batch")
+        if batch_spec is not None:
+            batch_uuid = (batch_spec.get("batch_uuid") or "").strip()
+            batch_type = (batch_spec.get("batch_type") or "").strip()
+            if not batch_uuid:
+                self._send_json({"error": "batch.batch_uuid is required"}, 400)
+                return
+            if not batch_type:
+                self._send_json({"error": "batch.batch_type is required"}, 400)
+                return
+
         if purchase_price is not None:
             purchase_price = float(purchase_price)
 
         conn = self._get_conn()
         try:
             init_db(conn)
+
+            batch_id = None
+            batch_repo = BatchRepository(conn)
+            if batch_spec is not None:
+                batch_id = batch_repo.get_or_create(Batch(
+                    id=None,
+                    batch_uuid=batch_uuid,
+                    name=batch_spec.get("name"),
+                    batch_type=batch_type,
+                    set_code=batch_spec.get("set_code"),
+                ))
 
             collection_repo = CollectionRepository(conn)
             entry = CollectionEntry(
@@ -7644,8 +7678,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 acquired_at=acquired_at,
                 purchase_price=purchase_price,
                 source=source,
+                batch_id=batch_id,
             )
             new_id = collection_repo.add(entry)
+            if batch_id is not None:
+                batch_repo.increment_card_count(batch_id, 1)
 
             # Auto-fulfill matching wishlist entry
             fulfilled_wishlist_id = None
@@ -7678,6 +7715,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         result = {"id": new_id}
         if fulfilled_wishlist_id is not None:
             result["fulfilled_wishlist_id"] = fulfilled_wishlist_id
+        if batch_id is not None:
+            result["batch_id"] = batch_id
         self._send_json(result)
 
     def _api_collection_copies(self, params: dict):
