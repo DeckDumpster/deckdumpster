@@ -24,8 +24,13 @@ with its set count and scrolls to it; each group is collapsible, and only the to
 types by curated rank start expanded. Each set is a tile showing its keyrune symbol,
 name, code, release date, and up to two completion meters — how much of the base set is
 owned, and how much of the whole printing catalogue for that set is owned. It is the
-entry point to the binder, and on its own it answers "which sets am I close to
-finishing?".
+entry point to the binder.
+
+A **Sort** select beside the filter switches that layout for the one question the
+grouping cannot answer: "which sets am I close to finishing?". The sets closest to
+finished are spread across every set type, so **Completion** dissolves the groups (and
+the rail, which has nothing left to jump between) into a single flat grid, drops the
+sets nothing is owned from, and runs the rest fullest-first.
 
 **`/sets/:set_code`** lays one set out as a binder page: every printing in the set, in
 collector-number order, at a caller-chosen number of cards per row, with owned pockets
@@ -81,9 +86,11 @@ rather than a link. The only in-app way out is the browser back button or a card
 | Element | ID | Type | Description |
 |---------|----|------|-------------|
 | Set filter | `#set-filter` | `<input type="text">` | Placeholder "Filter by set name or code". `autocomplete="off"`, `spellcheck="false"`. Filters entirely in the browser — it never re-queries the server. Matches a case-insensitive substring of `"{set_name} {set_code}"` |
-| Result count | `#sets-count` | `<span>` | Read-only. `"{N} sets"`, or `"{shown} of {N} sets"` while a filter is active |
-| Group heading | `.set-group-header` | `<h2 role="button" tabindex="0">` | The collapse control — click, Enter or Space toggles `.open` on the section and flips `aria-expanded`. Holds a rotating caret (a `::before`, so the heading's text still starts with the label), the set-type label, a `.group-count` and a `.group-owned` roll-up, both of which track the filter |
-| Jump rail | `#sets-rail` | `<aside>` | `aria-label="Jump to set type"`. One `.rail-row` button per rendered group, in the same order as the sections |
+| Sort | `#sets-sort` | `<select>` | Labelled "Sort". `released` ("Release date", default) / `completion` ("Completion"). Changing it re-renders the body and clears the rail; it never re-queries the server |
+| Result count | `#sets-count` | `<span>` | Read-only. `"{N} sets"`, or `"{shown} of {N} sets"` while a filter is active. *N* is the current sort's population — every cached set in Release date, only the owned ones in Completion |
+| Group heading | `.set-group-header` | `<h2 role="button" tabindex="0">` | Release date mode only. The collapse control — click, Enter or Space toggles `.open` on the section and flips `aria-expanded`. Holds a rotating caret (a `::before`, so the heading's text still starts with the label), the set-type label, a `.group-count` and a `.group-owned` roll-up, both of which track the filter |
+| Group heading (Completion) | `.set-group h2` | `<h2>` | Not interactive — Completion has one section, not one per type. Reads "Owned sets" plus a `.group-count` that tracks the filter |
+| Jump rail | `#sets-rail` | `<aside>` | `aria-label="Jump to set type"`. One `.rail-row` button per rendered group, in the same order as the sections. Empty in Completion mode — nothing to jump between |
 | Jump rail row | `.rail-row` | `<button>` | `data-set-type` names its group. Carries `.rail-label` and a `.rail-count` that tracks the filter; gains `.is-empty` (dimmed) when the filter left its group with nothing |
 | Set tile | `.set-tile` | `<a>` | Navigates to the binder for that set. Hover raises the border to the accent colour |
 | No-match empty state | `#sets-no-match` | `<div>` | Hidden unless the filter matches zero sets |
@@ -160,6 +167,17 @@ links to the same page.
 6. Count reads `"{shown} of {N} sets"`. Clearing the filter hands every group back to the
    expanded/collapsed state the user left it in.
 7. User clicks a tile and lands on `/sets/{code}`.
+
+### Flow 1b: Find the set nearest to complete
+
+1. From `/sets`, user picks "Completion" in the Sort select.
+2. The set-type sections vanish; one `.set-group[data-sort="completion"]` grid replaces
+   them, headed "Owned sets" with a count.
+3. Only sets with `owned_all > 0` are in it — at prod scale 133 of 993 — ordered by
+   `owned_all / total_all` descending, so the fullest set leads.
+4. Any filter text stays applied across the switch, and the count's denominator becomes
+   the owned population.
+5. Picking "Release date" again restores the sections and every set.
 
 ### Flow 2: Reconcile a physical binder (the reason the feature exists)
 
@@ -270,14 +288,17 @@ links to the same page.
 - `set_type` is title-cased for display (`draft_innovation` → "Draft Innovation") rather
   than mapped through a hand-kept label table, because the types come straight from
   Scryfall and there are dozens of them.
-- The rail and the sections are rendered from that one group array, so a rail row cannot
-  name a section that is not on the page and their counts cannot drift apart. A type with
-  no cached sets has no row, because it would jump nowhere; at prod scale all 24 ranked
-  types are present.
-- Each group carries its own tiles, its own search haystacks and its own owned flags,
-  paired by position within the group. There is no page-wide running index over the tiles
-  — that shape only held while every group contributed all of its tiles in document
-  order, which is exactly what a collapsed or removed section breaks.
+- `wireControls()` picks the renderer from `#sets-sort`'s value: `renderGroupedMode()` or
+  `renderCompletionMode()`. Each renders its own DOM and returns its own filter `apply`
+  pass; `wireControls` holds that in one variable, reassigned on every sort change, so the
+  filter input's single listener always drives whichever render is current instead of a
+  fresh listener stacking on each switch.
+- Grouped mode: the rail and the sections are rendered from one group array, so a rail row
+  cannot name a section that is not on the page and their counts cannot drift apart. A type
+  with no cached sets has no row, because it would jump nowhere; at prod scale all 24
+  ranked types are present. Each group carries its own tiles, its own search haystacks and
+  its own owned flags, paired by position within the group — there is no page-wide running
+  index over the tiles, which is exactly what a collapsed or removed section would break.
 
 ### `/sets` — collapsing
 
@@ -294,6 +315,26 @@ links to the same page.
 - The rail has no `overflow` of its own. If 24 rows stop fitting a laptop, the accepted
   fix is folding promo/token/memorabilia/minigame into one "Other products" row — not a
   scrollbar.
+
+### `/sets` — the completion sort
+
+- `renderCompletionMode()` clears `#sets-rail` — nothing to jump between — filters to
+  `owned_all > 0`, sorts by `owned_all / total_all` descending, and emits one
+  `<section class="set-group" data-sort="completion">`.
+- Sets nothing is owned from are **dropped from the DOM**, not hidden: they are not sets
+  you are close to finishing, and at prod scale the 860 of them would tie for last and
+  bury the answer. That filter also makes the division safe — a set cannot own a printing
+  it has none of, so `total_all` is at least 1 for every row that survives.
+- The sort is stable, so sets tied on percentage (1 / 1 and 100 / 100 are both 100%) keep
+  the response's newest-first order among themselves.
+- Filtering in this mode is one flat pass (`wireFlatFilter()`) over the single section's
+  tiles — no groups, no rail sync, the thing grouped mode's per-group filter exists for.
+- A sort change re-renders `#sets-body` and rebuilds the filter's `apply` pass. The input
+  and the select live outside `#sets-body` and are wired exactly once by `wireControls`, so
+  the filter text survives the switch and no listener is left behind on the grid that was
+  replaced.
+- No backend change: `owned_all` / `total_all` are already in the `/api/sets/index`
+  payload, so there is no second query surface to keep in step.
 
 ### `/sets` — filtering
 
@@ -540,11 +581,13 @@ Contract points the page relies on:
 | State | Appearance |
 |-------|------------|
 | **Loading** | Body is a single `.empty-state` with a spinner and "Loading sets…". `#sets-count` is blank |
-| **Loaded** | A 220 px sticky `#sets-rail` and, beside it, one `.set-group` per set type — a heading with a caret, count and owned roll-up over a responsive `.set-grid` of `minmax(280px, 1fr)` tiles. `#sets-count` reads `"{N} sets"` |
+| **Loaded (Release date)** | A 220 px sticky `#sets-rail` and, beside it, one `.set-group` per set type — a heading with a caret, count and owned roll-up over a responsive `.set-grid` of `minmax(280px, 1fr)` tiles. `#sets-count` reads `"{N} sets"` |
 | **Group collapsed** | Caret points right, `.set-grid` is `display: none`, tiles stay in the DOM. Everything below the top four ranked types starts here |
 | **Group expanded** | Caret rotated 90°, grid shown |
 | **Rail row** | Label left, count right, dimmed to 35% opacity when the filter left the group with nothing |
 | **Narrow (≤700px)** | One column: the rail goes static above the grid and its rows wrap as bordered chips instead of standing 24 tall; tiles go one per row |
+| **Completion sort** | `#sets-rail` empty. A single `.set-group[data-sort="completion"]`, headed "Owned sets" with the owned count, holding one `.set-grid` of the same tiles fullest-first. No `[data-set-type]` section is present |
+| **Completion, nothing owned** | The grid is replaced by "Nothing is owned from any cached set yet."; `#sets-no-match` stays hidden, because the filter is not what emptied it |
 | **Tile** | Keyrune symbol at 2× on the left, spanning both text rows; set name (bold, ellipsised on overflow); sub-line `"{CODE} · {released_at}"`, or `"{CODE} · unreleased"` when `released_at` is null; then the meters across the full tile width |
 | **Meter** | 3.2rem label ("Set" / "All"), a 6 px bar filled to the rounded percentage in the accent colour, and a tabular `"{owned} / {total}"` |
 | **Meter complete** | Fill switches from accent to the success colour at 100% |

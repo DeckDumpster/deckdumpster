@@ -1,0 +1,22 @@
+start_page: /sets
+involves:
+  - "input#set-filter, placeholder 'Filter by set name or code'"
+  - "select#sets-sort — 'Release date' / 'Completion'"
+  - "span#sets-count — 'N of M sets' while filtering, M being the current sort's population"
+  - "div#sets-no-match — 'No set matches that filter.'"
+fixture_data:
+  foundations_matches: "2 in Release date — Foundations (fdn) and Foundations Jumpstart (j25)"
+  foundations_matches_completion: "1 — only fdn is owned, so j25 is not in the Completion population"
+  populations: "18 sets in Release date, 9 in Completion"
+notes: >
+  This is the interaction the two controls have to survive: the sort re-renders
+  the whole grid, and the filter box is not part of what it re-renders.
+  1. Type 'foundations' into #set-filter; assert 2 visible tiles and
+  '2 of 18 sets'.
+  2. Select Completion. The box still reads 'foundations' and the filter is
+  still applied — assert 1 visible tile, that it is fdn, and '1 of 9 sets'.
+  The denominator moved because the population did; the filter did not reset.
+  3. Type 'zzzz'; assert 0 visible tiles and #sets-no-match visible — the
+  filter is still live on the re-rendered grid, not on the grid it replaced.
+  4. Clear the box; assert the 9 tiles of the Completion population and
+  '9 sets'.

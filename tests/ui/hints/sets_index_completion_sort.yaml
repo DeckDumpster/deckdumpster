@@ -1,0 +1,29 @@
+start_page: /sets
+involves:
+  - "select#sets-sort, labelled Sort — options 'Release date' (default) and 'Completion'"
+  - "section.set-group[data-set-type=...] — the five type blocks, present only in Release date"
+  - "section.set-group[data-sort=completion] — the single flat grid, present only in Completion"
+  - "its h2 reads 'Owned sets' with span.group-count holding 9"
+  - "span#sets-count — '18 sets' in Release date, '9 sets' in Completion"
+fixture_data:
+  cached_sets: "18, in 5 set_type blocks"
+  owned_sets: "9 — fdn, dsk, otj, blb, mh3, spg, woe, lci, mkm"
+  fullest: "fdn, Foundations, 12 of 771 — the first tile in Completion"
+  emptiest_shown: "mkm, 2 of 440 — still ahead of the 9 sets holding nothing"
+notes: >
+  The sort switch is synchronous on the select's change event, so no waits are
+  needed. Use select_by_label('#sets-sort', 'Completion') — the option labels
+  are what a user reads, and the values ('completion' / 'released') are the
+  internal branch.
+  1. In the default view assert 18 tiles, 5 [data-set-type] sections, and no
+  [data-sort=completion] section — this is what dissolving has to undo.
+  2. Select Completion; assert 0 [data-set-type] sections and exactly 1
+  section.set-group, headed 'Owned sets'.
+  3. Assert 9 visible tiles and '9 sets' — the nine sets nothing is owned from
+  are dropped from the grid, not merely sorted last.
+  4. Assert the first tile is /sets/fdn (fullest first) and that /sets/j25 —
+  cached, nothing owned — has no tile at all.
+  5. Select Release date; assert the 5 blocks and all 18 tiles are back.
+  Tiles the filter hides keep the hidden attribute, so count with
+  ':not([hidden])'; tiles the sort drops are removed from the DOM entirely,
+  which is why step 4 can assert a plain element count of 0.
