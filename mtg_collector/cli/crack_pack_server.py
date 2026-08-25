@@ -18,6 +18,7 @@ from pathlib import Path
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse
 
+from mtg_collector.cli.page_routes import PageRoute, match_page_route
 from mtg_collector.db.connection import get_db_path
 from mtg_collector.services.pack_generator import PackGenerator
 
@@ -1177,47 +1178,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         path = _normalize_page_path(parsed.path)
         params = parse_qs(parsed.query)
 
-        if path == "/":
-            self._serve_homepage()
-        elif path == "/crack":
-            self._serve_static("crack_pack.html")
-        elif path == "/sheets":
-            self._serve_static("explore_sheets.html")
-        elif path == "/collection":
-            self._serve_static("collection.html")
-        elif path == "/sealed":
-            self._serve_static("sealed.html")
-        elif path == "/deck-builder":
-            self._serve_static("deck_builder.html")
-        elif path.startswith("/deck-builder/"):
-            self._serve_static("deck_builder.html")
-        elif path == "/decks":
-            self._serve_static_with_data("decks.html", self._decks_init_data)
-        elif path.startswith("/decks/"):
-            self._serve_static("deck_builder.html")
-        elif path == "/binders":
-            self._serve_static("binders.html")
-        elif path == "/search-help":
-            self._serve_static("search-help.html")
-        elif path == "/set-value":
-            self._serve_static("set_value.html")
-        elif path == "/sets":
-            self._serve_static("sets.html")
-        elif path.startswith("/sets/"):
-            # /sets/:set_code → the binder grid. The set code is read from the
-            # path by the page itself, the way /card/:set/:cn does it.
-            self._serve_static("set_browse.html")
-        elif path.startswith("/card/"):
-            # /card/:set/:cn → card detail page
-            self._serve_static("card_detail.html")
-        elif path == "/upload":
-            self._serve_static("upload.html")
-        elif path == "/recent":
-            self._serve_static("recent.html")
-        elif path == "/process":
-            self._serve_static("recent.html")
-        elif path == "/disambiguate":
-            self._serve_static("disambiguate.html")
+        page = match_page_route(path)
+        if page is not None:
+            self._serve_page(page)
         elif path == "/api/sets":
             self._api_sets()
         elif path == "/api/sets/index":
@@ -1265,13 +1228,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path.startswith("/api/set-browse/"):
             set_code = path[len("/api/set-browse/"):]
             self._api_set_browse(set_code, params)
-        elif path == "/ingest-corners":
-            self._serve_static("ingest_corners.html")
-        elif path in ("/batches", "/corner-batches"):
-            self._serve_static("batches.html")
-        elif path.startswith("/batches/"):
-            # /batches/:id → batch detail page (JS reads pathname)
-            self._serve_static("batch_detail.html")
         elif path in ("/api/batches", "/api/corner-batches"):
             self._api_batches_list(params)
         elif (path.startswith("/api/batches/") or path.startswith("/api/corner-batches/")) and path.endswith("/cards"):
@@ -1281,17 +1237,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_batch_cards(int(bid))
             else:
                 self._send_json({"error": "Not found"}, 404)
-        elif path == "/ingestor-ids":
-            self._serve_static("ingest_ids.html")
-        elif path == "/ingestor-order":
-            self._serve_static("ingest_order.html")
-        elif path == "/import-csv":
-            self._serve_static("import_csv.html")
-        elif path == "/orders":
-            self._serve_static("orders.html")
-        elif path.startswith("/orders/"):
-            # /orders/:id → order detail page (JS reads pathname)
-            self._serve_static("order_detail.html")
         elif path == "/api/orders":
             self._api_orders_list()
         elif path.startswith("/api/orders/") and path.endswith("/cards"):
@@ -1955,8 +1900,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         ".svg": "image/svg+xml",
     }
 
-    def _serve_homepage(self):
-        self._serve_static("index.html")
+    def _serve_page(self, route: PageRoute):
+        """Serve one page from the route table (see cli/page_routes.py)."""
+        if route.init_data is None:
+            self._serve_static(route.template)
+        else:
+            self._serve_static_with_data(route.template, getattr(self, route.init_data))
 
     def _write_static_response(self, content: bytes, content_type: str,
                                 cache_control: str | None = None):

@@ -67,10 +67,11 @@ def test_every_parent_route_owns_its_trailing_slash(path, expected):
 
 
 def test_the_homepage_is_not_normalised_away():
-    handler = _bare_handler("/")
-    with patch.object(cps.CrackPackHandler, "_serve_homepage") as home:
-        handler.do_GET()
-    home.assert_called_once()
+    """`_normalize_page_path` must never turn `/` into `""` -- an empty path
+    would fall through every route in the table (see de-j19: routing is a
+    single PAGE_ROUTES table now, `/` has no dedicated serve method to patch,
+    so this asserts what actually gets served)."""
+    assert _page_served("/") == "index.html"
 
 
 def test_a_query_string_does_not_defeat_the_normalisation():

@@ -23,7 +23,6 @@ assert it is to size a viewport at it. That is a browser fixture's job, not a
 container scenario's.
 """
 
-import inspect
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -33,6 +32,7 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 from mtg_collector.cli import crack_pack_server as cps
+from mtg_collector.cli.page_routes import match_page_route
 
 STATIC = Path(cps.__file__).resolve().parent.parent / "static"
 
@@ -60,12 +60,21 @@ def test_sets_route_serves_the_page():
 
 
 def test_sets_route_does_not_swallow_the_set_code_page():
-    """`/sets/:set_code` is a separate page (de-k5o's item 7), so the index's
-    branch must be an exact match — `startswith` here would serve the index for
-    every set and the binder grid would never be reachable."""
-    source = inspect.getsource(cps.CrackPackHandler.do_GET)
-    assert 'elif path == "/sets":' in source
-    assert 'path.startswith("/sets")' not in source
+    """`/sets/:set_code` is a separate page (de-k5o's item 7), so `/sets` must
+    resolve as an exact match in the route table — a prefix match here would
+    serve the index for every set and the binder grid would never be
+    reachable. Routing moved from an if/elif chain to `page_routes.py`'s
+    PAGE_ROUTES (de-j19), so the invariant is now asserted against that table
+    directly rather than against do_GET's source text."""
+    index_route = match_page_route("/sets")
+    assert index_route is not None
+    assert index_route.template == "sets.html"
+    assert not index_route.parametrized
+
+    browse_route = match_page_route("/sets/lea")
+    assert browse_route is not None
+    assert browse_route.template == "set_browse.html"
+    assert browse_route.parametrized
 
 
 def test_page_assets_exist():
