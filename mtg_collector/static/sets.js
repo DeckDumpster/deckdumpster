@@ -195,7 +195,12 @@ function renderCompletionMode(sets) {
   // both 100% — keep the response's newest-first order among themselves.
   owned.sort((a, b) => b.owned_all / b.total_all - a.owned_all / a.total_all);
 
-  body.innerHTML = '<section class="set-group" data-sort="completion">'
+  // `.open` is what makes `.set-grid` visible at all (sets.css:177) -- grouped
+  // mode's collapse mechanism, borrowed here even though this section never
+  // collapses. Without it the grid stays `display: none` and every tile
+  // renders with a real bounding box of nothing, present in the DOM but
+  // invisible to anyone checking rather than counting.
+  body.innerHTML = '<section class="set-group open" data-sort="completion">'
     + `<h2>Owned sets<span class="group-count">${owned.length}</span></h2>`
     + `<div class="set-grid">${owned.map(renderTile).join('')}</div>`
     + '</section>'
