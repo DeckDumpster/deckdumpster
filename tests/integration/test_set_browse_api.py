@@ -196,7 +196,21 @@ class TestBadParams:
         assert "error" in body
 
     def test_an_uncached_set_is_still_a_404(self, api):
+        """The cache message is the right answer for a code that could name a
+        set and does not, and it stays that answer."""
         status, body = api.get("/api/set-browse/zzz")
 
         assert status == 404
         assert "not cached" in body["error"]
+        assert "mtg cache all" in body["error"]
+
+    def test_an_empty_code_is_a_400_that_does_not_blame_the_cache(self, api):
+        """`/api/set-browse/` is a URL with no set code in it, so nothing is
+        uncached.  Answering "run `mtg cache all` to populate" names a cause
+        that is plausible, trusted and wrong, and sends the reader to the
+        catalogue while the fault is in the URL."""
+        status, body = api.get("/api/set-browse/")
+
+        assert status == 400, body
+        assert "cache" not in body["error"].lower()
+        assert "set code" in body["error"].lower()

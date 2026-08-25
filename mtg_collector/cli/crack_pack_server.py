@@ -1018,6 +1018,27 @@ COLLECTION_LIMIT_DEFAULT = 250
 COLLECTION_LIMIT_MAX = 1000
 
 
+def _normalize_page_path(path: str) -> str:
+    """Drop a trailing slash from a page path: `/sets/` is `/sets`.
+
+    Every page route here is a pair -- an exact match for the parent (`/sets`,
+    `/decks`, `/orders`) and a prefix match for the child (`/sets/:code`,
+    `/decks/:id`) -- and a trailing slash falls to the child with an empty
+    name.  `/sets/` served the binder grid for a set whose code was `""`, which
+    rendered as a set you own nothing from.  A trailing slash is not a request
+    for a child called nothing, so it is stripped once here rather than guarded
+    at each of the pairs.
+
+    API paths are left exactly as they arrive.  They are built by our own JS
+    rather than typed, and `/api/set-browse/` has to keep reaching its handler
+    so the answer is a 400 naming the empty code -- normalising it away would
+    turn that into a bare 404.
+    """
+    if path.startswith("/api/"):
+        return path
+    return path.rstrip("/") or "/"
+
+
 class PageParamError(ValueError):
     """A limit/offset the caller must fix. Surfaced as a 400, never clamped."""
 
@@ -1041,6 +1062,31 @@ def _page_int(params: dict, name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         raise PageParamError(f"{name} must be an integer") from None
+
+
+#: A set code as Scryfall and MTGJSON both write it: lowercase alphanumeric.
+#: Length is deliberately unbounded -- codes have grown from three characters
+#: to six and a cap here would reject a real set as malformed.
+_SET_CODE_RE = re.compile(r"[a-z0-9]+")
+
+
+def _parse_set_code(raw: str) -> str:
+    """Return the canonical set code, or raise PageParamError.
+
+    "Not cached (run `mtg cache all` to populate)" is the right answer only for
+    a code that could name a set and does not.  `/sets/` asked for the empty
+    code and got that message, which names a plausible wrong cause: it sends
+    the reader to the catalogue -- a fetch, an import, a backfill -- while the
+    fault is entirely in the URL.  An error that is trusted and wrong costs
+    more than a generic one, so a code that cannot name a set is a 400 about
+    the code and says nothing about the cache.
+    """
+    code = raw.strip().lower()
+    if not _SET_CODE_RE.fullmatch(code):
+        raise PageParamError(
+            f"set code must be a non-empty alphanumeric code, got {raw!r}"
+        )
+    return code
 
 
 def _parse_set_browse_params(params: dict):
@@ -1128,7 +1174,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        path = parsed.path
+        path = _normalize_page_path(parsed.path)
         params = parse_qs(parsed.query)
 
         if path == "/":
@@ -7574,9 +7620,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         from mtg_collector.db.schema import init_db
         from mtg_collector.db.set_browse import browse_set
 
-        set_code = set_code.lower()
-
         try:
+            set_code = _parse_set_code(set_code)
             limit, offset = _parse_page_params(params)
             view = _parse_set_browse_params(params)
         except PageParamError as e:
