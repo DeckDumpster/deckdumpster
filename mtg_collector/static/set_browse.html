@@ -385,9 +385,15 @@ const PAGE_LIMIT = 1000;
 const COL_MIN = 1, COL_MAX = 12;
 
 /* Defaults, elided from the URL. `sections` is a set rather than a string so
-   toggling one is not string surgery; it serialises back in SECTION_ORDER. */
+   toggling one is not string surgery; it serialises back in SECTION_ORDER.
+
+   All three sections are on by default, matching DEFAULT_SECTIONS on the
+   server: the header meters count every printing in the set, so a section the
+   page declined to ask for made them disagree with the grid beneath them. The
+   pills dismiss a section by choice; the meters do not follow, because they
+   measure the set rather than the view. */
 const DEFAULTS = {cols: 6, sort: 'number', order: 'asc', q: '', filter: 'all',
-                  sections: 'base,extended'};
+                  sections: 'base,extended,promo'};
 
 const SECTION_ORDER = ['base', 'extended', 'promo'];
 const SECTION_TITLES = {base: 'Base set', extended: 'Extended', promo: 'Promos'};

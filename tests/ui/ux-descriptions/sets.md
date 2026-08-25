@@ -149,7 +149,8 @@ links to the same page.
 
 ### Flow 2: Reconcile a physical binder (the reason the feature exists)
 
-1. `/sets/fin` loads. Base and Extended sections render; Promos are off by default.
+1. `/sets/fin` loads. Base, Extended and Promos all render — every section is on by
+   default, so the grid holds exactly as many tiles as the "All printings" meter counts.
 2. Owned pockets are bright, unowned pockets are greyed and dimmed.
 3. For each card the user physically holds but the app does not, they click the matching
    finish pip once.
@@ -196,10 +197,11 @@ links to the same page.
 
 1. User picks "Need" from the pocket filter → refetch; only empty pockets render.
 2. User types in the in-set search → 250 ms after the last keystroke, refetch.
-3. User toggles the "Promos" pill on → refetch; a Promos section appears below Extended.
+3. User toggles the "Promos" pill **off** → refetch; the Promos section disappears. The
+   pills dismiss a section by choice — nothing is withheld from the default view.
 4. **Through all of this the header meters do not move** — completion is computed before
    `q`, `filter` and `sections` are applied, so the numbers describe the set rather than
-   the current view.
+   the current view. A dismissed section is therefore a gap the user chose.
 
 ### Flow 5: Resize the grid
 
@@ -214,8 +216,8 @@ links to the same page.
    `history.replaceState` — so no control adds a history entry.
 2. `/sets/fin?filter=need&sort=price&order=desc&cols=8` is a link; opening it restores
    that exact view before the first fetch.
-3. `sections=base,extended` and `sort=number` never appear in the URL, because they are
-   the defaults.
+3. `sections=base,extended,promo` and `sort=number` never appear in the URL, because they
+   are the defaults; dismissing Promos writes `sections=base,extended`.
 
 ### Flow 7: A rejected add
 
@@ -423,7 +425,7 @@ sit inside the base range.
 | `sort` | `number` | `number`, `name`, `rarity`, `price`, `qty` |
 | `order` | `asc` | `asc`, `desc` |
 | `filter` | `all` | `all`, `have`, `need` |
-| `sections` | `base,extended` | comma-separated subset of `base`, `extended`, `promo` |
+| `sections` | `base,extended,promo` | comma-separated subset of `base`, `extended`, `promo` |
 | `q` | *(none)* | free text; matched as `card.name LIKE %q%` |
 
 Every unrecognised value is a **400 with an explanatory `{error}`**, never a silent clamp

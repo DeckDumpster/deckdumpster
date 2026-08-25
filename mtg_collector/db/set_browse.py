@@ -31,12 +31,19 @@ from mtg_collector.db.collector_number import SUFFIX_ROOM
 
 #: Where a printing sits in the binder.  `base` is the numbered run the set was
 #: printed with, `extended` the boosterfun treatments above it, `promo` the
-#: temporally orphaned extras -- off by default, because they bloat the grid.
+#: temporally orphaned extras.
+#:
+#: All three are on by default, because the header meters are counted over
+#: every printing in the set and a section held back by fiat makes them
+#: disagree with the grid beneath them -- `hob` reported 321 printings and drew
+#: 320, the one missing tile being a bundle promo that no control could ask
+#: for (de-epk).  A section is dismissed by the pill that says so, and the
+#: meters then stay put on purpose: they measure the set, not the view.
 SECTION_BASE = "base"
 SECTION_EXTENDED = "extended"
 SECTION_PROMO = "promo"
 SECTIONS = (SECTION_BASE, SECTION_EXTENDED, SECTION_PROMO)
-DEFAULT_SECTIONS = (SECTION_BASE, SECTION_EXTENDED)
+DEFAULT_SECTIONS = SECTIONS
 
 #: `all` every printing, `have` the filled pockets, `need` the empty ones.
 FILTERS = ("all", "have", "need")
