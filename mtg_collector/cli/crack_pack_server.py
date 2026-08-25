@@ -19,6 +19,16 @@ from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse
 
 from mtg_collector.db.connection import get_db_path
+from mtg_collector.http_cache import (
+    CACHE_API,
+    CACHE_DOCUMENT,
+    CACHE_IMMUTABLE,
+    RangeNotSatisfiable,
+    compute_etag,
+    etag_matches,
+    negotiate_gzip,
+    parse_range,
+)
 from mtg_collector.services.pack_generator import PackGenerator
 
 
@@ -1138,19 +1148,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     # HTTP/1.1 keep-alive: reuses one TCP+TLS connection for the whole page's
     # assets instead of a fresh handshake per request. Requires Content-Length
-    # on every response, which all handlers already set.
+    # on every response that has a body -- `_respond` sets it, and the 304 and
+    # 416 paths deliberately do not, because neither carries one.
     protocol_version = "HTTP/1.1"
-
-    # Gzippable content types for static responses.
-    _GZIPPABLE = frozenset({
-        "text/html; charset=utf-8",
-        "text/css",
-        "text/javascript; charset=utf-8",
-        "application/javascript",
-        "application/json",
-        "image/svg+xml",
-        "font/ttf",
-    })
 
     def __init__(self, generator: PackGenerator, static_dir: Path, db_path: str, *args, **kwargs):
         self.generator = generator
@@ -1958,22 +1958,83 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _serve_homepage(self):
         self._serve_static("index.html")
 
-    def _write_static_response(self, content: bytes, content_type: str,
-                                cache_control: str | None = None):
+    def _respond(self, body: bytes, content_type: str, cache_control: str, *,
+                 status: int = 200, ranges: bool = False):
+        """The one way a body leaves this server (de-dai).
+
+        Every caller names what the response IS -- a document, a
+        content-addressed asset, an API payload -- and the caching rules follow
+        from that.  Nobody passes a Cache-Control string any more, because the
+        bug this replaces was a correct-looking string at the wrong call site.
+
+        Handles, in order: conditional revalidation (If-None-Match -> 304), byte
+        ranges, then content encoding.  A Range request forces identity so the
+        range is always a range of the representation whose ETag we quote.
+        """
+        # A Range request forces identity: the range must be a range of the
+        # representation whose ETag we quote, and the compressed one has a
+        # different ETag by construction.
+        ranging = status == 200 and ranges and bool(self.headers.get("Range"))
         encoding = None
-        if content_type in self._GZIPPABLE and len(content) > 1024 \
-                and "gzip" in self.headers.get("Accept-Encoding", ""):
-            content = gzip.compress(content)
+        if not ranging and negotiate_gzip(
+                self.headers.get("Accept-Encoding"), content_type, len(body)):
             encoding = "gzip"
-        self.send_response(200)
+
+        etag = compute_etag(body, encoding=encoding) if status == 200 else None
+
+        def _common_headers():
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("Vary", "Accept-Encoding")
+            if etag:
+                self.send_header("ETag", etag)
+
+        if etag and etag_matches(self.headers.get("If-None-Match"), etag):
+            # No body, and no Content-Length: a 304 describes a response the
+            # client already holds, so quoting a length here would describe
+            # bytes that are not on the wire.
+            self.send_response(304)
+            _common_headers()
+            self.end_headers()
+            return
+
+        if encoding == "gzip":
+            body = gzip.compress(body)
+
+        if ranging:
+            try:
+                span = parse_range(self.headers.get("Range"), len(body))
+            except RangeNotSatisfiable:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{len(body)}")
+                self.send_header("Content-Length", "0")
+                _common_headers()
+                self.end_headers()
+                return
+            if span:
+                start, end = span
+                chunk = body[start:end + 1]
+                self.send_response(206)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
+                self.send_header("Content-Length", str(len(chunk)))
+                self.send_header("Accept-Ranges", "bytes")
+                _common_headers()
+                self.end_headers()
+                self.wfile.write(chunk)
+                return
+
+        self.send_response(status)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Content-Length", str(len(body)))
         if encoding:
             self.send_header("Content-Encoding", encoding)
-        if cache_control:
-            self.send_header("Cache-Control", cache_control)
+        elif ranges:
+            # Advertised only on identity responses.  A client that ranged a
+            # gzipped representation would be quoting an ETag we never minted.
+            self.send_header("Accept-Ranges", "bytes")
+        _common_headers()
         self.end_headers()
-        self.wfile.write(content)
+        self.wfile.write(body)
 
     def _serve_static(self, filename: str):
         filepath = self.static_dir / filename
@@ -1985,7 +2046,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         content = filepath.read_bytes()
         content_type = self._CONTENT_TYPES.get(filepath.suffix, "application/octet-stream")
-        self._write_static_response(content, content_type, "public, max-age=86400")
+        self._respond(content, content_type, CACHE_DOCUMENT, ranges=True)
 
     def _serve_static_with_data(self, filename: str, data_fn):
         """Serve a static HTML file with /*INIT_DATA*/ replaced by JSON."""
@@ -1999,7 +2060,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         html = filepath.read_text(encoding="utf-8")
         html = html.replace("/*INIT_DATA*/", _json.dumps(data_fn()))
-        self._write_static_response(html.encode("utf-8"), "text/html; charset=utf-8")
+        self._respond(html.encode("utf-8"), "text/html; charset=utf-8", CACHE_DOCUMENT)
 
     def _decks_init_data(self):
         from mtg_collector.db.models import DeckRepository
@@ -4304,12 +4365,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         content = filepath.read_bytes()
         content_type = self._CONTENT_TYPES.get(filepath.suffix, "application/octet-stream")
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "public, max-age=86400, immutable")
-        self.end_headers()
-        self.wfile.write(content)
+        # The one path that was already doing caching correctly; its headers are
+        # unchanged.  See CACHE_IMMUTABLE for what these URLs actually rest on,
+        # and why the window is a day rather than a year.
+        self._respond(content, content_type, CACHE_IMMUTABLE, ranges=True)
 
     # (Legacy session-based ingest pipeline removed — use ingest2 endpoints)
 
@@ -8562,16 +8621,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         })
 
     def _send_json(self, obj, status=200):
-        body = json.dumps(obj).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        accept_enc = self.headers.get("Accept-Encoding", "")
-        if "gzip" in accept_enc and len(body) > 1024:
-            body = gzip.compress(body)
-            self.send_header("Content-Encoding", "gzip")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._respond(json.dumps(obj).encode(), "application/json", CACHE_API,
+                      status=status)
 
     def log_message(self, format, *args):
         # Quieter logging — just method and path
