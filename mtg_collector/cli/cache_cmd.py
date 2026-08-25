@@ -320,14 +320,20 @@ def cache_set(db_path: str, set_code: str):
 
     set_code = set_code.lower()
 
-    # Ensure set metadata exists
-    if not set_repo.exists(set_code):
-        set_data = api.get_set(set_code)
-        if not set_data:
-            print(f"Set not found on Scryfall: {set_code.upper()}")
-            sys.exit(1)
-        set_repo.upsert(api.to_set_model(set_data))
-        conn.commit()
+    # Refresh set metadata unconditionally.  A `sets` row existing is not
+    # evidence that it is populated: `mtg data import` and the TCGCSV sealed
+    # importer both create stubs with INSERT OR IGNORE (set_code, set_name), so
+    # the exists() guard that used to stand here left released_at, set_type,
+    # digital and total_set_size NULL on every set one of those paths reached
+    # first -- the columns `mtg cache all` fills for the whole catalogue in its
+    # Step 1.  upsert() COALESCEs base_set_size and cards_fetched_at, so writing
+    # Scryfall's view of the set here cannot blank what MTGJSON put there.
+    set_data = api.get_set(set_code)
+    if not set_data:
+        print(f"Set not found on Scryfall: {set_code.upper()}")
+        sys.exit(1)
+    set_repo.upsert(api.to_set_model(set_data))
+    conn.commit()
 
     local_before = conn.execute(
         "SELECT COUNT(*) FROM printings WHERE set_code = ?", (set_code,)
@@ -352,5 +358,12 @@ def cache_set(db_path: str, set_code: str):
 
     set_repo.mark_cards_cached(set_code)
     conn.commit()
+
+    # cards_fts is external-content FTS5 with no triggers, so CardRepository.upsert
+    # leaves the index untouched and a card cached here stays invisible to every
+    # `o:` / `t:` search until something rebuilds it.  `mtg cache all` does that in
+    # its Step 8; this path did not.  printings.card_name needs no equivalent --
+    # PrintingRepository.upsert writes it, and only rows for this set were touched.
+    rebuild_fts(conn)
 
     print(f"\nDone! {set_code.upper()}: {local_before} → {processed} cards")
