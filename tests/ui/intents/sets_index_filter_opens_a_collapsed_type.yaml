@@ -1,0 +1,14 @@
+# Scenario: Filtering to a set inside a folded block shows it to me
+#
+# Related:
+#   issues: [de-aax]
+#   pull_requests: []
+
+description: >
+  Draft Innovation is folded shut when I arrive at /sets. I type "modern
+  horizons" into the filter and the block opens on its own with Modern Horizons
+  3 showing — the count says one set matched and I can see the one set that
+  matched, rather than being told about a set the page is hiding. Every rail row
+  recounts as I type, and the four that now have nothing behind them dim. When I
+  clear the filter the page goes back to how I left it: Draft Innovation folded
+  again, everything visible again.

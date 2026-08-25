@@ -1,0 +1,26 @@
+start_page: /sets
+involves:
+  - "section.set-group per set_type, carrying data-set-type; gains class 'open' when expanded"
+  - "h2.set-group-header — the click target; holds span.group-label, span.group-count and span.group-owned"
+  - "div.set-grid inside each section — display:none until the section has class 'open'"
+  - "a.set-tile per set, href='/sets/<set_code>', inside the section's div.set-grid"
+fixture_data:
+  cached_sets: "18, in 5 set_type groups: expansion 12, core 2, draft_innovation 2, masterpiece 1, duel_deck 1"
+  default_open: "expansion and core — the fixture's only two types inside the top four of SET_TYPE_RANK (Expansion, Core, Commander, Masters)"
+  collapsed: "draft_innovation, masterpiece, duel_deck"
+  masterpiece_set: "spg — Special Guests, the only masterpiece, and one card is owned"
+  duel_deck_set: "ddh — Duel Decks: Ajani vs. Nicol Bolas, nothing owned"
+notes: >
+  Collapsing is CSS only — a collapsed section keeps every tile in the DOM, so
+  a hidden tile has to be checked with assert_hidden, never with a
+  ':not([hidden])' count (that attribute is the *filter's*, not the collapse's)
+  and never with assert_text_absent. The set-type label appears twice on the
+  page — once as a rail row, once as the group heading — and the rail comes
+  first in document order, so click_by_text would hit the rail. Click the
+  heading with click_by_selector("section[data-set-type='...'] h2").
+  1. Assert the expansion and core grids are visible and the other three are
+  hidden. 2. Assert a tile inside expansion is visible and the ddh tile inside
+  the collapsed duel_deck block is hidden. 3. Assert the masterpiece heading's
+  roll-up reads '1 owned'. 4. Click the masterpiece heading; assert its grid and
+  the spg tile are visible, and that expansion is still open. 5. Click it again;
+  assert its grid is hidden.

@@ -1,0 +1,21 @@
+start_page: /sets
+involves:
+  - "aside#sets-rail, aria-label 'Jump to set type', holding h2.rail-title 'Set types' and ul.rail-list"
+  - "button.rail-row per rendered group, carrying data-set-type; holds span.rail-label and span.rail-count"
+  - "section.set-group[data-set-type] — the block a row jumps to; its div.set-grid is display:none until open"
+fixture_data:
+  rail_rows: "5, in SET_TYPE_RANK order: Expansion 12, Core 2, Draft Innovation 2, Masterpiece 1, Duel Deck 1"
+  duel_deck_set: "ddh — Duel Decks: Ajani vs. Nicol Bolas, the only duel_deck set, nothing owned"
+notes: >
+  The rail is built from the same group array the sections are, so its row
+  count is the number of set types the fixture has cached — 5, not the 24 of
+  SET_TYPE_RANK. Row labels duplicate the group headings, and the rail is
+  first in document order, so use click_by_selector on the row's data-set-type
+  rather than click_by_text. The scroll itself is smooth and has no harness
+  assertion; it is pinned in tests/test_sets_page.py instead. What is asserted
+  here is the expand.
+  1. Assert 5 button.rail-row and that the rail's title is visible.
+  2. Assert the duel_deck row exists and the duel_deck grid is hidden.
+  3. Click the duel_deck rail row. 4. Assert its grid and the ddh tile are
+  visible. 5. Assert no rail row carries an ownership marker — the rail holds
+  only .rail-label and .rail-count spans.

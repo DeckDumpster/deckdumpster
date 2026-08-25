@@ -1,0 +1,13 @@
+# Scenario: Set-type blocks collapse, and only the four types I care about start open
+#
+# Related:
+#   issues: [de-aax]
+#   pull_requests: []
+
+description: >
+  I open /sets and the page does not dump all 24 set types on me at once.
+  Expansion and Core are open with their tiles showing; Draft Innovation,
+  Masterpiece and Duel Deck are folded down to a single heading line with a
+  caret, a set count and a roll-up of how many of those sets I own anything
+  from. I click the Masterpiece heading and its tiles appear; I click it again
+  and they fold away. Opening one block leaves the others exactly as they were.
