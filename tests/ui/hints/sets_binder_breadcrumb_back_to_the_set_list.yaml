@@ -1,0 +1,16 @@
+start_page: "/sets/spg"
+involves:
+  - "the breadcrumb link in the page header (.breadcrumb a, '← All sets')"
+  - "the set list at /sets it lands on (#set-filter, #sets-rail)"
+fixture_data:
+  set: "spg"
+  breadcrumb_text: "All sets"
+notes: >
+  Start on a binder page and wait for its grid, so the breadcrumb is being
+  clicked on a settled page rather than during the initial fetch.
+  Click .breadcrumb a rather than the text: 'All sets' is a prefix of 'All
+  pockets' in the filter select and of 'All printings' in the completion
+  meter, and click_by_text takes the first match in document order.
+  Assert on the landed page, not just the URL — a link that changes the
+  address and renders nothing is the failure worth catching — so wait for
+  /sets's own filter input and jump rail before checking the pathname.
