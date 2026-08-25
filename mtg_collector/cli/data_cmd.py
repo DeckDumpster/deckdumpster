@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -9,6 +10,7 @@ import sys
 import time
 import urllib.request
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
 from mtg_collector.db.connection import get_shared_write_path
@@ -160,6 +162,11 @@ def register(subparsers):
         help="Populate sets.base_set_size / total_set_size over every cached set",
     )
 
+    data_sub.add_parser(
+        "check-catalog",
+        help="Fail if the local set list has fallen behind upstream (exit 1 = stale)",
+    )
+
     parser.set_defaults(func=run)
 
 
@@ -201,8 +208,12 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         backfill_set_sizes(db_path)
+    elif args.data_command == "check-catalog":
+        from mtg_collector.db.connection import get_db_path
+        db_path = get_db_path(getattr(args, "db_path", None))
+        sys.exit(check_catalog(db_path))
     else:
-        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-set-sizes} [options]")
+        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-set-sizes|check-catalog} [options]")
         sys.exit(1)
 
 
@@ -627,6 +638,70 @@ def backfill_set_sizes(db_path: str):
     ).fetchone()
     conn.close()
     print(f"  Still NULL: base_set_size {remaining[0]}, total_set_size {remaining[1]}")
+
+
+def check_catalog(db_path: str) -> int:
+    """Alarm on catalog staleness by outcome: is our set list current? (de-b5q)
+
+    Returns a process exit code, so the systemd unit's own status carries the
+    verdict and its OnFailure= alert fires without this needing an alert channel
+    of its own.  Three ways to come back non-zero, and they are deliberately not
+    distinguished by the caller:
+
+      * the catalogue is behind upstream by more than the threshold,
+      * the local database has no released set at all,
+      * upstream could not be asked.
+
+    The last one is the point of the whole exercise.  "The download failed" and
+    "the catalogue is current" were indistinguishable to every timer on the box
+    for two months; they are not allowed to be indistinguishable here.  See
+    mtg_collector/db/catalog_freshness.py for what is compared and why.
+    """
+    from mtg_collector.db.catalog_freshness import DEFAULT_MAX_LAG_DAYS, assess
+    from mtg_collector.services.scryfall import ScryfallAPI
+
+    raw = os.environ.get("MTGC_CATALOG_MAX_LAG_DAYS", "")
+    if raw.strip():
+        # A threshold typo must not quietly become the default -- that is how a
+        # tightened alarm goes back to the shipped one without anyone noticing.
+        try:
+            max_lag_days = int(raw)
+        except ValueError:
+            print(
+                f"check-catalog: FAILED — MTGC_CATALOG_MAX_LAG_DAYS is {raw!r}, not an integer.",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        max_lag_days = DEFAULT_MAX_LAG_DAYS
+
+    print("Fetching set list from Scryfall ...")
+    scryfall_sets = ScryfallAPI().get_all_sets()
+    if not scryfall_sets:
+        # get_all_sets() turns a request failure into an empty list.
+        print(
+            "check-catalog: FAILED — Scryfall returned no sets; the catalogue could "
+            "not be checked against anything.",
+            file=sys.stderr,
+        )
+        return 1
+
+    conn = sqlite3.connect(db_path)
+    try:
+        verdict = assess(conn, scryfall_sets, date.today(), max_lag_days=max_lag_days)
+    finally:
+        conn.close()
+
+    if not verdict.stale:
+        print(f"check-catalog: {verdict.summary()}")
+        return 0
+
+    print(f"check-catalog: {verdict.summary()}", file=sys.stderr)
+    detail = verdict.detail()
+    if detail:
+        print(detail, file=sys.stderr)
+    print("Fix: mtg cache all (then mtg data fetch for MTGJSON)", file=sys.stderr)
+    return 1
 
 
 def _fetch_mtgjson_version() -> str | None:

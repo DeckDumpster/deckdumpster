@@ -320,6 +320,23 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   run that fails leaves nothing behind — that path used to `exit 1` before its own
   leftover check and cost ~1 GB of prod's disk per failing run.
   See `deploy/README.md` → "Container storage" and `deploy/store-lib.sh`.
+- **`mtg data check-catalog` alarms on catalog staleness by outcome, not component
+  health** (de-b5q). The catalogue sat two months behind — newest set 2026-06-26 against
+  upstream's 2026-08-14 — with every timer green, because every timer asks *did my
+  download succeed*. This asks whether the set list is current: the lag is upstream's
+  newest released set minus the newest released set in `sets`. `mtg cache all` upserts
+  every Scryfall set unfiltered, so both sides read one list under one rule and a current
+  mirror scores **exactly 0** — a quiet release month moves both sides together, so there
+  is no release cadence to tune around. Both sides drop future-dated sets, or a raw
+  `MAX(released_at)` reads the same far-future set on each side and measures nothing. It
+  deliberately does **not** require the newest set's *cards*: `mtg cache all` skips cards
+  with no `oracle_id`, so a token-only release stores zero printings by design and that
+  rule would pin the alarm red with nothing able to clear it. STALE exits 1 → the unit
+  fails → `OnFailure=` pushes the alert, so there is no second alerting path to keep in
+  sync. Nothing on a timer refreshes the catalogue, so this goes red on a box that has not
+  run `mtg cache all` recently — that is the correct reading, not a false positive. See
+  `mtg_collector/db/catalog_freshness.py`, `deploy/mtgc-catalog-check.{service,timer}`,
+  and `deploy/README.md` → "Catalog freshness check".
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
 - Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
 

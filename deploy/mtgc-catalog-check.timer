@@ -1,0 +1,13 @@
+[Unit]
+Description=MTGC catalog freshness check timer ({{INSTANCE}})
+
+[Timer]
+# Daily, well clear of the 06:00 price fetch. Nothing is gained by asking more
+# often: the thing being measured is a lag in whole days, and a set that is
+# missing this morning is missing this evening too.
+OnCalendar=*-*-* 09:00:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

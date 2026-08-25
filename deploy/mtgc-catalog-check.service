@@ -1,0 +1,25 @@
+[Unit]
+Description=MTGC catalog freshness check ({{INSTANCE}})
+# The outcome check for the card catalogue (de-b5q). Every other timer here
+# asks whether its own download succeeded; all of them said yes, every day, for
+# the two months the catalogue sat at 2026-06-26 while upstream had shipped The
+# Hobbit on 2026-08-14. This one asks the only question that would have caught
+# it: is our set list actually current?
+#
+# It reads the database and Scryfall's /sets, and writes nothing at all.
+After=network-online.target
+Wants=network-online.target
+# STALE exits 1, which fails the unit, which fires this — so the verdict travels
+# on the unit's own status and there is no second alerting path to keep in sync.
+# The same line covers the checker being unable to run: an unreachable Scryfall,
+# a stopped container, a database with no sets. "We could not ask" and "the
+# answer is fine" must never share an outcome.
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=podman exec systemd-mtgc-{{INSTANCE}} mtg data check-catalog
+# One Scryfall request plus a scan of ~1000 set rows. Generous, but a hung
+# request must eventually fail the unit rather than sit there looking like a run
+# in progress — which is the shape of the failure this check exists to catch.
+TimeoutStartSec=120
