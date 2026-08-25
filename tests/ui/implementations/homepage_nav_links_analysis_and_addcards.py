@@ -15,6 +15,11 @@ def steps(harness):
 
     # --- Analysis group ---
 
+    # Pin the size of the group. This scenario went stale once already: a
+    # fourth link (Browse Sets) was added and the walk below kept passing
+    # while never touching it. A count fails loudly on the next one.
+    harness.assert_element_count(".nav-group:has(> .group-label:text-is('Analysis')) > a", 4)
+
     # Click Crack-a-Pack and verify
     harness.click_by_selector("a[href='/crack']")
     harness.wait_for_text("Crack-a-Pack")
@@ -23,6 +28,12 @@ def steps(harness):
     # Click Explore Sheets and verify
     harness.click_by_selector("a[href='/sheets']")
     harness.wait_for_text("Explore Sheets")
+    harness.navigate("/")
+
+    # Click Browse Sets and verify. /sets carries no heading of its own,
+    # so the tiles the index is made of are what says it arrived.
+    harness.click_by_selector("a[href='/sets']")
+    harness.wait_for_visible("#sets-body a.set-tile")
     harness.navigate("/")
 
     # Click Set Value and verify

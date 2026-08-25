@@ -1,0 +1,11 @@
+# Scenario: Navigate to Browse Sets from the homepage
+#
+# Related:
+#   issues: []
+#   pull_requests: []
+
+description: >
+  I can see a "Browse Sets" link in the Analysis section of the homepage
+  navigation with the subtitle "Every set as a binder grid, with completion".
+  Clicking it takes me to the set index, which lists every cached set as a
+  tile linking to that set's binder page.
