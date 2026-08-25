@@ -1,0 +1,15 @@
+start_page: /
+involves:
+  - "homepage nav link: <a href='/sets'>Browse Sets<span>Every set as a binder grid, with completion</span></a>"
+  - "link is in the Analysis section of the nav grid, between Explore Sheets and Set Value"
+  - "set index has no heading of its own — a.set-tile links under #sets-body are what it renders"
+  - "span#sets-count in the controls row, reading '18 sets' unfiltered"
+fixture_data:
+  cached_sets: "18, one a.set-tile each; Lorwyn Eclipsed (ecl) is the newest"
+notes: >
+  'Browse Sets' is the link's own text and appears nowhere else on the
+  homepage, so click_by_text lands on it. The tiles are fetched, so wait for
+  the first one rather than asserting straight away. 1. Navigate to /.
+  2. Assert the link and its subtitle are visible. 3. Click "Browse Sets".
+  4. Wait for a set tile. 5. Assert 18 tiles, the '18 sets' count, and that
+  the ecl tile links to /sets/ecl.
