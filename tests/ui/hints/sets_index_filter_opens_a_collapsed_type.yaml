@@ -1,0 +1,23 @@
+start_page: /sets
+involves:
+  - "input#set-filter, placeholder 'Filter by set name or code'"
+  - "span#sets-count — '18 sets' unfiltered, 'N of 18 sets' while filtering"
+  - "section.set-group[data-set-type='draft_innovation'] — collapsed on load, its div.set-grid display:none"
+  - "button.rail-row — its span.rail-count follows the filter; the row gains class 'is-empty' at zero"
+  - "span.group-owned in each heading — the roll-up, recounted with the filter"
+fixture_data:
+  draft_innovation: "2 sets — j25 (Foundations Jumpstart) and mh3 (Modern Horizons 3, 4 cards owned)"
+  modern_horizons_matches: "1 — mh3, on the set name"
+  total: "18 cached sets in 5 set_type groups"
+notes: >
+  Filtering is synchronous on the input event, so no waits are needed. Two
+  different hiding mechanisms are in play and they must not be confused: the
+  filter sets the `hidden` attribute on a tile, while the collapse is a CSS
+  class on the section. A tile that is filtered out AND inside a folded block
+  is hidden twice over, so assert_hidden is the safe check throughout.
+  1. Assert the draft_innovation grid is hidden on load. 2. Fill #set-filter
+  with 'modern horizons'. 3. Assert the draft_innovation grid and the mh3 tile
+  are now visible, that the j25 tile beside it is hidden, and that #sets-count
+  reads '1 of 18 sets'. 4. Assert 4 rail rows carry .is-empty and the
+  draft_innovation row does not. 5. Clear the filter; assert the
+  draft_innovation grid is folded shut again and no rail row is .is-empty.

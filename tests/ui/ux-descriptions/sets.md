@@ -18,10 +18,13 @@ sheet explorer.
 
 **`/sets`** lists every set whose card list is cached locally, grouped by set type in a
 fixed order — Expansion, Core, Commander, … — with the sets inside each group newest
-release first. Each set is a tile showing its keyrune symbol, name, code, release date,
-and up to two completion meters — how much of the base set is owned, and how much of the
-whole printing catalogue for that set is owned. It is the entry point to the binder, and
-on its own it answers "which sets am I close to finishing?".
+release first. A sticky 220 px jump rail down the left names every one of those groups
+with its set count and scrolls to it; each group is collapsible, and only the top four
+types by curated rank start expanded. Each set is a tile showing its keyrune symbol,
+name, code, release date, and up to two completion meters — how much of the base set is
+owned, and how much of the whole printing catalogue for that set is owned. It is the
+entry point to the binder, and on its own it answers "which sets am I close to
+finishing?".
 
 **`/sets/:set_code`** lays one set out as a binder page: every printing in the set, in
 collector-number order, at a caller-chosen number of cards per row, with owned pockets
@@ -53,6 +56,7 @@ out as a fixed grid or make adding one copy cheap.
 | "DeckDumpster" (header h1) | `<a>` | `/` | `.site-header` from `shared.css` |
 | Collection / Decks / Build / Binders / Sealed | `<a>` | `/collection`, `/decks`, `/deck-builder`, `/binders`, `/sealed` | The standard shared header links. There is **no** "Sets" entry in this header |
 | Set tile | `<a class="set-tile">` | `/sets/{set_code}` | The whole tile is the link — symbol, name, sub-line and meters are all inside the anchor |
+| Jump rail row | `<button class="rail-row">` | same page | Expands the group and scrolls to it. Not a link — there is no hash in the URL and nothing to restore |
 
 ### `/sets/:set_code`
 
@@ -77,7 +81,9 @@ rather than a link. The only in-app way out is the browser back button or a card
 |---------|----|------|-------------|
 | Set filter | `#set-filter` | `<input type="text">` | Placeholder "Filter by set name or code". `autocomplete="off"`, `spellcheck="false"`. Filters entirely in the browser — it never re-queries the server. Matches a case-insensitive substring of `"{set_name} {set_code}"` |
 | Result count | `#sets-count` | `<span>` | Read-only. `"{N} sets"`, or `"{shown} of {N} sets"` while a filter is active |
-| Group heading | `.set-group h2` | `<h2>` | Not interactive. Set-type label plus a `.group-count` that tracks the filter |
+| Group heading | `.set-group-header` | `<h2 role="button" tabindex="0">` | The collapse control — click, Enter or Space toggles `.open` on the section and flips `aria-expanded`. Holds a rotating caret (a `::before`, so the heading's text still starts with the label), the set-type label, a `.group-count` and a `.group-owned` roll-up, both of which track the filter |
+| Jump rail | `#sets-rail` | `<aside>` | `aria-label="Jump to set type"`. One `.rail-row` button per rendered group, in the same order as the sections |
+| Jump rail row | `.rail-row` | `<button>` | `data-set-type` names its group. Carries `.rail-label` and a `.rail-count` that tracks the filter; gains `.is-empty` (dimmed) when the filter left its group with nothing |
 | Set tile | `.set-tile` | `<a>` | Navigates to the binder for that set. Hover raises the border to the accent colour |
 | No-match empty state | `#sets-no-match` | `<div>` | Hidden unless the filter matches zero sets |
 
@@ -142,10 +148,17 @@ links to the same page.
    order — Expansion leads whatever was released most recently, and a set type the rank
    has never heard of renders last rather than dropping out. Within a group the sets
    stay newest-first, the order the response arrives in. Count reads `"{N} sets"`.
-4. User types `fin` (or `Final Fantasy`) into the filter. Tiles hide on every keystroke;
-   each group heading's count updates; a group that lost every set hides entirely.
-5. Count reads `"{shown} of {N} sets"`.
-6. User clicks a tile and lands on `/sets/{code}`.
+   Expansion, Core, Commander and Masters are expanded; every other group is collapsed
+   to its heading.
+4. The jump rail lists the same groups in the same order with their counts. User clicks
+   **Token**: the group expands and the page scrolls to it.
+5. User types `fin` (or `Final Fantasy`) into the filter. Tiles hide on every keystroke;
+   each group heading's count and roll-up update, as does each rail row's count; a group
+   that lost every set hides entirely and its rail row dims; a group holding a match
+   opens whether it was collapsed or not.
+6. Count reads `"{shown} of {N} sets"`. Clearing the filter hands every group back to the
+   expanded/collapsed state the user left it in.
+7. User clicks a tile and lands on `/sets/{code}`.
 
 ### Flow 2: Reconcile a physical binder (the reason the feature exists)
 
@@ -246,20 +259,46 @@ links to the same page.
 
 - `loadSets()` calls `fetch('/api/sets/index')`. The response is unpaginated and already
   ordered newest-first, so the whole index arrives in one request.
-- Rows are grouped into a `Map` keyed on `set_type`, keeping first-appearance order.
+- Rows are grouped into a `Map` keyed on `set_type`, then sorted by `SET_TYPE_RANK`.
 - `set_type` is title-cased for display (`draft_innovation` → "Draft Innovation") rather
   than mapped through a hand-kept label table, because the types come straight from
   Scryfall and there are dozens of them.
-- A parallel `ordered` array is filled in document order, so tile *N* describes
-  `ordered[N]` — one running index reads each tile's set during filtering.
+- The rail and the sections are rendered from that one group array, so a rail row cannot
+  name a section that is not on the page and their counts cannot drift apart. A type with
+  no cached sets has no row, because it would jump nowhere; at prod scale all 24 ranked
+  types are present.
+- Each group carries its own tiles, its own search haystacks and its own owned flags,
+  paired by position within the group. There is no page-wide running index over the tiles
+  — that shape only held while every group contributed all of its tiles in document
+  order, which is exactly what a collapsed or removed section breaks.
+
+### `/sets` — collapsing
+
+- `.open` on the `section.set-group` is the whole mechanism: `.set-grid` is
+  `display: none` until then. Collapsing never removes a tile, so the filter still sees,
+  hides and counts the tiles inside a collapsed group.
+- Default-expanded is the first `DEFAULT_OPEN_RANKS` (4) entries of `SET_TYPE_RANK`:
+  Expansion, Core, Commander, Masters — 211 of ~995 sets at prod scale. Reordering the
+  rank moves the default with it; there is no second list. Deliberately *not*
+  collapse-unless-owned: 13 of 24 MTG set types hold something, and that rule would
+  default-expand Token and Promo, over half the catalogue.
+- A rail row click expands its group and `scrollIntoView({behavior: 'smooth'})`s to it.
+  A row whose group the filter emptied does nothing.
+- The rail has no `overflow` of its own. If 24 rows stop fitting a laptop, the accepted
+  fix is folding promo/token/memorabilia/minigame into one "Other products" row — not a
+  scrollbar.
 
 ### `/sets` — filtering
 
 - Search haystacks (`"{name} {code}"`, lowercased) are built once at wire-up, not per
   keystroke.
 - Each `input` event runs one pass over the tiles: `tile.hidden` is set, the group's
-  visible count is recomputed, a group with zero visible sets sets `hidden` on itself, and
+  visible count and owned roll-up are recomputed, its rail row's count follows, a group
+  with zero visible sets sets `hidden` on itself and dims its rail row, and
   `#sets-no-match` un-hides when nothing matched anywhere.
+- While a filter is active it, not the user, decides what is open: a group with a match
+  opens so the count and the page agree. Clearing the filter restores each group to
+  whatever the user last chose, defaulting to the rank cutoff.
 - No debounce and no network call — 993 sets at prod scale filter fast enough in the DOM.
 
 ### `/sets` — completion meters
@@ -494,7 +533,11 @@ Contract points the page relies on:
 | State | Appearance |
 |-------|------------|
 | **Loading** | Body is a single `.empty-state` with a spinner and "Loading sets…". `#sets-count` is blank |
-| **Loaded** | One `.set-group` per set type, each a heading with a count and a responsive `.set-grid` of `minmax(280px, 1fr)` tiles. `#sets-count` reads `"{N} sets"` |
+| **Loaded** | A 220 px sticky `#sets-rail` and, beside it, one `.set-group` per set type — a heading with a caret, count and owned roll-up over a responsive `.set-grid` of `minmax(280px, 1fr)` tiles. `#sets-count` reads `"{N} sets"` |
+| **Group collapsed** | Caret points right, `.set-grid` is `display: none`, tiles stay in the DOM. Everything below the top four ranked types starts here |
+| **Group expanded** | Caret rotated 90°, grid shown |
+| **Rail row** | Label left, count right, dimmed to 35% opacity when the filter left the group with nothing |
+| **Narrow (≤700px)** | One column: the rail goes static above the grid and its rows wrap as bordered chips instead of standing 24 tall; tiles go one per row |
 | **Tile** | Keyrune symbol at 2× on the left, spanning both text rows; set name (bold, ellipsised on overflow); sub-line `"{CODE} · {released_at}"`, or `"{CODE} · unreleased"` when `released_at` is null; then the meters across the full tile width |
 | **Meter** | 3.2rem label ("Set" / "All"), a 6 px bar filled to the rounded percentage in the accent colour, and a tabular `"{owned} / {total}"` |
 | **Meter complete** | Fill switches from accent to the success colour at 100% |

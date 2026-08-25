@@ -1,0 +1,13 @@
+# Scenario: The jump rail takes me to a set type without scrolling for it
+#
+# Related:
+#   issues: [de-aax]
+#   pull_requests: []
+
+description: >
+  Down the left of /sets is a rail naming every set type on the page, in the
+  same order the blocks are in, each with the number of sets it holds. Duel
+  Deck is at the bottom of the rail and its block is folded shut. I click the
+  Duel Deck row and the block opens with its set showing, without my having to
+  find the heading and scroll to it first. The rail rows carry no ownership
+  marker — they are a way to get somewhere, not a report.

@@ -20,19 +20,97 @@
   font-variant-numeric: tabular-nums;
 }
 
-.sets-body {
+/* Two columns: the jump rail, then the groups. Copied from the deck builder's
+   .builder-layout (deck-builder.css) — same grid, same sticky left column,
+   same single-column collapse at 700px. */
+.sets-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
   max-width: 1400px;
   margin: 0 auto;
   padding: 16px 24px 48px;
 }
 
-/* One block per set_type, in the order the types first appear in the
-   newest-first response — so the group holding the newest set leads. */
-.set-group { margin-bottom: 28px; }
+.sets-body { min-width: 0; }
+
+/* Sticky, and deliberately without an overflow of its own. 24 rows fit a
+   laptop; if they stop fitting, the fix is folding promo/token/memorabilia/
+   minigame into one "Other products" row, not giving the rail a scrollbar. */
+.sets-rail {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+}
+
+.rail-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.rail-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* shared.css styles every <button> as a filled accent button, so each of those
+   properties is unset here rather than inherited into a 24-row wall of red. */
+.rail-row {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 8px;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 400;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-row:hover { background: var(--bg-secondary); color: var(--accent); }
+
+.rail-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-count {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Filtered down to nothing: the row stays put so the rail does not reflow
+   under the pointer on every keystroke, but it says it has nowhere to go. */
+.rail-row.is-empty { opacity: 0.35; }
+
+/* One block per set_type, in sets.js's curated SET_TYPE_RANK order. */
+.set-group {
+  margin-bottom: 28px;
+  scroll-margin-top: 12px;
+}
 
 .set-group[hidden] { display: none; }
 
 .set-group h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 0.85rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -41,20 +119,49 @@
   padding-bottom: 6px;
   margin-bottom: 12px;
   border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  user-select: none;
 }
 
-.set-group h2 .group-count {
+/* The rotating caret from explore_sheets.html's collapsible sections. A
+   ::before rather than the <span class="arrow"> it uses there, so the
+   heading's own text still starts with the set type's label. */
+.set-group h2::before {
+  content: '\25B6';
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  transition: transform 0.2s;
+}
+
+.set-group.open h2::before { transform: rotate(90deg); }
+
+.set-group h2 .group-count,
+.set-group h2 .group-owned {
   color: var(--text-secondary);
   font-weight: 400;
   letter-spacing: 0;
-  margin-left: 8px;
+}
+
+/* Beside the count, not flush to the far end of the rule: on a wide screen
+   that put the roll-up a thousand pixels from the group it describes. */
+.set-group h2 .group-owned {
+  text-transform: none;
+  font-size: 0.78rem;
+}
+
+.set-group h2 .group-owned::before {
+  content: '·';
+  margin-right: 8px;
 }
 
 .set-grid {
-  display: grid;
+  display: none;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 12px;
 }
+
+.set-group.open .set-grid { display: grid; }
 
 .set-tile {
   display: grid;
@@ -134,4 +241,28 @@
 .set-meter-count {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
+}
+
+/* Narrow viewport. The layout collapse mirrors deck-builder.css's @media
+   (max-width: 700px): one column, and the sticky column goes static.
+   The rail's own list turns into wrapping chips there — 24 stacked rows above
+   the grid would be most of a phone screen before the first set tile. */
+@media (max-width: 700px) {
+  .sets-layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 12px 12px 32px;
+  }
+  .sets-rail { position: static; }
+  .rail-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .rail-row {
+    width: auto;
+    border: 1px solid var(--border-color);
+  }
+  .set-grid { grid-template-columns: 1fr; }
+  .sets-controls { padding: 12px 12px 0; }
 }

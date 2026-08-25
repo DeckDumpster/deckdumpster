@@ -16,6 +16,11 @@ it reads Expansion-first whether the rank exists or not. The invariant only
 shows up against a payload no fixture will produce, so these drive the real
 page (real `sets.html`, real scripts, `/api/sets/index` answered synthetically)
 in a browser and read the order back out of the DOM.
+
+The jump rail and the collapsible groups are pinned here for the same reason,
+plus one more: the narrow-viewport form is a `@media` rule, and the only way to
+assert it is to size a viewport at it. That is a browser fixture's job, not a
+container scenario's.
 """
 
 import inspect
@@ -142,8 +147,8 @@ def load_sets(browser):
 
     pages = []
 
-    def load(payload):
-        page = browser.new_page()
+    def load(payload, viewport=None):
+        page = browser.new_page(viewport=viewport) if viewport else browser.new_page()
         pages.append(page)
         errors = []
         page.on("pageerror", lambda e: errors.append(str(e)))
@@ -224,3 +229,207 @@ def test_rank_covers_the_set_types_the_page_actually_sees():
     js = (STATIC / "sets.js").read_text()
     for set_type in ("expansion", "core", "commander", "masters", "draft_innovation", "token", "promo"):
         assert f"'{set_type}'" in js, f"{set_type} missing from SET_TYPE_RANK"
+
+
+def _owned(row, owned_all):
+    """The same index row with cards in hand, for the group roll-up."""
+    return {**row, "owned_all": owned_all}
+
+
+def _rail(page):
+    return page.eval_on_selector_all(
+        "#sets-rail .rail-row",
+        "els => els.map(e => [e.dataset.setType, e.querySelector('.rail-count').textContent])",
+    )
+
+
+def _grid_visible(page, set_type):
+    return page.locator(f"section[data-set-type='{set_type}'] .set-grid").is_visible()
+
+
+def test_the_rail_lists_the_groups_in_rank_order_with_their_counts(load_sets):
+    """The rail is built from the same array the sections are, so its rows are
+    the rendered groups, in the rendered order — a type the rank has never heard
+    of gets its row at the end for free, and no row can name a section that is
+    not on the page to jump to."""
+    page, order, errors = load_sets(
+        [
+            _set("newt", "some_future_type", "2026-08-24"),
+            _set("tok1", "token", "2026-08-20"),
+            _set("tok2", "token", "2026-08-19"),
+            _set("expn", "expansion", "2026-01-23"),
+        ]
+    )
+
+    assert errors == []
+    assert _rail(page) == [
+        ["expansion", "1"],
+        ["token", "2"],
+        ["some_future_type", "1"],
+    ]
+    # And it is the section order, not a second opinion about it.
+    assert [row[0] for row in _rail(page)] == order
+
+
+def test_only_the_top_four_ranked_types_start_expanded(load_sets):
+    """Expansion, Core, Commander, Masters — 211 of ~995 sets at prod scale.
+    Explicitly not collapse-unless-owned: that rule would also expand Token and
+    Promo, which between them are over half the catalogue."""
+    page, _, errors = load_sets(
+        [
+            _set("expn", "expansion", "2026-01-23"),
+            _set("core", "core", "2025-11-14"),
+            _set("cmdr", "commander", "2025-09-26"),
+            _set("mstr", "masters", "2025-06-13"),
+            _set("draf", "draft_innovation", "2025-04-11"),
+            _set("tokn", "token", "2025-02-07"),
+        ]
+    )
+
+    assert errors == []
+    for set_type in ("expansion", "core", "commander", "masters"):
+        assert _grid_visible(page, set_type), f"{set_type} should start expanded"
+    for set_type in ("draft_innovation", "token"):
+        assert not _grid_visible(page, set_type), f"{set_type} should start collapsed"
+    # Collapsed is a class on the section, never a removal: the tiles are still
+    # in the DOM, which is what lets the filter below reach into them.
+    assert page.locator("a.set-tile").count() == 6
+
+
+def test_a_group_header_toggles_its_own_group(load_sets):
+    page, _, errors = load_sets(
+        [_set("expn", "expansion", "2026-01-23"), _set("tokn", "token", "2025-02-07")]
+    )
+
+    page.click("section[data-set-type='token'] h2")
+    assert _grid_visible(page, "token")
+    assert _grid_visible(page, "expansion"), "the other groups keep their own state"
+
+    page.click("section[data-set-type='token'] h2")
+    assert not _grid_visible(page, "token")
+    assert errors == []
+
+
+def test_a_rail_row_expands_its_group_and_scrolls_to_it(load_sets):
+    """The rail's whole job. Token starts collapsed and is at the bottom of a
+    page tall enough to scroll, so both halves are observable."""
+    page, _, errors = load_sets(
+        [_set(f"e{i:03d}", "expansion", "2026-01-23") for i in range(30)]
+        + [_set("tokn", "token", "2025-02-07")]
+    )
+
+    assert not _grid_visible(page, "token")
+    assert page.evaluate("window.scrollY") == 0
+
+    page.click("#sets-rail .rail-row[data-set-type='token']")
+
+    assert _grid_visible(page, "token")
+    # scrollIntoView is smooth, so the scroll lands a frame or two later.
+    page.wait_for_function("() => window.scrollY > 0")
+    assert errors == []
+
+
+def test_a_filter_match_inside_a_collapsed_group_opens_it(load_sets):
+    """The count and the page have to agree. Filtering to a set that lives in a
+    collapsed group used to be reachable only by expanding the group by hand —
+    the header would read "1 of 2 sets" over a page showing none of them."""
+    page, _, errors = load_sets(
+        [
+            _set("expn", "expansion", "2026-01-23", name="Lorwyn Eclipsed"),
+            _set("tokn", "token", "2025-02-07", name="Tarkir Tokens"),
+        ]
+    )
+
+    assert not _grid_visible(page, "token")
+
+    page.fill("#set-filter", "tarkir")
+
+    assert _grid_visible(page, "token")
+    assert page.locator("a.set-tile[href='/sets/tokn']").is_visible()
+    assert page.locator("section[data-set-type='expansion']").is_hidden()
+    assert page.locator("#sets-count").text_content() == "1 of 2 sets"
+
+    # Clearing the filter hands every group back to the state it was in.
+    page.fill("#set-filter", "")
+    assert not _grid_visible(page, "token")
+    assert _grid_visible(page, "expansion")
+    assert errors == []
+
+
+def test_the_filter_matches_each_tile_against_its_own_set(load_sets):
+    """The tiles are paired with their sets per group, not by one running index
+    over every tile on the page. A drifting index shows the neighbouring set's
+    tile for a match, which reads as a filter that is merely fuzzy — so the
+    assertion is *which* tile survived, in the last group, past a collapsed one."""
+    page, _, errors = load_sets(
+        [
+            _set("aaa", "expansion", "2026-01-23", name="Alpha"),
+            _set("bbb", "expansion", "2026-01-22", name="Bravo"),
+            _set("ccc", "token", "2025-02-07", name="Charlie"),
+            _set("ddd", "promo", "2025-01-06", name="Delta"),
+            _set("eee", "promo", "2025-01-05", name="Echo"),
+        ]
+    )
+
+    page.fill("#set-filter", "echo")
+
+    visible = page.eval_on_selector_all(
+        "a.set-tile:not([hidden])", "els => els.map(e => e.getAttribute('href'))"
+    )
+    assert visible == ["/sets/eee"]
+    assert page.locator("#sets-count").text_content() == "1 of 5 sets"
+    # The rail recounts with the sections, and says which rows go nowhere.
+    assert _rail(page) == [["expansion", "0"], ["token", "0"], ["promo", "1"]]
+    assert page.locator("#sets-rail .rail-row.is-empty").count() == 2
+    assert errors == []
+
+
+def test_the_group_roll_up_counts_the_sets_with_cards_in_hand(load_sets):
+    """The header's second number: how many of the group's sets you have any
+    card from. It tracks the filter the way the count beside it does, so the
+    header always describes what is on screen."""
+    page, _, errors = load_sets(
+        [
+            _owned(_set("aaa", "expansion", "2026-01-23", name="Alpha"), 12),
+            _owned(_set("bbb", "expansion", "2026-01-22", name="Bravo"), 3),
+            _set("ccc", "expansion", "2026-01-21", name="Charlie"),
+        ]
+    )
+
+    roll_up = page.locator("section[data-set-type='expansion'] .group-owned")
+    assert roll_up.text_content() == "2 owned"
+
+    page.fill("#set-filter", "charlie")
+    assert roll_up.text_content() == "0 owned"
+    assert errors == []
+
+
+def test_the_narrow_viewport_form_ships_with_the_rail(load_sets):
+    """de-l5l is the live evidence this codebase forgets the `@media` half of a
+    layout change, so it is asserted in the same change. At 700px and under the
+    two columns become one and the rail stops being sticky — the same collapse
+    deck-builder.css does — and the rail's rows wrap as chips rather than
+    standing 24 tall above the first set tile."""
+    payload = [
+        _set("expn", "expansion", "2026-01-23"),
+        _set("tokn", "token", "2025-02-07"),
+    ]
+
+    wide, _, errors = load_sets(payload, viewport={"width": 1280, "height": 720})
+    assert errors == []
+    assert len(wide.eval_on_selector(
+        ".sets-layout", "el => getComputedStyle(el).gridTemplateColumns"
+    ).split()) == 2
+    assert wide.eval_on_selector(".sets-rail", "el => getComputedStyle(el).position") == "sticky"
+
+    narrow, _, errors = load_sets(payload, viewport={"width": 390, "height": 844})
+    assert errors == []
+    assert len(narrow.eval_on_selector(
+        ".sets-layout", "el => getComputedStyle(el).gridTemplateColumns"
+    ).split()) == 1
+    assert narrow.eval_on_selector(".sets-rail", "el => getComputedStyle(el).position") == "static"
+    assert narrow.eval_on_selector(
+        ".rail-list", "el => getComputedStyle(el).flexDirection"
+    ) == "row"
+    # And the rail is still the whole rail — the narrow form folds no rows away.
+    assert [row[0] for row in _rail(narrow)] == ["expansion", "token"]
