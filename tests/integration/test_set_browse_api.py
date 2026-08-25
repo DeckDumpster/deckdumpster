@@ -122,6 +122,22 @@ class TestEnvelope:
         assert body["owned_all"] >= 3
         assert body["total_all"] >= body["total"]
 
+    def test_the_all_printings_meter_reconciles_with_the_default_view(self, api, owned_set):
+        """de-epk: `hob` reported 321 printings in the meter and returned 320.
+
+        The meter counts the set; the default view now asks for every section,
+        so the two agree without the caller naming `sections` at all.  A caller
+        that dismisses one is choosing the gap.
+        """
+        set_code, _total = owned_set
+
+        default = _browse(api, set_code, limit=MAX_LIMIT)
+        every_section = _browse(api, set_code, limit=MAX_LIMIT,
+                                sections="base,extended,promo")
+
+        assert default["total"] == default["total_all"]
+        assert default["total"] == every_section["total"]
+
     def test_later_windows_omit_them_rather_than_going_stale(self, api, owned_set):
         set_code, _total = owned_set
 

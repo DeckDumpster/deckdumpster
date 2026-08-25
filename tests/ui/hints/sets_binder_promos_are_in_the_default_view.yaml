@@ -1,0 +1,23 @@
+start_page: "/sets/mkm"
+involves:
+  - "the all-printings meter #meter-all-count, read as 'owned / total'"
+  - "the status line #status, which reads '{total} printings'"
+  - "section pills #sections button[data-section] — Base | Extended | Promos"
+  - ".section[data-section] blocks, each holding .sheet-card tiles"
+fixture_data:
+  set: "mkm — Murders at Karlov Manor"
+  total_printings: 440
+  promo_printings: 10
+  base_printings: 430
+notes: >
+  Land on the bare /sets/mkm — no query string, because every default is
+  elided and all three sections are now defaults. All three pills therefore
+  carry class 'on', and a section[data-section="promo"] renders below the base
+  set with 10 tiles in it.
+  The assertion that matters is the reconciliation: the denominator of
+  #meter-all-count, the number in #status, and the count of .sheet-card in the
+  page are all 440. Before de-epk the meter said 440 while 430 tiles rendered.
+  mkm has base_set_size NULL in the fixture like every other set there, so
+  #meter-base is hidden and everything non-promo lands in 'Base set' — that is
+  the NULL-size shape, not a defect. Only the owned side of the meter depends
+  on demo data, so read the denominator rather than the whole fraction.

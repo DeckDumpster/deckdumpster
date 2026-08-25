@@ -196,11 +196,32 @@ class TestSections:
         assert [r["collector_number"] for r in rows] == ["1", "2", "3", "4", "5", "6a", "6b"]
         assert len(rows) == BASE_SET_SIZE + 1
 
-    def test_promos_are_off_by_default(self, db):
+    def test_promos_are_on_by_default(self, db):
         rows = _rows(db)["rows"]
 
-        assert "promo" not in {r["section"] for r in rows}
-        assert len(rows) == len(PRINTINGS) - 1
+        assert "promo" in {r["section"] for r in rows}
+        assert len(rows) == len(PRINTINGS)
+
+    def test_the_default_view_reconciles_with_the_all_printings_meter(self, db):
+        """The gap de-epk was filed for: `hob` said 321 and drew 320.
+
+        The meter counts every printing in the set, so a section held back from
+        the default made the header disagree with the grid under it by exactly
+        the hidden promos.  Both numbers come off the same request, which is
+        what makes this a reconciliation view rather than two counts.
+        """
+        body = _rows(db)
+
+        assert body["total"] == body["total_all"] == len(PRINTINGS)
+        assert len(body["rows"]) == body["total_all"]
+
+    def test_a_dismissed_section_leaves_the_grid_and_not_the_meter(self, db):
+        """Dismissal is by choice, and the meters still measure the set."""
+        body = _rows(db, sections=("base", "extended"))
+
+        assert "promo" not in {r["section"] for r in body["rows"]}
+        assert body["total"] == len(PRINTINGS) - 1
+        assert body["total_all"] == len(PRINTINGS)
 
     def test_a_set_with_no_recorded_size_is_one_contiguous_run(self, db):
         """NULL is permanent and legitimate; it is not an empty base set."""
@@ -287,7 +308,7 @@ class TestPaging:
 
         assert len(body["rows"]) == 3
         assert (body["limit"], body["offset"]) == (3, 0)
-        assert body["total"] == len(PRINTINGS) - 1  # promos off by default
+        assert body["total"] == len(PRINTINGS)
 
     def test_an_offset_walk_repeats_no_printing_and_skips_none(self, db):
         _own(db, "print-00", "nonfoil", 3)
@@ -389,7 +410,7 @@ class TestParams:
         view = _parse_set_browse_params({})
 
         assert (view.sort, view.order, view.filter) == ("number", "asc", "all")
-        assert tuple(view.sections) == ("base", "extended")
+        assert tuple(view.sections) == ("base", "extended", "promo")
         assert view.q == ""
 
     @pytest.mark.parametrize("params", [

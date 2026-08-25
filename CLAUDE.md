@@ -227,12 +227,20 @@ filled, and it has no copy to take a finish from; a printing that exists in nonf
 priced in nonfoil, a foil-only or etched-only one in foil.
 
 **Sections** are `base` | `extended` | `promo`, decided by `sets.base_set_size` and nothing
-else (see "Set sizes"). Promos are off by default. With `base_set_size` NULL the set is one
+else (see "Set sizes"). With `base_set_size` NULL the set is one
 contiguous run — everything non-promo is `base`, which is also every pre-2019 set's shape —
 and `owned_base`/`total_base` are **null**, not 0/0, so the UI hides the bar.
 
+**All three sections are on by default** (`DEFAULT_SECTIONS`); promos used to be excluded
+(de-epk). The meters count every printing in the set, so a section withheld from the default made the
+header disagree with the grid beneath it by exactly the hidden rows — `hob` reported 321
+printings and drew 320, the missing tile a bundle promo no control could ask for. The pills
+on `/sets/:set_code` dismiss a section **by choice**, writing `sections` to the query string
+with the full set elided like every other control there.
+
 **Completion counts are computed before `q`, `filter` and `sections`**, so the header meters
-do not move when the view is filtered. Both count printings, never copies.
+do not move when the view is filtered — including when a section is dismissed. They measure
+the set, not the view. Both count printings, never copies.
 
 `limit` defaults to 250 and caps at `COLLECTION_LIMIT_MAX`; a bad `limit`, `sort`, `order`,
 `filter` or `sections` is a 400 via `PageParamError`, never a silent clamp or fallback.

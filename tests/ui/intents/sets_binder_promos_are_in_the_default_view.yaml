@@ -1,0 +1,12 @@
+# Scenario: The binder shows every printing it counts
+#
+# Related:
+#   issues: [de-epk]
+#   pages: [sets]
+
+description: >
+  I open a set's binder page without touching a single control. The
+  all-printings meter tells me how many printings the set has, and the grid
+  below it holds exactly that many pockets — promos included, in a section of
+  their own. Nothing in the set is counted in the header and then left out of
+  the page, which is the whole reason I would reconcile a binder here.
