@@ -7,13 +7,16 @@ involves:
   - "span#sets-count in the controls row, reading '18 sets' unfiltered"
 fixture_data:
   cached_sets: "18, in 5 set_type groups: expansion 12, core 2, draft_innovation 2, masterpiece 1, duel_deck 1"
-  newest: "Lorwyn Eclipsed (ecl), released 2026-01-23 — an expansion, so the Expansion group leads"
+  newest: "Lorwyn Eclipsed (ecl), released 2026-01-23 — the newest set, and an expansion"
 notes: >
   The page is already loaded by the runner's navigate to start_page, which
   waits for networkidle, so GET /api/sets/index has landed before the first
   step. 1. Assert 18 a.set-tile and 5 section.set-group. 2. Assert the first
-  child of #sets-body is the expansion group — that is the newest-first
-  group order. 3. Assert the first tile inside it is ecl — newest-first
+  child of #sets-body is the expansion group. Note this fixture cannot tell
+  the curated group order apart from the release order: its 5 types fall in the
+  same sequence either way, so the invariant is pinned in
+  tests/test_sets_page.py against a synthetic payload instead. 3. Assert the
+  first tile inside it is ecl — newest-first
   within the group. 4. Assert ecl's keyrune <i> carries ss-ecl, and its
   name and 'ECL · 2026-01-23' sub-line are visible. 5. Assert #sets-count
   reads '18 sets'.

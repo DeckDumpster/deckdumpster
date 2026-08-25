@@ -16,12 +16,12 @@ sheet explorer.
 
 ## 1. Page Purpose
 
-**`/sets`** lists every set whose card list is cached locally, grouped by set type
-(Expansion, Core, Commander, …), newest release first. Each set is a tile showing its
-keyrune symbol, name, code, release date, and up to two completion meters — how much
-of the base set is owned, and how much of the whole printing catalogue for that set is
-owned. It is the entry point to the binder, and on its own it answers "which sets am I
-close to finishing?".
+**`/sets`** lists every set whose card list is cached locally, grouped by set type in a
+fixed order — Expansion, Core, Commander, … — with the sets inside each group newest
+release first. Each set is a tile showing its keyrune symbol, name, code, release date,
+and up to two completion meters — how much of the base set is owned, and how much of the
+whole printing catalogue for that set is owned. It is the entry point to the binder, and
+on its own it answers "which sets am I close to finishing?".
 
 **`/sets/:set_code`** lays one set out as a binder page: every printing in the set, in
 collector-number order, at a caller-chosen number of cards per row, with owned pockets
@@ -138,8 +138,10 @@ links to the same page.
 
 1. User opens `/sets` from the homepage nav. Body shows a spinner and "Loading sets…".
 2. `GET /api/sets/index` returns every cached set, newest release first.
-3. Tiles render grouped by set type, in the order each type first appears — so the type
-   holding the newest set leads. Count reads `"{N} sets"`.
+3. Tiles render grouped by set type, the groups in `sets.js`'s curated `SET_TYPE_RANK`
+   order — Expansion leads whatever was released most recently, and a set type the rank
+   has never heard of renders last rather than dropping out. Within a group the sets
+   stay newest-first, the order the response arrives in. Count reads `"{N} sets"`.
 4. User types `fin` (or `Final Fantasy`) into the filter. Tiles hide on every keystroke;
    each group heading's count updates; a group that lost every set hides entirely.
 5. Count reads `"{shown} of {N} sets"`.
