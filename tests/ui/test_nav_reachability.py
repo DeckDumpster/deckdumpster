@@ -9,9 +9,10 @@ blind to by construction.
 This is default-deny in both directions. The route list comes from the server's
 own dispatch table (`mtg_collector/cli/page_routes.PAGE_ROUTES` — the tuple
 `do_GET` actually routes from), so adding a page and forgetting the nav link
-fails here with no list to remember to update. The previous shape of this check was a hand-written
-scenario naming each link, which is exactly what went stale: it kept passing on
-the links it knew about while /sets shipped with no homepage entry at all.
+fails here with no list to remember to update. The previous shape of this check
+was a hand-written scenario naming each link, which is exactly what went stale:
+it kept passing on the links it knew about while /sets shipped with no homepage
+entry at all.
 
 Two things it deliberately does *not* do:
 
