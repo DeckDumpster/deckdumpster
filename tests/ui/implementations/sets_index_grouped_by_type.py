@@ -1,9 +1,14 @@
 """
 Hand-written implementation for sets_index_grouped_by_type.
 
-Pins the two orderings the page depends on the API for — groups newest-first,
-and sets newest-first inside a group — plus the per-tile contents: keyrune
-symbol, code and date, and the link to the binder page.
+Pins the ordering the page depends on the API for — sets newest-first inside a
+group — plus the per-tile contents: keyrune symbol, code and date, and the link
+to the binder page.
+
+The group order is `SET_TYPE_RANK` in sets.js, and this fixture cannot see it:
+its five types come out in the same sequence whether the rank is applied or the
+response's own release order is. `tests/test_sets_page.py` pins the rank against
+a synthetic payload, which is the only place the difference shows.
 """
 
 
@@ -14,9 +19,8 @@ def steps(harness):
     harness.assert_visible("#sets-count")
     harness.assert_text_present("18 sets")
 
-    # /api/sets/index comes back newest release first and the page groups it
-    # preserving first appearance, so the group holding the newest set leads.
-    # Lorwyn Eclipsed (2026-01-23) is an expansion, so Expansion is first.
+    # Expansion is the first block — see the module docstring for why this
+    # assertion alone does not prove the group order is the curated one.
     harness.assert_element_count(
         "#sets-body > section.set-group:first-child[data-set-type='expansion']", 1
     )

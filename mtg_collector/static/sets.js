@@ -34,9 +34,32 @@ function setTypeLabel(setType) {
   return setType.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
-/* Groups keep first-appearance order. The response is sorted newest release
-   first, so the type holding the newest set leads and no second sort is
-   needed. */
+/* The order the groups are shown in. Which set_type leads used to be whichever
+   one owned the single most recently released cached set, and that is not a
+   judgement about what a collector opens this page for: msc and msh shared a
+   release date and the set_code tiebreak put Commander ahead of Expansion,
+   then importing the Hobbit sets reshuffled it again. The order is decided
+   here instead.
+
+   Scryfall adds set types over time, so a type this list has never heard of
+   sorts to the end rather than dropping out or throwing — the list needs
+   maintenance to stay optimal, never to stay correct. */
+const SET_TYPE_RANK = [
+  'expansion', 'core', 'commander', 'masters', 'draft_innovation', 'masterpiece',
+  'eternal', 'alchemy', 'box', 'duel_deck', 'from_the_vault', 'planechase',
+  'archenemy', 'spellbook', 'premium_deck', 'arsenal', 'starter', 'funny',
+  'vanguard', 'treasure_chest', 'minigame', 'memorabilia', 'token', 'promo',
+];
+
+function setTypeRank(setType) {
+  const i = SET_TYPE_RANK.indexOf(setType);
+  return i === -1 ? SET_TYPE_RANK.length : i;
+}
+
+/* Groups render in SET_TYPE_RANK order; within a group the response's
+   newest-first order is kept. Array sort is stable, so the types that share a
+   rank — every one the list has never heard of — keep first appearance, which
+   is still newest-first. */
 function renderGroups(sets, ordered) {
   const groups = new Map();
   for (const s of sets) {
@@ -45,7 +68,8 @@ function renderGroups(sets, ordered) {
     groups.get(key).push(s);
   }
   let html = '';
-  for (const [setType, rows] of groups) {
+  const ranked = Array.from(groups).sort((a, b) => setTypeRank(a[0]) - setTypeRank(b[0]));
+  for (const [setType, rows] of ranked) {
     ordered.push(...rows);
     html += `<section class="set-group" data-set-type="${esc(setType)}">`
       + `<h2>${esc(setTypeLabel(setType))}<span class="group-count">${rows.length}</span></h2>`
