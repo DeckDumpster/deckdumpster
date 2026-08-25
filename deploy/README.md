@@ -561,6 +561,73 @@ Nothing on a timer refreshes the card catalogue — `mtg cache all` and
 this check goes red immediately. That is the correct reading, and
 `mtg cache all` is the fix.
 
+## CDN deploy check
+
+> A deploy check that does not traverse the CDN is not a deploy check.
+
+On 2026-08-25 six commits deployed and the public site showed none of them for a
+day. Everything anyone checked passed: `deploy.sh`'s health check hit
+`https://localhost:<port>`, the LAN address served the new pages, the container
+was up, the checkout was current. The one hop nobody measured was Cloudflare,
+which was holding each document for 24h because the origin said
+`public, max-age=86400` with no validator to revalidate against.
+
+`deploy/cdn-check.sh` asks the public URL the same question the health check
+asks localhost, and then compares the two:
+
+```bash
+bash deploy/cdn-check.sh                                    # defaults below
+bash deploy/cdn-check.sh --path /sets                       # any document
+bash deploy/cdn-check.sh --url https://magic.dumpster.cards \
+                         --origin https://localhost:8081
+```
+
+It verifies, in order:
+
+1. the origin answers and carries an ETag;
+2. the public URL answers through Cloudflare and carries an ETag;
+3. **the two ETags name the same document** — the assertion that would have
+   caught it, and the only one that distinguishes "the edge is serving what we
+   deployed" from "the edge is serving something, plausibly";
+4. the public `Cache-Control` holds the document for under 60s without
+   revalidating;
+5. a conditional request through the edge returns 304;
+6. the edge negotiates gzip.
+
+Both sides are asked with `Accept-Encoding: identity`. The server mints a
+distinct ETag per encoding on purpose (see `mtg_collector/http_cache.py`), and
+Cloudflare re-compresses on its own schedule, so letting either side choose
+would make step 3 a coin toss. Cloudflare weakens strong ETags when it
+transforms a response, so `W/` is stripped from both sides before comparing;
+nothing else is normalised.
+
+**No check may pass by skipping.** There is no flag, no unset variable and no
+environment in which this exits 0 without having asked both sides and compared
+them.
+
+### Cloudflare Access
+
+`magic.dumpster.cards` is behind Cloudflare Access, so an unauthenticated
+request is answered by the Access login page rather than by the app. The script
+diagnoses that **by name** instead of letting it surface as an ETag mismatch — a
+mismatch would send the reader to the deploy and the cache, neither of which
+would be wrong. Give it a service token to get past it:
+
+```bash
+export CF_ACCESS_CLIENT_ID=...
+export CF_ACCESS_CLIENT_SECRET=...
+bash deploy/cdn-check.sh
+```
+
+`deploy.yml` runs this as a `cdn-check` job after the prod deploy, reading the
+token from the `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` repository
+secrets. Without them the job fails, reporting the Access wall. That failure is
+correct — an unverifiable deploy is exactly the condition the job exists to end
+— but it is a one-time configuration, not a code problem.
+
+`tests/test_cdn_check.py` drives the script into each failure it claims to
+catch, with a `curl` PATH shim, so none of the above is only ever seen green.
+
 ## Scripts
 
 | Script | Purpose |
@@ -573,6 +640,7 @@ this check goes red immediately. That is the correct reading, and
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
 | `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or any image its build labelled, turn up in Podman's default store, or if nothing was built. Removes what it catches, on both paths. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
+| `cdn-check.sh [--url U] [--origin U] [--path P]` | Verify the deployed document is what the CDN is actually serving, by comparing edge and origin ETags. Also checks revalidation, gzip and that no document is held for hours — see [CDN deploy check](#cdn-deploy-check) |
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 | `mtg data check-catalog` (in-container) | Compare the local set list against Scryfall's and exit 1 if it has fallen behind. Read-only — see [Catalog freshness check](#catalog-freshness-check) |

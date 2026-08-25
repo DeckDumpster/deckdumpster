@@ -262,6 +262,49 @@ the set, not the view. Both count printings, never copies.
 `limit` defaults to 250 and caps at `COLLECTION_LIMIT_MAX`; a bad `limit`, `sort`, `order`,
 `filter` or `sections` is a 400 via `PageParamError`, never a silent clamp or fallback.
 
+### HTTP response semantics — one door, policy keyed on the response
+
+Every body leaves through `CrackPackHandler._respond`, and the caching rules
+follow from **what the response is**, not from a string the caller passed.
+`mtg_collector/http_cache.py` holds the decisions as pure functions.
+
+Three policies, and there is no fourth: `CACHE_DOCUMENT` (`public, no-cache`)
+for HTML and everything under `/static/*`, `CACHE_IMMUTABLE` for the
+ingest-image path (whose headers are unchanged, at `public, max-age=86400,
+immutable`), `CACHE_API` (`private, no-cache`) for JSON. SSE sets its own
+headers and is untouched.
+
+**`immutable` is a promise about the URL, not about the bytes**, and no URL here
+is content-addressed. The ingest-image path rests on a convention — the upload
+handler refuses a name that already exists — which is why its window stays a day
+and not a year; a hash in the URL is what would earn more. `/static/app.css`
+rests on nothing at all: it is rewritten by every deploy, so a long max-age on
+it is the same bug the pages had. Every HTML page was served
+`public, max-age=86400` with no validator, and because `magic.dumpster.cards`
+reaches this process through a Cloudflare tunnel, the edge held each document
+for a day: six deploys landed on 2026-08-25 and the public site showed none of
+them. A hard refresh does not help — it defeats the browser cache, not the edge.
+
+**The ETag varies with the encoding** — `"<h>"` identity, `"<h>-gzip"` — plus
+`Vary: Accept-Encoding`. One tag for two representations is how a cache serves
+gzipped bytes to a client that asked for none, or satisfies a byte range out of
+the wrong representation; two tags makes that unrepresentable. For the same
+reason **a Range request forces identity**, and `Accept-Ranges` is advertised
+only on identity responses.
+
+The ETag is a hash of the body, never the mtime: "did this page change on disk"
+is what it has to answer, and it stays correct across a container rebuild, which
+resets every mtime without changing a byte. There is deliberately **no
+`Last-Modified`** — `If-None-Match` already wins whenever a client sends both,
+so a second validator would be a second date-parsing error path with no caller.
+
+An unparseable or multi-range `Range` is *ignored* (200), which is what RFC 9110
+requires; only a well-formed range outside the representation is a 416.
+
+**Verifying this needs the CDN.** `deploy/cdn-check.sh` compares the edge's ETag
+with the origin's, because every localhost check passed on the evening the
+public site was a day stale. See `deploy/README.md` → "CDN deploy check".
+
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
 
