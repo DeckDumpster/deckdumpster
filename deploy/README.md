@@ -480,6 +480,87 @@ is `s3api list-objects-v2`.
 { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::gantt-mtgc-backup" }
 ```
 
+## Catalog freshness check
+
+The card catalogue went two months without a new set — the newest set in the
+database was Marvel Super Heroes (2026-06-26) while upstream had shipped The
+Hobbit on 2026-08-14 — and **every timer on this box was green the whole time**.
+Nothing was broken in the sense any of them test for: the price fetch ran, the
+sealed catalogue imported, the backup uploaded, `AllPrintings.json` on disk had a
+current mtime. Each one answers *did my download succeed*, and each answered yes,
+correctly, every day.
+
+`mtg data check-catalog` asks the question none of them does — *is the catalogue
+actually current?* — by comparing what we hold against what exists:
+
+```
+lag = (newest set released upstream) - (newest set released in our `sets` table)
+```
+
+`mtg cache all` upserts **every** Scryfall set unfiltered before it touches a
+card, so `sets` is a mirror of Scryfall's `/sets` list. Both sides are drawn from
+that one list under one rule, so a current mirror scores exactly **0** — not
+"small", 0. There is no release-cadence term to tune around: a quiet month moves
+both sides together and the lag stays 0. It leaves 0 only when a set is out in
+the world and our copy of the list predates it.
+
+| Condition | Why it is a failure |
+|---|---|
+| lag > `MTGC_CATALOG_MAX_LAG_DAYS` (7) | a released set has been missing from the catalogue for a week |
+| the local database holds no released set at all | the catalogue was never populated |
+| Scryfall returns nothing | "we could not ask" is not "the answer is fine" |
+| `MTGC_CATALOG_MAX_LAG_DAYS` is not an integer | a typo must not silently restore the shipped default |
+
+Both sides drop sets with `released_at` in the future — Scryfall lists sets weeks
+ahead and the ingest stores them then, so a raw `MAX(released_at)` would read the
+same far-future set on both sides and measure nothing. That same head start is
+why a 7-day threshold is not tight: a catalogue refreshed at any point during a
+set's preview season already holds the row and scores 0 on release day, so a
+nonzero lag means the mirror predates the set's very appearance upstream.
+
+It deliberately does **not** require the newest set's *cards* to be cached.
+`mtg cache all` skips every card with no `oracle_id`, so a token-only or art-series
+release (`thob`, `amsh`) stores zero printings by design and that rule would hold
+the alarm red forever with nothing able to clear it. An alarm that cannot be
+cleared is an alarm that gets ignored.
+
+The verdict travels on the unit's own exit status — STALE exits 1, which fails
+`mtgc-catalog-check-<instance>.service`, which fires `OnFailure=` into the shared
+Pushover alert. There is no second alerting path to keep in sync, and the same
+line covers a stopped container or an unreachable Scryfall. The check reads the
+database and Scryfall and writes nothing.
+
+It reads the catalogue through `get_connection()` rather than opening the instance
+file: `sets` is in `SHARED_TABLES`, so an instance with `MTGC_SHARED_DB` has an
+empty `sets` of its own and reads the real one through a temp view over the
+ATTACHed `shared.sqlite`. Every `--test` and `--init` bring-up on a box with the
+`mtgc-shared-ref` volume is in that mode, and opening the instance file directly
+reports a catalogue with no sets in it — a permanent red no refresh could clear.
+
+### Arming an instance
+
+`setup.sh` installs `mtgc-catalog-check-<instance>.{service,timer}` (daily at
+09:00) but enables nothing.
+
+```bash
+# 1. Pushover credentials, if not already set — same channel as the backup check.
+#    See "Arming an instance" under Backup freshness check.
+
+# 2. Enable the timer.
+systemctl --user enable --now mtgc-catalog-check-<instance>.timer
+
+# 3. Prove it goes RED before trusting it green. A current catalogue scores a lag
+#    of exactly 0, so -1 is the threshold nothing can pass — run it and confirm
+#    both the non-zero exit and the alert. (-e, because podman exec does not pass
+#    the host's environment into the container.)
+podman exec -e MTGC_CATALOG_MAX_LAG_DAYS=-1 systemd-mtgc-<instance> mtg data check-catalog
+```
+
+Nothing on a timer refreshes the card catalogue — `mtg cache all` and
+`mtg data fetch` are both by hand — so on a box that has not run one recently
+this check goes red immediately. That is the correct reading, and
+`mtg cache all` is the fix.
+
 ## Scripts
 
 | Script | Purpose |
@@ -494,6 +575,7 @@ is `s3api list-objects-v2`.
 | `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or any image its build labelled, turn up in Podman's default store, or if nothing was built. Removes what it catches, on both paths. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
+| `mtg data check-catalog` (in-container) | Compare the local set list against Scryfall's and exit 1 if it has fallen behind. Read-only — see [Catalog freshness check](#catalog-freshness-check) |
 
 ## CI
 

@@ -329,7 +329,7 @@ fi
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_USER_DIR"
 
-for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-edhrec; do
+for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-catalog-check mtgc-edhrec; do
     echo "==> Installing ${UNIT_PREFIX} timer"
     for EXT in service timer; do
         sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
@@ -483,5 +483,6 @@ echo "  Prices:     systemctl --user enable --now mtgc-prices-${INSTANCE}.timer"
 echo "  Sealed:     systemctl --user enable --now mtgc-sealed-catalog-${INSTANCE}.timer"
 echo "  Backup:     systemctl --user enable --now mtgc-backup-${INSTANCE}.timer"
 echo "  Bkp check:  systemctl --user enable --now mtgc-backup-check-${INSTANCE}.timer"
+echo "  Cat check:  systemctl --user enable --now mtgc-catalog-check-${INSTANCE}.timer"
 echo "  EDHREC:     systemctl --user enable --now mtgc-edhrec-${INSTANCE}.timer"
 echo "  Teardown:   bash deploy/teardown.sh $INSTANCE"
