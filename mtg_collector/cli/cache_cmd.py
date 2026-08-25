@@ -1,5 +1,6 @@
 """Cache management commands: mtg cache all"""
 
+import gzip
 import json
 import sqlite3
 import sys
@@ -30,6 +31,33 @@ def _upsert_card_row(api, card_data, card_repo, printing_repo, skipped):
         skipped.append((card_data.get("id"), card_data.get("set"),
                         card_data.get("collector_number"), str(e)))
         return False
+
+
+def _bulk_jsonl_uri(bulk_meta, bulk_type="default_cards"):
+    """Pull the gzipped-JSONL download URI for one bulk-data type.
+
+    Scryfall retired the plain-JSON `download_uri` on 2026-07-20; every entry
+    now exposes `jsonl_download_uri` pointing at a `.jsonl.gz`.
+    """
+    for entry in bulk_meta.get("data", []):
+        if entry.get("type") == bulk_type:
+            return entry["jsonl_download_uri"]
+    return None
+
+
+def _iter_bulk_cards(path):
+    """Yield card dicts from a gzipped JSONL bulk-data file, one at a time.
+
+    The decompressed default_cards file is multiple GB. It is never held in
+    memory as a whole: gzip.open decompresses as the file object is read, and
+    each line is parsed and handed back on its own.
+    """
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            yield json.loads(line)
 
 
 def register(subparsers):
@@ -92,20 +120,16 @@ def cache_all(db_path: str):
     resp.raise_for_status()
     bulk_meta = resp.json()
 
-    download_uri = None
-    for entry in bulk_meta.get("data", []):
-        if entry.get("type") == "default_cards":
-            download_uri = entry["download_uri"]
-            break
+    download_uri = _bulk_jsonl_uri(bulk_meta)
 
     if not download_uri:
         print("Error: Could not find default_cards bulk data entry")
         sys.exit(1)
 
-    # Step 3: Stream-download bulk JSON to temp file
+    # Step 3: Stream-download the gzipped JSONL to a temp file
     tmp_dir = get_mtgc_home()
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    tmp_path = tmp_dir / "bulk-default-cards.json"
+    tmp_path = tmp_dir / "bulk-default-cards.jsonl.gz"
 
     print(f"Downloading bulk data to {tmp_path}...")
     with api.session.get(download_uri, stream=True) as resp:
@@ -125,19 +149,16 @@ def cache_all(db_path: str):
                     print(f"\r  {mb:.0f} MB", end="", flush=True)
     print()  # newline after progress
 
-    # Step 4: Parse and process cards
+    # Step 4: Parse and process cards.
+    # Streamed a line at a time - the decompressed file is several GB, and
+    # materialising it as a list is what OOMs this box.
     print("Processing bulk data...")
-    with open(tmp_path, "r") as f:
-        cards_data = json.load(f)
-
-    total_cards = len(cards_data)
-    print(f"  {total_cards} cards in bulk data")
 
     processed = 0
     all_set_codes = set()
     skipped = []
 
-    for card_data in cards_data:
+    for card_data in _iter_bulk_cards(tmp_path):
         set_code = card_data.get("set")
 
         # Reversible cards store oracle_id on faces, not top-level
@@ -270,8 +291,10 @@ def cache_all(db_path: str):
     if renamed:
         print(f"  Resynced card_name on {renamed} printing(s)")
 
-    # Step 9: Clean up temp file
+    # Step 9: Clean up temp file, and any multi-GB plain-JSON download left
+    # behind by a pre-JSONL run of this command.
     tmp_path.unlink(missing_ok=True)
+    (tmp_dir / "bulk-default-cards.json").unlink(missing_ok=True)
 
     # Summary
     print("\nDone!")
