@@ -55,14 +55,14 @@ def upstream():
     return json.loads(SETS_FIXTURE.read_text())["data"]
 
 
-def make_db(sets):
-    """An in-memory catalogue holding exactly these sets.
+def make_db(sets, path=":memory:"):
+    """A catalogue holding exactly these sets.
 
     Columns match `sets` in db/schema.py; only the three the check reads carry
     data, because those are the three `mtg cache all` step 1 writes for every
     Scryfall set before it touches a single card.
     """
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(path)
     conn.execute(
         "CREATE TABLE sets (set_code TEXT PRIMARY KEY, set_name TEXT NOT NULL,"
         " set_type TEXT, released_at TEXT, digital INTEGER NOT NULL DEFAULT 0,"
@@ -77,6 +77,7 @@ def make_db(sets):
             for s in sets
         ],
     )
+    conn.commit()
     return conn
 
 
@@ -229,7 +230,7 @@ def test_an_empty_catalogue_is_stale_but_is_not_a_number(upstream):
     assert verdict.stale
     assert verdict.lag_days is None
     assert verdict.local is None
-    assert "no released set in the local catalogue" in verdict.summary()
+    assert "holds no released set at all" in verdict.summary()
 
 
 def test_sets_with_no_release_date_take_no_part(upstream):
@@ -315,11 +316,7 @@ def cli(tmp_path, monkeypatch):
     def run(upstream_sets, db_sets, max_lag=None):
         db = tmp_path / "collection.sqlite"
         db.unlink(missing_ok=True)
-        conn = make_db(db_sets)
-        disk = sqlite3.connect(db)
-        conn.backup(disk)
-        disk.close()
-        conn.close()
+        make_db(db_sets, path=str(db)).close()
 
         class Stub:
             def get_all_sets(self):
@@ -400,6 +397,51 @@ def test_the_exit_code_reaches_the_process(monkeypatch, tmp_path, upstream):
     with pytest.raises(SystemExit) as exit_info:
         data_cmd.run(args)
     assert exit_info.value.code == 1
+
+
+def test_the_split_db_catalogue_is_the_one_read(tmp_path, monkeypatch, upstream):
+    """On a shared-reference instance the catalogue is not in the instance's DB.
+
+    `sets` is in SHARED_TABLES, so a deployed instance with MTGC_SHARED_DB has an
+    empty `sets` of its own and reads the real one through a temp view over the
+    ATTACHed shared.sqlite. Opening the instance file directly reports a
+    catalogue with no sets in it -- a permanent red no refresh could clear, which
+    is the one thing this alarm must never do.
+    """
+    from mtg_collector.cli import data_cmd
+    from mtg_collector.db import connection
+    from mtg_collector.db.schema import init_db
+
+    shared = tmp_path / "shared.sqlite"
+    conn = make_db(upstream, path=str(shared))
+    conn.close()
+
+    instance = tmp_path / "collection.sqlite"
+    local = sqlite3.connect(instance)
+    init_db(local)
+    local.execute("DELETE FROM sets")  # what the shared-ref prune leaves behind
+    local.commit()
+    local.close()
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 8, 25)
+
+    class Stub:
+        def get_all_sets(self):
+            return upstream
+
+    monkeypatch.setattr(data_cmd, "date", FrozenDate)
+    monkeypatch.setattr("mtg_collector.services.scryfall.ScryfallAPI", Stub)
+    monkeypatch.setenv("MTGC_SHARED_DB", str(shared))
+    monkeypatch.setattr(connection, "_connection", None)
+    monkeypatch.setattr(connection, "_db_path", None)
+
+    try:
+        assert data_cmd.check_catalog(str(instance)) == 0
+    finally:
+        connection.close_connection()
 
 
 def test_the_subcommand_is_registered():

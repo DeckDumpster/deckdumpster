@@ -333,8 +333,12 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   with no `oracle_id`, so a token-only release stores zero printings by design and that
   rule would pin the alarm red with nothing able to clear it. STALE exits 1 → the unit
   fails → `OnFailure=` pushes the alert, so there is no second alerting path to keep in
-  sync. Nothing on a timer refreshes the catalogue, so this goes red on a box that has not
-  run `mtg cache all` recently — that is the correct reading, not a false positive. See
+  sync. It reads through `get_connection()`, never `sqlite3.connect()`: `sets` is in
+  `SHARED_TABLES`, so a deployed instance's own `sets` is empty and the catalogue is behind
+  a temp view over the ATTACHed `shared.sqlite` — opening the instance file directly reports
+  a catalogue with no sets in it, a permanent red no refresh could clear. Nothing on a timer
+  refreshes the catalogue, so this goes red on a box that has not run `mtg cache all`
+  recently — that is the correct reading, not a false positive. See
   `mtg_collector/db/catalog_freshness.py`, `deploy/mtgc-catalog-check.{service,timer}`,
   and `deploy/README.md` → "Catalog freshness check".
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.

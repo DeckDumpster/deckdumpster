@@ -215,7 +215,7 @@ def assess(
     # what `mtg cache all` stores, but the by-hand ingest paths take a set code
     # from whatever the user typed, and a row that is present under `LCI` is
     # present.
-    have = {code.lower() for (code,) in conn.execute("SELECT set_code FROM sets")}
+    have = {row[0].lower() for row in conn.execute("SELECT set_code FROM sets")}
     missing = tuple(
         s for s in upstream if s.released_at > floor and s.set_code.lower() not in have
     )

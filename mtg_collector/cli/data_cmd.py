@@ -658,6 +658,7 @@ def check_catalog(db_path: str) -> int:
     mtg_collector/db/catalog_freshness.py for what is compared and why.
     """
     from mtg_collector.db.catalog_freshness import DEFAULT_MAX_LAG_DAYS, assess
+    from mtg_collector.db.connection import get_connection
     from mtg_collector.services.scryfall import ScryfallAPI
 
     raw = os.environ.get("MTGC_CATALOG_MAX_LAG_DAYS", "")
@@ -686,11 +687,15 @@ def check_catalog(db_path: str) -> int:
         )
         return 1
 
-    conn = sqlite3.connect(db_path)
-    try:
-        verdict = assess(conn, scryfall_sets, date.today(), max_lag_days=max_lag_days)
-    finally:
-        conn.close()
+    # get_connection(), not sqlite3.connect(): `sets` is in SHARED_TABLES, so on
+    # a deployed instance with MTGC_SHARED_DB the instance's own `sets` is empty
+    # and the catalogue lives in the ATTACHed shared.sqlite behind a temp view.
+    # Opening the file directly would read the empty one and report a catalogue
+    # with no sets in it — a permanent red that no refresh could clear, which is
+    # the one thing this alarm must never do.
+    verdict = assess(
+        get_connection(db_path), scryfall_sets, date.today(), max_lag_days=max_lag_days
+    )
 
     if not verdict.stale:
         print(f"check-catalog: {verdict.summary()}")

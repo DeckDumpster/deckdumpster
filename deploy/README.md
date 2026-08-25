@@ -530,6 +530,13 @@ Pushover alert. There is no second alerting path to keep in sync, and the same
 line covers a stopped container or an unreachable Scryfall. The check reads the
 database and Scryfall and writes nothing.
 
+It reads the catalogue through `get_connection()` rather than opening the instance
+file: `sets` is in `SHARED_TABLES`, so an instance with `MTGC_SHARED_DB` has an
+empty `sets` of its own and reads the real one through a temp view over the
+ATTACHed `shared.sqlite`. Every `--test` and `--init` bring-up on a box with the
+`mtgc-shared-ref` volume is in that mode, and opening the instance file directly
+reports a catalogue with no sets in it — a permanent red no refresh could clear.
+
 ### Arming an instance
 
 `setup.sh` installs `mtgc-catalog-check-<instance>.{service,timer}` (daily at
@@ -542,10 +549,11 @@ database and Scryfall and writes nothing.
 # 2. Enable the timer.
 systemctl --user enable --now mtgc-catalog-check-<instance>.timer
 
-# 3. Prove it goes RED before trusting it green — tighten the threshold to 0 and
-#    confirm the failure and the alert. (A catalogue refreshed today scores 0,
-#    so 0 is the value that cannot pass.)
-MTGC_CATALOG_MAX_LAG_DAYS=-1 podman exec systemd-mtgc-<instance> mtg data check-catalog
+# 3. Prove it goes RED before trusting it green. A current catalogue scores a lag
+#    of exactly 0, so -1 is the threshold nothing can pass — run it and confirm
+#    both the non-zero exit and the alert. (-e, because podman exec does not pass
+#    the host's environment into the container.)
+podman exec -e MTGC_CATALOG_MAX_LAG_DAYS=-1 systemd-mtgc-<instance> mtg data check-catalog
 ```
 
 Nothing on a timer refreshes the card catalogue — `mtg cache all` and
