@@ -62,6 +62,23 @@ systemctl --user start mtgc-<name>                     # Start / status
 
 The HTTP server is `mtg_collector/cli/crack_pack_server.py` — a single-file threaded stdlib `http.server` with manual path dispatch in `do_GET`/`do_POST`/`do_PUT`/`do_DELETE`. SSE is used for long-running ingest processing. No framework.
 
+**HTML pages are dispatched from a table, not the `elif` chain.**
+`mtg_collector/cli/page_routes.py` holds `PAGE_ROUTES`, and `do_GET` routes every page
+through `match_page_route`, so the table *is* the routing rather than a description of it.
+API endpoints stay in the chain — nobody navigates to one, and their dispatch carries
+per-route parsing the table has no shape for.
+
+Adding a page means adding a `PageRoute`, and that is deliberately the only way:
+`tests/ui/test_nav_reachability.py` reads the same tuple and demands a **visible** anchor
+on the rendered homepage for every non-parametrized route, at a standard *and* a narrow
+viewport. Default-deny — a new page with no nav link fails the suite. Deliberate
+exceptions live in that file's `NAV_EXEMPT`, each with the reason it is a decision (deep
+links, legacy aliases, contextual help). Do not add a second list of routes anywhere; the
+check exists because a hand-written one went stale and let `/sets` ship unlinked. It reads
+the rendered DOM, never the HTML source, and at two widths: what this UI renders is
+viewport-conditional in places (de-l5l), so a link present in the markup is not yet a link
+a user can reach.
+
 ### HTML pages
 | Path | What it serves |
 |---|---|
