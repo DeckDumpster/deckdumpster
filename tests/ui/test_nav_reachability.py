@@ -44,8 +44,9 @@ NAV_EXEMPT = {
         "resolve; a permanent homepage entry would usually lead to an empty page"
     ),
     "/process": (
-        "legacy alias serving the same page as /recent, kept for bookmarks. "
-        "Nav-linking both would be two entries for one page"
+        "serves the same page as /recent (the ingest status list), kept for "
+        "bookmarks from when processing had its own URL. Nothing links it and "
+        "nothing should: two nav entries for one page is not navigation"
     ),
     "/corner-batches": (
         "legacy alias serving the same page as /batches, kept for bookmarks "
@@ -66,12 +67,15 @@ LINKABLE_ROUTES = tuple(r.path for r in PAGE_ROUTES if not r.parametrized)
 MUST_BE_LINKED = tuple(p for p in LINKABLE_ROUTES if p not in NAV_EXEMPT)
 
 
-def _homepage_anchors(browser, base_url, viewport):
+def _homepage_anchors(browser, base_url, viewport, extra_css=None):
     """Every anchor on the rendered homepage: its resolved path and visibility.
 
     Visibility is read off the laid-out box, not the stylesheet: an element with
     no client rects is not on the page as far as a user is concerned, however
     present it is in the markup.
+
+    `extra_css` is only for the self-check below, which hides a known link to
+    prove that hiding one is noticed.
     """
     width, height = VIEWPORTS[viewport]
     context = browser.new_context(
@@ -82,6 +86,8 @@ def _homepage_anchors(browser, base_url, viewport):
         page = context.new_page()
         page.goto(f"{base_url}/", wait_until="load")
         page.wait_for_selector("a[href]", state="attached", timeout=5000)
+        if extra_css:
+            page.add_style_tag(content=extra_css)
         return page.eval_on_selector_all(
             "a[href]",
             """els => els.map(el => ({
@@ -137,16 +143,21 @@ def test_no_homepage_link_points_at_an_unrouted_path(anchors):
     )
 
 
-def test_a_link_present_but_hidden_does_not_count(anchors):
-    """Guards the check itself: rendered visibility is what is being read.
+def test_a_link_the_markup_has_and_a_media_query_hides_does_not_count(browser, base_url):
+    """The self-check: proves the narrow viewport is doing real work.
 
-    If `visible` came back true for everything — a selector that stopped
-    matching, an evaluate that silently returned defaults — the reachability
-    assertion above would pass on a page with no nav at all. The homepage's
-    badge spans are anchors' children, not anchors, so the honest expectation
-    is simply that some anchors exist and they were measured, not asserted.
+    Everything above rests on `visible` meaning something. If the probe reported
+    True for every anchor — a selector that stopped matching, an evaluate that
+    quietly returned defaults — the reachability assertion would pass on a page
+    with no usable nav at all, which is the failure it exists to catch. So hide
+    one real link at narrow widths only and require the reading to change: it is
+    reachable at 1280px and unreachable at 390px, from identical markup. Source
+    inspection cannot tell those two apart.
     """
-    _, found = anchors
+    hide_at_narrow = "@media (max-width: 768px) { a[href='/sets'] { display: none } }"
 
-    assert found, "no anchors found on the homepage at all"
-    assert all(isinstance(a["visible"], bool) for a in found)
+    wide = {a["path"] for a in _homepage_anchors(browser, base_url, "standard", hide_at_narrow) if a["visible"]}
+    narrow = {a["path"] for a in _homepage_anchors(browser, base_url, "narrow", hide_at_narrow) if a["visible"]}
+
+    assert "/sets" in wide
+    assert "/sets" not in narrow
