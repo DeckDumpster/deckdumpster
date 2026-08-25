@@ -63,6 +63,19 @@ def test_an_uncached_set_still_gets_the_page(api):
     assert "<title>Browse Set</title>" in html
 
 
+def test_a_trailing_slash_serves_the_index_not_an_empty_binder(api):
+    """`/sets/` is `/sets`, not the binder for a set whose code is `""`.
+
+    It used to serve this page with an empty code, so the grid asked the API
+    for set `''` and rendered "not cached (run `mtg cache all` to populate)" --
+    a page that looks like a broken catalogue and is really a stray slash.
+    """
+    html = _page(api, "/sets/")
+
+    assert "<title>Sets</title>" in html
+    assert "<title>Browse Set</title>" not in html
+
+
 def test_a_query_string_does_not_change_what_is_served(api, cached_set):
     """URL is the state: cols/sort/q/filter/sections are read in the browser."""
     plain = _page(api, f"/sets/{cached_set}")

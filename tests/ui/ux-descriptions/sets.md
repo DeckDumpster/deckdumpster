@@ -3,9 +3,10 @@
 Routes: `/sets` (set index) and `/sets/:set_code` (binder grid)
 Sources: `mtg_collector/static/sets.html` + `sets.js` + `sets.css`,
 `mtg_collector/static/set_browse.html` (self-contained; page script inline)
-Served by: `crack_pack_server.py` — `path == "/sets"` → `sets.html`,
-`path.startswith("/sets/")` → `set_browse.html` (the set code is read from the
-path by the page itself, the way `/card/:set/:cn` does it)
+Served by: `crack_pack_server.py` — the index for `/sets`, `set_browse.html` for
+`/sets/:set_code` (the set code is read from the path by the page itself, the way
+`/card/:set/:cn` does it). A trailing slash is stripped before dispatch, so `/sets/`
+is `/sets` — it is not a request for a set whose code is the empty string (de-y72).
 
 Two pages, one feature, so they are documented together. `/sets` is the across-sets
 list; `/sets/:set_code` is the single-set binder the list links into. Neither
@@ -237,6 +238,10 @@ links to the same page.
 3. Status turns red and shows the message; the content area shows the same message as an
    empty state. The header still reads "Loading…" as the set name, because the name only
    arrives with a successful response.
+4. That message is reserved for a code that could name a set and does not. A code that
+   could not — empty, or with anything but letters and digits in it — is a 400 naming the
+   code, and says nothing about the cache: `/sets/` used to answer "run `mtg cache all`
+   to populate", which named the catalogue as the cause of a stray slash (de-y72).
 
 ---
 
