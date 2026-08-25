@@ -1,5 +1,6 @@
 /* sets.js — the /sets index: every locally cached set, grouped by set_type,
-   with a jump rail down the left and each group collapsible.
+   with a jump rail down the left and each group collapsible — or flat and
+   ordered by completion when the sort select says so.
    Depends on globals from shared.js (esc) and shared-card-table.js
    (keyruneSetCode, which carries the KEYRUNE_FALLBACKS map). */
 
@@ -8,7 +9,6 @@
    server — 993 sets at prod scale is small enough to filter in the browser. */
 async function loadSets() {
   const body = document.getElementById('sets-body');
-  const rail = document.getElementById('sets-rail');
   const res = await fetch('/api/sets/index');
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -21,11 +21,39 @@ async function loadSets() {
     document.getElementById('sets-count').textContent = '0 sets';
     return;
   }
+  wireControls(sets);
+}
+
+/* The sort select switches between two full renderers over the same payload —
+   grouped-by-type (with its rail) and flat-by-completion (with none) — rather
+   than reordering the DOM in place. Each renderer builds its own filter pass
+   over its own tiles and returns it; `apply` is reassigned here rather than
+   inside either renderer, so the filter input's own listener is attached once
+   and always drives whichever render is current, instead of a fresh listener
+   stacking on every sort change. */
+function wireControls(sets) {
+  const input = document.getElementById('set-filter');
+  const select = document.getElementById('sets-sort');
+  let apply = () => {};
+
+  function render() {
+    apply = select.value === 'completion' ? renderCompletionMode(sets) : renderGroupedMode(sets);
+    apply();
+  }
+
+  input.addEventListener('input', () => apply());
+  select.addEventListener('change', render);
+  render();
+}
+
+function renderGroupedMode(sets) {
+  const body = document.getElementById('sets-body');
+  const rail = document.getElementById('sets-rail');
   const groups = groupByType(sets);
   body.innerHTML = groups.map(renderGroup).join('')
     + '<div class="empty-state" id="sets-no-match" hidden>No set matches that filter.</div>';
   rail.innerHTML = renderRail(groups);
-  wireGroups(groups);
+  return wireGroups(groups);
 }
 
 /* `expansion` → `Expansion`, `draft_innovation` → `Draft Innovation`. The set
@@ -134,6 +162,52 @@ function renderRail(groups) {
     + '</ul>';
 }
 
+/* Completion mode answers the one question the set_type grouping cannot:
+   which sets am I close to finishing. Those sets are spread across every type,
+   so the grouping is exactly what hides the answer — this mode dissolves it
+   into one flat grid ordered by how full the set is. It has no rail: nothing
+   to jump between, so the rail is cleared while it is active rather than left
+   showing stale rows for a grouping that is not on screen.
+
+   Only sets with something owned are in it. A set at 0 / 291 is not a set you
+   are close to finishing, and at prod scale there are 860 of those against 133
+   with a card in them — keeping them would bury the answer under a page of
+   empty tiles that are all tied for last. `owned_all > 0` is also what makes
+   the division safe: a set cannot own a printing it does not have, so
+   `total_all` is at least 1 for every row that survives the filter.
+
+   The heading stays, and it is not a group — it says which population the grid
+   is showing, so 860 sets going missing reads as the point of the mode rather
+   than as a bug. */
+function renderCompletionMode(sets) {
+  const body = document.getElementById('sets-body');
+  const rail = document.getElementById('sets-rail');
+  rail.innerHTML = '';
+
+  const owned = sets.filter(s => s.owned_all > 0);
+  if (!owned.length) {
+    body.innerHTML = '<div class="empty-state">Nothing is owned from any cached set yet.</div>'
+      + '<div class="empty-state" id="sets-no-match" hidden>No set matches that filter.</div>';
+    document.getElementById('sets-count').textContent = '0 sets';
+    return () => {};
+  }
+  // Array sort is stable, so sets tied on percentage — 1 / 1 and 100 / 100 are
+  // both 100% — keep the response's newest-first order among themselves.
+  owned.sort((a, b) => b.owned_all / b.total_all - a.owned_all / a.total_all);
+
+  // `.open` is what makes `.set-grid` visible at all (sets.css:177) -- grouped
+  // mode's collapse mechanism, borrowed here even though this section never
+  // collapses. Without it the grid stays `display: none` and every tile
+  // renders with a real bounding box of nothing, present in the DOM but
+  // invisible to anyone checking rather than counting.
+  body.innerHTML = '<section class="set-group open" data-sort="completion">'
+    + `<h2>Owned sets<span class="group-count">${owned.length}</span></h2>`
+    + `<div class="set-grid">${owned.map(renderTile).join('')}</div>`
+    + '</section>'
+    + '<div class="empty-state" id="sets-no-match" hidden>No set matches that filter.</div>';
+  return wireFlatFilter(owned);
+}
+
 function renderTile(s) {
   const code = (s.set_code || '').toUpperCase();
   const released = s.released_at || 'unreleased';
@@ -173,8 +247,10 @@ function setOpen(g, open) {
   g.header.setAttribute('aria-expanded', String(open));
 }
 
+/* Wires the grouped-mode DOM and returns the filter pass for it. Does not
+   touch the filter input itself — `wireControls` owns that listener across
+   both render modes, so it is not attached (and re-attached) here. */
 function wireGroups(groups) {
-  const input = document.getElementById('set-filter');
   const count = document.getElementById('sets-count');
   const noMatch = document.getElementById('sets-no-match');
   const rail = document.getElementById('sets-rail');
@@ -227,6 +303,7 @@ function wireGroups(groups) {
   }
 
   function apply() {
+    const input = document.getElementById('set-filter');
     const needle = input.value.trim().toLowerCase();
     let shown = 0;
     for (const g of groups) {
@@ -255,8 +332,37 @@ function wireGroups(groups) {
     count.textContent = needle ? `${shown} of ${total} sets` : `${total} sets`;
   }
 
-  input.addEventListener('input', apply);
-  apply();
+  return apply;
+}
+
+/* Wires completion mode's single flat section and returns its filter pass.
+   One section, one pass, no collapse and no rail to keep in sync — the thing
+   `wireGroups` does that this does not need. */
+function wireFlatFilter(ordered) {
+  const count = document.getElementById('sets-count');
+  const noMatch = document.getElementById('sets-no-match');
+  const groupEl = document.querySelector('.set-group[data-sort="completion"]');
+  const countEl = groupEl.querySelector('.group-count');
+  const tiles = Array.from(groupEl.querySelectorAll('.set-tile'));
+  // Lowercased once here rather than on every keystroke. Code as well as name:
+  // a set is as often reached for by `fin` as by `Final Fantasy`.
+  const haystacks = ordered.map(s => `${s.set_name || ''} ${s.set_code || ''}`.toLowerCase());
+  const total = ordered.length;
+
+  return function apply() {
+    const input = document.getElementById('set-filter');
+    const needle = input.value.trim().toLowerCase();
+    let shown = 0;
+    for (let i = 0; i < tiles.length; i++) {
+      const hit = !needle || haystacks[i].includes(needle);
+      tiles[i].hidden = !hit;
+      if (hit) shown++;
+    }
+    groupEl.hidden = shown === 0;
+    countEl.textContent = shown;
+    noMatch.hidden = shown > 0;
+    count.textContent = needle ? `${shown} of ${total} sets` : `${total} sets`;
+  };
 }
 
 loadSets();

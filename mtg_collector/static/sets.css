@@ -14,6 +14,19 @@
   max-width: 420px;
 }
 
+/* The sort select sits with the filter. The label is what keeps "Release date"
+   readable as a sort and not as a second filter — the two controls are a text
+   box and a dropdown side by side, and nothing else on the row says which is
+   which. */
+.sets-sort {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
 .sets-count {
   color: var(--text-secondary);
   font-size: 0.85rem;

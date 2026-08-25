@@ -1,0 +1,15 @@
+# Scenario: Sorting by completion answers which sets I am close to finishing
+#
+# Related:
+#   issues: [de-kbq]
+#   pages: [sets]
+
+description: >
+  The set index groups by type, which is the wrong shape for the one question
+  I actually want answered: which sets am I close to finishing. So I change
+  the Sort control beside the filter from Release date to Completion. The
+  type blocks dissolve into a single grid headed "Owned sets", and the sets I
+  own nothing from are gone from it entirely — a set at 0 of 419 is not a set
+  I am close to finishing, and there are far more of those than of the ones I
+  want to see. What is left runs fullest-first, so the set I have the most of
+  leads. Switching back to Release date restores the blocks and every set.

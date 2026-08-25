@@ -1,0 +1,13 @@
+# Scenario: The filter and the sort are independent controls
+#
+# Related:
+#   issues: [de-kbq]
+#   pages: [sets]
+
+description: >
+  With a filter already typed, I switch the sort to Completion and my filter
+  is still applied — the box still holds what I typed and the grid still shows
+  only what matched, counted against the new sort's population rather than the
+  old one's. Typing into the box after the switch still narrows the page live,
+  the way it did before I touched the sort, and clearing it brings back
+  everything that sort has to show. Neither control resets the other.

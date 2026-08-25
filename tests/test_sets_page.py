@@ -7,15 +7,18 @@ dispatch table can be driven against a handler built without a socket, the way
 Most of the page's behaviour is JavaScript and belongs to the UI scenario
 tests. What is worth pinning here is what is invisible from either side alone:
 the route exists and points at a file that exists, that file loads the two
-scripts whose globals `sets.js` calls without declaring, and the group order is
-what `SET_TYPE_RANK` says rather than what the payload happened to arrive in.
+scripts whose globals `sets.js` calls without declaring, the group order is
+what `SET_TYPE_RANK` says rather than what the payload happened to arrive in,
+and the completion sort orders by the fraction rather than by the count.
 
-That last one is here and not in `tests/ui/` on purpose. A scenario test runs
+Those last two are here and not in `tests/ui/` on purpose. A scenario test runs
 against the fixture database, and the fixture's newest set is an expansion — so
-it reads Expansion-first whether the rank exists or not. The invariant only
-shows up against a payload no fixture will produce, so these drive the real
-page (real `sets.html`, real scripts, `/api/sets/index` answered synthetically)
-in a browser and read the order back out of the DOM.
+it reads Expansion-first whether the rank exists or not, and its owned counts
+are whatever the demo data happens to hold rather than the pairs that separate
+a percentage sort from a count sort. Both invariants only show up against a
+payload no fixture will produce, so these drive the real page (real
+`sets.html`, real scripts, `/api/sets/index` answered synthetically) in a
+browser and read the order back out of the DOM.
 
 The jump rail and the collapsible groups are pinned here for the same reason,
 plus one more: the narrow-viewport form is a `@media` rule, and the only way to
@@ -104,9 +107,10 @@ def test_no_nan_meter_can_be_rendered():
     assert "if (!(total > 0)) return '';" in js
 
 
-def _set(code, set_type, released_at, name=None):
-    """One row of `/api/sets/index`. The meters are what the endpoint sends for
-    a set nothing is owned from; only the type and the date matter here."""
+def _set(code, set_type, released_at, name=None, owned_all=0, total_all=120):
+    """One row of `/api/sets/index`. The group-order tests care only about the
+    type and the date; the completion-sort tests drive `owned_all` / `total_all`,
+    which is the fraction that sort reads."""
     return {
         "set_code": code,
         "set_name": name or code.upper(),
@@ -114,8 +118,8 @@ def _set(code, set_type, released_at, name=None):
         "released_at": released_at,
         "owned_base": 0,
         "total_base": 100,
-        "owned_all": 0,
-        "total_all": 120,
+        "owned_all": owned_all,
+        "total_all": total_all,
     }
 
 
@@ -442,3 +446,161 @@ def test_the_narrow_viewport_form_ships_with_the_rail(load_sets):
     ) == "row"
     # And the rail is still the whole rail — the narrow form folds no rows away.
     assert [row[0] for row in _rail(narrow)] == ["expansion", "token"]
+# --- Completion sort (de-kbq) ---------------------------------------------
+#
+# The select is the only question on this page that grouping cannot answer:
+# which sets am I close to finishing. Those live in the DOM order the sort
+# produces, so these read the tiles back out of the browser the same way the
+# group-order tests do.
+
+
+def _codes_in_order(page):
+    """Set codes of the visible tiles, in document order."""
+    return page.eval_on_selector_all(
+        "#sets-body a.set-tile:not([hidden])",
+        "els => els.map(e => e.href.split('/').pop())",
+    )
+
+
+def _choose_completion(page):
+    page.select_option("#sets-sort", "completion")
+    page.wait_for_selector("#sets-body section[data-sort='completion']")
+
+
+def test_release_date_is_the_default_sort(load_sets):
+    """The select exists, and the page it renders before anyone touches it is
+    the grouped one — a page that opened in completion mode would hide every
+    set nothing is owned from, which is most of them."""
+    page, _, errors = load_sets([_set("expn", "expansion", "2026-01-23", owned_all=5)])
+
+    assert page.locator("#sets-sort").input_value() == "released"
+    assert page.locator("#sets-body section[data-set-type]").count() == 1
+    assert page.locator("#sets-body section[data-sort='completion']").count() == 0
+    assert errors == []
+
+
+def test_completion_sort_orders_by_percentage_not_by_count(load_sets):
+    """The fraction is what is being sorted, so a set with 9 of 10 leads one
+    with 60 of 120. Sorting on `owned_all` alone — the tempting shortcut, since
+    it needs no division — reverses exactly this pair."""
+    page, _, errors = load_sets(
+        [
+            _set("half", "expansion", "2026-08-24", owned_all=60, total_all=120),
+            _set("near", "commander", "2026-08-20", owned_all=9, total_all=10),
+            _set("thin", "token", "2026-08-15", owned_all=1, total_all=50),
+        ]
+    )
+    _choose_completion(page)
+
+    assert _codes_in_order(page) == ["near", "half", "thin"]
+    assert errors == []
+
+
+def test_completion_sort_drops_the_sets_nothing_is_owned_from(load_sets):
+    """`owned_all > 0` is the population. A set at 0 / 291 is not a set you are
+    close to finishing, and at prod scale 860 of the 993 are exactly that —
+    they would all tie for last and bury the answer under empty tiles."""
+    page, _, errors = load_sets(
+        [
+            _set("emty", "expansion", "2026-08-24", owned_all=0, total_all=291),
+            _set("some", "expansion", "2026-08-20", owned_all=4, total_all=100),
+            _set("nada", "commander", "2026-08-15", owned_all=0, total_all=50),
+        ]
+    )
+    _choose_completion(page)
+
+    assert _codes_in_order(page) == ["some"]
+    assert page.locator("#sets-count").text_content() == "1 sets"
+    assert errors == []
+
+
+def test_completion_sort_dissolves_the_set_type_grouping(load_sets):
+    """One flat grid, not one grid per type: the sets you are closest to are
+    spread across every type, so keeping the sections is what hides the answer.
+    Switching back restores them."""
+    page, _, errors = load_sets(
+        [
+            _set("expn", "expansion", "2026-08-24", owned_all=10, total_all=100),
+            _set("cmdr", "commander", "2026-08-20", owned_all=50, total_all=100),
+            _set("tokn", "token", "2026-08-15", owned_all=90, total_all=100),
+        ]
+    )
+    _choose_completion(page)
+
+    assert page.locator("#sets-body section[data-set-type]").count() == 0
+    assert page.locator("#sets-body section").count() == 1
+    assert _codes_in_order(page) == ["tokn", "cmdr", "expn"]
+
+    page.select_option("#sets-sort", "released")
+    page.wait_for_selector("#sets-body section[data-set-type]")
+    assert page.locator("#sets-body section[data-set-type]").count() == 3
+    assert errors == []
+
+
+def test_the_filter_survives_a_sort_change(load_sets):
+    """The two controls are independent: switching sort re-renders the body,
+    and the filter text is still in an input that re-render does not touch."""
+    page, _, errors = load_sets(
+        [
+            _set("fin", "expansion", "2026-08-24", name="Final Fantasy", owned_all=10, total_all=100),
+            _set("cmdr", "commander", "2026-08-20", name="Commander", owned_all=50, total_all=100),
+        ]
+    )
+    page.fill("#set-filter", "final")
+    _choose_completion(page)
+
+    assert _codes_in_order(page) == ["fin"]
+    assert page.locator("#sets-count").text_content() == "1 of 2 sets"
+    assert errors == []
+
+
+def test_the_filter_still_works_after_switching_back_and_forth(load_sets):
+    """Each render rebuilds the pass that hides tiles, and a keystroke after
+    several switches has to drive the tiles now on the page — a render that
+    left `apply` pointing at an earlier one would filter a detached grid and
+    the visible tiles would never move."""
+    page, _, errors = load_sets(
+        [
+            _set("fin", "expansion", "2026-08-24", name="Final Fantasy", owned_all=10, total_all=100),
+            _set("cmdr", "commander", "2026-08-20", name="Commander", owned_all=50, total_all=100),
+        ]
+    )
+    _choose_completion(page)
+    page.select_option("#sets-sort", "released")
+    page.wait_for_selector("#sets-body section[data-set-type]")
+    _choose_completion(page)
+
+    page.fill("#set-filter", "commander")
+    page.dispatch_event("#set-filter", "input")
+
+    assert _codes_in_order(page) == ["cmdr"]
+    assert page.locator("#sets-count").text_content() == "1 of 2 sets"
+    assert errors == []
+
+
+def test_completion_mode_says_so_when_nothing_is_owned(load_sets):
+    """A fresh install has cached sets and an empty collection. The grid says
+    that rather than rendering nothing, and it does not also claim the filter
+    is what emptied it."""
+    page, _, errors = load_sets(
+        [
+            _set("expn", "expansion", "2026-08-24", owned_all=0),
+            _set("cmdr", "commander", "2026-08-20", owned_all=0),
+        ]
+    )
+    page.select_option("#sets-sort", "completion")
+    page.wait_for_selector("#sets-body .empty-state:not([hidden])")
+
+    assert "Nothing is owned" in page.locator("#sets-body .empty-state").first.text_content()
+    assert page.locator("#sets-no-match").is_hidden()
+    assert page.locator("#sets-count").text_content() == "0 sets"
+    assert errors == []
+
+
+def test_the_sort_select_is_in_the_page(load_sets):
+    """Both options, with the values sets.js branches on. A renamed value would
+    silently fall through to the grouped render."""
+    html = (STATIC / "sets.html").read_text()
+    assert 'id="sets-sort"' in html
+    assert 'value="released"' in html
+    assert 'value="completion"' in html
