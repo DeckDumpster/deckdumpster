@@ -1958,8 +1958,37 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _serve_homepage(self):
         self._serve_static("index.html")
 
+    # Documents and the CSS/JS they name live at a stable URL that a deploy
+    # rewrites in place, so a cache has no way to notice its copy is stale.
+    # Six deploys' worth of pages sat behind Cloudflare on 2026-08-25 until the
+    # cache was purged by hand. These revalidate instead; the ETag makes that
+    # cost a 304 rather than a body. Content-addressed bytes -- the ingest
+    # images at _api_ingest_serve_image -- are the other case, and keep their
+    # immutable year: a URL that names its own content can never go stale.
+    _REVALIDATE = "no-cache"
+
+    def _if_none_match(self, etag: str) -> bool:
+        """Does the request already hold this exact representation?"""
+        header = self.headers.get("If-None-Match")
+        if not header:
+            return False
+        if header.strip() == "*":
+            return True
+        return any(tag.strip() == etag for tag in header.split(","))
+
     def _write_static_response(self, content: bytes, content_type: str,
                                 cache_control: str | None = None):
+        cache_control = cache_control or self._REVALIDATE
+        # Weak, and over the uncompressed bytes: the same document is served
+        # gzipped or not depending on Accept-Encoding, and a conditional GET
+        # compares weakly anyway.
+        etag = 'W/"%s"' % hashlib.sha256(content).hexdigest()[:32]
+        if self._if_none_match(etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", cache_control)
+            self.end_headers()
+            return
         encoding = None
         if content_type in self._GZIPPABLE and len(content) > 1024 \
                 and "gzip" in self.headers.get("Accept-Encoding", ""):
@@ -1970,8 +1999,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         if encoding:
             self.send_header("Content-Encoding", encoding)
-        if cache_control:
-            self.send_header("Cache-Control", cache_control)
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(content)
 
@@ -1985,7 +2014,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         content = filepath.read_bytes()
         content_type = self._CONTENT_TYPES.get(filepath.suffix, "application/octet-stream")
-        self._write_static_response(content, content_type, "public, max-age=86400")
+        self._write_static_response(content, content_type)
 
     def _serve_static_with_data(self, filename: str, data_fn):
         """Serve a static HTML file with /*INIT_DATA*/ replaced by JSON."""
@@ -8565,6 +8594,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         body = json.dumps(obj).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        # Read straight out of the collection DB, and a day-old answer is
+        # indistinguishable from a broken one. Never store it anywhere.
+        self.send_header("Cache-Control", "no-store")
         accept_enc = self.headers.get("Accept-Encoding", "")
         if "gzip" in accept_enc and len(body) > 1024:
             body = gzip.compress(body)
