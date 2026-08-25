@@ -1,0 +1,13 @@
+# Scenario: Promos are dismissed by choice, and the meter does not follow
+#
+# Related:
+#   issues: [de-epk]
+#   pages: [sets]
+
+description: >
+  Promos are in the binder by default, and I can put them away. Clicking the
+  Promos pill drops that section out of the grid and the count of printings on
+  screen falls by the promos I dismissed — but the all-printings meter keeps
+  reporting the whole set, because it measures the set rather than whatever I
+  am looking at. The dismissal is in the address bar, so the narrowed view is
+  a link I can come back to, and it comes back with the pill still off.

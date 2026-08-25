@@ -1,0 +1,23 @@
+start_page: "/sets/mkm"
+involves:
+  - "the Promos pill #sections button[data-section='promo']"
+  - ".section[data-section='promo'] — the section it dismisses"
+  - "the status line #status and the meter #meter-all-count"
+  - "the query string itself — sections, with the full set elided"
+fixture_data:
+  set: "mkm — Murders at Karlov Manor"
+  total_printings: 440
+  promo_printings: 10
+  dismissed_query: "sections=base%2Cextended"
+notes: >
+  Start from the bare /sets/mkm and confirm the Promos section is there before
+  dismissing it. One click on the Promos pill; the click handler writes the URL
+  before it starts the refetch, so the query string can be read without waiting
+  on the fetch — the same way sets_binder_url_restores_cols_and_sort reads
+  cols/sort. URLSearchParams percent-encodes the comma, so the query is
+  sections=base%2Cextended.
+  Then navigate to that address and assert the restored view under the page-load
+  budget: no promo section, 430 tiles, status '430 printings', the Promos pill
+  off and the other two on. #meter-all-count still reads 440 in the denominator
+  — completion is computed before sections, so a dismissed section is a gap the
+  user chose, and the header does not quietly shrink to match.
