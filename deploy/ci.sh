@@ -78,7 +78,6 @@ uv run shot-scraper install
 echo "==> Build and start test container"
 bash deploy/setup.sh "$INSTANCE" --test
 
-echo "==> Wait for server"
 wait_for_server() {
     local i port
     for i in $(seq 1 20); do
@@ -91,6 +90,8 @@ wait_for_server() {
     echo "Server failed to start" >&2
     return 1
 }
+
+echo "==> Wait for server"
 wait_for_server
 
 echo "==> Run unit tests"

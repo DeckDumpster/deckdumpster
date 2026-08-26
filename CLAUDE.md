@@ -85,8 +85,8 @@ systemctl --user start mtgc-<name>                     # Start / status
 `.github/workflows/ci.yml` checks out the repo and runs `bash deploy/ci.sh`. It has no
 other step, so **anything not invoked from `deploy/ci.sh` never runs in CI** — wire new
 gates in there. The script is the only list; keeping the steps inline in the workflow is
-what made a red CI impossible to reproduce locally, and left the rig's agent instructions
-describing a `deploy/ci.sh` that did not exist (de-xz8).
+what made a red CI impossible to reproduce locally, and left the rig's agent instructions —
+which live outside this repo — describing a `deploy/ci.sh` that did not exist (de-xz8).
 
 Run it by hand with an instance name of your own — `INSTANCE` defaults to `ci-test`, which
 is the self-hosted runner's own instance, and the runner shares a machine with your

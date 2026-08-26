@@ -651,9 +651,9 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 `.github/workflows/ci.yml` checks out the repo and runs `bash deploy/ci.sh`. That is its
 only step, so **anything not invoked from `deploy/ci.sh` never runs in CI** — a new gate
 goes in the script, not the workflow. Keeping the steps inline in YAML meant a red CI could
-not be reproduced locally, and left this repo's agent instructions pointing at a
-`deploy/ci.sh` that did not exist; de-3a0 read that instruction, found no such file and
-stopped (de-xz8).
+not be reproduced locally, and left the rig's agent instructions — which live outside this
+repo, and so could not be corrected from inside it — pointing at a `deploy/ci.sh` that did
+not exist; de-3a0 read that instruction, found no such file and stopped (de-xz8).
 
 Run the whole job by hand with an instance name of your own:
 
