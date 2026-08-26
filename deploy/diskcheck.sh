@@ -34,13 +34,18 @@
 #
 #     MTGC_DISK_FLOOR_GB=20
 #
+# Precedence is environment, then that file, then the default — the same order
+# store-lib.sh gives MTGC_STORE_ROOT. The file says what this BOX needs free;
+# the environment says what THIS RUN needs.
+#
 # PORTED FROM pokedumpster's deploy/diskcheck.sh (pd-fite); keep the two in step
 # rather than letting them diverge. Two deliberate differences:
 #
 #   * Only the --floor gate is ported. pokedumpster's script is also a Layer 4
 #     low-disk ALERT run by a timer; deckdumpster has no such timer, and
 #     shipping an alert mode nothing runs would be dead code. Bare invocation is
-#     a usage error (exit 2), not a silent no-op.
+#     a usage error (exit 2), not a silent no-op — that is the seam the alert
+#     half would slot into, tracked as de-ax9.
 #   * `df -Pk` plus awk instead of GNU `df --output=`, so the script also runs
 #     by hand on the macOS deployment path, where BSD df has no --output. POSIX
 #     guarantees -P puts each filesystem on one line, so the field positions
@@ -86,9 +91,13 @@ esac
 PATHS=("$@")
 [ ${#PATHS[@]} -gt 0 ] || PATHS=("$HOME")
 
-# Paths on one filesystem are one check. A plain string rather than an
+# Paths on one filesystem are one check — the output names disks, not arguments.
+# Keyed on the MOUNT POINT, which is unique per filesystem, and not on the device
+# the way pokedumpster's does: `tmpfs` and `overlay` are the reported source for
+# every one of their mounts, so two genuinely different filesystems collapse into
+# one and the second never gets measured. A plain string rather than an
 # associative array so this still runs under the bash 3.2 macOS ships.
-SEEN=" "
+SEEN="|"
 FAILED=0
 
 for p in "${PATHS[@]}"; do
@@ -101,18 +110,23 @@ for p in "${PATHS[@]}"; do
     # df's own stderr is left alone; a path this cannot measure is a FAILURE of
     # the gate, because a gate that does not know how much room there is must
     # not be the thing that says there is enough.
-    DF_LINE="$(df -Pk "$p" | awk 'NR==2 { avail=$4; dev=$1; $1=$2=$3=$4=$5=""; sub(/^ +/, ""); print dev, avail, $0 }')" || true
+    DF_LINE="$(df -Pk "$p" | awk 'NR==2 {
+        dev = $1; avail = $4
+        $1 = $2 = $3 = $4 = $5 = ""; sub(/^ +/, "")   # what is left is the mount
+        print dev, avail, $0
+    }')" || true
     if [ -z "$DF_LINE" ]; then
         echo "ERROR: df could not measure ${p} — refusing to build without knowing the free space." >&2
         FAILED=1
         continue
     fi
-    read -r DEV AVAIL_KB MOUNT <<EOF
+    read -r _DEV AVAIL_KB MOUNT <<EOF
 $DF_LINE
 EOF
 
-    case "$SEEN" in *" $DEV "*) continue ;; esac
-    SEEN="${SEEN}${DEV} "
+    # Delimited with | rather than a space, because a mount point may contain one.
+    case "$SEEN" in *"|${MOUNT}|"*) continue ;; esac
+    SEEN="${SEEN}${MOUNT}|"
 
     FREE_GB=$(( AVAIL_KB / 1024 / 1024 ))
     if [ "$FREE_GB" -lt "$FLOOR_GB" ]; then

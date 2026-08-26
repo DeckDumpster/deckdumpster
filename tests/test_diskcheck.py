@@ -126,6 +126,9 @@ def test_the_refusal_says_why_the_build_would_not_have_looked_like_disk(tmp_path
     proc = _run(tmp_path, CRAMPED, paths=("home",))
     assert "Bus error" in proc.stderr
     assert "Free space before re-running" in proc.stderr
+    # And how full the disk actually is, in the shape an operator reads —
+    # the `df -h` line, not just the gate's own arithmetic.
+    assert "90%" in proc.stderr
 
 
 def test_a_path_it_cannot_measure_is_a_refusal_not_a_pass(tmp_path):
@@ -180,6 +183,19 @@ def test_one_filesystem_under_two_names_is_reported_once(tmp_path):
     assert proc.stdout.count("40G free") == 1
 
 
+def test_two_filesystems_sharing_a_device_name_are_both_checked(tmp_path):
+    """Deduping on the reported device would collapse these. `tmpfs` and
+    `overlay` are the source of every one of their mounts, so keying on it
+    measures the first and silently skips the rest — /dev/shm and /run on this
+    box are exactly that pair. The mount point is what is unique."""
+    table = [("shm", "tmpfs", 40 * GB, "/dev/shm"),
+             ("run", "tmpfs", 1 * GB, "/run")]
+    proc = _run(tmp_path, table, paths=("shm", "run"))
+    assert proc.returncode == 1, proc.stdout
+    assert "/dev/shm has 40G free" in proc.stdout
+    assert "only 1G free on /run" in proc.stderr
+
+
 def test_a_failure_on_the_first_disk_does_not_hide_the_second(tmp_path):
     """One red run should name every disk that is short, not just the first."""
     table = [("home", "/dev/sda1", 1 * GB, "/"),
@@ -218,37 +234,47 @@ def test_the_environment_outranks_the_host_file(tmp_path):
 # The gate's own tests cannot see this, and it is the failure that costs the
 # whole feature: a script nobody calls is indistinguishable from no script.
 
-BUILDERS = {
-    "deploy/setup.sh": "podman build",
-    "deploy/deploy.sh": "podman build",
-    "deploy/seed.sh": "podman build",
-}
+BUILDERS = ["deploy/setup.sh", "deploy/deploy.sh", "deploy/seed.sh"]
+CALLERS = BUILDERS + [".github/workflows/ci.yml"]
+
+
+def _lines(rel):
+    return (REPO_ROOT / rel).read_text().splitlines()
+
+
+def _invocation(rel):
+    """(index, text) of the line that actually runs the gate.
+
+    Matched on the invocation rather than on the name, so a caller cannot pass
+    by mentioning `diskcheck.sh` in a comment while never running it.
+    """
+    for i, ln in enumerate(_lines(rel)):
+        if ln.lstrip().startswith("#"):
+            continue
+        if "diskcheck.sh" in ln and "--floor" in ln:
+            return i, ln
+    raise AssertionError(f"{rel} builds an image but never runs the disk gate")
 
 
 def test_every_linux_build_path_calls_the_gate():
-    for rel in BUILDERS:
-        text = (REPO_ROOT / rel).read_text()
-        assert "diskcheck.sh" in text, f"{rel} builds an image without the disk gate"
+    for rel in CALLERS:
+        _invocation(rel)
 
 
 def test_the_gate_runs_before_the_build_not_after():
     """After the build it is a post-mortem, which is what we already had."""
-    for rel, build in BUILDERS.items():
-        lines = (REPO_ROOT / rel).read_text().splitlines()
-        gate = next(i for i, ln in enumerate(lines) if "diskcheck.sh" in ln)
-        first_build = next(i for i, ln in enumerate(lines)
-                           if build in ln and not ln.lstrip().startswith("#"))
+    for rel in BUILDERS:
+        gate, _ = _invocation(rel)
+        first_build = next(i for i, ln in enumerate(_lines(rel))
+                           if "podman build" in ln and not ln.lstrip().startswith("#"))
         assert gate < first_build, f"{rel} builds before it checks the disk"
 
 
 def test_every_caller_checks_both_disks():
     """MTGC_STORE_ROOT moves the store, not $HOME. Checking only one leaves
     the build able to die on the other."""
-    callers = list(BUILDERS) + [".github/workflows/ci.yml"]
-    for rel in callers:
-        text = (REPO_ROOT / rel).read_text()
-        call = next(ln for ln in text.splitlines() if "diskcheck.sh" in ln)
-        assert "--floor" in call, rel
+    for rel in CALLERS:
+        _, call = _invocation(rel)
         assert "$HOME" in call, rel
         assert "MTGC_STORE_ROOT" in call, rel
 
@@ -256,8 +282,8 @@ def test_every_caller_checks_both_disks():
 def test_ci_checks_the_disk_before_anything_builds():
     """The isolation gate builds an image too, so the check has to precede it
     rather than sit before the later `setup.sh` step."""
-    lines = (REPO_ROOT / ".github/workflows/ci.yml").read_text().splitlines()
-    gate = next(i for i, ln in enumerate(lines) if "diskcheck.sh" in ln)
+    lines = _lines(".github/workflows/ci.yml")
+    gate, _ = _invocation(".github/workflows/ci.yml")
     builds = [i for i, ln in enumerate(lines)
               if re.search(r"store-isolation-gate\.sh|setup\.sh \$INSTANCE", ln)]
     assert builds, "CI no longer builds anything — this test needs rewriting"

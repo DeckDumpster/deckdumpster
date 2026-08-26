@@ -246,7 +246,10 @@ bash deploy/diskcheck.sh --floor "$HOME" "${MTGC_STORE_ROOT:-$HOME}"
 - **Both disks, because `MTGC_STORE_ROOT` only moves the store.** `$HOME` still
   holds the uv cache the `Containerfile` bind-mounts and the default store
   `prod`'s own volumes live in. Unset, the two arguments name one filesystem and
-  it is reported once — the output names disks, not arguments.
+  it is reported once — the output names disks, not arguments. That collapse is
+  keyed on the **mount point**, not the device: `tmpfs` and `overlay` are the
+  reported source of every one of their mounts, so keying on the device measures
+  the first and silently skips the rest.
 - **Callers:** `.github/workflows/ci.yml` (ahead of the isolation gate, which
   builds an image of its own), `setup.sh`, `deploy.sh` and `seed.sh`.
   `store-isolation-gate.sh` inherits it through the `setup.sh` it runs.
@@ -272,7 +275,8 @@ bash deploy/diskcheck.sh --floor "$HOME" "${MTGC_STORE_ROOT:-$HOME}"
   a silent no-op.
 - Ported from pokedumpster's `deploy/diskcheck.sh`, gate half only — that repo's
   script is also a low-disk alert driven by a timer, and there is no such timer
-  here to drive it.
+  here to drive it. A gate only speaks when someone tries to build, so the
+  between-builds half is tracked as de-ax9.
 
 `tests/test_diskcheck.py` runs the shipped script against stubbed filesystems
 and watches it refuse each way, then asserts the wiring itself: that every
