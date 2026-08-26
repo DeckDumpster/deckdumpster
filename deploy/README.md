@@ -606,7 +606,7 @@ rounds up: 9.2 G free reports as `10G` and would clear a 10 G floor.
 Two disks matter and they are not the same disk: prod's (`$HOME`, where rootless
 Podman keeps prod's 19 G volume) and the non-prod container store
 (`MTGC_STORE_ROOT`, on a box that opted in). Both are watched, deduplicated by
-device, so a box that never opted in checks exactly one filesystem and behaves
+mount point, so a box that never opted in checks exactly one filesystem and behaves
 as if this paragraph were not here.
 
 `diskcheck.sh` reads `store.env` only to learn a path to *watch*. That is not

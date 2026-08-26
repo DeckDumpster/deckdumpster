@@ -40,7 +40,7 @@
 # Two disks matter here and they are not the same disk: prod's ($HOME, where
 # rootless Podman keeps prod's 19G volume) and the non-prod container store
 # (MTGC_STORE_ROOT, if this box opted in). Both are watched, deduplicated by
-# device, so a box that never opted in checks exactly one filesystem and behaves
+# mount point, so a box that never opted in checks exactly one filesystem and behaves
 # as if this paragraph were not here.
 #
 # Reading store.env to learn a path to WATCH is not the store selection that
@@ -110,8 +110,11 @@ free_gb() {
 }
 
 # watch_list — the filesystems to measure, one resolved path per distinct
-# device. Paths on the same device are the same check, and both modes below want
-# that, so it is written once.
+# MOUNT POINT. Both modes below want that, so it is written once.
+#
+# Keyed on the mount point, not the device: `tmpfs` and `overlay` are the
+# reported source for every one of THEIR mounts, so two genuinely different
+# filesystems would collapse into one and the second would never get measured.
 #
 # An empty result is a FAILURE, not a quiet pass. "We could not measure anything"
 # and "everything is fine" must never share an outcome — the same rule
@@ -119,7 +122,7 @@ free_gb() {
 # disk went unreported twice.
 watch_list() {
     local -n out="$1"; shift
-    mapfile -t out < <(dedupe_by_device "$@")
+    mapfile -t out < <(dedupe_by_mount "$@")
     if [ "${#out[@]}" -eq 0 ]; then
         echo "diskcheck: FAILED — measured no filesystem at all. df could not read:" >&2
         printf '  %s\n' "$@" >&2
@@ -127,14 +130,14 @@ watch_list() {
     fi
 }
 
-dedupe_by_device() {
-    local p dev
+dedupe_by_mount() {
+    local p mount
     declare -A seen=()
     for p in "$@"; do
         p="$(resolve_existing "$p")"
-        dev="$(df --output=source "$p" | tail -n1)"
-        [ -z "${seen[$dev]:-}" ] || continue
-        seen[$dev]=1
+        mount="$(df --output=target "$p" | tail -n1)"
+        [ -z "${seen[$mount]:-}" ] || continue
+        seen[$mount]=1
         printf '%s\n' "$p"
     done
 }

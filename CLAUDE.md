@@ -444,7 +444,7 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   `ld terminated with signal 7 [Bus error]`. **There is no bypass flag**;
   `MTGC_DISK_FLOOR_GB` is the only knob. Free space is read in 1 K blocks and **truncated**,
   never from `df -BG`, which rounds up and would let 9.2 G free clear a 10 G floor. It
-  watches `$HOME` *and* `MTGC_STORE_ROOT`, deduplicated by device, so an unconfigured box
+  watches `$HOME` *and* `MTGC_STORE_ROOT`, deduplicated by mount point, so an unconfigured box
   checks exactly one filesystem; reading `store.env` here only picks a `df` line to look at
   and is not the store selection `setup.sh` scopes away from `prod`. It deliberately frees
   nothing — which instance to prune is a judgement a timer cannot make, and
