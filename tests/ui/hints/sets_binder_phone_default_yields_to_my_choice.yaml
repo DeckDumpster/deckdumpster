@@ -1,0 +1,21 @@
+start_page: "/sets/spg"
+involves:
+  - "cards-per-row control #col-plus / #col-count"
+  - "the card grid .card-grid"
+  - "localStorage['setsGridCols'], which is what carries the choice between visits"
+fixture_data:
+  set: "spg"
+  printings: 165
+  phone_viewport: {width: 390, height: 844}
+  phone_cols: 3
+  chosen_cols: 5
+notes: >
+  Same phone bring-up as sets_binder_phone_opens_a_readable_grid: clear
+  setsGridCols (the runner's 1280 start-page load wrote it), resize to 390x844,
+  then navigate — storedCols() reads innerWidth at load time.
+  From 3, two presses of #col-plus reach 5. The handler writes the URL before
+  starting the refetch, so a short settle is enough to read it back.
+  Then navigate to the BARE /sets/spg — no query string — which is the shape a
+  return visit takes. 5 comes back, from localStorage, at the same phone width
+  that would otherwise have opened at 3. Reading the track count rather than
+  only #col-count is what makes this about the grid and not about a label.
