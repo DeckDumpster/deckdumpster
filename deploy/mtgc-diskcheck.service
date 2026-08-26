@@ -1,0 +1,23 @@
+[Unit]
+Description=MTGC low-disk check ({{INSTANCE}})
+# The disk on this box is the one prod serves from, and it has hit 100% twice —
+# 2026-08-08 and 2026-08-11. On both nights the nightly backup silently did not
+# run (de-o4e) and nothing said so. de-3mo/de-3a0 bounded the largest producer
+# of those bytes; this notices the fill whatever produced it (de-yef).
+#
+# It runs `df` on the host and writes nothing at all. There is no `podman` in
+# the ExecStart, so it needs no store flags — see setup.sh's stamp loop.
+#
+# Disk is host-wide, not per-instance, so on a box with several instances these
+# render as several identical timers. That is deliberate: one install mechanism
+# rather than a second special-cased one, and only the instances an operator
+# actually enables ever fire. Prod is the one to enable.
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'exec bash {{REPO_DIR}}/deploy/diskcheck.sh'
+# A handful of df calls and at most one curl to Pushover. Generous, but a hung
+# push must eventually fail the unit — and failing is how it gets reported —
+# rather than sit there looking like a run in progress.
+TimeoutStartSec=60
