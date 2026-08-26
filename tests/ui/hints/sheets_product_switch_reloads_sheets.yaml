@@ -1,17 +1,25 @@
-start_page: /sheets
+start_page: "/sheets#set=blb&product=play"
 involves:
-  - "set search input #set-input"
-  - "set dropdown #set-dropdown with li items"
   - "product radio pills #product-radios with label elements (radio inputs display:none)"
   - "sheet sections .section with .section-header h2 text"
   - "status text #status showing sheet/card counts"
+  - "URL hash #set=<code>&product=<product>"
 fixture_data:
   set: "blb"
   set_name: "Bloomburrow"
   collector_sheets: ["foilRareMythic", "showcaseRareMythic", "foilShowcaseRareMythic", "foilLand", "foilCommon", "foilUncommon"]
   play_sheets: ["land", "uncommon", "common", "theList", "foilLand", "wildcard", "rareMythicWithShowcase", "foil"]
 notes: >
-  Navigate to /sheets. Select BLB. First product (collector) is auto-selected
-  and sections render. Click the "play" product label. Verify "Common"
-  appears in the section headers (play has a "common" sheet; collector does
-  not). Verify URL hash contains "product=play".
+  Load the deep link /sheets#set=blb&product=play. That one navigation fetches
+  both products — loadProducts() auto-checks the first (collector) and fires a
+  sheet load, then setSelectedProduct() switches to play and fires a second —
+  so every product pill this scenario clicks has already been served once and
+  the switch itself is what the 500 ms interaction budget measures. Reaching a
+  product through the pills without that warm-up spent the budget on the first
+  /api/sheets for the set, which against a fresh container does not come back
+  in time (de-35k).
+  Wait on "8 sheets" (play has 8, collector has 6) rather than .section-header:
+  both products paint section headers, so only the count tells them apart.
+  Then click the "collector" pill and verify the sheet content reloads —
+  "6 sheets", a collector-only sheet name, and product=collector in the URL
+  hash — and click "play" to switch back.
