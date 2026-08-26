@@ -202,7 +202,7 @@ mtgc_store_activate() {
     export MTGC_STORE_GLOBAL_ARGS="${MTGC_STORE_GLOBAL_ARGS:-}"
     [ -n "${MTGC_STORE_ROOT:-}" ] || return 0
 
-    local root graph runroot bin real
+    local root graph runroot bin real shimmed
     # Normalise the trailing slash so the same directory always produces the
     # same graph root, hence the same runroot and the same GlobalArgs — but not
     # for "/" itself, which must reach the validator intact to be named in the
@@ -212,31 +212,79 @@ mtgc_store_activate() {
     mtgc_store_validate "$root" || return 1
     export MTGC_STORE_ROOT="$root"
     bin="${root}/bin"
-
-    # Already activated in an ancestor: the shim is on PATH and the flags are in
-    # the environment. Re-shimming here would resolve `podman` to the shim and
-    # build one that exec's itself.
-    case ":${PATH}:" in
-        *":${bin}:"*) return 0 ;;
-    esac
-
-    real="$(command -v podman)" || {
-        echo "ERROR: MTGC_STORE_ROOT is set but podman is not on PATH" >&2
-        return 1
-    }
-
     graph="${root}/storage"
-    # Remembered so mtgc_store_deactivate can put it back; see there.
-    export MTGC_STORE_PREV_TMPDIR="${TMPDIR-}"
     # The runroot holds volatile per-boot state, including the layer store's
     # mountpoints.json — a file each store rewrites wholesale. Two stores sharing
     # one would drop each other's mount records, and prod is one of those stores.
     # It has to be on a local filesystem, so it goes in the runtime dir, keyed by
     # the store it belongs to.
     runroot="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/mtgc-store-$(printf '%s' "$graph" | sha1sum | cut -c1-8)"
+
+    # The shim on PATH is what makes this shell's podman calls land in the store,
+    # so its presence decides whether there is anything left to install below.
+    shimmed=""
+    case ":${PATH}:" in
+        *":${bin}:"*) shimmed=1 ;;
+    esac
+
+    # PATH says the store is active and the shim it names is gone: what a shell
+    # that ran mtgc_store_teardown looks like, the shim having lived inside the
+    # store root it just deleted. `podman` now resolves to the real one on the
+    # DEFAULT store while everything below would go on stamping units for a
+    # store that no longer exists — the same split this whole file exists to
+    # prevent. Said before the directories are created, so the error describes
+    # the store as it was found.
+    if [ -n "$shimmed" ] && [ ! -x "${bin}/podman" ]; then
+        echo "ERROR: ${bin} is on PATH but there is no podman shim in it." >&2
+        echo "       The store under ${root} was removed while this shell was using it." >&2
+        echo "       Start a new shell." >&2
+        return 1
+    fi
+
+    # DERIVED FROM THE STORE ROOT, NEVER TAKEN FROM THE ENVIRONMENT (de-nu5).
+    #
+    # Everything above this line is a pure function of $MTGC_STORE_ROOT, so it
+    # is cheaper to recompute than to decide whether to trust an inherited copy
+    # — and deciding wrong is silent. It was: the "already activated" branch
+    # below used to return before this assignment, on the assumption that a
+    # shell with the shim on PATH also had the flags in its environment. A shell
+    # that inherits the store the OTHER documented way — `export
+    # PATH="$MTGC_STORE_ROOT/bin:$PATH"`, which is enough to make every podman
+    # call land in the right store — has the shim and no flags, so
+    # MTGC_STORE_GLOBAL_ARGS stayed empty, mtgc_store_stamp_unit no-op'd, and
+    # setup.sh rendered a Quadlet with no GlobalArgs=. That is the mirror of the
+    # deploy.sh failure in the header: systemd went to the DEFAULT store, found
+    # no image, and the unit sat in a restart loop reporting
+    #
+    #   Error: initializing source docker://localhost/mtgc:<inst>: pinging
+    #   container registry localhost: dial tcp 127.0.0.1:443: connection refused
+    #
+    # which reads as a network problem while the image is sitting in the
+    # alternate store. mtgc_store_is_activated already treats "the shim is on
+    # PATH" as being in the store; deriving the flags here is what makes this
+    # function agree with it.
+    export MTGC_STORE_GLOBAL_ARGS="--root=${graph} --runroot=${runroot}"
+    # TMPDIR moves with the store (see the header), and for the same reason it
+    # is set by whichever activation gets here first rather than by the one that
+    # happens to install the shim. MTGC_STORE_PREV_TMPDIR being *set at all* —
+    # empty counts — is the record that some activation in this process tree
+    # already moved it, so a nested one cannot overwrite the original value
+    # mtgc_store_deactivate has to put back.
+    if [ -z "${MTGC_STORE_PREV_TMPDIR+set}" ]; then
+        export MTGC_STORE_PREV_TMPDIR="${TMPDIR-}"
+        export TMPDIR="${root}/tmp"
+    fi
     mkdir -p "$graph" "$runroot" "${root}/tmp" "$bin"
 
-    export MTGC_STORE_GLOBAL_ARGS="--root=${graph} --runroot=${runroot}"
+    # Already activated: every podman call in this shell already goes through the
+    # shim, so there is nothing left to install. Re-shimming here would resolve
+    # `podman` to the shim and build one that exec's itself.
+    [ -z "$shimmed" ] || return 0
+
+    real="$(command -v podman)" || {
+        echo "ERROR: MTGC_STORE_ROOT is set but podman is not on PATH" >&2
+        return 1
+    }
 
     cat > "${bin}/podman" <<EOF
 #!/usr/bin/env bash
@@ -247,7 +295,6 @@ EOF
     chmod +x "${bin}/podman"
 
     export PATH="${bin}:${PATH}"
-    export TMPDIR="${root}/tmp"
     # stderr, not stdout: callers parse some of these scripts' stdout (deploy.sh
     # greps `podman port`), and this is a progress note, not a result.
     echo "==> Container storage: ${graph} (non-prod store; prod's is untouched)" >&2

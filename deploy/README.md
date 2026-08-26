@@ -131,6 +131,18 @@ bash deploy/setup.sh prod 8081
 - The per-instance price / sealed-catalog / EDHREC timer units carry the same
   flags on their `podman exec` lines, because systemd does not inherit the
   `PATH` shim that scopes the scripts.
+- **Two ways into the store, and both stamp the unit.** The documented one is
+  `. deploy/store-lib.sh; mtgc_store_load_config; mtgc_store_activate`. The other
+  is putting the shim on `PATH` yourself —
+  `export PATH="$MTGC_STORE_ROOT/bin:$PATH"` — which is also what an inherited
+  activation looks like from a child's side, and is enough on its own to send
+  every podman call to the right store. The flags stamped into units are derived
+  from `MTGC_STORE_ROOT` rather than read back out of the environment, so neither
+  route can produce an unstamped unit. The `PATH`-only one used to: systemd went
+  to the *default* store, found no image, and the unit sat in a restart loop
+  reporting `pinging container registry localhost: dial tcp 127.0.0.1:443:
+  connection refused` — a network error, while the image was in the alternate
+  store all along (de-nu5).
 - `--root`/`--runroot` per invocation, never a `storage.conf`: the choice cannot
   leak into unrelated podman use on the box.
 - **`prod` never sets the variable**, so prod's generated unit is byte-identical
