@@ -1,0 +1,11 @@
+# Scenario: A binder page has a way off it — the breadcrumb goes back to /sets
+#
+# Related:
+#   issues: [de-tok]
+#   pages: [sets]
+
+description: >
+  I open one set's binder page from the set list, reconcile a pocket or two,
+  and then want the list again. The breadcrumb above the set name takes me
+  there — back to /sets, the page I came from — without reaching for the
+  browser's back button or editing the address bar.

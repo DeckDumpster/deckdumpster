@@ -1,11 +1,18 @@
-"""Every page the server routes is reachable from the homepage, or exempt on purpose.
+"""Navigation works in both directions: every page is reachable from `/`, and gets back.
 
-This is default-deny. The route list comes from the server's own dispatch table
-(`mtg_collector/cli/page_routes.PAGE_ROUTES` — the tuple `do_GET` actually
-routes from), so adding a page and forgetting the nav link fails here with no
-list to remember to update. The previous shape of this check was a hand-written
-scenario naming each link, which is exactly what went stale: it kept passing on
-the links it knew about while /sets shipped with no homepage entry at all.
+Two invariants over one table. Forward: every routed page has a visible link on
+the homepage. Back: every routed page renders a visible link to `/`. They are
+complements, and they belong together — /sets/:set_code shipped reachable from
+the homepage and with no way off it at all, which the forward check alone is
+blind to by construction.
+
+This is default-deny in both directions. The route list comes from the server's
+own dispatch table (`mtg_collector/cli/page_routes.PAGE_ROUTES` — the tuple
+`do_GET` actually routes from), so adding a page and forgetting the nav link
+fails here with no list to remember to update. The previous shape of this check
+was a hand-written scenario naming each link, which is exactly what went stale:
+it kept passing on the links it knew about while /sets shipped with no homepage
+entry at all.
 
 Two things it deliberately does *not* do:
 
@@ -15,8 +22,8 @@ Two things it deliberately does *not* do:
   rendered DOM, at a standard **and** a narrow viewport. A link the markup
   contains but a media query hides is not a link anyone can reach.
 * It does not describe intent. There is no Claude-graded intent/hint pair and it
-  is not a `/qa-finish` scenario — it is one mechanical invariant over a table,
-  and it lives in `tests/ui/` only because that is the tier with a browser.
+  is not a `/qa-finish` scenario — these are mechanical invariants over a table,
+  and they live in `tests/ui/` only because that is the tier with a browser.
 
 Usage:
     uv run pytest tests/ui/test_nav_reachability.py -v --instance <instance>
@@ -65,6 +72,60 @@ VIEWPORTS = {"standard": (1280, 900), "narrow": (390, 844)}
 LINKABLE_ROUTES = tuple(r.path for r in PAGE_ROUTES if not r.parametrized)
 
 MUST_BE_LINKED = tuple(p for p in LINKABLE_ROUTES if p not in NAV_EXEMPT)
+
+#: Pages that deliberately render no link back to `/`. The homepage is the only
+#: one: it *is* `/`. Unlike NAV_EXEMPT there is no such thing as a page a user
+#: navigates to and should then be stuck on — an alias, a deep link and a
+#: mid-ingest resolution screen all still need a way out — so an entry here
+#: wants a better reason than "nothing links it".
+HOME_LINK_EXEMPT = {
+    "/": "the homepage itself — a link from `/` to `/` is not navigation",
+}
+
+#: One concrete URL per parametrized route, because a prefix is not a page you
+#: can open. The id need not resolve: every one of these pages ships its chrome
+#: as static markup and fills the body from an API call afterwards, so a
+#: placeholder exercises the same header a real id would — and keeps this suite
+#: independent of whatever happens to be in the instance's database.
+#:
+#: Parametrized routes are emphatically *not* exempt from the back-link rule.
+#: /sets/:set_code is one, and it is the page that motivated this check.
+PARAMETRIZED_SAMPLES = {
+    "/deck-builder/": "/deck-builder/1",
+    "/decks/": "/decks/1",
+    "/sets/": "/sets/fdn",
+    "/card/": "/card/fdn/1",
+    "/batches/": "/batches/1",
+    "/orders/": "/orders/1",
+}
+
+
+def _pages_that_must_link_home():
+    """Every routed page as a URL you can actually open, minus the exemptions.
+
+    Reading the parametrized samples out of the same table is what keeps this
+    default-deny: a new `PageRoute(..., parametrized=True)` with no sample here
+    fails `test_every_parametrized_route_has_a_sample_url` rather than quietly
+    dropping out of the sweep.
+    """
+    paths = []
+    for route in PAGE_ROUTES:
+        if route.path in HOME_LINK_EXEMPT:
+            continue
+        sample = PARAMETRIZED_SAMPLES.get(route.path) if route.parametrized else route.path
+        if sample is not None:
+            paths.append(sample)
+    return tuple(paths)
+
+
+MUST_LINK_HOME = _pages_that_must_link_home()
+
+#: Reads an anchor to `/` off the rendered page, on the same terms the homepage
+#: sweep reads its own: laid-out box, not stylesheet.
+_HAS_VISIBLE_HOME_LINK = """els => els.some(el =>
+    new URL(el.getAttribute('href'), location.href).pathname === '/'
+    && el.getClientRects().length > 0
+    && getComputedStyle(el).visibility !== 'hidden')"""
 
 
 def _homepage_anchors(browser, base_url, viewport, extra_css=None):
@@ -161,3 +222,96 @@ def test_a_link_the_markup_has_and_a_media_query_hides_does_not_count(browser, b
 
     assert "/sets" in wide
     assert "/sets" not in narrow
+
+
+def _home_links(browser, base_url, viewport):
+    """Whether each routed page renders a visible link to `/`, keyed by path.
+
+    One context and one page for the whole sweep: these are ~25 navigations per
+    viewport and a fresh context each time is the bulk of the cost. Nothing here
+    writes, so there is no state to isolate between them.
+    """
+    width, height = VIEWPORTS[viewport]
+    context = browser.new_context(
+        viewport={"width": width, "height": height},
+        ignore_https_errors=True,
+    )
+    try:
+        page = context.new_page()
+        found = {}
+        for path in MUST_LINK_HOME:
+            page.goto(f"{base_url}{path}", wait_until="load")
+            page.wait_for_selector("body", state="attached", timeout=5000)
+            found[path] = page.eval_on_selector_all("a[href]", _HAS_VISIBLE_HOME_LINK)
+        return found
+    finally:
+        context.close()
+
+
+@pytest.fixture(scope="module", params=sorted(VIEWPORTS))
+def home_links(request, browser, base_url):
+    return request.param, _home_links(browser, base_url, request.param)
+
+
+def test_every_routed_page_links_back_to_the_homepage(home_links):
+    """The complement of the forward check: a page you can reach and not leave.
+
+    /sets/:set_code was exactly that — linked from /sets, carrying one anchor of
+    its own (`#batch-link`, hidden unless a batch is open), so the only ways off
+    it were the back button and the URL bar.
+    """
+    viewport, found = home_links
+
+    stranded = sorted(path for path, has_link in found.items() if not has_link)
+
+    assert not stranded, (
+        f"pages rendering no visible link to / at the {viewport} viewport "
+        f"{VIEWPORTS[viewport]}: {stranded}. Give the page the shared site "
+        "header (`.site-header`, as /sets and /card/:set/:cn have it), or — if "
+        "it is genuinely a page nobody should leave forwards — add it to "
+        "HOME_LINK_EXEMPT in this file with the reason."
+    )
+
+
+def test_every_parametrized_route_has_a_sample_url():
+    """The sweep above can only be default-deny if it opens every route.
+
+    A parametrized route is a prefix, not a URL, so it needs a sample to be
+    visited at all — and a missing sample would drop the page out of the sweep
+    silently, which is how a check comes to pass on a page it never loaded.
+    """
+    parametrized = {r.path for r in PAGE_ROUTES if r.parametrized}
+    unsampled = sorted(parametrized - set(PARAMETRIZED_SAMPLES))
+
+    assert not unsampled, (
+        f"parametrized routes with no sample URL: {unsampled}. Add one to "
+        "PARAMETRIZED_SAMPLES in this file so the back-link sweep opens the "
+        "page; the id does not have to resolve."
+    )
+
+    stale = sorted(set(PARAMETRIZED_SAMPLES) - parametrized)
+    assert not stale, (
+        f"PARAMETRIZED_SAMPLES entries for routes the server no longer has: "
+        f"{stale}"
+    )
+
+
+def test_a_sample_url_actually_reaches_its_page(browser, base_url):
+    """The self-check for the sweep: a placeholder id still serves the page.
+
+    The back-link assertion reads anchors off whatever came back. If a sample
+    URL 404'd — or served an error page that happens to link home — every route
+    behind it would report "fine" from a page that is not the one under test. So
+    require one sample to arrive at its own template, identified by an element
+    only that page has.
+    """
+    context = browser.new_context(viewport={"width": 1280, "height": 900}, ignore_https_errors=True)
+    try:
+        page = context.new_page()
+        response = page.goto(f"{base_url}{PARAMETRIZED_SAMPLES['/sets/']}", wait_until="load")
+        assert response.status == 200, response.status
+        # #set-name and the section pills belong to set_browse.html alone.
+        assert page.query_selector("#set-name") is not None
+        assert page.query_selector("#sections [data-section='base']") is not None
+    finally:
+        context.close()

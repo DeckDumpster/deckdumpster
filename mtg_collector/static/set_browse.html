@@ -18,7 +18,11 @@ body {
   min-height: 100vh;
 }
 
-header {
+/* One bar, worn by both: the site nav on top and this page's own header
+   under it. The values are shared.css's `.site-header` written out, because
+   this page styles bare `button` itself and shared.css's `button:hover`
+   repaints the column and finish steppers red through it. */
+header, .site-header {
   background: #16213e;
   padding: 16px 24px;
   display: flex;
@@ -27,6 +31,32 @@ header {
   flex-wrap: wrap;
   border-bottom: 2px solid #0f3460;
 }
+
+.site-header h1 {
+  font-size: 1.3rem;
+  color: #e94560;
+  margin-right: 16px;
+  white-space: nowrap;
+}
+
+.site-header a {
+  color: #e0e0e0;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.site-header a:hover { color: #e94560; }
+
+/* Back to the set list — the parent of one binder page, and where you go
+   after reconciling it. */
+.breadcrumb a {
+  color: #7ec8e3;
+  text-decoration: none;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.breadcrumb a:hover { text-decoration: underline; }
 
 header h1 {
   font-size: 1.3rem;
@@ -311,7 +341,17 @@ button.toggle.on {
 </head>
 <body>
 
+<div class="site-header">
+  <h1><a href="/" style="color:inherit;text-decoration:none;">DeckDumpster</a></h1>
+  <a href="/collection">Collection</a>
+  <a href="/decks">Decks</a>
+  <a href="/deck-builder">Build</a>
+  <a href="/binders">Binders</a>
+  <a href="/sealed">Sealed</a>
+</div>
+
 <header>
+  <nav class="breadcrumb" aria-label="Breadcrumb"><a href="/sets">&larr; All sets</a></nav>
   <h1><span id="set-name">Loading…</span><span class="set-code" id="set-code"></span></h1>
 
   <div class="meters">
