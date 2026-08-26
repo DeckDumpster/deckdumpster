@@ -29,6 +29,16 @@ PAGE_ASSETS = (
 )
 
 
+#: `shared.<64 bits of hex>.js` -> `shared.js`. The server mints the digest as
+#: the page goes out (de-l23), so the name in the markup is not the name on
+#: disk and a literal comparison would be a comparison against a deploy.
+_DIGEST = re.compile(r"\.[0-9a-f]{16}(\.[^.]+)$")
+
+
+def _undigest(url: str) -> str:
+    return _DIGEST.sub(r"\1", url)
+
+
 @pytest.fixture(scope="module")
 def cached_set(api):
     status, sets = api.get("/api/cached-sets")
@@ -97,6 +107,23 @@ def test_the_page_names_no_asset_this_test_does_not_know_about(api, cached_set):
     """Keeps PAGE_ASSETS honest when a future change adds a dependency."""
     html = _page(api, f"/sets/{cached_set}")
 
-    named = set(re.findall(r'(?:src|href)="(/static/[^"]+)"', html))
+    named = {_undigest(u) for u in re.findall(r'(?:src|href)="(/static/[^"]+)"', html)}
 
     assert named - {"/static/favicon.ico"} == set(PAGE_ASSETS)
+
+
+def test_the_urls_the_page_actually_names_are_content_addressed(api, cached_set):
+    """Since de-l23 the server rewrites each reference to carry the digest of
+    the bytes, so what a browser requests is not what the file is called. The
+    hashed URL is the one that has to be served -- a page whose scripts 404
+    renders an empty grid and reads as an empty set."""
+    html = _page(api, f"/sets/{cached_set}")
+
+    named = re.findall(r'(?:src|href)="(/static/[^"]+)"', html)
+    assert named, "the page names no assets"
+
+    for url in named:
+        assert url != _undigest(url), f"{url} carries no digest"
+        status, body = api.get_raw(url)
+        assert status == 200, f"{url} -> {status}"
+        assert body

@@ -23,6 +23,7 @@ from mtg_collector.db.connection import get_db_path
 from mtg_collector.http_cache import (
     CACHE_API,
     CACHE_DOCUMENT,
+    CACHE_HASHED_ASSET,
     CACHE_IMMUTABLE,
     RangeNotSatisfiable,
     compute_etag,
@@ -31,6 +32,7 @@ from mtg_collector.http_cache import (
     parse_range,
 )
 from mtg_collector.services.pack_generator import PackGenerator
+from mtg_collector.static_assets import hasher_for
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
@@ -1157,6 +1159,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self.generator = generator
         self.static_dir = static_dir
         self.db_path = db_path
+        # Process-wide, not per-handler: a handler is constructed per request,
+        # so a cache living here would re-hash every asset on every page load.
+        self.assets = hasher_for(static_dir)
         super().__init__(*args, **kwargs)
 
     def _get_conn(self):
@@ -1986,16 +1991,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_static(self, filename: str):
-        filepath = self.static_dir / filename
-        if not filepath.resolve().is_relative_to(self.static_dir.resolve()):
+        """Serve one file out of the static directory (de-l23 for the digest).
+
+        `resolve` decides which file a URL names and whether the URL earned a
+        promise; it answers None for a name that is not on disk *and* for a
+        hashed URL whose digest no longer matches, both of which are the same
+        404 to a client. Documents are rewritten on the way out so their asset
+        references carry digests — see `static_assets.rewrite`.
+        """
+        asset = self.assets.resolve(filename)
+        if asset is None:
             self._send_json({"error": "Not found"}, 404)
             return
-        if not filepath.is_file():
-            self._send_json({"error": "Not found"}, 404)
-            return
-        content = filepath.read_bytes()
-        content_type = self._CONTENT_TYPES.get(filepath.suffix, "application/octet-stream")
-        self._respond(content, content_type, CACHE_DOCUMENT, ranges=True)
+        content = asset.path.read_bytes()
+        content_type = self._CONTENT_TYPES.get(asset.path.suffix, "application/octet-stream")
+        if content_type == "text/html; charset=utf-8":
+            content = self.assets.rewrite(content)
+        policy = CACHE_HASHED_ASSET if asset.content_addressed else CACHE_DOCUMENT
+        self._respond(content, content_type, policy, ranges=True)
 
     def _serve_static_with_data(self, filename: str, data_fn):
         """Serve a static HTML file with /*INIT_DATA*/ replaced by JSON."""
@@ -2009,7 +2022,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         html = filepath.read_text(encoding="utf-8")
         html = html.replace("/*INIT_DATA*/", _json.dumps(data_fn()))
-        self._respond(html.encode("utf-8"), "text/html; charset=utf-8", CACHE_DOCUMENT)
+        body = self.assets.rewrite(html.encode("utf-8"))
+        self._respond(body, "text/html; charset=utf-8", CACHE_DOCUMENT)
 
     def _decks_init_data(self):
         from mtg_collector.db.models import DeckRepository
