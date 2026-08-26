@@ -4,7 +4,8 @@ de-dai put every response behind one door and keyed the caching policy on what
 the response *is*.  That left ``/static/*`` with the documents on
 ``public, no-cache``: correct, because a URL whose bytes can change under a
 client can only ever revalidate, but it costs a conditional round trip per
-subresource per page load, and the collection page names nine of them.
+subresource per page load, and the deck page names eleven of them (measured
+against a test instance: eleven 304s, ~500 ms of them on a loaded box).
 
 WHAT MAKES A URL IMMUTABLE IS THE URL.  ``/static/shared.<digest>.css`` names
 one exact byte string: change the file and the digest changes, so the page that

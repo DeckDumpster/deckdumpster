@@ -22,7 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECK = REPO_ROOT / "deploy" / "cdn-check.sh"
 
 # Replays responses/N.txt for the Nth call, so a canned conversation lines up
-# with the script's fixed call order: origin, edge, conditional, gzip.
+# with the script's fixed call order: origin, edge, conditional, gzip, then the
+# document body and the two sides of one asset it names (de-l23).
 CURL_STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$CURL_CALL_LOG"
 n=$(( $(cat "$CURL_SEQ" 2>/dev/null || echo 0) + 1 ))
@@ -45,12 +46,23 @@ def _dump(status="200", etag=ETAG, cache="public, no-cache", extra=()):
     return "\r\n".join(lines) + "\r\n\r\n"
 
 
-# The happy path: origin and edge agree, the edge revalidates, gzip negotiated.
+#: One content-addressed asset URL, as the server now rewrites references into
+#: (de-l23), and the headers a correct edge answers it with.
+ASSET_URL = "/static/shared.0123456789abcdef.css"
+ASSET_ETAG = '"0123456789abcdef0123456789abcdef"'
+ASSET_CACHE = "public, max-age=31536000, immutable"
+DOCUMENT_BODY = f'<!doctype html><link rel="stylesheet" href="{ASSET_URL}">'
+
+# The happy path: origin and edge agree, the edge revalidates, gzip negotiated,
+# and the asset the document names is immutable and identical on both sides.
 GREEN = {
     1: _dump(),
     2: _dump(),
     3: _dump(status="304"),
     4: _dump(extra=["content-encoding: gzip"]),
+    5: DOCUMENT_BODY,
+    6: _dump(etag=ASSET_ETAG, cache=ASSET_CACHE),
+    7: _dump(etag=ASSET_ETAG, cache=ASSET_CACHE),
 }
 
 
@@ -192,6 +204,47 @@ def test_dead_edge_is_caught(tmp_path):
     assert "'502'" in proc.stderr
 
 
+# ── The asset the document names (de-l23) ───────────────────────────────────
+
+
+def test_a_document_naming_no_hashed_asset_is_caught(tmp_path):
+    """An origin that stopped rewriting references is a silent regression: the
+    site still works, and every asset goes back to costing a round trip."""
+    proc, _ = _run(tmp_path, {**GREEN, 5: '<link rel="stylesheet" href="/static/shared.css">'})
+    assert proc.returncode == 1
+    assert "names no content-addressed asset" in proc.stderr
+
+
+def test_an_asset_the_edge_cannot_serve_is_caught(tmp_path):
+    """The document names it, so a 404 here is every user's page unstyled."""
+    proc, _ = _run(tmp_path, {**GREEN, 7: _dump(status="404", etag=None, cache=None)})
+    assert proc.returncode == 1
+    assert "'404'" in proc.stderr
+
+
+def test_an_asset_missing_at_the_origin_is_caught(tmp_path):
+    proc, _ = _run(tmp_path, {**GREEN, 6: _dump(status="404", etag=None, cache=None)})
+    assert proc.returncode == 1
+    assert "renders unstyled" in proc.stderr
+
+
+def test_an_asset_not_served_immutable_is_caught(tmp_path):
+    """The digest in the URL is the whole reason the long window is correct;
+    paying for the URL and taking none of the benefit is the regression."""
+    proc, _ = _run(tmp_path, {**GREEN, 7: _dump(etag=ASSET_ETAG, cache="public, no-cache")})
+    assert proc.returncode == 1
+    assert "content-addressed asset is served" in proc.stderr
+
+
+def test_an_edge_holding_different_bytes_for_a_hashed_url_is_caught(tmp_path):
+    """A digest names one byte string. Under a year-long promise, an edge
+    holding another is a cache nobody can revalidate out of."""
+    proc, _ = _run(tmp_path, {**GREEN, 7: _dump(etag='"deadbeefdeadbeefdeadbeefdeadbeef"',
+                                                cache=ASSET_CACHE)})
+    assert proc.returncode == 1
+    assert "DIFFERENT bytes" in proc.stderr
+
+
 # ── The Access wall, diagnosed by name ──────────────────────────────────────
 
 
@@ -214,7 +267,7 @@ def test_service_token_is_sent_on_every_public_request(tmp_path):
     })
     assert proc.returncode == 0, proc.stderr
     public_calls = [line for line in calls.splitlines() if "magic.dumpster.cards" in line]
-    assert len(public_calls) == 3, f"expected three edge requests, got {public_calls}"
+    assert len(public_calls) == 5, f"expected five edge requests, got {public_calls}"
     assert all("CF-Access-Client-Id: id.access" in line for line in public_calls)
     # And never at the origin, which is not behind Access.
     origin_calls = [line for line in calls.splitlines() if "localhost:8081" in line]
