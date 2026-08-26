@@ -59,6 +59,9 @@ uv run pytest tests/ui/ -v --instance <instance>
 
 # Always-skipped: 7 order parser tests need real vendor HTML files (not in repo).
 
+# 6. Everything CI runs, in one script (~25 min; the whole of ci.yml)
+INSTANCE=ci-<yourname> bash deploy/ci.sh
+
 # --- App ---
 mtg setup                                              # DB + Scryfall cache + MTGJSON
 mtg setup --demo                                       # + ~50 demo cards
@@ -76,6 +79,18 @@ bash deploy/teardown.sh <name> [--purge]               # Stop / remove
 bash deploy/prune-instances.sh                         # Clean up orphaned test instances
 systemctl --user start mtgc-<name>                     # Start / status
 ```
+
+## What CI runs
+
+`.github/workflows/ci.yml` checks out the repo and runs `bash deploy/ci.sh`. It has no
+other step, so **anything not invoked from `deploy/ci.sh` never runs in CI** — wire new
+gates in there. The script is the only list; keeping the steps inline in the workflow is
+what made a red CI impossible to reproduce locally, and left the rig's agent instructions
+describing a `deploy/ci.sh` that did not exist (de-xz8).
+
+Run it by hand with an instance name of your own — `INSTANCE` defaults to `ci-test`, which
+is the self-hosted runner's own instance, and the runner shares a machine with your
+worktree. The UI tier needs `ANTHROPIC_API_KEY`; CI passes it in as a repository secret.
 
 ## Web routes
 
