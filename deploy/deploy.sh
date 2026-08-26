@@ -52,6 +52,10 @@ if [ ! -f "$QUADLET_FILE" ]; then
     echo "==> Starting $SERVICE_NAME..."
     systemctl --user start "$SERVICE_NAME"
 else
+    # Refuse to start on a nearly-full disk (de-3ww). Only this branch builds —
+    # the one above delegates to setup.sh, which runs the same gate itself.
+    bash "$SCRIPT_DIR/diskcheck.sh" --floor "$HOME" "${MTGC_STORE_ROOT:-$HOME}"
+
     echo "==> Building container image (mtgc:latest)..."
     podman build -t mtgc:latest -f Containerfile \
         -v "${HOME}/.cache/uv:/root/.cache/uv:z" .

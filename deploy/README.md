@@ -228,6 +228,58 @@ raised until it stops meaning anything. A gate never observed failing is not
 known to work, and one never observed staying green under noise is not known to
 be usable.
 
+### Refusing to build on a nearly-full disk
+
+Moving where the bytes land is not the same as having somewhere to put them.
+`MTGC_STORE_ROOT` gave non-prod container storage another disk; it did not stop
+a build starting on a disk that has no room left, and **a build that runs out of
+room does not fail as a disk error** — the one that filled `/` reported
+`ld terminated with signal 7 [Bus error]` from a link step, which reads as a
+broken toolchain and cost real diagnosis time.
+
+So every Linux path that builds an image asks first:
+
+```bash
+bash deploy/diskcheck.sh --floor "$HOME" "${MTGC_STORE_ROOT:-$HOME}"
+```
+
+- **Both disks, because `MTGC_STORE_ROOT` only moves the store.** `$HOME` still
+  holds the uv cache the `Containerfile` bind-mounts and the default store
+  `prod`'s own volumes live in. Unset, the two arguments name one filesystem and
+  it is reported once — the output names disks, not arguments.
+- **Callers:** `.github/workflows/ci.yml` (ahead of the isolation gate, which
+  builds an image of its own), `setup.sh`, `deploy.sh` and `seed.sh`.
+  `store-isolation-gate.sh` inherits it through the `setup.sh` it runs.
+- **Not covered: `mac-setup.sh` / `mac-deploy.sh`.** Same reason the store work
+  skips them — on macOS the build's bytes land inside the `podman machine` VM,
+  so a host-side `df` would measure a filesystem the build is not filling.
+- **The floor is 10G**, roughly five times what an image build writes, tripping
+  at about 90% used on the deployment box's 98G root. It is deliberately not
+  tighter: the path this most needs to protect is prod's deploy, which is also
+  the one that must not fail spuriously — but a prod deploy attempted with under
+  10G free is one that would likely have died half-built, and refusing is the
+  better of those two. Raise it host-wide in `~/.config/mtgc/alerts.env`:
+
+  ```
+  MTGC_DISK_FLOOR_GB=20
+  ```
+
+  Precedence is environment, then that file, then the built-in default — the
+  same order `MTGC_STORE_ROOT` follows.
+- **It fails closed.** A non-numeric floor and a path `df` cannot measure are
+  both refusals, never a pass: a gate that does not know the free space must not
+  be the thing that says there is enough. Bare invocation is a usage error, not
+  a silent no-op.
+- Ported from pokedumpster's `deploy/diskcheck.sh`, gate half only — that repo's
+  script is also a low-disk alert driven by a timer, and there is no such timer
+  here to drive it.
+
+`tests/test_diskcheck.py` runs the shipped script against stubbed filesystems
+and watches it refuse each way, then asserts the wiring itself: that every
+build path calls it, that the call comes *before* the build rather than after
+it, and that each caller passes both disks. A gate nobody invokes is the same
+as no gate, and that is a one-line regression.
+
 ### Deleting a store — never `podman system reset`
 
 Everything above teaches you to aim `--root`/`--runroot` at a second store.
@@ -637,6 +689,7 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 | `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
 | `deploy.sh <name>` | Rebuild image and restart one instance. Regenerates the Quadlet via `setup.sh` if it has gone missing — `--http-port` / `--tls-certs` are re-applied from the env file, so the unit is reproduced rather than downgraded |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
+| `diskcheck.sh --floor [path...]` | Gate — exit non-zero when a path's filesystem has under `MTGC_DISK_FLOOR_GB` free. Run by CI, `setup.sh`, `deploy.sh` and `seed.sh` before they build — see [Refusing to build on a nearly-full disk](#refusing-to-build-on-a-nearly-full-disk) |
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
 | `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or any image its build labelled, turn up in Podman's default store, or if nothing was built. Removes what it catches, on both paths. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |

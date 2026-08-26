@@ -287,6 +287,12 @@ fi
 
 # --- Build container image ---
 
+# Refuse to start on a nearly-full disk (de-3ww). Both disks matter: $HOME holds
+# the uv cache this build bind-mounts and the default store, and MTGC_STORE_ROOT
+# (resolved above) is where the layers actually land when one is named. Unset,
+# they are the same filesystem and are reported once.
+bash "$SCRIPT_DIR/diskcheck.sh" --floor "$HOME" "${MTGC_STORE_ROOT:-$HOME}"
+
 echo "==> Building container image (mtgc:latest)..."
 podman build -t mtgc:latest -f "$REPO_DIR/Containerfile" \
     -v "${HOME}/.cache/uv:/root/.cache/uv:z" "$REPO_DIR"

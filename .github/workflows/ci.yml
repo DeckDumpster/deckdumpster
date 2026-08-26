@@ -49,6 +49,18 @@ jobs:
           bash deploy/teardown.sh $INSTANCE --purge 2>/dev/null || true
           podman image prune -f 2>/dev/null || true
 
+      # Before this job builds anything: refuse to start on a nearly-full disk
+      # (de-3ww). / has hit 100% on the deployment box twice, and a build that
+      # runs out of room does not fail as a disk error — one produced
+      # `ld terminated with signal 7 [Bus error]`, which reads as a toolchain
+      # bug. Both disks are checked: $HOME holds the uv cache the Containerfile
+      # bind-mounts and the default store, MTGC_STORE_ROOT (set by the
+      # Select container store step, if this box names one) is where they land. This is the
+      # first step that can fail on space, so it goes ahead of the isolation
+      # gate rather than after it — the gate builds an image too.
+      - name: Disk floor check
+        run: bash deploy/diskcheck.sh --floor "$HOME" "${MTGC_STORE_ROOT:-$HOME}"
+
       # Before the job writes several more gigabytes of its own: a --test
       # bring-up must put nothing under $HOME, which on the deployment box is
       # the disk prod runs from (de-3a0). de-3mo gave those bytes somewhere
