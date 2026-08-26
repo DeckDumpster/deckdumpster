@@ -220,6 +220,14 @@ it already walks. Neither runs on a timer, so an existing database is brought fo
 `mtg data backfill-set-sizes` (one Scryfall `/sets` call plus local `AllPrintings.json`,
 batched, and idempotent: a second run writes zero rows). See `mtg_collector/db/set_sizes.py`.
 
+**The test fixture carries both sizes, and `spg` is deliberately NULL.** Until de-1ov the
+fixture had neither column, so every set in a `--test` container reported `owned_base` /
+`total_base` as NULL and no test against one could reach the populated path at all.
+`scripts/build_test_fixture.py` now writes MTGJSON's `baseSetSize` for the sets it caches
+(`total_set_size` already arrived with `ensure_set_cached`), and Special Guests is in that
+table with `0` — which `clean_size` reads as an absence — so one cached set stays NULL and
+both branches have a fixture. Do not "fix" `spg` to a positive number.
+
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
 holds both. A **query** is aggregated day by day inside SQLite from `collection` + `prices`;
