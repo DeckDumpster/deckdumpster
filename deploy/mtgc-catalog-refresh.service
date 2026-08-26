@@ -1,0 +1,26 @@
+[Unit]
+Description=MTGC daily card catalog refresh ({{INSTANCE}})
+# The thing that actually keeps the card catalogue current (de-wdq). Until this
+# existed, nothing on a timer refreshed it: `mtg cache all` and `mtg data fetch`
+# were both by hand, and the catalogue sat two months behind upstream — newest
+# set 2026-06-26 against The Hobbit's 2026-08-14 — with every other timer green,
+# because each of those asks whether its own download succeeded and each was
+# telling the truth. mtgc-catalog-check raises the alarm; this clears it.
+After=network-online.target
+Wants=network-online.target
+# A refresh that fails every night and says nothing is how the gap reopens. The
+# freshness check would still catch it, but a week later and without the reason.
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+# ONE ExecStart, not three. Scryfall cache and MTGJSON fetch+import were separate
+# manual steps, and a refresh that is two commands is a refresh where one of them
+# stops being run. `mtg data refresh-catalog` runs both in one process, so the
+# unit's exit status is the whole catalogue's verdict rather than half of it.
+ExecStart=podman exec systemd-mtgc-{{INSTANCE}} mtg data refresh-catalog
+# ~500 MB of Scryfall bulk data and ~500 MB of MTGJSON, then ~112k printings
+# upserted and the per-set backfills on top. Measured well inside an hour; three
+# hours is room for a slow mirror, and a bound so a wedged download eventually
+# fails the unit instead of sitting there looking like a run in progress.
+TimeoutStartSec=10800

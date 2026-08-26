@@ -167,13 +167,18 @@ def register(subparsers):
         help="Fail if the local set list has fallen behind upstream (exit 1 = stale)",
     )
 
+    data_sub.add_parser(
+        "refresh-catalog",
+        help="Refresh the whole card/set catalogue: Scryfall cache + MTGJSON, as one step",
+    )
+
     parser.set_defaults(func=run)
 
 
 def run(args):
     """Run the data command."""
     if args.data_command == "fetch":
-        fetch_allprintings(force=args.force)
+        fetch_allprintings(force=args.force, db_path=getattr(args, "db_path", None))
     elif args.data_command == "fetch-prices":
         _fetch_prices(force=args.force)
     elif args.data_command == "import":
@@ -212,13 +217,17 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         sys.exit(check_catalog(db_path))
+    elif args.data_command == "refresh-catalog":
+        from mtg_collector.db.connection import get_db_path
+        db_path = get_db_path(getattr(args, "db_path", None))
+        refresh_catalog(db_path)
     else:
-        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-set-sizes|check-catalog} [options]")
+        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-set-sizes|check-catalog|refresh-catalog} [options]")
         sys.exit(1)
 
 
-def fetch_allprintings(force: bool = False):
-    """Download AllPrintings.json from MTGJSON."""
+def fetch_allprintings(force: bool = False, db_path: str | None = None):
+    """Download AllPrintings.json from MTGJSON, then import it."""
     dest = get_allprintings_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -243,23 +252,23 @@ def fetch_allprintings(force: bool = False):
     size_mb = dest.stat().st_size / (1024 * 1024)
     print(f"Done! AllPrintings.json ({size_mb:.0f} MB) saved to: {dest}")
 
-    # Auto-import into SQLite
-    try:
-        from mtg_collector.db.connection import get_db_path
-        db_path = get_db_path()
-        import_mtgjson(db_path)
-        # Store the MTGJSON version we just imported
-        version = _fetch_mtgjson_version()
-        if version:
-            conn = sqlite3.connect(db_path)
-            conn.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES ('mtgjson_version', ?)",
-                (version,),
-            )
-            conn.commit()
-            conn.close()
-    except Exception as e:
-        print(f"Warning: auto-import failed: {e}", file=sys.stderr)
+    # Import into SQLite. A download whose import failed used to print a warning
+    # and exit 0 — the file on disk was current, the database was not, and no
+    # timer could tell the difference. That is the exact shape of the two-month
+    # gap this command is scheduled to close, so the failure propagates.
+    from mtg_collector.db.connection import get_db_path
+    db_path = get_db_path(db_path)
+    import_mtgjson(db_path)
+    # Store the MTGJSON version we just imported
+    version = _fetch_mtgjson_version()
+    if version:
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('mtgjson_version', ?)",
+            (version,),
+        )
+        conn.commit()
+        conn.close()
 
 
 def import_mtgjson(db_path: str):
@@ -705,8 +714,37 @@ def check_catalog(db_path: str) -> int:
     detail = verdict.detail()
     if detail:
         print(detail, file=sys.stderr)
-    print("Fix: mtg cache all (then mtg data fetch for MTGJSON)", file=sys.stderr)
+    print("Fix: mtg data refresh-catalog (Scryfall cache + MTGJSON, one step)", file=sys.stderr)
     return 1
+
+
+def refresh_catalog(db_path: str):
+    """Refresh the entire card/set catalogue: Scryfall cache, then MTGJSON.
+
+    One command, one process, one exit status, because splitting the refresh is
+    what produced the failure this exists to prevent: `mtg cache all` and
+    `mtg data fetch` were both by-hand, both had to be remembered, and the
+    catalogue sat two months behind upstream — a fresh AllPrintings.json on disk
+    beside a database whose newest set was 2026-06-26 — while every timer on the
+    box reported green (de-b5q, de-wdq).
+
+    Scryfall first. `sets` is written by `cache all` and is what
+    `mtg data check-catalog` measures, so on a run that only half-succeeds the
+    half that landed is the half the alarm can see. It is also the order
+    `mtg setup` uses and the order the check's own Fix: line prints.
+
+    Nothing here is conditional on what is already on disk: MTGJSON rebuilds
+    daily and Scryfall's bulk export is regenerated daily, so "we already have a
+    file" is not a reason to skip, and a skip is indistinguishable from a run
+    that had nothing to do.
+    """
+    from mtg_collector.cli.cache_cmd import cache_all
+
+    print("=== Scryfall: sets, cards, printings ===")
+    cache_all(db_path=db_path)
+
+    print("\n=== MTGJSON: AllPrintings ===")
+    fetch_allprintings(force=True, db_path=db_path)
 
 
 def _fetch_mtgjson_version() -> str | None:

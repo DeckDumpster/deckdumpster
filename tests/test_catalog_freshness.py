@@ -342,7 +342,9 @@ def test_cli_exits_1_on_the_real_gap(cli, upstream, capsys):
     assert "STALE" in err
     assert f"lag {REAL_LAG_DAYS}d" in err
     assert "The Hobbit" in err
-    assert "mtg cache all" in err
+    # It must name the one command that clears it (de-wdq), not the two that had
+    # to be remembered in order -- which is how the gap opened.
+    assert "mtg data refresh-catalog" in err
 
 
 def test_cli_exits_0_on_a_current_catalogue(cli, upstream, capsys):
