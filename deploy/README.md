@@ -586,9 +586,11 @@ bash deploy/diskcheck.sh --floor /some/dir  # GATE mode against named paths
 `MTGC_DISK_THRESHOLD` (default 90) and pushes through the same `alert.sh`
 channel as the backup and catalog checks. It is a timer, not a gate: a healthy
 disk exits 0. An unconfigured Pushover channel is a failure, not a no-op — a
-full disk that reached nobody is the defect this exists to remove.
+full disk that reached nobody is the defect this exists to remove. So is a `df`
+that cannot answer: measuring no filesystem at all exits 1 rather than passing
+quietly, in both modes.
 
-**Gate mode** is what `setup.sh` and CI run before writing gigabytes. It exits
+**Gate mode** is what `setup.sh`, `deploy.sh` and CI run before writing gigabytes. It exits
 non-zero when a filesystem has less than `MTGC_DISK_FLOOR_GB` free (default 10).
 The gate exists because running out mid-build does not fail as a disk error: at
 697 MB free a cargo link reported `ld terminated with signal 7 [Bus error]` and
@@ -611,8 +613,10 @@ as if this paragraph were not here.
 the store selection `setup.sh` scopes away from `prod` — nothing here moves a
 byte or picks a store, it only decides which `df` lines to look at.
 
-`setup.sh` and CI both gate on the store they have already resolved, so the
-floor measures the disk that run will actually write to.
+`setup.sh`, `deploy.sh` and CI all gate on the store they have already
+resolved, so the floor measures the disk that run will actually write to.
+`deploy.sh` adopts the store from the instance's own Quadlet unit, which is how
+a prod redeploy measures prod's disk and a non-prod one measures its own.
 
 ### Arming an instance
 
@@ -631,6 +635,10 @@ systemctl --user enable --now mtgc-diskcheck-prod.timer
 #    can pass — run it and confirm the push actually arrives.
 MTGC_DISK_THRESHOLD=0 bash deploy/diskcheck.sh
 ```
+
+A value passed in the environment beats the file, for every knob below — the
+same precedence `store.env` documents for `MTGC_STORE_ROOT`, and what makes the
+recipe above work on a box that has already configured a threshold.
 
 Optional, in `~/.config/mtgc/alerts.env`:
 
@@ -728,7 +736,7 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 | `mtg data check-catalog` (in-container) | Compare the local set list against Scryfall's and exit 1 if it has fallen behind. Read-only — see [Catalog freshness check](#catalog-freshness-check) |
-| `diskcheck.sh [--floor [path...]]` | Alert when a watched filesystem is over `MTGC_DISK_THRESHOLD`% used; `--floor` instead exits 1 when one has less than `MTGC_DISK_FLOOR_GB` free. Called by `setup.sh` and CI before they write gigabytes — see [Low-disk check](#low-disk-check) |
+| `diskcheck.sh [--floor [path...]]` | Alert when a watched filesystem is over `MTGC_DISK_THRESHOLD`% used; `--floor` instead exits 1 when one has less than `MTGC_DISK_FLOOR_GB` free. Called by `setup.sh`, `deploy.sh` and CI before they write gigabytes — see [Low-disk check](#low-disk-check) |
 
 ## CI
 

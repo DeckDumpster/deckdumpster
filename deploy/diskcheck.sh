@@ -31,7 +31,9 @@
 # broken toolchain and cost real diagnosis time.
 #
 # Mirrors pokedumpster:deploy/diskcheck.sh, which is where both failure modes
-# were measured; keep the two in step rather than diverging.
+# were measured; keep the two in step rather than diverging. The one deliberate
+# divergence is below: the sibling watches a single path, and MTGC has a second
+# disk worth watching because MTGC_STORE_ROOT put one there.
 #
 # WHICH FILESYSTEMS
 #
@@ -43,7 +45,9 @@
 #
 # Reading store.env to learn a path to WATCH is not the store selection that
 # deploy/setup.sh scopes away from prod — nothing here moves a byte or picks a
-# store. It only decides which `df` lines to look at.
+# store. It only decides which `df` lines to look at. This script never invokes
+# podman, so it does not source deploy/store-lib.sh the way the scripts that do
+# must; it restates that file's precedence rule and cites it instead.
 #
 # Env-driven, from the host-wide ~/.config/mtgc/alerts.env:
 #   MTGC_DISK_THRESHOLD   percent-used that triggers an alert (default 90)
@@ -57,11 +61,22 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # gate can exercise the shipped script without reading — or depending on — the
 # operator's real credentials. Same convention as deploy/backup-check.sh.
 CONF_DIR="${MTGC_CONFIG_DIR:-${HOME}/.config/mtgc}"
+
+# A value passed in the environment beats the one in the file, for every knob
+# here — the same precedence store.env already documents for MTGC_STORE_ROOT,
+# and what `MTGC_DISK_THRESHOLD=0 bash diskcheck.sh` has to mean for the
+# prove-it-goes-red recipe in deploy/README.md to work on a box that HAS
+# configured a threshold. Sourcing a dotenv always overwrites, so the three are
+# saved first.
+ENV_THRESHOLD="${MTGC_DISK_THRESHOLD:-}"
+ENV_FLOOR_GB="${MTGC_DISK_FLOOR_GB:-}"
+ENV_DISK_PATH="${MTGC_DISK_PATH:-}"
+
 [ -f "${CONF_DIR}/alerts.env" ] && { set -a; . "${CONF_DIR}/alerts.env"; set +a; }
 
-THRESHOLD="${MTGC_DISK_THRESHOLD:-90}"
-FLOOR_GB="${MTGC_DISK_FLOOR_GB:-10}"
-DISK_PATH="${MTGC_DISK_PATH:-$HOME}"
+THRESHOLD="${ENV_THRESHOLD:-${MTGC_DISK_THRESHOLD:-90}}"
+FLOOR_GB="${ENV_FLOOR_GB:-${MTGC_DISK_FLOOR_GB:-10}}"
+DISK_PATH="${ENV_DISK_PATH:-${MTGC_DISK_PATH:-$HOME}}"
 
 # --- Which paths are watched by default -------------------------------------
 
@@ -94,6 +109,36 @@ free_gb() {
     echo $(( kb / 1048576 ))
 }
 
+# watch_list — the filesystems to measure, one resolved path per distinct
+# device. Paths on the same device are the same check, and both modes below want
+# that, so it is written once.
+#
+# An empty result is a FAILURE, not a quiet pass. "We could not measure anything"
+# and "everything is fine" must never share an outcome — the same rule
+# backup-check.sh states, and the reason this file exists at all is that a full
+# disk went unreported twice.
+watch_list() {
+    local -n out="$1"; shift
+    mapfile -t out < <(dedupe_by_device "$@")
+    if [ "${#out[@]}" -eq 0 ]; then
+        echo "diskcheck: FAILED — measured no filesystem at all. df could not read:" >&2
+        printf '  %s\n' "$@" >&2
+        exit 1
+    fi
+}
+
+dedupe_by_device() {
+    local p dev
+    declare -A seen=()
+    for p in "$@"; do
+        p="$(resolve_existing "$p")"
+        dev="$(df --output=source "$p" | tail -n1)"
+        [ -z "${seen[$dev]:-}" ] || continue
+        seen[$dev]=1
+        printf '%s\n' "$p"
+    done
+}
+
 # --- Gate mode --------------------------------------------------------------
 
 if [ "${1:-}" = "--floor" ]; then
@@ -101,16 +146,12 @@ if [ "${1:-}" = "--floor" ]; then
     PATHS=("$@")
     [ ${#PATHS[@]} -gt 0 ] || PATHS=("${DEFAULT_PATHS[@]}")
 
-    # Paths on the same filesystem are the same check; report each device once
-    # so the output names disks rather than repeating one under several aliases.
-    declare -A SEEN=()
-    FAILED=0
-    for p in "${PATHS[@]}"; do
-        p="$(resolve_existing "$p")"
-        DEV="$(df --output=source "$p" | tail -n1)"
-        [ -z "${SEEN[$DEV]:-}" ] || continue
-        SEEN[$DEV]=1
+    watch_list WATCH "${PATHS[@]}"
 
+    # Every short disk is reported, not just the first: a caller told to free
+    # space wants the whole list before it starts deleting things.
+    FAILED=0
+    for p in "${WATCH[@]}"; do
         FREE="$(free_gb "$p")"
         MOUNT="$(df --output=target "$p" | tail -n1)"
         if [ "$FREE" -lt "$FLOOR_GB" ]; then
@@ -130,13 +171,9 @@ fi
 
 # --- Alert mode -------------------------------------------------------------
 
-declare -A SEEN=()
-for p in "${DEFAULT_PATHS[@]}"; do
-    p="$(resolve_existing "$p")"
-    DEV="$(df --output=source "$p" | tail -n1)"
-    [ -z "${SEEN[$DEV]:-}" ] || continue
-    SEEN[$DEV]=1
+watch_list WATCH "${DEFAULT_PATHS[@]}"
 
+for p in "${WATCH[@]}"; do
     MOUNT="$(df --output=target "$p" | tail -n1)"
     USE="$(df --output=pcent "$p" | tail -n1 | tr -dc '0-9')"
     echo "diskcheck: ${MOUNT} at ${USE}% (threshold ${THRESHOLD}%)"

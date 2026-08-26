@@ -43,6 +43,12 @@ echo "Filesystem Size Used Avail Use% Mounted on"
 echo "$src - - - ${pcent}% $tgt"
 """
 
+# A df that cannot answer at all. "We could not measure anything" must not be
+# reported the same way as "everything is fine".
+DF_BROKEN = """#!/usr/bin/env bash
+exit 1
+"""
+
 CURL_STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$CURL_CALL_LOG"
 exit 0
@@ -158,6 +164,26 @@ def test_threshold_is_configurable(rig):
     assert len(rig.pushes) == 1
 
 
+def test_the_environment_beats_the_config_file(rig):
+    """`MTGC_DISK_THRESHOLD=0 bash diskcheck.sh` is the prove-it-goes-red recipe.
+
+    Sourcing a dotenv always overwrites, so on a box that has configured a
+    threshold the recipe would silently do nothing without this precedence —
+    which is the exact class of defect this check exists to remove.
+    """
+    home_disk(rig, pcent=55)
+    rig.alerts["MTGC_DISK_THRESHOLD"] = "90"
+    r = rig.run(env={"MTGC_DISK_THRESHOLD": "0"})
+    assert "threshold 0%" in r.stdout
+    assert len(rig.pushes) == 1
+
+
+def test_the_environment_beats_the_config_file_for_the_floor_too(rig):
+    home_disk(rig, free_gb=42)
+    rig.alerts["MTGC_DISK_FLOOR_GB"] = "10"
+    assert rig.run("--floor", env={"MTGC_DISK_FLOOR_GB": "100"}).returncode != 0
+
+
 def test_unable_to_alert_is_a_failure_not_a_no_op(rig):
     """A full disk that reached nobody must fail the unit, which is how it gets seen."""
     home_disk(rig, pcent=99)
@@ -166,6 +192,24 @@ def test_unable_to_alert_is_a_failure_not_a_no_op(rig):
     assert r.returncode != 0
     assert "reached nobody" in r.stderr
     assert rig.pushes == []
+
+
+def test_measuring_nothing_is_a_failure_not_a_quiet_pass(rig):
+    """A df that cannot answer must not exit 0 having checked no disk."""
+    home_disk(rig, pcent=99)
+    (rig.bin / "df").write_text(DF_BROKEN)
+    r = rig.run()
+    assert r.returncode != 0
+    assert "measured no filesystem at all" in r.stderr
+    assert rig.pushes == []
+
+
+def test_the_gate_also_refuses_to_pass_when_it_cannot_measure(rig):
+    home_disk(rig, free_gb=1)
+    (rig.bin / "df").write_text(DF_BROKEN)
+    r = rig.run("--floor")
+    assert r.returncode != 0
+    assert "measured no filesystem at all" in r.stderr
 
 
 # --- Which filesystems are watched ------------------------------------------
@@ -351,6 +395,17 @@ def test_setup_gates_on_room_before_it_builds():
     # Gated against the store this run resolved, not a hardcoded default --
     # otherwise a non-prod bring-up measures prod's disk and vice versa.
     assert '"${MTGC_STORE_ROOT:-$HOME}"' in line
+
+
+def test_deploy_gates_on_room_before_it_rebuilds():
+    """deploy.sh is prod's redeploy path — a build that runs out mid-way leaves
+    a partial image and then restarts the live service against it."""
+    deploy = (REPO_ROOT / "deploy" / "deploy.sh").read_text()
+    gate = deploy.index("diskcheck.sh")
+    assert gate < deploy.index("podman build")
+    # After the store is adopted from the instance's own unit, so it measures
+    # the disk this instance actually builds into.
+    assert deploy.index("mtgc_store_adopt_instance") < gate
 
 
 def test_ci_gates_on_room_before_it_builds():
