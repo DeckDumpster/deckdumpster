@@ -169,10 +169,15 @@ class AssetHasher:
         if direct.is_file():
             return ResolvedAsset(direct, content_addressed=False)
 
-        match = _HASHED.match(direct.name)
+        # Read the digest out of the requested name, not the resolved one: the
+        # directory the asset lives in is part of what the URL asked for, and
+        # rebuilding it from a resolved path is a slice that goes wrong on any
+        # name that did not survive normalisation unchanged.
+        prefix, slash, name = rel.rpartition("/")
+        match = _HASHED.match(name)
         if match is None:
             return None
-        base_rel = f"{rel[:-len(direct.name)]}{match['stem']}.{match['suffix']}"
+        base_rel = f"{prefix}{slash}{match['stem']}.{match['suffix']}"
         base = self._within(base_rel)
         if base is None or not base.is_file():
             return None
@@ -217,11 +222,17 @@ _HASHERS_LOCK = threading.Lock()
 
 
 def hasher_for(static_dir: Path) -> AssetHasher:
-    """The process-wide hasher for ``static_dir``, made on first use."""
-    key = Path(static_dir).resolve()
+    """The process-wide hasher for ``static_dir``, made on first use.
+
+    Keyed on the path as given, not on its resolved form: this runs once per
+    connection -- including every API request, which has no assets in it -- and
+    a `resolve` here would be a walk of syscalls charged to responses that never
+    ask a question about a file.  The resolving happens once, inside the hasher
+    that is built.
+    """
     with _HASHERS_LOCK:
-        hasher = _HASHERS.get(key)
+        hasher = _HASHERS.get(static_dir)
         if hasher is None:
-            hasher = AssetHasher(key)
-            _HASHERS[key] = hasher
+            hasher = AssetHasher(Path(static_dir))
+            _HASHERS[static_dir] = hasher
         return hasher
