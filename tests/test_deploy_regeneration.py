@@ -1,9 +1,10 @@
 """Regenerating a missing Quadlet must reproduce the unit it replaces.
 
 `deploy.sh` regenerates a missing Quadlet by calling `setup.sh <instance>` with
-no flags. `--http-port` and `--tls-certs` are inputs to the render, so unless
-they are recorded somewhere the regenerated unit silently loses the plaintext
-publish and the certificate mount.
+nothing but the instance name. `--http-port`, `--tls-certs` and the positional
+port are inputs to the render, so unless they are recorded somewhere the
+regenerated unit silently loses the plaintext publish, the certificate mount and
+the pinned HTTPS host port.
 
 These tests drive the real `setup.sh` with podman/systemd/loginctl stubbed out,
 so they exercise the same code path `deploy.sh` triggers.
@@ -110,28 +111,78 @@ def test_regenerating_a_missing_quadlet_keeps_the_cert_mount(host):
     assert f"Volume={certs}:/certs:ro,Z" in unit.read_text()
 
 
-def test_regeneration_reproduces_both_flags_together(host):
-    """Both flag-derived lines come back, and nothing else the render owns
-    changes. The explicit HTTPS host port is the one input still not recorded —
-    a pre-existing gap tracked separately as de-f2d, so this compares the unit
-    with the PublishPort=<host>:8081 line excluded rather than whole-file."""
+def test_regeneration_reproduces_the_whole_unit(host):
+    """Every input the render owns comes back — byte-for-byte, not line by line.
+    Whole-file identity is the assertion that catches the next input someone
+    adds without recording it."""
     certs = host.home / "certs"
     certs.mkdir()
     host.setup("inst", "8083", "--http-port", "8084", "--tls-certs", str(certs))
     unit = host.quadlet("inst")
-
-    def without_https_publish(text):
-        return [ln for ln in text.splitlines() if not ln.endswith(":8081")]
-
-    original = without_https_publish(unit.read_text())
+    original = unit.read_text()
 
     unit.unlink()
     host.setup("inst")
 
-    regenerated = unit.read_text()
-    assert without_https_publish(regenerated) == original
-    assert "PublishPort=127.0.0.1:8084:8080" in regenerated
-    assert f"Volume={certs}:/certs:ro,Z" in regenerated
+    assert unit.read_text() == original
+    assert "PublishPort=8083:8081" in original
+    assert "PublishPort=127.0.0.1:8084:8080" in original
+    assert f"Volume={certs}:/certs:ro,Z" in original
+
+
+def test_regenerating_a_missing_quadlet_keeps_the_https_port(host):
+    """de-f2d: an instance created on an explicit port must come back on it.
+    The old failure was silent — deploy.sh discovers the port from `podman
+    port`, so its health check passes on whatever high port Podman picked."""
+    host.setup("inst", "8083")
+    unit = host.quadlet("inst")
+    assert "PublishPort=8083:8081" in unit.read_text()
+
+    unit.unlink()
+    host.setup("inst")  # deploy.sh regenerates with no port
+
+    assert "PublishPort=8083:8081" in unit.read_text()
+
+
+def test_an_explicit_port_overrides_the_recorded_one(host):
+    host.setup("inst", "8083")
+    host.setup("inst", "8085")
+
+    unit = host.quadlet("inst").read_text()
+    assert "PublishPort=8085:8081" in unit
+    assert "8083" not in unit
+
+
+def test_an_auto_assigned_port_records_nothing(host):
+    """Auto-assign is the absence of a port, not a port: recording 0 — or
+    whatever Podman happened to pick — would pin an instance that asked to
+    float."""
+    host.setup("inst")
+
+    assert "MTGC_PUBLISH_PORT" not in host.env_file("inst").read_text()
+    assert "PublishPort=:8081" in host.quadlet("inst").read_text()
+
+    host.quadlet("inst").unlink()
+    host.setup("inst")
+
+    assert "PublishPort=:8081" in host.quadlet("inst").read_text()
+
+
+def test_deleting_the_recorded_port_returns_the_instance_to_auto_assign(host):
+    """Same removal mechanism as the two flags: there is no --no-port."""
+    host.setup("inst", "8083")
+    env_file = host.env_file("inst")
+    env_file.write_text(
+        "".join(
+            line
+            for line in env_file.read_text().splitlines(keepends=True)
+            if not line.startswith("MTGC_PUBLISH_PORT=")
+        )
+    )
+
+    host.setup("inst")
+
+    assert "PublishPort=:8081" in host.quadlet("inst").read_text()
 
 
 def test_an_explicit_flag_overrides_the_recorded_value(host):
@@ -168,6 +219,7 @@ def test_unset_flags_record_nothing_and_render_unchanged(host):
     env_text = host.env_file("inst").read_text()
     assert "MTGC_HTTP_PUBLISH_PORT" not in env_text
     assert "MTGC_TLS_CERTS_DIR" not in env_text
+    assert "MTGC_PUBLISH_PORT=8083" in env_text  # the port WAS given explicitly
 
     unit = host.quadlet("inst").read_text()
     assert unit.count("PublishPort=") == 1
@@ -185,6 +237,7 @@ def test_recording_leaves_the_rest_of_the_env_file_alone(host):
     assert "ANTHROPIC_API_KEY=sk-ant-secret" in lines
     assert "MTGC_TLS_CERT=/certs/c.pem" in lines
     assert "MTGC_HTTP_PUBLISH_PORT=8084" in lines
+    assert "MTGC_PUBLISH_PORT=8083" in lines
 
 
 def test_env_file_stays_private_after_recording(host):
