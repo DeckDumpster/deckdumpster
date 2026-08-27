@@ -2481,12 +2481,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     {_ENRICH_COLUMNS}
             """
-            def _body(joins: str) -> str:
+            def _body(joins: str, *, copies_only: bool = False) -> str:
+                collection_join = "JOIN" if copies_only else "LEFT JOIN"
                 return f"""
                 FROM printings p
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
-                LEFT JOIN collection c ON p.printing_id = c.printing_id
+                {collection_join} collection c ON p.printing_id = c.printing_id
                 LEFT JOIN orders o ON c.order_id = o.id
                 {joins}
                 WHERE {where_sql}
@@ -2494,9 +2495,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             """
             body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
             count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="none"))
-            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="prices"))
+            # The sums range over copies, and this is the one template whose
+            # rows need not have one: a card you do not own is a row here with
+            # qty 0, so it adds 0 to total_qty and 0 to total_value whatever it
+            # would have been priced at. Inner-joining the copies drops those
+            # rows before the price joins are reached rather than pricing
+            # 109,976 of them to add zero. See the aggregates below.
+            totals_body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=False, enrich="prices"),
+                copies_only=True,
+            )
             order_sql = _order_by("p.printing_id")
             agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
+            totals_body_spans_result = False
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
             select_sql = f"""
@@ -2546,6 +2557,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # identifies a row.
             order_sql = _order_by("p.printing_id", "c.id", "dc.id")
             agg_qty_sql = "1"
+            totals_body_spans_result = True
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
             select_sql = f"""
@@ -2594,6 +2606,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "p.printing_id", "c.finish", "c.condition", "c.status", "c.order_id"
             )
             agg_qty_sql = "COUNT(DISTINCT c.id)"
+            totals_body_spans_result = True
 
         # order_sql stays per-template: the tiebreak is that template's row
         # identity, and it differs (the GROUP BY key, or c.id/dc.id per copy).
@@ -2708,9 +2721,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             aggregates["total_value"] = round(sum(
                 float(c[price_key] or 0) * (c.get("qty") or 0) for c in results
             ), 2)
-        elif offset == 0:
+        elif offset == 0 and totals_body_spans_result:
             # One scan for all three. Counting and summing separately walked the
             # same grouped body twice: 1.4 s against 1.0 s for this, same answer.
+            # Still true for the templates that drive from `collection`, where
+            # the totals body has a row per result row: re-measured at 792 ms
+            # combined against 1,242 ms split, on 15,045 copies.
             agg = conn.execute(
                 f"SELECT COUNT(*), COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
                 f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {totals_body_sql})",
@@ -2719,6 +2735,24 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             total = agg[0]
             aggregates["total_qty"] = agg[1]
             aggregates["total_value"] = round(agg[2], 2)
+        elif offset == 0:
+            # The is:unowned template's totals body ranges over copies, not over
+            # result rows, so it cannot also answer `total` — the rows it drops
+            # are exactly the ones the query is about. Two statements, and both
+            # are cheaper than the one they replace: the sums no longer price
+            # 109,976 rows to add zero, and the count carries no price joins.
+            # Measured on 109,976 rows: 7,271 ms combined against 2,515 ms for
+            # the pair, of which the sums are under a millisecond.
+            agg = conn.execute(
+                f"SELECT COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
+                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {totals_body_sql})",
+                sql_params,
+            ).fetchone()
+            aggregates["total_qty"] = agg[0]
+            aggregates["total_value"] = round(agg[1], 2)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
+            ).fetchone()[0]
         elif short_page:
             total = offset + len(rows)
         else:
