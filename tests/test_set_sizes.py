@@ -22,7 +22,7 @@ from mtg_collector.db.schema import (
     get_current_version,
     init_db,
 )
-from mtg_collector.db.set_sizes import apply_base_set_sizes, apply_total_set_sizes
+from mtg_collector.db.set_backfill import apply_base_set_sizes, apply_total_set_sizes
 from mtg_collector.services.bulk_import import ScryfallBulkClient
 
 FIXTURE_DB = Path(__file__).parent / "fixtures" / "test-data.sqlite"
