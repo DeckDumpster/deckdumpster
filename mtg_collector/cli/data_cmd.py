@@ -737,14 +737,29 @@ def refresh_catalog(db_path: str):
     daily and Scryfall's bulk export is regenerated daily, so "we already have a
     file" is not a reason to skip, and a skip is indistinguishable from a run
     that had nothing to do.
+
+    Last, the collection's copy of the card name. `cache all` repairs
+    printings.card_name from cards.name, and this carries the same rename the
+    last hop to collection.card_name, which the default collection sort is
+    ordered by. It runs here rather than inside `cache all` because under
+    split-DB that command writes to the *shared* catalogue, where `collection`
+    is somebody else's empty table -- the copy that needs repairing lives in
+    this instance's own database, which is what db_path names in both modes.
     """
     from mtg_collector.cli.cache_cmd import cache_all
+    from mtg_collector.db.connection import get_connection
+    from mtg_collector.db.schema import rebuild_collection_card_names
 
     print("=== Scryfall: sets, cards, printings ===")
     cache_all(db_path=db_path)
 
     print("\n=== MTGJSON: AllPrintings ===")
     fetch_allprintings(force=True, db_path=db_path)
+
+    print("\n=== Collection sort key ===")
+    conn = get_connection(db_path)
+    renamed = rebuild_collection_card_names(conn)
+    print(f"Resynced card_name on {renamed} collection row(s)")
 
 
 def _fetch_mtgjson_version() -> str | None:

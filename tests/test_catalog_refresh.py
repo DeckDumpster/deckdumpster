@@ -20,6 +20,7 @@ between them and not what either one downloads.
 """
 
 import argparse
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,38 +35,62 @@ DEPLOY = REPO_ROOT / "deploy"
 # --- The command --------------------------------------------------------------
 
 
-def test_it_runs_both_halves_in_one_call():
-    """Scryfall cache and MTGJSON, from one invocation. That is the whole point."""
+@contextmanager
+def _stubbed_refresh(calls, *, cache_all=None):
+    """Every side effect of refresh_catalog, recorded instead of performed."""
+    cache = cache_all or (lambda **kw: calls.append(("cache_all", kw)))
+    with patch("mtg_collector.cli.cache_cmd.cache_all", side_effect=cache), \
+         patch.object(data_cmd, "fetch_allprintings", side_effect=lambda **kw: calls.append(("fetch", kw))), \
+         patch("mtg_collector.db.connection.get_connection", side_effect=lambda p: ("conn", p)), \
+         patch("mtg_collector.db.schema.rebuild_collection_card_names",
+               side_effect=lambda conn: calls.append(("resync", {"db_path": conn[1]})) or 0):
+        yield
+
+
+def test_it_runs_every_half_in_one_call():
+    """Scryfall cache, MTGJSON, then the collection's copy of the card name.
+
+    One invocation for all of it. That is the whole point.
+    """
     calls = []
-    with patch("mtg_collector.cli.cache_cmd.cache_all", side_effect=lambda **kw: calls.append(("cache_all", kw))), \
-         patch.object(data_cmd, "fetch_allprintings", side_effect=lambda **kw: calls.append(("fetch", kw))):
+    with _stubbed_refresh(calls):
         data_cmd.refresh_catalog("/tmp/whatever.sqlite")
 
     # Scryfall first: `sets` is what check-catalog measures, so on a run that
-    # only half-lands, the half that landed is the half the alarm can see.
-    assert [name for name, _ in calls] == ["cache_all", "fetch"]
-    # Both halves write the database they were pointed at, not the default one.
-    assert [kw["db_path"] for _, kw in calls] == ["/tmp/whatever.sqlite"] * 2
+    # only half-lands, the half that landed is the half the alarm can see. The
+    # resync last: it copies from printings.card_name, which `cache all` is what
+    # repairs.
+    assert [name for name, _ in calls] == ["cache_all", "fetch", "resync"]
+    # Every half writes the database it was pointed at, not the default one --
+    # including the resync, whose target is the *instance* DB even under
+    # split-DB, where the other two write the shared catalogue.
+    assert [kw["db_path"] for _, kw in calls] == ["/tmp/whatever.sqlite"] * 3
 
 
 def test_the_mtgjson_half_re_downloads_unconditionally():
     """`fetch` skips a file that already exists unless forced, and a skip here is
     indistinguishable from a run with nothing to do. MTGJSON rebuilds daily."""
-    with patch("mtg_collector.cli.cache_cmd.cache_all"), \
-         patch.object(data_cmd, "fetch_allprintings") as fetch:
+    calls = []
+    with _stubbed_refresh(calls):
         data_cmd.refresh_catalog("/tmp/whatever.sqlite")
 
-    assert fetch.call_args.kwargs["force"] is True
+    fetch_kwargs = [kw for name, kw in calls if name == "fetch"]
+    assert [kw["force"] for kw in fetch_kwargs] == [True]
 
 
 def test_a_failing_scryfall_half_stops_the_run():
     """No swallowing: the MTGJSON half must not paper over a dead Scryfall half."""
-    with patch("mtg_collector.cli.cache_cmd.cache_all", side_effect=RuntimeError("scryfall down")), \
+    calls = []
+    with _stubbed_refresh(calls, cache_all=_raise_scryfall), \
          patch.object(data_cmd, "fetch_allprintings") as fetch:
         with pytest.raises(RuntimeError):
             data_cmd.refresh_catalog("/tmp/whatever.sqlite")
 
     assert fetch.call_count == 0
+
+
+def _raise_scryfall(**_kw):
+    raise RuntimeError("scryfall down")
 
 
 def test_a_failing_import_fails_the_command(tmp_path, monkeypatch):

@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 49
+SCHEMA_VERSION = 50
 
 
 class SchemaIntegrityError(Exception):
@@ -234,10 +234,26 @@ CREATE TABLE IF NOT EXISTS collection (
     sale_price REAL,
     order_id INTEGER REFERENCES orders(id),
     binder_id INTEGER REFERENCES binders(id) ON DELETE SET NULL,
-    batch_id INTEGER REFERENCES batches(id)
+    batch_id INTEGER REFERENCES batches(id),
+    -- Denormalised copy of printings.card_name, which is itself a copy of
+    -- cards.name.  It exists so the default collection sort can be served by
+    -- an index: /api/collection's owned template drives from `collection`, so
+    -- no index on `printings` can order it, and reading the name across the
+    -- join costs a temp B-tree over the whole result before LIMIT takes 250.
+    -- See idx_collection_card_name below.
+    card_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_collection_binder ON collection(binder_id);
 CREATE INDEX IF NOT EXISTS idx_collection_batch ON collection(batch_id);
+-- The default collection page's whole ORDER BY *and* GROUP BY, in one scan.
+-- The trailing columns are the owned template's row-identity key, so grouping
+-- and ordering are both satisfied by reading this index in order and LIMIT
+-- stops it after 250 groups.  Measured on 110,018 printings / 121,020 owned
+-- copies: 6.6 s -> 28 ms for the first page, 12.5 s -> 50 ms for expand=copies.
+-- Drop a column and the grouping needs its own sort again, which is the whole
+-- cost this removes.
+CREATE INDEX IF NOT EXISTS idx_collection_card_name
+    ON collection(card_name, printing_id, finish, condition, status, order_id);
 
 -- Status audit log (append-only)
 CREATE TABLE IF NOT EXISTS status_log (
@@ -997,6 +1013,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v47_to_v48(conn)
         if current < 49:
             _migrate_v48_to_v49(conn)
+        if current < 50:
+            _migrate_v49_to_v50(conn)
 
     # Record schema version
     conn.execute(
@@ -3070,6 +3088,62 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sets ADD COLUMN base_set_size INTEGER")
     if "total_set_size" not in columns:
         conn.execute("ALTER TABLE sets ADD COLUMN total_set_size INTEGER")
+
+
+def _migrate_v49_to_v50(conn: sqlite3.Connection):
+    """Denormalise printings.card_name onto collection so the owned sort has an index.
+
+    v46 did this for the printings-driven templates.  The owned/default
+    template drives from `collection`, so no index on `printings` can order it
+    -- see idx_collection_card_name in SCHEMA_SQL for the measurement.
+
+    Backfilling ~121k rows and building the index takes a few seconds.  Under
+    split-DB the read of `printings` resolves through the temp shadow views to
+    the ATTACHed shared catalogue, which is where the names actually are;
+    `collection` is never shared, so the write always lands in this database.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(collection)")}
+    if "card_name" not in columns:
+        conn.execute("ALTER TABLE collection ADD COLUMN card_name TEXT")
+    rebuild_collection_card_names(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_collection_card_name "
+        "ON collection(card_name, printing_id, finish, condition, status, order_id)"
+    )
+
+
+def rebuild_collection_card_names(conn):
+    """Resync collection.card_name from printings.card_name.
+
+    Returns the number of rows corrected.
+
+    Every write that sets a collection row's printing_id sets card_name from
+    the same subquery, so this is not how the column is normally filled -- it
+    is the v50 backfill, and the repair for the one thing those writes cannot
+    see: a card renamed upstream.  A rename lands in `cards`, rebuild_card_names()
+    carries it to `printings`, and this carries it the last hop.  `mtg data
+    refresh-catalog` runs both, in that order, so the staleness window is the
+    same one printings.card_name already has: until the next catalogue refresh
+    a renamed card sorts under its previous name, and nothing displayed is
+    affected -- the sort is the only thing that reads this column.
+
+    Idempotent: the WHERE clause matches only rows whose copy disagrees, so a
+    second run corrects nothing.
+    """
+    cursor = conn.execute(
+        """
+        UPDATE collection SET card_name = (
+            SELECT p.card_name FROM printings p
+            WHERE p.printing_id = collection.printing_id
+        )
+        WHERE card_name IS NOT (
+            SELECT p.card_name FROM printings p
+            WHERE p.printing_id = collection.printing_id
+        )
+        """
+    )
+    conn.commit()
+    return cursor.rowcount
 
 
 def rebuild_card_names(conn):

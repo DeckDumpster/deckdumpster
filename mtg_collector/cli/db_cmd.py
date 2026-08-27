@@ -278,8 +278,10 @@ def run_recache(args):
 
             # Update collection entries to point to English printing
             conn.execute(
-                "UPDATE collection SET printing_id = ? WHERE printing_id = ?",
-                (new_id, old_id),
+                "UPDATE collection SET printing_id = ?,"
+                " card_name = (SELECT card_name FROM printings WHERE printing_id = ?)"
+                " WHERE printing_id = ?",
+                (new_id, new_id, old_id),
             )
 
             print(f"  Fixed: {old_name} ({set_code.upper()} #{cn}) [{old_lang} -> en]")
