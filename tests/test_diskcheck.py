@@ -189,7 +189,7 @@ def test_a_floor_of_zero_clears_any_disk(rig):
 
     Every test that drives setup.sh does so under a tmp_path $HOME, so the
     gate measures pytest's scratch disk rather than the deploy box's. Those
-    fixtures pin the floor to 0; unpinned, 35 of them went red on a box whose
+    fixtures pin the floor to 0; unpinned, 41 of them went red on a box whose
     /tmp sat at 92% (de-ax9). A zero that got treated as "unset" and fell back
     to the default 10 would leave those pins looking present and doing nothing,
     so the coupling would come back without a single test naming it.

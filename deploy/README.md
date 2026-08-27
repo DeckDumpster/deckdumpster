@@ -681,13 +681,16 @@ before the 03:00 backup writes its ~3 GB tarball) but enables nothing. Disk is
 host-wide, so enable it on one instance — `prod`.
 
 ```bash
-# 1. Install the units, if this instance predates the check. setup.sh renders
-#    them at bring-up, so an instance created before de-yef landed does not have
-#    them and step 3 fails with "Unit not found" rather than arming anything —
-#    which is prod's case on the deployment box today. Check first, and if it is
-#    not-found, redeploy prod to render them:
-systemctl --user is-enabled mtgc-diskcheck-prod.timer   # not-found => redeploy
-bash deploy/deploy.sh prod
+# 1. Install the units, if this instance predates the check. setup.sh is the only
+#    thing that renders them, and it runs at bring-up — deploy.sh re-renders
+#    nothing on its redeploy path, so an instance created before de-yef landed
+#    still does not have them however many times it has auto-deployed since
+#    (de-wxzx). That is prod's case on the deployment box today, and step 3
+#    fails with "Unit not found" rather than arming anything. Check, and if it
+#    is not-found, re-run setup.sh for the instance — it is idempotent and
+#    enables nothing:
+systemctl --user is-enabled mtgc-diskcheck-prod.timer   # not-found => not installed
+bash deploy/setup.sh prod
 
 # 2. Pushover credentials, if not already set — same channel as the backup check.
 #    See "Arming an instance" under Backup freshness check. An absent
