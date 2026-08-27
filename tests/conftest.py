@@ -13,17 +13,45 @@ import pytest
 # Progress file — write test results as JSONL for real-time monitoring
 # ---------------------------------------------------------------------------
 
+
+def _default_progress_path(repo_root):
+    """Progress-file path for one checkout.
+
+    A fixed name in the shared temp dir is not one file per run, it is one file
+    per box: several worktrees of this repo sit side by side and their agents
+    run the unit tier at the same time, so each session truncated and then
+    interleaved into the other's file — a live progress view showed another
+    run's nodeids, and a finished run read as hung (de-bj7). The checkout is
+    what makes a run distinct, so the file lives in it.
+
+    It goes under `.pytest_cache/` because a monitor has to *find* it, and this
+    is the one per-checkout location it can name before the run has produced any
+    output: a path carrying a hash of the root would have to be read back out of
+    the run's own stdout, which is block-buffered the moment it is redirected to
+    a file — exactly the case a monitor is for. The directory is also already
+    ignored by git (pytest writes `.pytest_cache/.gitignore`) and by
+    `.containerignore`, so the file is invisible to `git status` and to the
+    image build.
+    """
+    return os.path.join(repo_root, ".pytest_cache", "progress.jsonl")
+
+
 _PROGRESS_PATH = os.environ.get(
     "PYTEST_PROGRESS_FILE",
-    os.path.join(tempfile.gettempdir(), "pytest-progress.jsonl"),
+    _default_progress_path(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
 )
 _progress_file = None
 _session_start = None
 
 
+def pytest_report_header(config):
+    return f"progress file: {_PROGRESS_PATH}"
+
+
 def pytest_sessionstart(session):
     global _progress_file, _session_start
     _session_start = time.monotonic()
+    os.makedirs(os.path.dirname(_PROGRESS_PATH), exist_ok=True)
     _progress_file = open(_PROGRESS_PATH, "w")
     _progress_file.write(json.dumps({
         "event": "session_start",
