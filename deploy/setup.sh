@@ -341,36 +341,11 @@ fi
 
 ## --- Generate and install timer units ---
 
-SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-mkdir -p "$SYSTEMD_USER_DIR"
-
-for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-catalog-check mtgc-catalog-refresh mtgc-diskcheck mtgc-edhrec; do
-    echo "==> Installing ${UNIT_PREFIX} timer"
-    for EXT in service timer; do
-        sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
-            -e "s|{{REPO_DIR}}|${REPO_DIR}|g" \
-            "$REPO_DIR/deploy/${UNIT_PREFIX}.${EXT}" \
-            > "${SYSTEMD_USER_DIR}/${UNIT_PREFIX}-${INSTANCE}.${EXT}"
-    done
-    # These are rendered per instance, not %i templates, so they can carry the
-    # store. Their ExecStart lines run `podman exec`; without the flags an
-    # alternate-store instance's timers fire against the default store and fail
-    # with "no such container". (mtgc-backup's ExecStart is backup.sh, which
-    # adopts the instance itself — the stamp finds no `podman ` there.)
-    mtgc_store_stamp_service "${SYSTEMD_USER_DIR}/${UNIT_PREFIX}-${INSTANCE}.service"
-done
-
-# The alert unit is a systemd instance template, not a timer: its %i is the name
-# of the unit that failed, supplied by the OnFailure= that fires it. Rendered
-# per MTGC instance like everything else, so setting up a test instance cannot
-# repoint prod's alerting at a test checkout.
-echo "==> Installing mtgc-alert template"
-sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
-    -e "s|{{REPO_DIR}}|${REPO_DIR}|g" \
-    "$REPO_DIR/deploy/mtgc-alert@.service" \
-    > "${SYSTEMD_USER_DIR}/mtgc-alert-${INSTANCE}@.service"
-
-systemctl --user daemon-reload
+# Rendering lives in units-lib.sh because deploy.sh installs the same units on
+# every redeploy; see the header there for why it has to (de-46k).
+# shellcheck source=deploy/units-lib.sh
+. "$SCRIPT_DIR/units-lib.sh"
+mtgc_install_units "$INSTANCE" "$REPO_DIR"
 
 # --- Optional: initialize data volume (always exercises restore.sh) ---
 
@@ -494,12 +469,10 @@ else
     echo "  Init data:  podman exec -it systemd-${SERVICE_NAME} mtg setup"
 fi
 echo "  Logs:       journalctl --user -u $SERVICE_NAME -f"
-echo "  Prices:     systemctl --user enable --now mtgc-prices-${INSTANCE}.timer"
-echo "  Sealed:     systemctl --user enable --now mtgc-sealed-catalog-${INSTANCE}.timer"
-echo "  Backup:     systemctl --user enable --now mtgc-backup-${INSTANCE}.timer"
-echo "  Bkp check:  systemctl --user enable --now mtgc-backup-check-${INSTANCE}.timer"
-echo "  Cat check:  systemctl --user enable --now mtgc-catalog-check-${INSTANCE}.timer"
-echo "  Cat refr:   systemctl --user enable --now mtgc-catalog-refresh-${INSTANCE}.timer"
-echo "  Disk check: systemctl --user enable --now mtgc-diskcheck-${INSTANCE}.timer"
-echo "  EDHREC:     systemctl --user enable --now mtgc-edhrec-${INSTANCE}.timer"
+# Installed but not armed — every one of these is a per-instance decision, and
+# listing them from the same place they were rendered from means a timer this
+# repo gains cannot go missing from the hint.
+while IFS= read -r UNIT_PREFIX; do
+    echo "  Enable:     systemctl --user enable --now ${UNIT_PREFIX}-${INSTANCE}.timer"
+done <<< "$(mtgc_units_list "$REPO_DIR")"
 echo "  Teardown:   bash deploy/teardown.sh $INSTANCE"

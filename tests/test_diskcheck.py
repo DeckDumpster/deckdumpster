@@ -352,11 +352,19 @@ def test_floor_never_pushes(rig):
 # --- Deployment wiring ------------------------------------------------------
 
 
-def test_the_timer_unit_is_installed_and_torn_down():
-    setup = (REPO_ROOT / "deploy" / "setup.sh").read_text()
-    teardown = (REPO_ROOT / "deploy" / "teardown.sh").read_text()
-    assert "mtgc-diskcheck" in setup
-    assert "mtgc-diskcheck" in teardown
+def test_the_timer_unit_is_defined_as_a_pair():
+    """Defining the pair IS installing it.
+
+    `units-lib.sh` renders every `deploy/mtgc-*.timer` that has a matching
+    `.service`, on `setup.sh` and on every `deploy.sh`, and errors on a timer
+    with no service rather than skipping the pair. `teardown.sh` and
+    `prune-instances.sh` remove what the host has. This used to assert that
+    `setup.sh` and `teardown.sh` mentioned the name — which passed while prod
+    was missing the unit entirely, because a list is not an outcome. The
+    end-to-end proof, for every unit here, is in tests/test_deploy_units.py.
+    """
+    assert (REPO_ROOT / "deploy" / "mtgc-diskcheck.timer").is_file()
+    assert (REPO_ROOT / "deploy" / "mtgc-diskcheck.service").is_file()
 
 
 def test_the_unit_alerts_on_failure_and_writes_nothing():

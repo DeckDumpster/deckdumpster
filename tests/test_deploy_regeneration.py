@@ -55,6 +55,12 @@ def host(tmp_path):
     env["HOME"] = str(home)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["XDG_RUNTIME_DIR"] = str(tmp_path / "run")
+    # setup.sh gates on free space before it would write a gigabyte of image
+    # layers (de-yef). These tests stub podman and write a handful of unit
+    # files, and pytest's tmp_path is on /tmp, which is not the disk the gate
+    # exists to protect — so use the documented knob rather than letting a full
+    # /tmp fail the suite for a reason the suite is not about.
+    env["MTGC_DISK_FLOOR_GB"] = "0"
 
     class Host:
         def __init__(self):

@@ -64,8 +64,23 @@ else
         -v "${HOME}/.cache/uv:/root/.cache/uv:z" .
     podman tag mtgc:latest "mtgc:${INSTANCE}"
 
-    echo "==> Reloading systemd (picks up Quadlet changes)..."
-    systemctl --user daemon-reload
+    # Reinstall the timer units from this checkout. deploy.sh runs setup.sh
+    # only when the Quadlet is missing (above), so for an instance that already
+    # exists this is the ONLY path a unit added to the repo can travel — and
+    # without it, it travelled none. prod ran for months with
+    # mtgc-catalog-check, mtgc-catalog-refresh and mtgc-diskcheck absent from
+    # the host entirely, each of them a feature that had landed on main and
+    # deployed (de-46k).
+    #
+    # Unconditional because it is safe to be: it rewrites unit files, never
+    # enable state, so an armed timer stays armed and a disarmed one stays
+    # disarmed. Arming is still a per-instance decision made once, by hand.
+    echo "==> Installing timer units from this checkout..."
+    # shellcheck source=deploy/units-lib.sh
+    . "$SCRIPT_DIR/units-lib.sh"
+    # Ends in `systemctl --user daemon-reload`, which is also what picks up any
+    # Quadlet change — hence no second reload here.
+    mtgc_install_units "$INSTANCE" "$REPO_DIR"
 
     echo "==> Restarting $SERVICE_NAME..."
     systemctl --user restart "$SERVICE_NAME"

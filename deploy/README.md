@@ -43,6 +43,55 @@ systemctl --user start mtgc-prod
 podman exec -it systemd-mtgc-prod mtg setup
 ```
 
+## Installing timer units
+
+> A feature can land on main, deploy to prod, and still not be running there.
+
+Every scheduled job in this repo is a pair of files — `deploy/<name>.timer` and
+`deploy/<name>.service` — rendered per instance into
+`~/.config/systemd/user/<name>-<instance>.{timer,service}`. **Both `setup.sh`
+and `deploy.sh` install them, every time**, and that is a correction rather
+than a convenience: `deploy.sh` only falls back to `setup.sh` when an
+instance's Quadlet is *missing*, so for an instance that already exists — prod
+— the redeploy path was the sole route a newly added unit could travel, and it
+did not travel it. `mtgc-catalog-check` (de-b5q), `mtgc-catalog-refresh`
+(de-wdq) and `mtgc-diskcheck` (de-yef) were absent from prod's host entirely,
+months after each shipped, with every deploy green (de-46k).
+
+**Installing is not arming, and re-installing does not disarm.** Only unit
+files are written; enablement lives in `*.target.wants/` symlinks, which
+rewriting a unit file does not touch. So an armed timer stays armed, a disarmed
+one stays disarmed, and the install can be unconditional. Which timers an
+instance runs stays a decision someone makes once, per instance, by hand — each
+job's own section below says how.
+
+Rendering is a pure function of the template, the instance name and the repo
+path, so a redeploy against an unchanged checkout rewrites byte-identical
+files.
+
+**The unit list is the directory**, read from `deploy/mtgc-*.timer` rather than
+written down beside it. A second copy of "which timers exist" is the same bug
+one level up: a template added to `deploy/` and forgotten in the list would
+install on no host at all, and the only symptom is a timer that never fires. A
+`.timer` whose `.service` is missing is a hard error, not a skipped pair.
+`teardown.sh` and `prune-instances.sh` read the other end — the units the
+**host** has for that instance — because the two lists diverge exactly when a
+template is deleted, and then the repo has forgotten a unit the host still has,
+armed and firing for an instance that is gone. `prune-instances.sh` had that
+bug and the staleness one together: it named four roles, so it left the other
+four behind on every orphan it cleaned, and it matched shortest-prefix-first,
+so `mtgc-backup-check-<inst>` was reported as an instance called
+`check-<inst>`. Mechanism: [`deploy/units-lib.sh`](units-lib.sh); tests in
+`tests/test_deploy_units.py`.
+
+```bash
+# What is installed for an instance, and what is armed.
+systemctl --user list-unit-files "mtgc-*-<instance>.timer"
+
+# What will fire next.
+systemctl --user list-timers "mtgc-*-<instance>.timer"
+```
+
 ## Seed volume (one-time, speeds up all future instances)
 
 Create a reusable seed data volume so `--init` clones it in seconds instead of downloading ~600 MB:
@@ -596,11 +645,18 @@ on disk and a stale database.
 
 ### Arming an instance
 
-`setup.sh` installs `mtgc-catalog-refresh-<instance>.{service,timer}` (daily at
-01:00, ahead of the sealed catalog, EDHREC, the price fetch and the 09:00
-freshness check) but enables nothing.
+`mtgc-catalog-refresh-<instance>.{service,timer}` runs daily at 01:00, ahead of
+the sealed catalog, EDHREC, the price fetch and the 09:00 freshness check. It
+is installed by every `setup.sh` **and every `deploy.sh`** (see [Installing
+timer units](#installing-timer-units)) and enabled by neither — arming is a
+per-instance decision, made once, here.
 
 ```bash
+# 0. Confirm the unit is on this host at all. A timer added to the repo after
+#    the instance was installed arrives on its next deploy, not before — and
+#    `enable` on a unit that is not there fails with "Unit not found".
+systemctl --user list-unit-files "mtgc-catalog-refresh-<instance>.timer"
+
 # 1. Enable the timer.
 systemctl --user enable --now mtgc-catalog-refresh-<instance>.timer
 
@@ -783,8 +839,9 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 | `seed.sh [--force]` | Create reusable seed data volume. Run once, all future `--init` clones from it |
 | `setup.sh <name> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]` | Create instance. `--test` uses pre-built fixture (fast, no network). `--init` clones seed volume. Port auto-assigned if omitted. `--http-port` adds a loopback-only plaintext publish — see [Cloudflare Tunnel origin](#cloudflare-tunnel-origin). `--tls-certs` mounts a host cert directory read-only at `/certs` — see [Trusted certificates](#trusted-certificates) |
 | `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
-| `deploy.sh <name>` | Rebuild image and restart one instance. Regenerates the Quadlet via `setup.sh` if it has gone missing — `--http-port` / `--tls-certs` are re-applied from the env file, so the unit is reproduced rather than downgraded |
+| `deploy.sh <name>` | Rebuild image and restart one instance. Reinstalls the timer units from the checkout every time — see [Installing timer units](#installing-timer-units). Regenerates the Quadlet via `setup.sh` if it has gone missing — `--http-port` / `--tls-certs` are re-applied from the env file, so the unit is reproduced rather than downgraded |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
+| `units-lib.sh` | Sourced — renders this repo's timer units for one instance, and lists the ones a host already has. Used by `setup.sh`, `deploy.sh`, `teardown.sh` and `prune-instances.sh`; see [Installing timer units](#installing-timer-units) |
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
 | `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or any image its build labelled, turn up in Podman's default store, or if nothing was built. Removes what it catches, on both paths. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
