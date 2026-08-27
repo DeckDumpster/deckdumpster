@@ -134,6 +134,25 @@ def _page(db_path, **params):
     return body
 
 
+@pytest.fixture
+def two_source_db(priced_db):
+    """Give every card a Card Kingdom *retail* price alongside its TCG one, at
+    the same price_type — the shape that makes a source-blind join match twice.
+
+    Shared by the two classes below: `sort=price` and the `price:` keyword are
+    the two ways to reach latest_prices from a query, and one fixture keeps them
+    reading the same collection.
+    """
+    conn = sqlite3.connect(priced_db)
+    for cn, price in ((1, 1.5), (2, 2.5), (3, 3.5)):
+        _price(conn, cn, "cardkingdom", "normal", price)
+        _price(conn, cn, "cardkingdom", "foil", price)
+    refresh_latest_prices(conn)
+    conn.commit()
+    conn.close()
+    return priced_db
+
+
 class TestWholeResultTotals:
     """The figures describe the result, not the page."""
 
@@ -260,20 +279,6 @@ class TestPriceSortDoesNotDuplicateRows:
     unreachable rather than absent.
     """
 
-    @pytest.fixture
-    def two_source_db(self, priced_db):
-        """Give every card a Card Kingdom *retail* price alongside its TCG one,
-        at the same price_type — the shape that makes a source-blind join
-        match twice."""
-        conn = sqlite3.connect(priced_db)
-        for cn, price in ((1, 1.5), (2, 2.5), (3, 3.5)):
-            _price(conn, cn, "cardkingdom", "normal", price)
-            _price(conn, cn, "cardkingdom", "foil", price)
-        refresh_latest_prices(conn)
-        conn.commit()
-        conn.close()
-        return priced_db
-
     def test_fixture_really_has_two_sources(self, two_source_db):
         """Guard the guard: if this stops holding, the tests below pass for the
         wrong reason."""
@@ -315,3 +320,66 @@ class TestPriceSortDoesNotDuplicateRows:
         by_price = [r["name"] for r in _page(two_source_db, sort="price")["rows"]]
         by_ck = [r["name"] for r in _page(two_source_db, sort="ck_price")["rows"]]
         assert by_price == by_ck
+
+
+class TestPriceKeywordDoesNotDuplicateRows:
+    """The `price:` search keyword is the other way to reach latest_prices.
+
+    `sort=price` was fixed by resolving the sort to the displayed price column
+    (see the class above), but the keyword kept its own join on the same table,
+    pinning price_type and not source — so a card priced by both TCG and Card
+    Kingdom matched twice, and `expand=copies`, which has no GROUP BY, returned
+    and counted every copy of it twice (de-fb1).
+
+    Reachable from the deck-builder card picker, which passes the user's query
+    through with expand=copies, and where `total` sizes the scroller.
+    """
+
+    #: Copies with a price at all: everything but the unpriced Delta.
+    PRICED_QTY = TOTAL_QTY - 1
+
+    def test_expand_copies_page_is_not_multiplied(self, two_source_db):
+        body = _page(two_source_db, expand="copies", q="price>0")
+        ids = [r["collection_id"] for r in body["rows"]]
+        assert len(ids) == len(set(ids)), f"price: duplicated rows: {ids}"
+        assert len(ids) == self.PRICED_QTY == body["total"]
+
+    def test_offset_walk_covers_each_copy_once(self, two_source_db):
+        """The property paging actually depends on."""
+        seen = []
+        offset = 0
+        while True:
+            body = _page(two_source_db, expand="copies", q="price>0", limit=2, offset=offset)
+            if not body["rows"]:
+                break
+            seen.extend(r["collection_id"] for r in body["rows"])
+            offset += len(body["rows"])
+            if offset >= body["total"]:
+                break
+        assert sorted(seen) == sorted(set(seen)), "price: repeated copies while paging"
+        assert len(seen) == self.PRICED_QTY
+
+    def test_grouped_total_qty_is_not_multiplied(self, two_source_db):
+        """The GROUP BY templates collapse the duplicate rows, but total_qty is
+        a COUNT(DISTINCT c.id) over the same body — so it survived either way.
+        It is the figure the status line shows, so pin it."""
+        body = _page(two_source_db, q="price>0")
+        assert body["total_qty"] == self.PRICED_QTY
+        assert body["total_value"] == TOTAL_VALUE_TCG
+
+    def test_keyword_follows_the_displayed_source(self, two_source_db):
+        """`price:` filters on the number the Price column shows.  With both
+        sources present it is otherwise undecided which one the filter read —
+        and reading either meant reading both, twice.
+
+        Bravo is the dearest by TCG (10.00) and Alpha by Card Kingdom (6.00),
+        so neither answer can pass for the other.
+        """
+        assert [r["name"] for r in _page(two_source_db, q="price>5")["rows"]] == ["Bravo"]
+        _set_price_source(two_source_db, "ck,tcg")
+        assert [r["name"] for r in _page(two_source_db, q="price>5")["rows"]] == ["Alpha"]
+
+    def test_keyword_prices_a_copy_by_its_finish(self, two_source_db):
+        """Charlie is foil and carries a 999.00 *nonfoil* TCG price the fixture
+        adds precisely to catch a filter that ignores the copy's finish."""
+        assert _page(two_source_db, q="price>100")["rows"] == []

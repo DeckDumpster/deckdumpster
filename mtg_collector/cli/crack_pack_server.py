@@ -1035,6 +1035,28 @@ _ENRICH_COLUMNS = """COALESCE(_ck_buy.price, _ck_retail.price) as ck_price,
                     COALESCE(NULLIF(CASE WHEN c.finish IN ('foil', 'etched') THEN _mp.ck_url_foil END, ''), _mp.ck_url, '') as ck_url"""
 
 
+# The one price the client renders, and the joins that expression is built from.
+# The `price_sources` setting picks it: the first entry is the column the table
+# shows, so it is also what `sort=price` orders by, what the status-line totals
+# are summed from, and what the `price:` search keyword filters on.  One number
+# on screen, one number every control acts on.
+_CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
+_TCG_PRICE_SQL = "_tcg.price"
+_CK_PRICE_JOINS = _ENRICH_JOINS[:2]
+_TCG_PRICE_JOINS = _ENRICH_JOINS[2:3]
+
+
+def _display_price(conn) -> tuple[str, str, list[str]]:
+    """(first source, the price expression, the joins that expression needs)."""
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'price_sources'"
+    ).fetchone()
+    first_source = (row["value"] if row else "tcg,ck").split(",")[0]
+    if first_source == "ck":
+        return first_source, _CK_PRICE_SQL, list(_CK_PRICE_JOINS)
+    return first_source, _TCG_PRICE_SQL, list(_TCG_PRICE_JOINS)
+
+
 # Page bounds for /api/collection. Measured on the real payload (108,630 rows
 # for is:unowned): a 250-row page is 212 KB raw / 28 KB gzipped and 434 round
 # trips to walk the catalog; 1000 is 855 KB / 103 KB and 108 trips. There is no
@@ -2256,7 +2278,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         extensions (status:, added:, price:, deck:, binder:, is:wanted, etc.).
         When no status: is in the query, defaults to status:owned.
         """
-        from mtg_collector.search import SearchError, compile_query, parse_query
+        from mtg_collector.search import (
+            PRICE_EXPR,
+            SearchError,
+            compile_query,
+            parse_query,
+        )
 
         try:
             limit, offset = _parse_page_params(params)
@@ -2318,17 +2345,23 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             where_sql = f"{card_filter} AND ({where_sql})" if where_sql != "1=1" else card_filter
 
         # The price column the client renders follows the price_sources
-        # setting, so sorting and the totals below follow it too — otherwise
-        # the table would order itself by a number it is not showing.
-        price_sources_row = conn.execute(
-            "SELECT value FROM settings WHERE key = 'price_sources'"
-        ).fetchone()
-        first_source = (
-            price_sources_row["value"] if price_sources_row else "tcg,ck"
-        ).split(",")[0]
-        _CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
-        _TCG_PRICE_SQL = "_tcg.price"
-        display_price_sql = _CK_PRICE_SQL if first_source == "ck" else _TCG_PRICE_SQL
+        # setting, so sorting, the totals below and the `price:` filter follow
+        # it too — otherwise the table would order itself by, and filter itself
+        # on, a number it is not showing.
+        first_source, display_price_sql, display_price_joins = _display_price(conn)
+
+        # `price:` compiles to a single alias for latest_prices, which the
+        # compiler cannot resolve to one row per card on its own: the key is
+        # (set_code, collector_number, source, price_type), and it has no
+        # `settings` to say which source. Pinning price_type alone matched a
+        # card priced by both TCG and Card Kingdom twice, and expand=copies has
+        # no GROUP BY to collapse it — 600 owned copies were reported and
+        # painted as 1200 (de-fb1). Substituting the displayed price drops the
+        # alias entirely: the joins it is built from are single-row by
+        # construction, and there is no second definition of "the price" left
+        # for a filter to disagree with the column about.
+        if compiled and compiled.needs_price_join:
+            where_sql = where_sql.replace(PRICE_EXPR, display_price_sql)
 
         # Sort: use search engine order:/direction: if present, else URL params.
         # No sort_map value is unique, and neither is the card.name tiebreak
@@ -2420,9 +2453,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # Conditional JOINs from the search engine
         # Note: expand_copies and default templates already include dc/d/b joins.
         # Only the shared-links (card_pairs) template needs them dynamically.
-        # _lp now serves only the search engine's `price:` keyword — no sort
-        # resolves to it any more, so sorting no longer drags in a join that
-        # can match a card twice.
         needs_price_join = compiled and compiled.needs_price_join
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
@@ -2435,14 +2465,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     joins.append("LEFT JOIN decks d ON dc.deck_id = d.id")
                 if compiled and "b.name" in (compiled.where_sql or ""):
                     joins.append("LEFT JOIN binders b ON c.binder_id = b.id")
-            if needs_price_join:
-                # price_type follows the copy's actual finish so foil copies sort
-                # by their foil price, not the nonfoil price. Etched uses foil.
-                joins.append(
-                    "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
-                    " AND _lp.collector_number = p.collector_number"
-                    " AND _lp.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END"
-                )
+            if needs_price_join and enrich == "none":
+                # A `price:` filter is written in the display-price columns, so
+                # the count template has to carry their joins even though it
+                # enriches nothing. "full" and "prices" already include them.
+                joins.extend(display_price_joins)
             if needs_wishlist_join:
                 joins.append(
                     "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
@@ -2939,7 +2966,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         independent of the window, so the UI can size its range pills.
         """
         from mtg_collector.db import growth
-        from mtg_collector.search import SearchError, compile_query, parse_query
+        from mtg_collector.search import (
+            PRICE_EXPR,
+            SearchError,
+            compile_query,
+            parse_query,
+        )
 
         # Stripped, so a query bar holding nothing but spaces is the unfiltered
         # case it renders as rather than a filter that happens to match all.
@@ -2973,22 +3005,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             else:
                 where_sql = f"{growth.UNFILTERED_WHERE} AND ({where_sql})"
 
-        # Conditional joins (mirrors /api/collection's default template — the
-        # collection-anchored one, since growth is always about owned rows).
-        extra_joins = []
-        if compiled and compiled.needs_price_join:
-            extra_joins.append(
-                "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
-                " AND _lp.collector_number = p.collector_number AND _lp.price_type = 'normal'"
-            )
-        if compiled and compiled.needs_wishlist_join:
-            extra_joins.append(
-                "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
-            )
-        extra_joins_sql = "\n            ".join(extra_joins)
-
         conn = self._get_conn()
         try:
+            # Conditional joins (mirrors /api/collection's default template —
+            # the collection-anchored one, since growth is always about owned
+            # rows). `price:` is resolved to the displayed price the same way,
+            # so the chart and the table describe the same cards: a join that
+            # pinned neither source nor the copy's finish selected on whichever
+            # price any source happened to publish (de-fb1).
+            extra_joins = []
+            if compiled and compiled.needs_price_join:
+                _, display_price_sql, display_price_joins = _display_price(conn)
+                where_sql = where_sql.replace(PRICE_EXPR, display_price_sql)
+                extra_joins.extend(display_price_joins)
+            if compiled and compiled.needs_wishlist_join:
+                extra_joins.append(
+                    "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
+                )
+            extra_joins_sql = "\n            ".join(extra_joins)
+
             if q:
                 result = growth.compute_series(
                     conn,
