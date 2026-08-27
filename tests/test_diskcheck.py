@@ -184,6 +184,23 @@ def test_the_environment_beats_the_config_file_for_the_floor_too(rig):
     assert rig.run("--floor", env={"MTGC_DISK_FLOOR_GB": "100"}).returncode != 0
 
 
+def test_a_floor_of_zero_clears_any_disk(rig):
+    """Zero is the only way to opt a run out — there is no bypass flag.
+
+    Every test that drives setup.sh does so under a tmp_path $HOME, so the
+    gate measures pytest's scratch disk rather than the deploy box's. Those
+    fixtures pin the floor to 0; unpinned, 35 of them went red on a box whose
+    /tmp sat at 92% (de-ax9). A zero that got treated as "unset" and fell back
+    to the default 10 would leave those pins looking present and doing nothing,
+    so the coupling would come back without a single test naming it.
+    """
+    home_disk(rig, free_gb=0)
+    rig.alerts["MTGC_DISK_FLOOR_GB"] = "10"
+    r = rig.run("--floor", env={"MTGC_DISK_FLOOR_GB": "0"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "floor 0G" in r.stdout
+
+
 def test_unable_to_alert_is_a_failure_not_a_no_op(rig):
     """A full disk that reached nobody must fail the unit, which is how it gets seen."""
     home_disk(rig, pcent=99)

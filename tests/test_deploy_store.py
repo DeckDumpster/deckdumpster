@@ -84,6 +84,13 @@ class Host:
         self.env["PATH"] = f"{bin_dir}:{self.env['PATH']}"
         self.env["XDG_RUNTIME_DIR"] = str(tmp_path / "run")
         self.env["PODMAN_LOG"] = str(self.log)
+        # The floor gate (de-yef) measures the filesystem the run will write to,
+        # which under a tmp_path $HOME is pytest's scratch disk, not the deploy box's.
+        # Unpinned, every test here passes or fails on how full /tmp happens to be —
+        # 35 of them went red on a box whose /tmp sat at 92%. Zero is the documented
+        # knob (there is no bypass flag); what the floor does with a real number is
+        # tests/test_diskcheck.py's subject, not this file's.
+        self.env["MTGC_DISK_FLOOR_GB"] = "0"
         # Inherited from the developer's own shell it would silently opt every
         # test into a real store.
         self.env.pop("MTGC_STORE_ROOT", None)
