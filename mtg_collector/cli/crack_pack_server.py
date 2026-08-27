@@ -1079,6 +1079,29 @@ def _parse_page_params(params: dict) -> tuple[int, int]:
     return limit, offset
 
 
+def _parse_known_total(params: dict) -> int | None:
+    """Return the whole-result count the caller already holds, or None.
+
+    `total` describes the result, not the window, so a client walking a result
+    it is holding on screen receives the same number over and over -- and every
+    window after the first re-derives it by walking the entire grouped body.
+    Measured on 110,018 printings, one window at offset=50000 of an is:unowned
+    result: 2251 ms for the page, 929 ms to count what the client already had
+    (de-j9b).
+
+    A caller that has the number says so and is given it back. Absent, the
+    server counts as it always did -- a caller that opens a window cold has no
+    number to echo, and taking `total` off later windows entirely would leave
+    it no way to get one.
+    """
+    if not params.get("known_total", [""])[0].strip():
+        return None
+    total = _page_int(params, "known_total", 0)
+    if total < 0:
+        raise PageParamError("known_total must be 0 or greater")
+    return total
+
+
 def _page_int(params: dict, name: str, default: int) -> int:
     raw = params.get(name, [""])[0].strip()
     if not raw:
@@ -2260,6 +2283,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         try:
             limit, offset = _parse_page_params(params)
+            known_total = _parse_known_total(params)
         except PageParamError as e:
             self._send_json({"error": str(e)}, 400)
             return
@@ -2696,7 +2720,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         #
         # `total` is on every window: deck-builder.js pages the card picker until
         # `offset >= total`, so dropping it there would turn its loop into a
-        # fixed-cap scan.
+        # fixed-cap scan, and a caller that opens a window cold would have no
+        # way to learn the size of what it is walking. It is instead the one
+        # figure a client can hand back — see `known_total` below.
         totals_in_hand = short_page and offset == 0
         price_key = "ck_price" if first_source == "ck" else "tcg_price"
         aggregates = {}
@@ -2721,6 +2747,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             aggregates["total_value"] = round(agg[2], 2)
         elif short_page:
             total = offset + len(rows)
+        elif known_total is not None:
+            # The caller already has the count and sent it back, so nothing is
+            # counted (de-j9b). Only this branch honours it: the three above
+            # each get the number free from work this request is doing anyway —
+            # window 0's single scan, or a short page that ends the walk — and a
+            # count this request derived beats one it was told.
+            total = known_total
         else:
             # Count the body, which carries the GROUP BY and so counts groups,
             # matching what the page returns. The enrichment joins are left out:
