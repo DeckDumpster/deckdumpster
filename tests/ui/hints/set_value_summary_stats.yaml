@@ -11,10 +11,11 @@ involves:
 fixture_data:
   set: "blb"
   total_cards: 398
-  priced_cards: 0
+  priced_cards: 378
 notes: >
   Navigate to /set-value. Select BLB and click Analyze. Wait for #summary
   to be visible. Verify #stat-total shows a nonzero value. Verify
   "Total Cards" label is present. Verify "With Prices" label is present.
-  Verify "Median" label is present. Fixture has 0 priced cards so
-  #stat-priced shows 0.
+  Verify "Median" label is present. The fixture prices the catalogue
+  (de-9tb), so #stat-priced is nonzero and below #stat-total — the 20 BLB
+  printings with no nonfoil finish have no nonfoil price to show.
