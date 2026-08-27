@@ -2507,6 +2507,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             )
             order_sql = _order_by("p.printing_id")
             agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
+            # ...and so `total` cannot be counted off it: the rows it drops are
+            # exactly the ones an is:unowned result is made of.
             totals_body_spans_result = False
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
@@ -2718,10 +2720,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # The page is the whole result, so the rows in hand are the answer.
             total = len(results)
             aggregates["total_qty"] = sum(c.get("qty") or 0 for c in results)
-            # float() so the key's JSON type does not depend on which rows the
-            # result happened to hold: summing nothing, or summing only rows
-            # SQLite gave an integer 0 for, otherwise sends `0` where every
-            # other response sends `0.0`.
+            # float() here and on both SQL paths, so the key's JSON type does
+            # not depend on what the result held. Python sums an empty result to
+            # an integer 0, and SQLite's COALESCE(SUM(...), 0) returns one when
+            # no row carried a price; without this, those responses send `0`
+            # where every other response sends `0.0`.
             aggregates["total_value"] = round(float(sum(
                 float(c[price_key] or 0) * (c.get("qty") or 0) for c in results
             )), 2)
