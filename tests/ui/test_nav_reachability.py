@@ -147,7 +147,11 @@ def _homepage_anchors(browser, base_url, viewport, extra_css=None):
     )
     try:
         page = context.new_page()
-        page.goto(f"{base_url}/", wait_until="load")
+        page.goto(
+            f"{base_url}/",
+            wait_until="load",
+            timeout=budget_ms(ROUND_TRIP_BUDGET_MS),
+        )
         page.wait_for_selector(
             "a[href]", state="attached", timeout=budget_ms(ROUND_TRIP_BUDGET_MS)
         )
@@ -244,7 +248,11 @@ def _home_links(browser, base_url, viewport):
         page = context.new_page()
         found = {}
         for path in MUST_LINK_HOME:
-            page.goto(f"{base_url}{path}", wait_until="load")
+            page.goto(
+                f"{base_url}{path}",
+                wait_until="load",
+                timeout=budget_ms(ROUND_TRIP_BUDGET_MS),
+            )
             page.wait_for_selector(
                 "body", state="attached", timeout=budget_ms(ROUND_TRIP_BUDGET_MS)
             )
@@ -314,7 +322,11 @@ def test_a_sample_url_actually_reaches_its_page(browser, base_url):
     context = browser.new_context(viewport={"width": 1280, "height": 900}, ignore_https_errors=True)
     try:
         page = context.new_page()
-        response = page.goto(f"{base_url}{PARAMETRIZED_SAMPLES['/sets/']}", wait_until="load")
+        response = page.goto(
+            f"{base_url}{PARAMETRIZED_SAMPLES['/sets/']}",
+            wait_until="load",
+            timeout=budget_ms(ROUND_TRIP_BUDGET_MS),
+        )
         assert response.status == 200, response.status
         # #set-name and the section pills belong to set_browse.html alone.
         assert page.query_selector("#set-name") is not None

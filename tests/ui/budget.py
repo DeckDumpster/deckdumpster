@@ -37,6 +37,11 @@ Two base budgets, because there are two kinds of wait and they cost differently:
   navigate**. `page.click` blocks until a navigation the click started commits,
   so a 500 ms click timeout was a navigation budget wearing an interaction
   budget's clothes — which is exactly how a successful click failed a test.
+
+**Every timeout-bearing Playwright call in `tests/ui/` must pass one of these,
+including the ones that look like they do not need a timeout.** Omitting it does
+not mean "no deadline" — it inherits Playwright's 30 s, unscaled and unreadable
+at the call site. `tests/test_ui_budget.py` fails the build on either mistake.
 """
 
 import os

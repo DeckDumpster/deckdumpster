@@ -580,8 +580,12 @@ which contention stops being the explanation. It caps what contention may *add*;
 shrinks a timeout a caller asked for outright. The factor is sampled **once per scenario**
 and held: timeouts that drift step to step make a failure unreproducible from its own log.
 
-`tests/test_ui_budget.py` is the guard, and it is default-deny — an AST walk fails on any
-`timeout=<number>` written at a call site in `replay.py`, `harness.py` or
-`test_nav_reachability.py`. The bug it exists to stop is a literal per call site: with a
-500 written twenty times, raising the budget means finding all twenty, and the ones nobody
-found are the ones that flake.
+`tests/test_ui_budget.py` is the guard, and it is default-deny in **both** directions — an
+AST walk over `replay.py`, `harness.py` and `test_nav_reachability.py` fails a
+timeout-bearing Playwright call that writes a number at the call site *or* omits the
+timeout entirely. A literal per call site is the obvious half: with a 500 written twenty
+times, raising the budget means finding all twenty, and the ones nobody found are the ones
+that flake. **A missing timeout is the half that hides**, because there is nothing at the
+call site to read — the call silently inherits Playwright's own 30 s, which no budget
+scales. `test_every_routed_page_links_back_to_the_homepage` navigated that way and errored
+on `/crack` at a load the budgeted calls in the same run sailed through.

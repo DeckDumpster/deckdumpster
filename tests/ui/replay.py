@@ -19,11 +19,6 @@ from .budget import (
 )
 from .harness import EXTRACT_ELEMENTS_JS
 
-# Text assertions wait for async renders rather than sampling instantaneously.
-# Every other harness call passes the interaction budget to Playwright; these
-# two used a bare count() and raced page updates under load (efj-mtgc-h9z).
-TEXT_ASSERT_TIMEOUT_MS = ROUND_TRIP_BUDGET_MS
-
 log = logging.getLogger(__name__)
 
 
@@ -223,12 +218,14 @@ class ReplayHarness:
             self._fail(f"Expected hidden: {selector}")
         self._snap()
 
-    def assert_text_present(self, text: str, timeout: int = TEXT_ASSERT_TIMEOUT_MS):
+    def assert_text_present(self, text: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         """Assert text is in the DOM, waiting for async renders to land.
 
         Uses Playwright's auto-waiting rather than an instantaneous count():
         pages that populate from a fetch would otherwise lose the race under
-        load and fail with no relation to the code under test.
+        load and fail with no relation to the code under test (efj-mtgc-h9z).
+        The round-trip budget rather than the interaction one for the same
+        reason: what it waits on is a fetch, not a render.
 
         Waits on "attached" rather than "visible" to preserve the previous
         count() semantics, which counted DOM nodes regardless of visibility.

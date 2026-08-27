@@ -313,7 +313,11 @@ class UIHarness:
         start = "/"
         if self.hints and self.hints.get("start_page"):
             start = self.hints["start_page"]
-        self.page.goto(f"{self.base_url}{start}", wait_until="networkidle")
+        self.page.goto(
+            f"{self.base_url}{start}",
+            wait_until="networkidle",
+            timeout=budget_ms(ROUND_TRIP_BUDGET_MS),
+        )
 
         for _ in range(max_steps):
             screenshot_b64, elements = self._observe()

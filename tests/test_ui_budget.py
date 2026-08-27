@@ -87,29 +87,73 @@ _TIMEOUT_CALL_SITES = [
 ]
 
 
-def _bare_numeric_timeouts(path: Path) -> list[str]:
-    """Every `timeout=<number>` written as a literal rather than a budget."""
-    tree = ast.parse(path.read_text())
+#: Playwright calls that accept a `timeout`. Anything here that does not pass one
+#: silently inherits Playwright's own 30 s default, which no budget scales — and
+#: an inherited default reads exactly like a deliberate one at the call site.
+_TIMEOUT_BEARING = {
+    "goto",
+    "click",
+    "fill",
+    "press",
+    "select_option",
+    "set_input_files",
+    "wait_for",
+    "wait_for_selector",
+    "wait_for_load_state",
+    "is_visible",
+    "is_hidden",
+}
+
+#: `page.keyboard.press` and `page.mouse.*` share a name with a timeout-bearing
+#: call and take no timeout at all.
+_UNTIMED_RECEIVERS = {"keyboard", "mouse"}
+
+
+def _receiver(func: ast.Attribute) -> str:
+    inner = func.value
+    return inner.attr if isinstance(inner, ast.Attribute) else ""
+
+
+def _unbudgeted_timeouts(path: Path) -> list[str]:
+    """Every timeout-bearing call that does not take its deadline from a budget.
+
+    Two ways to fail: writing a number at the call site, or writing nothing and
+    inheriting Playwright's.
+    """
     found = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
-        for kw in node.keywords:
-            if kw.arg == "timeout" and isinstance(kw.value, ast.Constant):
-                found.append(f"{path.name}:{kw.value.lineno} timeout={kw.value.value}")
+        if node.func.attr not in _TIMEOUT_BEARING:
+            continue
+        if _receiver(node.func) in _UNTIMED_RECEIVERS:
+            continue
+        timeout = next((kw for kw in node.keywords if kw.arg == "timeout"), None)
+        if timeout is None:
+            found.append(f"{path.name}:{node.lineno} {node.func.attr}() has no timeout")
+        elif isinstance(timeout.value, ast.Constant):
+            found.append(
+                f"{path.name}:{timeout.value.lineno} "
+                f"{node.func.attr}(timeout={timeout.value.value})"
+            )
     return found
 
 
 @pytest.mark.parametrize("path", _TIMEOUT_CALL_SITES, ids=lambda p: p.name)
-def test_no_call_site_hardcodes_its_own_timeout(path):
-    """The regression this whole change is about is a literal per call site.
+def test_every_timeout_comes_from_the_budget(path):
+    """Default-deny, in both directions, because both directions have bitten.
 
-    With a 500 written at every call, raising the budget means finding all of
-    them, and the ones nobody found are the ones that flake. Route it through
-    `budget_ms` instead — then there is one place the number lives and one place
-    host contention gets applied.
+    A literal per call site is the regression this change is about: with a 500
+    written at every call, raising the budget means finding all of them, and the
+    ones nobody found are the ones that flake.
+
+    A *missing* timeout is the subtler half. `test_every_routed_page_links_back_
+    to_the_homepage` navigated with no timeout at all, so it inherited
+    Playwright's 30 s — unscaled, and invisible at the call site because there
+    was nothing there to read. It errored on `/crack` mid-verification of this
+    very fix, at a load the budgeted calls in the same run sailed through.
     """
-    bare = _bare_numeric_timeouts(path)
+    bare = _unbudgeted_timeouts(path)
     assert not bare, "timeouts must come from tests/ui/budget.py: " + ", ".join(bare)
 
 
