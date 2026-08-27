@@ -48,10 +48,22 @@ def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source
     return str(row[0]) if row else None
 
 
+#: Distinct (set_code, collector_number) pairs looked up per price statement.
+#: Each pair binds two parameters, so a statement holds at most 1,000 of them
+#: however many cards were asked for -- the point of the constant, and the whole
+#: point of the batching.  Statements sized by the caller's result set are the
+#: defect de-ckq removed from /api/collection, where 112,809 rows built one
+#: statement with 225,618 bound parameters against a SQLITE_MAX_VARIABLE_NUMBER
+#: of 250,000.  The callers left here are nowhere near that -- the largest real
+#: booster product measured 779 distinct cards -- so this is the pattern being
+#: closed, not a live overflow being averted.
+_PRICE_LOOKUP_BATCH = 500
+
+
 def _bulk_attach_prices(conn, cards: list[dict]) -> None:
     """Batch-attach tcg_price and ck_price to a list of card dicts.
 
-    Uses a single SQL query instead of per-card connections.
+    Uses batched SQL queries instead of per-card connections.
     Each card dict must have set_code, collector_number, and foil (bool).
     """
     if not cards:
@@ -59,15 +71,17 @@ def _bulk_attach_prices(conn, cards: list[dict]) -> None:
     unique_pairs = list({(c.get("set_code", "").lower(), c.get("collector_number", "")) for c in cards})
     if not unique_pairs:
         return
-    ph = ",".join("(?,?)" for _ in unique_pairs)
-    params = [v for pair in unique_pairs for v in pair]
     price_map: dict[tuple, str] = {}
-    for r in conn.execute(
-        f"SELECT set_code, collector_number, source, price_type, price "
-        f"FROM latest_prices WHERE (set_code, collector_number) IN ({ph})",
-        params,
-    ).fetchall():
-        price_map[(r["set_code"], r["collector_number"], r["source"], r["price_type"])] = str(r["price"])
+    for start in range(0, len(unique_pairs), _PRICE_LOOKUP_BATCH):
+        batch = unique_pairs[start:start + _PRICE_LOOKUP_BATCH]
+        ph = ",".join("(?,?)" for _ in batch)
+        params = [v for pair in batch for v in pair]
+        for r in conn.execute(
+            f"SELECT set_code, collector_number, source, price_type, price "
+            f"FROM latest_prices WHERE (set_code, collector_number) IN ({ph})",
+            params,
+        ).fetchall():
+            price_map[(r["set_code"], r["collector_number"], r["source"], r["price_type"])] = str(r["price"])
     for card in cards:
         sc = card.get("set_code", "").lower()
         cn = card.get("collector_number", "")
