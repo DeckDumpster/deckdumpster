@@ -285,6 +285,21 @@ EOF
     echo "    Wrote ${STORE_ENV} (container store; commented out = Podman's default)."
 fi
 
+# --- Disk floor ---
+
+# Before writing a multi-gigabyte image and volume: is there room? Running out
+# mid-build does not announce itself as a disk problem — at 697M free a cargo
+# link died with `ld terminated with signal 7 [Bus error]`, which reads as a
+# broken toolchain — and on the two nights / hit 100% the thing that silently
+# stopped working was the backup, not the build. This is also the bound de-yef
+# asked for: several full-scale rigs standing up at once genuinely did not fit,
+# and nothing said no.
+#
+# Checked against the store resolved above, so it measures the disk THIS run
+# will actually write to rather than a default. To push past it once, set
+# MTGC_DISK_FLOOR_GB — the threshold is the only knob, there is no bypass flag.
+bash "$REPO_DIR/deploy/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
+
 # --- Build container image ---
 
 echo "==> Building container image (mtgc:latest)..."
@@ -329,7 +344,7 @@ fi
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_USER_DIR"
 
-for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-catalog-check mtgc-catalog-refresh mtgc-edhrec; do
+for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-catalog-check mtgc-catalog-refresh mtgc-diskcheck mtgc-edhrec; do
     echo "==> Installing ${UNIT_PREFIX} timer"
     for EXT in service timer; do
         sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
@@ -485,5 +500,6 @@ echo "  Backup:     systemctl --user enable --now mtgc-backup-${INSTANCE}.timer"
 echo "  Bkp check:  systemctl --user enable --now mtgc-backup-check-${INSTANCE}.timer"
 echo "  Cat check:  systemctl --user enable --now mtgc-catalog-check-${INSTANCE}.timer"
 echo "  Cat refr:   systemctl --user enable --now mtgc-catalog-refresh-${INSTANCE}.timer"
+echo "  Disk check: systemctl --user enable --now mtgc-diskcheck-${INSTANCE}.timer"
 echo "  EDHREC:     systemctl --user enable --now mtgc-edhrec-${INSTANCE}.timer"
 echo "  Teardown:   bash deploy/teardown.sh $INSTANCE"

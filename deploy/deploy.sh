@@ -52,6 +52,13 @@ if [ ! -f "$QUADLET_FILE" ]; then
     echo "==> Starting $SERVICE_NAME..."
     systemctl --user start "$SERVICE_NAME"
 else
+    # Before writing another ~1 GB of layers: is there room? This is prod's
+    # redeploy path, so a build that runs out mid-way leaves a partial image and
+    # then restarts the live service against it. Gated on the store adopted
+    # above — prod's unit carries none, so prod measures the disk it runs from.
+    # There is no bypass flag; MTGC_DISK_FLOOR_GB is the only knob (de-yef).
+    bash "$SCRIPT_DIR/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
+
     echo "==> Building container image (mtgc:latest)..."
     podman build -t mtgc:latest -f Containerfile \
         -v "${HOME}/.cache/uv:/root/.cache/uv:z" .

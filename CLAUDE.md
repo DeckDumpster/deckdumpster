@@ -442,6 +442,27 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   with nothing to do. `fetch_allprintings` no longer wraps its import in a `try/except`
   that printed a warning — that swallowed exit code is what let a current file on disk sit
   beside a stale database. See `deploy/README.md` → "Catalog refresh".
+- **`deploy/diskcheck.sh` is both the disk alarm and the pre-flight floor** (de-yef). /
+  is 98 G and prod serves from it; it hit 100% on 2026-08-08 and again on 2026-08-11, and
+  on both nights the backup produced no object and nothing said so (de-o4e). `MTGC_STORE_ROOT`
+  bounded the largest producer of those bytes, but prod's own volume, the price series and
+  every other project on the box are still on that disk. Run bare it is the **alarm**:
+  percent-used against `MTGC_DISK_THRESHOLD` (90), pushed through the same `alert.sh`
+  channel as the backup and catalog checks, always exiting 0 on a healthy disk because it
+  is a timer and not a gate. Run `--floor` it is the **gate**: exit 1 below
+  `MTGC_DISK_FLOOR_GB` (10) free, called by `setup.sh` and `deploy.sh` before `podman
+  build` and by `ci.yml` before the isolation gate, each against the store *it has already
+  resolved* so it measures the disk that run will really write to — which for a prod
+  redeploy is prod's own. The gate exists because running
+  out mid-build does not fail as a disk error — at 697 MB free a cargo link reported
+  `ld terminated with signal 7 [Bus error]`. **There is no bypass flag**;
+  `MTGC_DISK_FLOOR_GB` is the only knob. Free space is read in 1 K blocks and **truncated**,
+  never from `df -BG`, which rounds up and would let 9.2 G free clear a 10 G floor. It
+  watches `$HOME` *and* `MTGC_STORE_ROOT`, deduplicated by mount point, so an unconfigured box
+  checks exactly one filesystem; reading `store.env` here only picks a `df` line to look at
+  and is not the store selection `setup.sh` scopes away from `prod`. It deliberately frees
+  nothing — which instance to prune is a judgement a timer cannot make, and
+  `deploy/prune-instances.sh` stays by hand. See `deploy/README.md` → "Low-disk check".
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
 - Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
 
