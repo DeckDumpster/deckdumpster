@@ -266,7 +266,7 @@ It is off unless you turn it on, and turning it on takes **two independent switc
 
 | Switch | Where | Effect |
 |---|---|---|
-| `MTGC_HTTP_PORT=8080` | `~/.config/mtgc/<instance>.env` | The app binds a second, plain-HTTP listener on that **container** port, in addition to the TLS listener on 8081. Unset → one listener, exactly today's behaviour. A non-integer value fails the server at startup — there is no fallback. |
+| `MTGC_HTTP_PORT=8080` | `~/.config/mtgc/<instance>.env` | The app binds a second, plain-HTTP listener on that **container** port, in addition to the TLS listener on 8081. Unset → one listener, exactly today's behaviour, and a **blank value counts as unset** — `MTGC_HTTP_PORT=` disables the listener rather than crash-looping the instance, the same rule `MTGC_TLS_CERT` / `MTGC_TLS_KEY` read themselves by. A non-empty, non-integer value fails the server at startup — there is no fallback. |
 | `bash deploy/setup.sh <name> [port] --http-port <p>` | generated Quadlet unit | Publishes that container port on the **host** as `PublishPort=127.0.0.1:<p>:8080`. Omitted → the line is absent and the unit is byte-identical to a render with no plaintext publish. |
 
 Neither switch does anything useful alone: without the env var nothing is listening on 8080 inside the container; without the flag nothing outside the container namespace can reach it. `8080` is the container-side port the publish targets, so that is the value `MTGC_HTTP_PORT` takes.
@@ -304,6 +304,8 @@ sed -i '/^MTGC_HTTP_PORT=/d' ~/.config/mtgc/<name>.env
 systemctl --user restart mtgc-<name>
 ```
 
+Blanking the line (`MTGC_HTTP_PORT=`) does the same thing; deleting it is tidier.
+
 The app is back to a single TLS listener. No rebuild, no data migration. If the tunnel route was switched to plain HTTP, point it back at `https://localhost:8081` with `noTLSVerify: true`.
 
 To also drop the host publish, delete the recorded line and re-render. Omitting `--http-port` is **not** enough — the flag is sticky by design, so that a regenerated unit reproduces the one it replaces:
@@ -336,7 +338,7 @@ Two switches, same shape as the tunnel origin above: one mounts the files, one t
 | Switch | Where | Effect |
 |---|---|---|
 | `bash deploy/setup.sh <name> [port] --tls-certs <dir>` | generated Quadlet unit | Mounts the host directory at `/certs` inside the container as `Volume=<dir>:/certs:ro,Z`. `/certs` and `:ro` are hardcoded in `render-quadlet.sh`, not operator-supplied. Omitted → no mount line at all. The directory must already exist, or Podman would create it as an empty root-owned mount point. |
-| `MTGC_TLS_CERT` / `MTGC_TLS_KEY` | `~/.config/mtgc/<instance>.env` | Container-side paths to the certificate and private key. Both set → the app serves them on 8081. Neither set → today's self-signed behaviour. |
+| `MTGC_TLS_CERT` / `MTGC_TLS_KEY` | `~/.config/mtgc/<instance>.env` | Container-side paths to the certificate and private key. Both set → the app serves them on 8081. Neither set → today's self-signed behaviour; a blank value counts as unset, matching `MTGC_HTTP_PORT`. |
 
 Setting exactly one of the pair, or pointing either at something that is not a readable file, **fails the server at startup**. There is no fallback to the self-signed certificate: a deployer who believes they are serving a trusted certificate is never silently downgraded to one that warns.
 

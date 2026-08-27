@@ -8618,6 +8618,26 @@ def register(subparsers):
     parser.set_defaults(func=run)
 
 
+def _resolve_http_port():
+    """Resolve the optional second, plain-HTTP listener's port from the environment.
+
+    Presence of ``MTGC_HTTP_PORT`` is the switch for the listener, and a blank
+    value is absence: ``MTGC_HTTP_PORT=`` means unset, the same rule
+    ``MTGC_TLS_CERT`` / ``MTGC_TLS_KEY`` already read themselves by, and the same
+    rule ``setup.sh``'s ``record`` writes by — it deletes a key rather than
+    writing an empty one. Blanking a line is how operators disable a setting, so
+    two switches introduced in the same epic must not disagree about what one
+    means; here it used to raise out of ``int('')`` and crash-loop the instance.
+
+    A non-empty value that is not an integer is still a hard failure. There is no
+    fallback to one listener for a typo'd port.
+    """
+    raw = os.environ.get("MTGC_HTTP_PORT", "").strip()
+    if not raw:
+        return None
+    return int(raw)
+
+
 def _resolve_external_tls_paths():
     """Resolve an operator-supplied certificate pair from the environment.
 
@@ -8710,10 +8730,10 @@ def run(args):
     _shared_db_path = os.environ.get("MTGC_SHARED_DB")
     if _shared_db_path:
         print(f"[startup] Shared reference DB: {_shared_db_path}", flush=True)
-    # Presence of MTGC_HTTP_PORT is the switch for the second, plain-HTTP listener.
-    # A non-integer value raises out of int() and the process exits non-zero.
-    _http_port_env = os.environ.get("MTGC_HTTP_PORT")
-    http_port = int(_http_port_env) if _http_port_env is not None else None
+    # Presence of MTGC_HTTP_PORT is the switch for the second, plain-HTTP
+    # listener; blank is absence. A non-empty non-integer raises and the process
+    # exits non-zero.
+    http_port = _resolve_http_port()
     _background_db_path = db_path
     _ingest_executor = ThreadPoolExecutor(max_workers=4)
     _recover_pending_images(db_path)
