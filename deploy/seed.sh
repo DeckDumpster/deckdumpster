@@ -48,6 +48,11 @@ if podman volume exists "$SEED_VOLUME" 2>/dev/null; then
     fi
 fi
 
+# Before writing another ~1 GB of layers, plus the seed volume itself: is
+# there room? This build runs 15-30 minutes and creates a reusable volume, so
+# it is exactly the disk-heavy path the gate exists for (de-yef).
+bash "$SCRIPT_DIR/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
+
 echo "==> Building container image (mtgc:latest)..."
 podman build -t mtgc:latest -f Containerfile \
     -v "${HOME}/.cache/uv:/root/.cache/uv:z" .

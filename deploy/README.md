@@ -561,6 +561,98 @@ Nothing on a timer refreshes the card catalogue — `mtg cache all` and
 this check goes red immediately. That is the correct reading, and
 `mtg cache all` is the fix.
 
+## Low-disk check
+
+> The disk prod serves from has hit 100% twice, and both times the thing that
+> silently stopped working was the backup.
+
+/ on the deployment box is 98 G and prod runs from it. It filled on 2026-08-08
+and again on 2026-08-11; on both of those nights `mtgc-backup` produced no
+object and nothing said so (de-o4e, de-yef). [Container
+storage](#container-storage-keeping-non-prod-off-the-prod-disk) bounded the
+largest producer of those bytes and CI proves it stays bounded, but prod's own
+volume, the price time series, another project on the same box and a stray
+tarball are all still on that disk, and none of them announce themselves.
+
+`deploy/diskcheck.sh` has two modes over one threshold source.
+
+```bash
+bash deploy/diskcheck.sh                    # ALERT mode: push when a watched fs is full
+bash deploy/diskcheck.sh --floor            # GATE mode: exit 1 when a watched fs is short
+bash deploy/diskcheck.sh --floor /some/dir  # GATE mode against named paths
+```
+
+**Alert mode** is what the timer runs. It compares percent-used against
+`MTGC_DISK_THRESHOLD` (default 90) and pushes through the same `alert.sh`
+channel as the backup and catalog checks. It is a timer, not a gate: a healthy
+disk exits 0. An unconfigured Pushover channel is a failure, not a no-op — a
+full disk that reached nobody is the defect this exists to remove. So is a `df`
+that cannot answer: measuring no filesystem at all exits 1 rather than passing
+quietly, in both modes.
+
+**Gate mode** is what `setup.sh`, `deploy.sh` and CI run before writing gigabytes. It exits
+non-zero when a filesystem has less than `MTGC_DISK_FLOOR_GB` free (default 10).
+The gate exists because running out mid-build does not fail as a disk error: at
+697 MB free a cargo link reported `ld terminated with signal 7 [Bus error]` and
+exit 101, which reads as a broken toolchain and cost real diagnosis time. There
+is no bypass flag — `MTGC_DISK_FLOOR_GB` is the only knob, and lowering it for
+one run is how you push past it deliberately.
+
+Free space is read in 1 K blocks and **truncated**, not from `df -BG`, which
+rounds up: 9.2 G free reports as `10G` and would clear a 10 G floor.
+
+### Which filesystems
+
+Two disks matter and they are not the same disk: prod's (`$HOME`, where rootless
+Podman keeps prod's 19 G volume) and the non-prod container store
+(`MTGC_STORE_ROOT`, on a box that opted in). Both are watched, deduplicated by
+mount point, so a box that never opted in checks exactly one filesystem and behaves
+as if this paragraph were not here.
+
+`diskcheck.sh` reads `store.env` only to learn a path to *watch*. That is not
+the store selection `setup.sh` scopes away from `prod` — nothing here moves a
+byte or picks a store, it only decides which `df` lines to look at.
+
+`setup.sh`, `deploy.sh` and CI all gate on the store they have already
+resolved, so the floor measures the disk that run will actually write to.
+`deploy.sh` adopts the store from the instance's own Quadlet unit, which is how
+a prod redeploy measures prod's disk and a non-prod one measures its own.
+
+### Arming an instance
+
+`setup.sh` installs `mtgc-diskcheck-<instance>.{service,timer}` (daily at 22:00,
+before the 03:00 backup writes its ~3 GB tarball) but enables nothing. Disk is
+host-wide, so enable it on one instance — `prod`.
+
+```bash
+# 1. Pushover credentials, if not already set — same channel as the backup check.
+#    See "Arming an instance" under Backup freshness check.
+
+# 2. Enable the timer.
+systemctl --user enable --now mtgc-diskcheck-prod.timer
+
+# 3. Prove it goes RED before trusting it green. A threshold of 0 is one nothing
+#    can pass — run it and confirm the push actually arrives.
+MTGC_DISK_THRESHOLD=0 bash deploy/diskcheck.sh
+```
+
+A value passed in the environment beats the file, for every knob below — the
+same precedence `store.env` documents for `MTGC_STORE_ROOT`, and what makes the
+recipe above work on a box that has already configured a threshold.
+
+Optional, in `~/.config/mtgc/alerts.env`:
+
+```bash
+MTGC_DISK_THRESHOLD=90      # percent-used that alerts
+MTGC_DISK_FLOOR_GB=10       # gigabytes free below which --floor fails
+MTGC_DISK_PATH=/home/you    # the primary filesystem to watch (default $HOME)
+```
+
+When it goes red, `deploy/prune-instances.sh` and `podman image prune` are the
+first things to reach for. Nothing prunes automatically and nothing should: an
+instance holding a volume may be someone's live rig, and deleting it is a
+judgement a timer cannot make. The alert exists so a person makes it.
+
 ## CDN deploy check
 
 > A deploy check that does not traverse the CDN is not a deploy check.
@@ -644,6 +736,7 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 | `mtg data check-catalog` (in-container) | Compare the local set list against Scryfall's and exit 1 if it has fallen behind. Read-only — see [Catalog freshness check](#catalog-freshness-check) |
+| `diskcheck.sh [--floor [path...]]` | Alert when a watched filesystem is over `MTGC_DISK_THRESHOLD`% used; `--floor` instead exits 1 when one has less than `MTGC_DISK_FLOOR_GB` free. Called by `setup.sh`, `deploy.sh` and CI before they write gigabytes — see [Low-disk check](#low-disk-check) |
 
 ## CI
 
