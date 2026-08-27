@@ -18,10 +18,15 @@ from pathlib import Path
 
 import anthropic
 
+from .budget import ROUND_TRIP_BUDGET_MS, budget_ms
+
 log = logging.getLogger(__name__)
 
 MODEL = os.environ.get("UI_TEST_MODEL", "claude-sonnet-4-6")
 MAX_STEPS = 20
+
+#: How long _settle() waits for the network to go quiet after an action.
+SETTLE_BUDGET_MS = 3_000
 
 SYSTEM = """\
 You are a UI testing agent. You interact with a web application to accomplish \
@@ -464,7 +469,10 @@ class UIHarness:
         # since _observe() (e.g. async search results replacing innerHTML).
         self.page.evaluate(EXTRACT_ELEMENTS_JS)
 
-        timeout = 5_000  # 5s max per action
+        # 5s per action, normalized by how oversubscribed the box is: on a
+        # loaded host every action would otherwise come back "error: Timeout"
+        # and Claude would go looking for a UI problem that is not there.
+        timeout = budget_ms(ROUND_TRIP_BUDGET_MS)
         try:
             if action == "navigate":
                 self.page.goto(
@@ -510,7 +518,9 @@ class UIHarness:
         """Wait briefly for async page updates to land."""
         self.page.wait_for_timeout(500)
         try:
-            self.page.wait_for_load_state("networkidle", timeout=3000)
+            self.page.wait_for_load_state(
+                "networkidle", timeout=budget_ms(SETTLE_BUDGET_MS)
+            )
         except Exception:
             pass
 

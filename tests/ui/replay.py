@@ -11,12 +11,18 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .budget import (
+    INTERACTION_BUDGET_MS,
+    ROUND_TRIP_BUDGET_MS,
+    budget_ms,
+    host_contention,
+)
 from .harness import EXTRACT_ELEMENTS_JS
 
 # Text assertions wait for async renders rather than sampling instantaneously.
-# Every other harness call passes timeout=500 to Playwright; these two used a
-# bare count() and raced page updates under load (efj-mtgc-h9z).
-TEXT_ASSERT_TIMEOUT_MS = 5_000
+# Every other harness call passes the interaction budget to Playwright; these
+# two used a bare count() and raced page updates under load (efj-mtgc-h9z).
+TEXT_ASSERT_TIMEOUT_MS = ROUND_TRIP_BUDGET_MS
 
 log = logging.getLogger(__name__)
 
@@ -60,13 +66,30 @@ class ReplayHarness:
         self.scenario_name = scenario_name
         self._step = 0
         self._steps: list[ReplayStep] = []
+        # Sampled once, held for the whole scenario. A factor re-read per step
+        # would make a failure impossible to reproduce from its own log, since
+        # no two steps would have run under the same deadline.
+        self._contention = host_contention()
+        log.info(
+            "[%s] Host contention %.1fx — interaction budget %d ms, "
+            "round trip %d ms",
+            scenario_name,
+            self._contention,
+            self._budget(INTERACTION_BUDGET_MS),
+            self._budget(ROUND_TRIP_BUDGET_MS),
+        )
+
+    def _budget(self, base_ms: int) -> int:
+        return budget_ms(base_ms, self._contention)
 
     # ── Navigation ─────────────────────────────────────────────────────
 
     def navigate(self, path: str):
         self._record("navigate", path)
         self.page.goto(
-            f"{self.base_url}{path}", wait_until="networkidle", timeout=5_000
+            f"{self.base_url}{path}",
+            wait_until="networkidle",
+            timeout=self._budget(ROUND_TRIP_BUDGET_MS),
         )
         self._settle()
         self._snap()
@@ -75,31 +98,37 @@ class ReplayHarness:
 
     def click_by_text(self, text: str, *, exact: bool = False):
         self._record("click_by_text", text)
-        self.page.get_by_text(text, exact=exact).first.click(timeout=500)
+        self.page.get_by_text(text, exact=exact).first.click(
+            timeout=self._budget(ROUND_TRIP_BUDGET_MS)
+        )
         self._settle()
         self._snap()
 
     def click_by_selector(self, selector: str):
         self._record("click_by_selector", selector)
-        self.page.click(selector, timeout=500)
+        self.page.click(selector, timeout=self._budget(ROUND_TRIP_BUDGET_MS))
         self._settle()
         self._snap()
 
     def click_by_test_id(self, test_id: str):
         self._record("click_by_test_id", test_id)
-        self.page.get_by_test_id(test_id).click(timeout=500)
+        self.page.get_by_test_id(test_id).click(
+            timeout=self._budget(ROUND_TRIP_BUDGET_MS)
+        )
         self._settle()
         self._snap()
 
     def fill_by_placeholder(self, placeholder: str, value: str):
         self._record("fill_by_placeholder", f"{placeholder}={value}")
-        self.page.get_by_placeholder(placeholder).fill(value, timeout=500)
+        self.page.get_by_placeholder(placeholder).fill(
+            value, timeout=self._budget(ROUND_TRIP_BUDGET_MS)
+        )
         self._settle()
         self._snap()
 
     def fill_by_selector(self, selector: str, value: str):
         self._record("fill_by_selector", f"{selector}={value}")
-        self.page.fill(selector, value, timeout=500)
+        self.page.fill(selector, value, timeout=self._budget(ROUND_TRIP_BUDGET_MS))
         self._settle()
         self._snap()
 
@@ -108,7 +137,9 @@ class ReplayHarness:
         target = selector or "active element"
         self._record("press_key", f"{key} on {target}")
         if selector:
-            self.page.press(selector, key, timeout=500)
+            self.page.press(
+                selector, key, timeout=self._budget(ROUND_TRIP_BUDGET_MS)
+            )
         else:
             self.page.keyboard.press(key)
         self._settle()
@@ -116,13 +147,17 @@ class ReplayHarness:
 
     def set_input_files(self, selector: str, file_path: str):
         self._record("set_input_files", f"{selector} <- {file_path}")
-        self.page.set_input_files(selector, file_path, timeout=500)
+        self.page.set_input_files(
+            selector, file_path, timeout=self._budget(ROUND_TRIP_BUDGET_MS)
+        )
         self._settle()
         self._snap()
 
     def select_by_label(self, selector: str, label: str):
         self._record("select_by_label", f"{selector}={label}")
-        self.page.select_option(selector, label=label, timeout=500)
+        self.page.select_option(
+            selector, label=label, timeout=self._budget(ROUND_TRIP_BUDGET_MS)
+        )
         self._settle()
         self._snap()
 
@@ -135,43 +170,55 @@ class ReplayHarness:
 
     # ── Waiting ────────────────────────────────────────────────────────
 
-    def wait_for_visible(self, selector: str, timeout: int = 500):
+    def wait_for_visible(self, selector: str, timeout: int = INTERACTION_BUDGET_MS):
         self._record("wait_for_visible", selector)
-        self.page.wait_for_selector(selector, state="visible", timeout=timeout)
+        self.page.wait_for_selector(
+            selector, state="visible", timeout=self._budget(timeout)
+        )
         self._snap()
 
-    def wait_for_attached(self, selector: str, timeout: int = 500):
+    def wait_for_attached(self, selector: str, timeout: int = INTERACTION_BUDGET_MS):
         """Wait for a DOM element to exist, regardless of visibility.
 
         Use for elements that exist but are not visible to the user — e.g.
         <option> nodes inside an unopened <select>.
         """
         self._record("wait_for_attached", selector)
-        self.page.wait_for_selector(selector, state="attached", timeout=timeout)
+        self.page.wait_for_selector(
+            selector, state="attached", timeout=self._budget(timeout)
+        )
         self._snap()
 
-    def wait_for_hidden(self, selector: str, timeout: int = 500):
+    def wait_for_hidden(self, selector: str, timeout: int = INTERACTION_BUDGET_MS):
         self._record("wait_for_hidden", selector)
-        self.page.wait_for_selector(selector, state="hidden", timeout=timeout)
+        self.page.wait_for_selector(
+            selector, state="hidden", timeout=self._budget(timeout)
+        )
         self._snap()
 
-    def wait_for_text(self, text: str, timeout: int = 500):
+    def wait_for_text(self, text: str, timeout: int = INTERACTION_BUDGET_MS):
         self._record("wait_for_text", text)
-        self.page.get_by_text(text).first.wait_for(state="visible", timeout=timeout)
+        self.page.get_by_text(text).first.wait_for(
+            state="visible", timeout=self._budget(timeout)
+        )
         self._snap()
 
     # ── Assertions ─────────────────────────────────────────────────────
 
     def assert_visible(self, selector: str):
         self._record("assert_visible", selector)
-        visible = self.page.is_visible(selector, timeout=500)
+        visible = self.page.is_visible(
+            selector, timeout=self._budget(INTERACTION_BUDGET_MS)
+        )
         if not visible:
             self._fail(f"Expected visible: {selector}")
         self._snap()
 
     def assert_hidden(self, selector: str):
         self._record("assert_hidden", selector)
-        hidden = self.page.is_hidden(selector, timeout=500)
+        hidden = self.page.is_hidden(
+            selector, timeout=self._budget(INTERACTION_BUDGET_MS)
+        )
         if not hidden:
             self._fail(f"Expected hidden: {selector}")
         self._snap()
@@ -189,7 +236,7 @@ class ReplayHarness:
         self._record("assert_text_present", text)
         try:
             self.page.get_by_text(text).first.wait_for(
-                state="attached", timeout=timeout
+                state="attached", timeout=self._budget(timeout)
             )
         except Exception:
             self._fail(f"Expected text present: {text}")
@@ -285,10 +332,18 @@ class ReplayHarness:
             step.dom_snapshot = None
 
     def _settle(self):
-        """Wait for async page updates: one animation frame + networkidle."""
+        """Wait for async page updates: one animation frame + networkidle.
+
+        The networkidle wait is scaled like every other budget here. It giving
+        up early is not harmless: the assertion that follows then starts its own
+        clock against a page that is still fetching, so an unscaled settle turns
+        one slow request into a failure two steps later.
+        """
         self.page.wait_for_timeout(50)
         try:
-            self.page.wait_for_load_state("networkidle", timeout=500)
+            self.page.wait_for_load_state(
+                "networkidle", timeout=self._budget(INTERACTION_BUDGET_MS)
+            )
         except Exception:
             pass
 

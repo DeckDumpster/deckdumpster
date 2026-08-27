@@ -33,6 +33,8 @@ import pytest
 
 from mtg_collector.cli.page_routes import PAGE_ROUTES, match_page_route
 
+from .budget import ROUND_TRIP_BUDGET_MS, budget_ms
+
 #: Pages that are deliberately not linked from the homepage, each with the
 #: reason it is a decision rather than an oversight. Anything not listed here
 #: must have a visible anchor on `/`; that is the whole point of the check, so
@@ -146,7 +148,9 @@ def _homepage_anchors(browser, base_url, viewport, extra_css=None):
     try:
         page = context.new_page()
         page.goto(f"{base_url}/", wait_until="load")
-        page.wait_for_selector("a[href]", state="attached", timeout=5000)
+        page.wait_for_selector(
+            "a[href]", state="attached", timeout=budget_ms(ROUND_TRIP_BUDGET_MS)
+        )
         if extra_css:
             page.add_style_tag(content=extra_css)
         return page.eval_on_selector_all(
@@ -241,7 +245,9 @@ def _home_links(browser, base_url, viewport):
         found = {}
         for path in MUST_LINK_HOME:
             page.goto(f"{base_url}{path}", wait_until="load")
-            page.wait_for_selector("body", state="attached", timeout=5000)
+            page.wait_for_selector(
+                "body", state="attached", timeout=budget_ms(ROUND_TRIP_BUDGET_MS)
+            )
             found[path] = page.eval_on_selector_all("a[href]", _HAS_VISIBLE_HOME_LINK)
         return found
     finally:

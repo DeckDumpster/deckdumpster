@@ -551,3 +551,37 @@ uv run pytest tests/ui/ -v --instance <instance>
 4. Runs the new tests against the container before tearing down.
 
 Do **not** create or modify UI scenario tests outside `/qa-finish`. Per-test DB isolation is via session-scoped `sqlite3.backup()` snapshot + per-test restore (see `tests/ui/conftest.py`).
+
+### Timeout budgets
+
+**Every timeout in `tests/ui/` comes from `tests/ui/budget.py`, and there are two of
+them.** `INTERACTION_BUDGET_MS` (500) is the app's answer to an interaction on a page
+that is already loaded — the deliberate UX budget the collection-payload work exists to
+defend. `ROUND_TRIP_BUDGET_MS` (5 000) is anything that crosses to the server and back: a
+page load, a text assertion backed by a fetch, and **any action that might navigate**,
+because `page.click` blocks until a navigation the click started commits. A 500 ms click
+timeout was a navigation budget wearing an interaction budget's clothes, and that is
+literally how a *successful* click failed a test — Playwright's call log showed the click
+landed and the page reached `/sets`, and the harness raised anyway (de-6q2).
+
+**Both are scaled by `host_contention()` — runnable tasks per CPU, floored at 1.0.** A
+wall-clock budget on a shared box measures the box. On the 4-CPU deployment box at load
+average 61-85, a `tests/ui -k sets_` run gave 14 failures of which **14 were Playwright
+timeouts and 0 were assertion failures**; re-running the same scenarios alone passed. A
+suite that reds without a single assertion firing is measuring the other tenants. On a
+quiet box the factor is 1.0 and every timeout is byte-identical to what it was before, so
+a payload regression still reds on the machine where you actually measure. Do **not**
+raise a base budget to make a scenario pass — that is the thing being measured. If a
+scenario is slow because of its own *setup*, move that setup under the page-load budget (a
+deep-link `start_page`), as `sheets_card_zoom_overlay` and `sheets_deep_link_url_hash` do.
+
+`TIMEOUT_CEILING_MS` (30 000) is Playwright's own default action timeout — the line past
+which contention stops being the explanation. It caps what contention may *add*; it never
+shrinks a timeout a caller asked for outright. The factor is sampled **once per scenario**
+and held: timeouts that drift step to step make a failure unreproducible from its own log.
+
+`tests/test_ui_budget.py` is the guard, and it is default-deny — an AST walk fails on any
+`timeout=<number>` written at a call site in `replay.py`, `harness.py` or
+`test_nav_reachability.py`. The bug it exists to stop is a literal per call site: with a
+500 written twenty times, raising the budget means finding all twenty, and the ones nobody
+found are the ones that flake.
