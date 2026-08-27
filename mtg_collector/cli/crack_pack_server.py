@@ -2718,9 +2718,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # The page is the whole result, so the rows in hand are the answer.
             total = len(results)
             aggregates["total_qty"] = sum(c.get("qty") or 0 for c in results)
-            aggregates["total_value"] = round(sum(
+            # float() so the key's JSON type does not depend on which rows the
+            # result happened to hold: summing nothing, or summing only rows
+            # SQLite gave an integer 0 for, otherwise sends `0` where every
+            # other response sends `0.0`.
+            aggregates["total_value"] = round(float(sum(
                 float(c[price_key] or 0) * (c.get("qty") or 0) for c in results
-            ), 2)
+            )), 2)
         elif offset == 0 and totals_body_spans_result:
             # One scan for all three. Counting and summing separately walked the
             # same grouped body twice: 1.4 s against 1.0 s for this, same answer.
@@ -2734,7 +2738,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             ).fetchone()
             total = agg[0]
             aggregates["total_qty"] = agg[1]
-            aggregates["total_value"] = round(agg[2], 2)
+            aggregates["total_value"] = round(float(agg[2]), 2)
         elif offset == 0:
             # The is:unowned template's totals body ranges over copies, not over
             # result rows, so it cannot also answer `total` — the rows it drops
@@ -2749,7 +2753,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 sql_params,
             ).fetchone()
             aggregates["total_qty"] = agg[0]
-            aggregates["total_value"] = round(agg[1], 2)
+            aggregates["total_value"] = round(float(agg[1]), 2)
             total = conn.execute(
                 f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
             ).fetchone()[0]

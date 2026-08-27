@@ -192,6 +192,33 @@ All filtering is one Scryfall-style query bar (`?q=...`). Standard Scryfall keyw
 
 Search compiler lives in `mtg_collector/search/`: `grammar.py` (tokeniser), `transformer.py` (parser → AST), `compiler.py` (AST → SQL), `keywords.py` (canonical name registry), `dates.py` (timezone-aware date parsing).
 
+### The whole-result figures on `/api/collection`
+
+`total`, `total_qty` and `total_value` describe the result rather than the page —
+the client fetches windows as it scrolls, so a page-scoped figure would climb as
+the user scrolled. They are **two scans over two different things**, and that is
+the part to keep. `total` counts result rows. The two sums range over *copies*: a
+result row with no copy has `qty` 0, so it contributes nothing to either sum
+whatever that printing is priced at.
+
+The distinction only bites on the LEFT-JOIN template (`is:unowned`, and the
+`cards=` shared-link list), where a result row need not have a copy — and for
+`is:unowned` none does. So the totals body there **inner-joins `collection`**,
+dropping those rows before the three `latest_prices` joins are reached instead of
+pricing 109,976 of them to add zero. Measured on that result: 7,271 ms for the
+shipped combined statement against 2,515 ms for the pair that replaced it, of
+which the sums are under a millisecond.
+
+**The count cannot ride on that body** — the rows it drops are exactly the ones
+the query is about — so it takes its own statement on that template, and only
+there. The templates that drive from `collection` have a row per result row, and
+one combined scan stays cheaper for them: 792 ms against 1,242 ms split, on
+15,045 copies. Do not unify the two paths in either direction.
+
+`total_qty` / `total_value` are sent on the first window only (de-962). `total` is
+sent on every window, because `deck-builder.js` pages its card picker until
+`offset >= total`.
+
 ### Set sizes
 
 `sets.base_set_size` and `sets.total_set_size` are stored, never derived, and populated at
