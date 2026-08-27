@@ -137,6 +137,16 @@ class TestMigrationV39ToV40:
             CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
             INSERT INTO schema_version (version, applied_at) VALUES (39, '2025-01-01');
 
+            -- mtgjson_printings arrived at v16, so a v39 database has it.  Present
+            -- here so migrations that add a column to it -- v50 adds `side` -- have
+            -- something to alter.
+            CREATE TABLE mtgjson_printings (
+                uuid TEXT PRIMARY KEY, printing_id TEXT, name TEXT NOT NULL,
+                set_code TEXT NOT NULL, number TEXT NOT NULL, rarity TEXT,
+                border_color TEXT, is_full_art INTEGER DEFAULT 0, frame_effects TEXT,
+                ck_url TEXT, ck_url_foil TEXT, imported_at TEXT NOT NULL
+            );
+
             CREATE TABLE cards (oracle_id TEXT PRIMARY KEY, name TEXT NOT NULL,
                 type_line TEXT, mana_cost TEXT, cmc REAL DEFAULT 0,
                 colors TEXT DEFAULT '[]', color_identity TEXT DEFAULT '[]');

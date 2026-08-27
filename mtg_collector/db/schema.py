@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 49
+SCHEMA_VERSION = 50
 
 
 class SchemaIntegrityError(Exception):
@@ -423,9 +423,25 @@ CREATE TABLE IF NOT EXISTS mtgjson_printings (
     frame_effects   TEXT,
     ck_url          TEXT,
     ck_url_foil     TEXT,
-    imported_at     TEXT NOT NULL
+    imported_at     TEXT NOT NULL,
+    -- MTGJSON's `side`: 'a' for the front face of a multi-face card, 'b'/'c'/'d'
+    -- for the rest, NULL for a single-faced one.  printing_id is NOT unique here
+    -- -- every face carries the same Scryfall id with its own Card Kingdom link
+    -- -- so this is the only column that says which row is the card you see.
+    -- Read it through mtg_collector/db/mtgjson_faces.py, never by hand.
+    --
+    -- Last, and that is load-bearing: `mtg db split` copies each table with
+    -- `INSERT INTO shared.t SELECT * FROM main.t`, which pairs columns by
+    -- position.  ALTER TABLE ADD COLUMN appends, so a migrated database has
+    -- this column last; declaring it anywhere else here would shift `side` and
+    -- `imported_at` past each other on a deployed instance and fail the copy
+    -- on imported_at's NOT NULL.
+    side            TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_mtgjson_printing ON mtgjson_printings(printing_id);
+-- Carries the whole of the front-face resolution in mtgjson_faces:
+-- seek on printing_id, then side then uuid already in order, so the
+-- ORDER BY costs no sorter.  set_browse's plan test asserts on that.
+CREATE INDEX IF NOT EXISTS idx_mtgjson_printing ON mtgjson_printings(printing_id, side, uuid);
 CREATE INDEX IF NOT EXISTS idx_mtgjson_set ON mtgjson_printings(set_code);
 
 -- MTGJSON booster sheet entries (uuid/weight per sheet)
@@ -997,6 +1013,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v47_to_v48(conn)
         if current < 49:
             _migrate_v48_to_v49(conn)
+        if current < 50:
+            _migrate_v49_to_v50(conn)
 
     # Record schema version
     conn.execute(
@@ -3070,6 +3088,42 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sets ADD COLUMN base_set_size INTEGER")
     if "total_set_size" not in columns:
         conn.execute("ALTER TABLE sets ADD COLUMN total_set_size INTEGER")
+
+
+def _migrate_v49_to_v50(conn: sqlite3.Connection):
+    """Add mtgjson_printings.side — which face of a card the row describes.
+
+    Additive only, and deliberately left NULL.  `side` comes from
+    AllPrintings.json and there is nothing in the database to derive it from:
+    the two rows a double-faced card produces differ only in `uuid` and their
+    Card Kingdom links, both of which are opaque.  A ~500 MB JSON parse in
+    front of every `mtg` command is not the price of a column, so the fill is
+    the ordinary re-import — `mtg data refresh-catalog`, which the
+    mtgc-catalog-refresh timer runs daily at 01:00.
+
+    Until it runs, `side` is NULL on every row and mtgjson_faces resolves a
+    duplicated printing_id on `uuid` alone: one row per card rather than
+    whichever the seek reached first, which is already what the old query
+    lacked.  The re-import then makes it the front face.
+    """
+    from mtg_collector.db.connection import suspend_shared_shadow
+
+    # Both statements name mtgjson_printings, which is a SHARED_TABLE: with the
+    # shadow up the name resolves to a temp view, and SQLite answers "cannot add
+    # a column to a view" / "views may not be indexed" rather than touching the
+    # table.  Same reason init_db suspends it around SCHEMA_SQL.
+    with suspend_shared_shadow(conn):
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(mtgjson_printings)")}
+        if "side" not in columns:
+            conn.execute("ALTER TABLE mtgjson_printings ADD COLUMN side TEXT")
+        # idx_mtgjson_printing widens to (printing_id, side, uuid) so the
+        # resolution's ORDER BY is read off the index.  A widening is a
+        # replacement, which CREATE INDEX IF NOT EXISTS would skip.
+        conn.execute("DROP INDEX IF EXISTS idx_mtgjson_printing")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mtgjson_printing "
+            "ON mtgjson_printings(printing_id, side, uuid)"
+        )
 
 
 def rebuild_card_names(conn):

@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from mtg_collector.cli.page_routes import PageRoute, match_page_route
 from mtg_collector.db.connection import get_db_path
+from mtg_collector.db.mtgjson_faces import front_face_bulk_sql, front_face_uuid_sql
 from mtg_collector.http_cache import (
     CACHE_API,
     CACHE_DOCUMENT,
@@ -1015,12 +1016,12 @@ _ENRICH_JOINS = [
     " AND _tcg.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
     # printing_id is not unique in mtgjson_printings: MTGJSON emits one row per
     # face of a double-faced card and both carry the same scryfallId, with a
-    # different Card Kingdom link each.  Resolve to a uuid first so the join
-    # stays single-row, and resolve it the way PackGenerator.get_ck_url() does
-    # — same index seek, same first row — so the collection list and the card
-    # detail page show the same link for the same card.
+    # different Card Kingdom link each.  Resolve to the front face's uuid so the
+    # join stays single-row and names the card the user is looking at — the rule
+    # lives in mtgjson_faces so this page, /card/:set/:cn, the binder grid and
+    # the deck page cannot drift into linking one card to two products.
     "LEFT JOIN mtgjson_printings _mp ON _mp.uuid ="
-    " (SELECT uuid FROM mtgjson_printings WHERE printing_id = p.printing_id LIMIT 1)",
+    f" {front_face_uuid_sql('p.printing_id')}",
 ]
 
 # The price joins alone — every _ENRICH_JOINS entry that a display price can be
@@ -5952,8 +5953,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if self.generator:
                 pids = [card["printing_id"] for card in cards]
                 ph2 = ",".join("?" for _ in pids)
+                # One row per printing_id, or the dict below keeps whichever face
+                # the scan returned last — which is the back face, and a different
+                # Card Kingdom link from the one /api/collection shows.
                 for r in conn.execute(
-                    f"SELECT printing_id, ck_url, ck_url_foil FROM mtgjson_printings WHERE printing_id IN ({ph2})",
+                    front_face_bulk_sql("mp.printing_id, mp.ck_url, mp.ck_url_foil", ph2),
                     pids,
                 ).fetchall():
                     ck_url_map[r["printing_id"]] = (r["ck_url"] or "", r["ck_url_foil"] or "")

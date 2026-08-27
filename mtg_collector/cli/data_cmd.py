@@ -340,6 +340,12 @@ def import_mtgjson(db_path: str):
                 json.dumps(frame_effects) if frame_effects else None,
                 purchase_urls.get("cardKingdom", ""),
                 purchase_urls.get("cardKingdomFoil", ""),
+                # Which face this row is.  MTGJSON emits one row per face and
+                # every face repeats the same scryfallId, so without `side`
+                # nothing downstream can ask for the front one -- see
+                # mtg_collector/db/mtgjson_faces.py.  Absent on single-faced
+                # cards, which is the NULL that means "the only face".
+                card.get("side"),
                 imported_at,
             ))
             uuid_map_rows.append((uuid, set_code, number))
@@ -368,6 +374,7 @@ def import_mtgjson(db_path: str):
                 json.dumps(frame_effects) if frame_effects else None,
                 "",  # no ck_url for tokens
                 "",  # no ck_url_foil for tokens
+                token.get("side"),  # double-faced tokens split by face too
                 imported_at,
             ))
             uuid_map_rows.append((uuid, token_set_code, number))
@@ -472,8 +479,8 @@ def import_mtgjson(db_path: str):
     conn.executemany(
         "INSERT OR IGNORE INTO mtgjson_printings "
         "(uuid, printing_id, name, set_code, number, rarity, border_color, "
-        "is_full_art, frame_effects, ck_url, ck_url_foil, imported_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "is_full_art, frame_effects, ck_url, ck_url_foil, side, imported_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         printing_rows,
     )
 

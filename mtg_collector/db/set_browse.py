@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
 from mtg_collector.db.collector_number import SUFFIX_ROOM
+from mtg_collector.db.mtgjson_faces import front_face_uuid_sql
 
 #: Where a printing sits in the binder.  `base` is the numbered run the set was
 #: printed with, `extended` the boosterfun treatments above it, `promo` the
@@ -138,10 +139,11 @@ _ENRICH_JOINS = f"""
          AND _tcg.price_type = {_finish_case('normal', 'foil')}
     -- printing_id is not unique in mtgjson_printings: one row per face of a
     -- double-faced card, both carrying the same Scryfall id with a different
-    -- Card Kingdom link.  Resolve to a uuid first, the way PackGenerator
-    -- .get_ck_url() does, so the join stays single-row.
+    -- Card Kingdom link.  Resolve to the front face's uuid so the join stays
+    -- single-row and links the pocket the grid draws -- mtgjson_faces holds
+    -- the rule, shared with /api/collection and the card detail page.
     LEFT JOIN mtgjson_printings _mp ON _mp.uuid =
-         (SELECT uuid FROM mtgjson_printings WHERE printing_id = p.printing_id LIMIT 1)
+         {front_face_uuid_sql('p.printing_id')}
 """
 
 _CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
