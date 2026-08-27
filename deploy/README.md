@@ -556,10 +556,66 @@ systemctl --user enable --now mtgc-catalog-check-<instance>.timer
 podman exec -e MTGC_CATALOG_MAX_LAG_DAYS=-1 systemd-mtgc-<instance> mtg data check-catalog
 ```
 
-Nothing on a timer refreshes the card catalogue — `mtg cache all` and
-`mtg data fetch` are both by hand — so on a box that has not run one recently
-this check goes red immediately. That is the correct reading, and
-`mtg cache all` is the fix.
+`mtgc-catalog-refresh` (below) is what clears this alarm; the check grades it,
+and its 09:00 slot is after the 01:00 refresh for that reason. On a box where the
+refresh timer was never enabled, this check goes red as soon as a set ships. That
+is the correct reading, not a false positive.
+
+## Catalog refresh
+
+The other half of the same story. The freshness check tells you the catalogue has
+fallen behind; this is the thing that stops it happening. Until it existed
+**nothing on a timer refreshed the card catalogue at all** — `mtg cache all` and
+`mtg data fetch` were both by hand, both had to be remembered, and for two months
+neither was.
+
+```
+mtg data refresh-catalog
+  ├── mtg cache all      Scryfall: every set, then ~112k cards and printings
+  └── mtg data fetch     MTGJSON: AllPrintings.json, imported and version-stamped
+```
+
+**One command, one process, one exit status**, and that is the design rather than
+a convenience. The refresh was already two commands and the second one is the one
+that stopped being run; a unit with two `ExecStart=` lines would rebuild exactly
+that failure mode inside systemd, where a half-refresh reads as a green unit. The
+Scryfall half runs first because `sets` is what `check-catalog` measures, so a run
+that only half-lands lands the half the alarm can see.
+
+Neither half is conditional on what is already on disk. Scryfall regenerates its
+bulk export daily and MTGJSON rebuilds daily, so "we already have the file" is not
+a reason to skip, and a skip is indistinguishable from a run that had nothing to
+do. The cost of that is ~1 GB downloaded per night; the cost of the alternative is
+measured in months.
+
+Failures alert directly (`OnFailure=` → the shared Pushover channel) rather than
+waiting for the freshness check to notice a week later without the reason. The
+import in particular now propagates: it used to run inside a `try/except` that
+printed a warning, so a download whose import blew up exited 0 with a current file
+on disk and a stale database.
+
+### Arming an instance
+
+`setup.sh` installs `mtgc-catalog-refresh-<instance>.{service,timer}` (daily at
+01:00, ahead of the sealed catalog, EDHREC, the price fetch and the 09:00
+freshness check) but enables nothing.
+
+```bash
+# 1. Enable the timer.
+systemctl --user enable --now mtgc-catalog-refresh-<instance>.timer
+
+# 2. Prove it runs, rather than trusting that it is installed. Expect ~1 GB of
+#    downloads and the better part of an hour on a full catalogue.
+systemctl --user start mtgc-catalog-refresh-<instance>.service
+journalctl --user -u mtgc-catalog-refresh-<instance> -f
+
+# 3. Grade the result with the check that watches it. 0 lag, exit 0.
+podman exec systemd-mtgc-<instance> mtg data check-catalog
+```
+
+Run it by hand the same way — `podman exec systemd-mtgc-<instance> mtg data
+refresh-catalog` — rather than reaching for `mtg cache all` and `mtg data fetch`
+separately.
 
 ## Low-disk check
 
@@ -736,6 +792,7 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 | `mtg data check-catalog` (in-container) | Compare the local set list against Scryfall's and exit 1 if it has fallen behind. Read-only — see [Catalog freshness check](#catalog-freshness-check) |
+| `mtg data refresh-catalog` (in-container) | Refresh the whole catalogue — Scryfall cache then MTGJSON — in one process, so a half-refresh cannot exit 0. What clears the check above; see [Catalog refresh](#catalog-refresh) |
 | `diskcheck.sh [--floor [path...]]` | Alert when a watched filesystem is over `MTGC_DISK_THRESHOLD`% used; `--floor` instead exits 1 when one has less than `MTGC_DISK_FLOOR_GB` free. Called by `setup.sh`, `deploy.sh` and CI before they write gigabytes — see [Low-disk check](#low-disk-check) |
 
 ## CI

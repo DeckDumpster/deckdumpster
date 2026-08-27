@@ -1,0 +1,18 @@
+[Unit]
+Description=MTGC daily card catalog refresh timer ({{INSTANCE}})
+
+[Timer]
+# Daily. Scryfall regenerates its bulk export and MTGJSON rebuilds every day, and
+# sets release on no schedule this could be tuned to — a weekly cadence would
+# mean up to seven days of a released set missing, which is most of the freshness
+# check's own 7-day patience spent before anything has gone wrong.
+#
+# 01:00 puts the long run ahead of everything else on the box: the sealed catalog
+# (Mon 04:00), EDHREC (Wed 05:00), the price fetch (06:00), and the freshness
+# check (09:00), which therefore reads the catalogue this run produced.
+OnCalendar=*-*-* 01:00:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target

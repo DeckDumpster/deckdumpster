@@ -382,7 +382,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 
 Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
 - `~/.config/mtgc/<instance>.env` — per-instance env.
@@ -423,11 +423,25 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   sync. It reads through `get_connection()`, never `sqlite3.connect()`: `sets` is in
   `SHARED_TABLES`, so a deployed instance's own `sets` is empty and the catalogue is behind
   a temp view over the ATTACHed `shared.sqlite` — opening the instance file directly reports
-  a catalogue with no sets in it, a permanent red no refresh could clear. Nothing on a timer
-  refreshes the catalogue, so this goes red on a box that has not run `mtg cache all`
-  recently — that is the correct reading, not a false positive. See
+  a catalogue with no sets in it, a permanent red no refresh could clear. `mtgc-catalog-refresh`
+  is what clears it, so this goes red on a box where that timer was never enabled — the
+  correct reading, not a false positive. See
   `mtg_collector/db/catalog_freshness.py`, `deploy/mtgc-catalog-check.{service,timer}`,
   and `deploy/README.md` → "Catalog freshness check".
+- **`mtg data refresh-catalog` is the whole catalogue refresh, and it is one command
+  because it used to be two** (de-wdq). `mtg cache all` (Scryfall sets + printings) and
+  `mtg data fetch` (MTGJSON) were both by hand, and the second is the one that stopped
+  being run — which is how the catalogue got two months behind with every timer green.
+  `deploy/mtgc-catalog-refresh.{service,timer}` runs it daily at 01:00, ahead of the
+  sealed catalog (Mon 04:00), EDHREC (Wed 05:00), prices (06:00), and the 09:00 freshness
+  check that grades it. **The unit has exactly one `ExecStart=`** — two lines would
+  rebuild the same failure mode inside systemd, where a half-refresh reads as a green
+  unit. Scryfall runs first because `sets` is what `check-catalog` measures, so a run that
+  half-lands lands the half the alarm can see. Neither half is conditional on what is
+  already on disk: both sources rebuild daily, so a skip is indistinguishable from a run
+  with nothing to do. `fetch_allprintings` no longer wraps its import in a `try/except`
+  that printed a warning — that swallowed exit code is what let a current file on disk sit
+  beside a stale database. See `deploy/README.md` → "Catalog refresh".
 - **`deploy/diskcheck.sh` is both the disk alarm and the pre-flight floor** (de-yef). /
   is 98 G and prod serves from it; it hit 100% on 2026-08-08 and again on 2026-08-11, and
   on both nights the backup produced no object and nothing said so (de-o4e). `MTGC_STORE_ROOT`
