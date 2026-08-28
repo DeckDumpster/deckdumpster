@@ -681,13 +681,27 @@ before the 03:00 backup writes its ~3 GB tarball) but enables nothing. Disk is
 host-wide, so enable it on one instance — `prod`.
 
 ```bash
-# 1. Pushover credentials, if not already set — same channel as the backup check.
-#    See "Arming an instance" under Backup freshness check.
+# 1. Install the units, if this instance predates the check. setup.sh is the only
+#    thing that renders them, and it runs at bring-up — deploy.sh re-renders
+#    nothing on its redeploy path, so an instance created before de-yef landed
+#    still does not have them however many times it has auto-deployed since
+#    (de-wxzx). That is prod's case on the deployment box today, and step 3
+#    fails with "Unit not found" rather than arming anything. Check, and if it
+#    is not-found, re-run setup.sh for the instance — it is idempotent and
+#    enables nothing:
+systemctl --user is-enabled mtgc-diskcheck-prod.timer   # not-found => not installed
+bash deploy/setup.sh prod
 
-# 2. Enable the timer.
+# 2. Pushover credentials, if not already set — same channel as the backup check.
+#    See "Arming an instance" under Backup freshness check. An absent
+#    ~/.config/mtgc/alerts.env is not a quiet no-op: alert.sh exits 1 and the
+#    unit fails, so the first real alert is one nobody was paged for. The
+#    already-armed checks are green only because none of them has had to push.
+
+# 3. Enable the timer.
 systemctl --user enable --now mtgc-diskcheck-prod.timer
 
-# 3. Prove it goes RED before trusting it green. A threshold of 0 is one nothing
+# 4. Prove it goes RED before trusting it green. A threshold of 0 is one nothing
 #    can pass — run it and confirm the push actually arrives.
 MTGC_DISK_THRESHOLD=0 bash deploy/diskcheck.sh
 ```
