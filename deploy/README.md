@@ -415,6 +415,50 @@ systemctl --user restart mtgc-<name>
 
 The instance regenerates and serves the self-signed certificate again — browsers warn, `curl -ks` works, nothing else changes. To also drop the mount, re-run `setup.sh` without `--tls-certs` and `systemctl --user daemon-reload`.
 
+## What the nightly backup needs free
+
+> 42 of the 175 nights from 2026-03-05 are missing from the bucket. Every one of
+> them was refused for want of free space, and nothing said so.
+
+`backup.sh` stages an uncompressed host-side sqlite snapshot and writes the
+tarball beside it, so peak usage is ~1.4x the database — on today's 11.4 GB prod
+that is ~15.5 GB, about 15% of the whole 98 GB root volume, and it rises ~91 MB a
+day as the database grows ~65 MB a day. That volume also carries prod's own 19 GB
+data volume, the retained tarballs and Podman's default store, so any transient
+few-GB claim at 03:00 sharp used to cost the night — and a lost night is
+permanent: `aws s3 sync` mirrors a directory, so a tarball that was never written
+can never be backfilled (de-o4e).
+
+Before refusing, the run reclaims what on that disk is its own (de-4e8):
+
+| Reclaimed | Why it was never a claim on the disk |
+|---|---|
+| a previous run's staging directory | a run killed mid-snapshot leaves up to a whole database behind, its EXIT trap never fired |
+| retained local dailies that S3 already holds | the local copies are a fast-restore convenience; the night is not |
+
+Tarballs go oldest first and the loop stops the moment the run fits, so a roomy
+night spends nothing and retention is exactly what it was. One is deleted only
+when `aws s3 ls` answers for it **at the same size** — a half-uploaded object
+answers too — and nothing local is deleted at all without
+`MTGC_BACKUP_S3_BUCKET`, because then the local copy is the only copy. The sync
+runs without `--delete`, so reclaiming locally never removes anything from the
+bucket.
+
+The image trees are archived straight from the volume mount instead of being
+copied into staging first: ~1 GB on prod the run no longer has to have free,
+against a budget that only ever set 200 MB aside for them. Reading them live is
+no more exposed than the copy was — `cp -a` fails just the same on a file
+deleted from under it.
+
+**None of this moves the floor.** The snapshot is a full copy of the database, so
+peak usage cannot go below 1x the database however the tarball is written:
+SQLite's backup API needs a seekable destination, and neither this box's
+`libsqlite3` nor its `sqlite3` shell carries `sqlite_dbpage`, so there is no
+streaming a byte-identical copy into a pipe. The bar keeps rising with the
+database. The durable fix is to put `MTGC_BACKUP_DIR` on a filesystem that is not
+the 98 GB root volume — `/workspaces` is 938 G — which is a host decision about
+where prod's backups live, tracked separately.
+
 ## Backup freshness check
 
 The nightly backup is a cron job. A cron job can exit 0 having uploaded nothing —

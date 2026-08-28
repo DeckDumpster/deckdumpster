@@ -498,6 +498,27 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   and is not the store selection `setup.sh` scopes away from `prod`. It deliberately frees
   nothing — which instance to prune is a judgement a timer cannot make, and
   `deploy/prune-instances.sh` stays by hand. See `deploy/README.md` → "Low-disk check".
+- **`deploy/backup.sh` spends its own retained copies before it loses a night** (de-4e8).
+  Peak usage is the uncompressed host-side snapshot (~1x DB) plus the tarball (~0.3x), so
+  the nightly run demands ~15.5 GB free against an 11.4 GB prod database and rises ~91 MB a
+  day. It shares the 98 GB root volume with prod's data volume, the tarballs and Podman's
+  store, and a refused night is **permanent** — `aws s3 sync` mirrors a directory, so a
+  tarball never written can never be backfilled. That cost 42 of the 175 nights from
+  2026-03-05, every one of them for want of space (de-o4e). So before refusing, the run
+  clears a killed run's abandoned staging (up to a whole database, its EXIT trap never
+  fired) and then deletes retained local dailies **oldest first, stopping the moment it
+  fits** — a roomy night spends nothing and retention is unchanged. A tarball is deleted
+  only when `aws s3 ls` answers for it *at the same size* (a half-uploaded object answers
+  too), and never without `MTGC_BACKUP_S3_BUCKET`, because then the local copy is the only
+  copy; the sync runs without `--delete`, so this never touches the bucket. The image trees
+  are archived straight from the volume mount rather than copied into staging — ~1 GB on
+  prod, against a budget that only ever set 200 MB aside for them, so the copy could carry
+  a run past a check it had already passed. **The floor is 1x the database and cannot be
+  lowered here**: SQLite's backup API needs a seekable destination and this box's sqlite has
+  no `sqlite_dbpage`, so there is no streaming a byte-identical copy into the tarball. What
+  removes the constraint is putting `MTGC_BACKUP_DIR` on a filesystem that is not the root
+  volume, which is a host decision. See `deploy/README.md` → "What the nightly backup needs
+  free".
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
 - Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
 
