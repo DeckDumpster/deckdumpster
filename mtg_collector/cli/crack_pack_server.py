@@ -2508,12 +2508,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     {_ENRICH_COLUMNS}
             """
-            def _body(joins: str) -> str:
+            def _body(joins: str, *, copies_only: bool = False) -> str:
+                collection_join = "JOIN" if copies_only else "LEFT JOIN"
                 return f"""
                 FROM printings p
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
-                LEFT JOIN collection c ON p.printing_id = c.printing_id
+                {collection_join} collection c ON p.printing_id = c.printing_id
                 LEFT JOIN orders o ON c.order_id = o.id
                 {joins}
                 WHERE {where_sql}
@@ -2521,9 +2522,21 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             """
             body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
             count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="none"))
-            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="prices"))
+            # The sums range over copies, and this is the one template whose
+            # rows need not have one: a card you do not own is a row here with
+            # qty 0, so it adds 0 to total_qty and 0 to total_value whatever it
+            # would have been priced at. Inner-joining the copies drops those
+            # rows before the price joins are reached rather than pricing
+            # 109,976 of them to add zero. See the aggregates below.
+            totals_body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=False, enrich="prices"),
+                copies_only=True,
+            )
             order_sql = _order_by("p.printing_id")
             agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
+            # ...and so `total` cannot be counted off it: the rows it drops are
+            # exactly the ones an is:unowned result is made of.
+            totals_body_spans_result = False
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
             select_sql = f"""
@@ -2573,6 +2586,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # identifies a row.
             order_sql = _order_by("p.printing_id", "c.id", "dc.id")
             agg_qty_sql = "1"
+            totals_body_spans_result = True
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
             select_sql = f"""
@@ -2621,6 +2635,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 "p.printing_id", "c.finish", "c.condition", "c.status", "c.order_id"
             )
             agg_qty_sql = "COUNT(DISTINCT c.id)"
+            totals_body_spans_result = True
 
         # order_sql stays per-template: the tiebreak is that template's row
         # identity, and it differs (the GROUP BY key, or c.id/dc.id per copy).
@@ -2732,12 +2747,20 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # The page is the whole result, so the rows in hand are the answer.
             total = len(results)
             aggregates["total_qty"] = sum(c.get("qty") or 0 for c in results)
-            aggregates["total_value"] = round(sum(
+            # float() here and on both SQL paths, so the key's JSON type does
+            # not depend on what the result held. Python sums an empty result to
+            # an integer 0, and SQLite's COALESCE(SUM(...), 0) returns one when
+            # no row carried a price; without this, those responses send `0`
+            # where every other response sends `0.0`.
+            aggregates["total_value"] = round(float(sum(
                 float(c[price_key] or 0) * (c.get("qty") or 0) for c in results
-            ), 2)
-        elif offset == 0:
+            )), 2)
+        elif offset == 0 and totals_body_spans_result:
             # One scan for all three. Counting and summing separately walked the
             # same grouped body twice: 1.4 s against 1.0 s for this, same answer.
+            # Still true for the templates that drive from `collection`, where
+            # the totals body has a row per result row: re-measured at 792 ms
+            # combined against 1,242 ms split, on 15,045 copies.
             agg = conn.execute(
                 f"SELECT COUNT(*), COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
                 f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {totals_body_sql})",
@@ -2745,7 +2768,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             ).fetchone()
             total = agg[0]
             aggregates["total_qty"] = agg[1]
-            aggregates["total_value"] = round(agg[2], 2)
+            aggregates["total_value"] = round(float(agg[2]), 2)
+        elif offset == 0:
+            # The is:unowned template's totals body ranges over copies, not over
+            # result rows, so it cannot also answer `total` — the rows it drops
+            # are exactly the ones the query is about. Two statements, and both
+            # are cheaper than the one they replace: the sums no longer price
+            # 109,976 rows to add zero, and the count carries no price joins.
+            # Measured on 109,976 rows: 7,271 ms combined against 2,515 ms for
+            # the pair, of which the sums are under a millisecond.
+            agg = conn.execute(
+                f"SELECT COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
+                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {totals_body_sql})",
+                sql_params,
+            ).fetchone()
+            aggregates["total_qty"] = agg[0]
+            aggregates["total_value"] = round(float(agg[1]), 2)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
+            ).fetchone()[0]
         elif short_page:
             total = offset + len(rows)
         else:
@@ -8653,6 +8694,26 @@ def register(subparsers):
     parser.set_defaults(func=run)
 
 
+def _resolve_http_port():
+    """Resolve the optional second, plain-HTTP listener's port from the environment.
+
+    Presence of ``MTGC_HTTP_PORT`` is the switch for the listener, and a blank
+    value is absence: ``MTGC_HTTP_PORT=`` means unset, the same rule
+    ``MTGC_TLS_CERT`` / ``MTGC_TLS_KEY`` already read themselves by, and the same
+    rule ``setup.sh``'s ``record`` writes by — it deletes a key rather than
+    writing an empty one. Blanking a line is how operators disable a setting, so
+    two switches introduced in the same epic must not disagree about what one
+    means; here it used to raise out of ``int('')`` and crash-loop the instance.
+
+    A non-empty value that is not an integer is still a hard failure. There is no
+    fallback to one listener for a typo'd port.
+    """
+    raw = os.environ.get("MTGC_HTTP_PORT", "").strip()
+    if not raw:
+        return None
+    return int(raw)
+
+
 def _resolve_external_tls_paths():
     """Resolve an operator-supplied certificate pair from the environment.
 
@@ -8745,10 +8806,10 @@ def run(args):
     _shared_db_path = os.environ.get("MTGC_SHARED_DB")
     if _shared_db_path:
         print(f"[startup] Shared reference DB: {_shared_db_path}", flush=True)
-    # Presence of MTGC_HTTP_PORT is the switch for the second, plain-HTTP listener.
-    # A non-integer value raises out of int() and the process exits non-zero.
-    _http_port_env = os.environ.get("MTGC_HTTP_PORT")
-    http_port = int(_http_port_env) if _http_port_env is not None else None
+    # Presence of MTGC_HTTP_PORT is the switch for the second, plain-HTTP
+    # listener; blank is absence. A non-empty non-integer raises and the process
+    # exits non-zero.
+    http_port = _resolve_http_port()
     _background_db_path = db_path
     _ingest_executor = ThreadPoolExecutor(max_workers=4)
     _recover_pending_images(db_path)

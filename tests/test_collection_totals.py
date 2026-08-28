@@ -383,3 +383,140 @@ class TestPriceKeywordDoesNotDuplicateRows:
         """Charlie is foil and carries a 999.00 *nonfoil* TCG price the fixture
         adds precisely to catch a filter that ignores the copy's finish."""
         assert _page(two_source_db, q="price>100")["rows"] == []
+
+
+# --- The LEFT-JOIN template: rows that have no copy -------------------------
+#
+# `is:unowned` (and the shared-links `cards=` list) LEFT JOIN `collection`, so a
+# result row can be a card nobody owns: qty 0, and therefore 0 towards
+# total_value whatever that printing is priced at.  The sums are taken over a
+# body that inner-joins the copies for exactly that reason — pricing 109,976
+# copy-less rows to add zero was 6.6 s of a 7.3 s first paint (de-dfb).
+#
+# What that must not cost: `total` counts result rows, copy-less ones included,
+# so it cannot come from the same body.  These pin both halves.
+
+UNOWNED_PRICE = 100.0  # dear on purpose: a sum that reached it would be obvious
+
+
+@pytest.fixture
+def mixed_db():
+    """One owned printing and one owned by nobody, both priced."""
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        path = f.name
+
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    conn.execute("INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test Set')")
+
+    _add_card(conn, 1, "Alpha")
+    _own(conn, 1, "nonfoil", 3)
+    _price(conn, 1, "tcgplayer", "normal", 2.0)
+
+    _add_card(conn, 5, "Echo")  # no copies
+    _price(conn, 5, "tcgplayer", "normal", UNOWNED_PRICE)
+
+    refresh_latest_prices(conn)
+    conn.commit()
+    conn.close()
+    yield path
+    os.unlink(path)
+
+
+def _recorded(db_path, **params):
+    """Call /api/collection, returning (envelope, statements it ran)."""
+    from mtg_collector.cli.crack_pack_server import CrackPackHandler
+
+    statements = []
+
+    class _Recording:
+        def __init__(self, path):
+            self._conn = sqlite3.connect(path)
+            self._conn.row_factory = sqlite3.Row
+
+        def execute(self, sql, sql_params=()):
+            statements.append((sql, list(sql_params)))
+            return self._conn.execute(sql, sql_params)
+
+        def close(self):
+            pass  # the test reads the plans after the handler is done
+
+    rec = _Recording(db_path)
+    handler = object.__new__(CrackPackHandler)
+    handler.db_path = db_path
+    handler.generator = object()
+    handler._get_conn = lambda: rec
+    responses = []
+    handler._send_json = lambda obj, status=200: responses.append((status, obj))
+    handler._api_collection({k: [str(v)] for k, v in params.items()})
+    status, body = responses[-1]
+    assert status == 200, body
+    return body, rec, statements
+
+
+class TestRowsWithNoCopy:
+    def test_unowned_result_is_worth_nothing(self, mixed_db):
+        """One row, priced at $100, owned by nobody.  It is worth $0."""
+        body = _page(mixed_db, q="is:unowned", limit=1)
+        assert body["total"] == 1
+        assert body["total_qty"] == 0
+        assert body["total_value"] == 0
+
+    def test_total_counts_rows_the_sums_skip(self, mixed_db):
+        """The regression the split has to survive.
+
+        A shared-links list is the same LEFT-JOIN template holding one owned
+        card and one unowned one.  `total` is 2 — deck-builder.js pages until
+        `offset >= total`, so a total taken from the copies-only body would
+        stop it a card early — while the sums see only the copies.
+        """
+        body = _page(mixed_db, cards="tst:1,tst:5", limit=1)
+        assert body["total"] == 2
+        assert body["total_qty"] == 3
+        assert body["total_value"] == 6.00
+
+    def test_the_two_templates_agree_on_the_same_card(self, mixed_db):
+        """Alpha is worth the same whichever template found it."""
+        left_join = _page(mixed_db, cards="tst:1", limit=1)
+        default = _page(mixed_db, q="Alpha", limit=1)
+        assert (left_join["total_qty"], left_join["total_value"]) == (
+            default["total_qty"],
+            default["total_value"],
+        )
+
+    def test_the_sums_do_not_walk_the_copyless_rows(self, mixed_db):
+        """Pin the mechanism, not just the answer.
+
+        The sums must reach `collection` through an inner join, so the price
+        joins are never reached for a row with no copy.  A LEFT-JOIN step here
+        means the whole result is being priced again.
+        """
+        _, rec, statements = _recorded(mixed_db, q="is:unowned", limit=1)
+        sums = [(sql, p) for sql, p in statements if "SUM(qty * price)" in sql]
+        assert len(sums) == 1, f"expected one totals statement, got {len(sums)}"
+        sql, sql_params = sums[0]
+        assert "COUNT(*)" not in sql, (
+            "the count is riding on the totals body, which no longer spans the "
+            "result:\n" + sql
+        )
+        plan = [r[3] for r in rec.execute(f"EXPLAIN QUERY PLAN {sql}", sql_params)]
+        rec._conn.close()
+        offending = [s for s in plan if s.startswith("SEARCH c ") and "LEFT-JOIN" in s]
+        assert not offending, (
+            "the totals are still walking rows with no copy:\n  " + "\n  ".join(plan)
+        )
+
+    def test_the_owned_templates_still_count_and_sum_in_one_scan(self, priced_db):
+        """The split is scoped to the template that needs it.
+
+        Where the totals body already drives from `collection` it has a row per
+        result row, so one scan answers all three — 792 ms against 1,242 ms
+        split, on 15,045 copies.
+        """
+        _, rec, statements = _recorded(priced_db, limit=1)
+        rec._conn.close()
+        combined = [sql for sql, _ in statements if "SUM(qty * price)" in sql]
+        assert len(combined) == 1
+        assert "COUNT(*)" in combined[0], combined[0]
+        assert not [sql for sql, _ in statements if sql.startswith("SELECT COUNT(*) FROM (SELECT 1")]

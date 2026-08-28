@@ -249,6 +249,7 @@ def run_gate(tmp_path, mode):
         PATH=f"{bin_dir}:{env['PATH']}",
         XDG_RUNTIME_DIR=str(tmp_path / "run"),
         PODMAN_LOG=str(tmp_path / "podman.log"),
+        MTGC_DISK_FLOOR_GB="0",
         STUB_MODE=mode,
         STUB_STATE=str(state),
         STUB_MB=str(STUB_MB),
@@ -412,6 +413,7 @@ def test_it_refuses_a_probe_store_inside_the_store_under_test(tmp_path):
     env = dict(os.environ)
     env.update(
         HOME=str(home),
+        MTGC_DISK_FLOOR_GB="0",
         MTGC_STORE_GATE_ROOT=str(home / ".local/share/containers/probe"),
     )
     env.pop("MTGC_STORE_ROOT", None)

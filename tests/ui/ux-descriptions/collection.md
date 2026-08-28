@@ -598,10 +598,12 @@ Multi-select state is tracked via a `Set` of indices into the `allCards` array. 
 ### 6.3 External Dependencies
 
 - **Scryfall CDN**: Card images loaded from `card.image_uri` (Scryfall image URLs).
+  This is the only host the page reaches; everything below is served by this app
+  from `/static/vendor/`, so the page renders without the public internet.
 - **Chart.js v4**: Price history chart rendering.
 - **chartjs-adapter-date-fns v3**: Date axis for price chart.
-- **Keyrune CSS**: Set icons (loaded from CDN).
-- **Mana Font CSS**: Mana cost icons (loaded from CDN).
+- **Keyrune CSS**: Set icons.
+- **Mana Font CSS**: Mana cost icons.
 
 ---
 

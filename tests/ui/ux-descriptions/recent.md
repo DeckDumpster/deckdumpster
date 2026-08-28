@@ -248,8 +248,9 @@ The accordion is a single shared `<div>` that is repositioned in the DOM after t
 - Decks and binders must exist in the database to appear in the assignment dropdown.
 
 ### External Resources
-- Keyrune CSS (`cdn.jsdelivr.net/npm/keyrune@latest/css/keyrune.min.css`) for MTG set icons.
 - Scryfall image CDN (`cards.scryfall.io`) for candidate card images and table-mode thumbnails.
+  This is the only external host the page reaches; the Keyrune set-icon font is served
+  by this app from `/static/vendor/keyrune/keyrune.min.css`.
 
 ---
 
