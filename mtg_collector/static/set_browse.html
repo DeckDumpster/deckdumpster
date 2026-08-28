@@ -482,10 +482,23 @@ let _modalCard = null;
 
 /* cards-per-row is the one control that is also remembered across sets, the
    same way its four siblings are (collectionGridCols, crackPackGridCols,
-   exploreGridCols, recentGridCols). The URL wins when it says something. */
+   exploreGridCols, recentGridCols). The URL wins when it says something.
+
+   With nothing stored, a narrow viewport opens narrower — 3, the same value
+   /sheets picks, which is the page this grid's tile was extracted from. Six
+   columns of card art on a phone is unreadable, and reconciling a physical
+   binder is the phone-in-hand task this page exists for. The only --grid-cols
+   consumer is shared-card-tile.css, unconditional, so there is no media query
+   compensating for it.
+
+   DEFAULTS.cols stays a flat 6 and is deliberately not the viewport-dependent
+   value: it is also what writeUrl() elides against, and a default that moved
+   with the viewport would make one link mean different things on different
+   devices. A phone that starts at 3 says so in its URL, like any other view. */
 function storedCols() {
   const n = parseInt(localStorage.getItem('setsGridCols'), 10);
-  return Number.isInteger(n) && n >= COL_MIN && n <= COL_MAX ? n : DEFAULTS.cols;
+  if (Number.isInteger(n) && n >= COL_MIN && n <= COL_MAX) return n;
+  return window.innerWidth < 600 ? 3 : DEFAULTS.cols;
 }
 
 function readUrl() {
