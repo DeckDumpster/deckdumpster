@@ -20,6 +20,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from mtg_collector.cli.page_routes import PageRoute, match_page_route
 from mtg_collector.db.connection import get_db_path
+from mtg_collector.db.enrich import (
+    COPY_IS_FOIL,
+    enrich_columns,
+    enrich_joins,
+    enrich_price_joins,
+)
 from mtg_collector.http_cache import (
     CACHE_API,
     CACHE_DOCUMENT,
@@ -988,51 +994,22 @@ def _recover_pending_images(db_path):
         print(f"[startup] {len(rows)} pending image(s) waiting — ANTHROPIC_API_KEY not set, skipping processing", flush=True)
 
 
-# /api/collection price and Card Kingdom URL enrichment, folded into the main
-# query.  This used to be two follow-up passes whose `IN (...)` clauses were
-# sized by the result set: 112,809 rows built a statement with 225,618 bound
-# parameters, within 11% of this build's SQLITE_MAX_VARIABLE_NUMBER of 250,000.
-# Every join below binds zero parameters and matches at most one row, so neither
-# the SQL text nor the row cardinality depends on how large the result set is.
+# /api/collection prices and Card Kingdom link, folded into the main query.
+# The joins themselves live in mtg_collector/db/enrich.py, because the deck
+# page and the binder-page view render the same three values and used to each
+# carry their own copy of the logic; see that module for why every join binds
+# zero parameters and matches at most one row.
 #
-# `latest_prices` has PRIMARY KEY (set_code, collector_number, source,
-# price_type), so pinning source and price_type makes each price join
-# single-row.  price_type follows the physical copy's finish (c.finish), not the
-# printing's available finishes, so a foil copy of a printing that also exists
-# in nonfoil gets the foil price; etched copies price as foil.
-_ENRICH_JOINS = [
-    "LEFT JOIN latest_prices _ck_buy ON _ck_buy.set_code = p.set_code"
-    " AND _ck_buy.collector_number = p.collector_number"
-    " AND _ck_buy.source = 'cardkingdom'"
-    " AND _ck_buy.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'buylist_foil' ELSE 'buylist_normal' END",
-    "LEFT JOIN latest_prices _ck_retail ON _ck_retail.set_code = p.set_code"
-    " AND _ck_retail.collector_number = p.collector_number"
-    " AND _ck_retail.source = 'cardkingdom'"
-    " AND _ck_retail.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
-    "LEFT JOIN latest_prices _tcg ON _tcg.set_code = p.set_code"
-    " AND _tcg.collector_number = p.collector_number"
-    " AND _tcg.source = 'tcgplayer'"
-    " AND _tcg.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END",
-    # printing_id is not unique in mtgjson_printings: MTGJSON emits one row per
-    # face of a double-faced card and both carry the same scryfallId, with a
-    # different Card Kingdom link each.  Resolve to a uuid first so the join
-    # stays single-row, and resolve it the way PackGenerator.get_ck_url() does
-    # — same index seek, same first row — so the collection list and the card
-    # detail page show the same link for the same card.
-    "LEFT JOIN mtgjson_printings _mp ON _mp.uuid ="
-    " (SELECT uuid FROM mtgjson_printings WHERE printing_id = p.printing_id LIMIT 1)",
-]
+# This endpoint lists *copies*, so it prices each one in the finish it was
+# recorded in.
+_ENRICH_JOINS = enrich_joins(COPY_IS_FOIL)
 
-# The price joins alone — every _ENRICH_JOINS entry that a display price can be
+# The price joins alone -- every _ENRICH_JOINS entry that a display price can be
 # built from, without the ck_url lookup.  The totals scan the whole result, so
 # they take this rather than the full set.
-_ENRICH_PRICE_JOINS = _ENRICH_JOINS[:3]
+_ENRICH_PRICE_JOINS = enrich_price_joins(COPY_IS_FOIL)
 
-# Card Kingdom publishes a buylist and a retail price; the buylist wins when
-# present.  A foil copy falls back to the nonfoil URL when there is no foil one.
-_ENRICH_COLUMNS = """COALESCE(_ck_buy.price, _ck_retail.price) as ck_price,
-                    _tcg.price as tcg_price,
-                    COALESCE(NULLIF(CASE WHEN c.finish IN ('foil', 'etched') THEN _mp.ck_url_foil END, ''), _mp.ck_url, '') as ck_url"""
+_ENRICH_COLUMNS = enrich_columns(COPY_IS_FOIL)
 
 
 # Page bounds for /api/collection. Measured on the real payload (108,630 rows
@@ -5954,59 +5931,30 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             conn.close()
         self._send_json({"ok": True})
 
+    @staticmethod
+    def _finish_deck_cards(cards: list) -> list:
+        """Normalise the rows both deck endpoints send.
+
+        Prices and ck_url arrive on the row from the query's enrichment joins
+        (mtg_collector/db/enrich.py).  They used to be two follow-up passes in
+        _api_deck_cards, whose `IN (...)` clauses were sized by the deck; that
+        shape is gone from /api/collection and from here for the same reason,
+        and the ck_url the joins resolve is the one the collection list and the
+        card detail page show for the same double-faced card.  As on
+        /api/collection, the payload carries prices as strings.
+        """
+        for card in cards:
+            card["layout"] = card.get("layout") or "normal"
+            card["tcg_price"] = None if card["tcg_price"] is None else str(card["tcg_price"])
+            card["ck_price"] = None if card["ck_price"] is None else str(card["ck_price"])
+        return cards
+
     def _api_deck_cards(self, deck_id: int, params: dict):
         conn = self._get_conn()
         from mtg_collector.db.models import DeckRepository
         repo = DeckRepository(conn)
         zone = params.get("zone", [None])[0]
-        cards = repo.get_cards_for_state(deck_id, zone=zone)
-
-        for card in cards:
-            card["layout"] = card.get("layout") or "normal"
-            card["tcg_price"] = None
-            card["ck_price"] = None
-            card["ck_url"] = ""
-
-        # Bulk price lookup
-        if cards:
-            price_keys = []
-            for card in cards:
-                finishes = json.loads(card["finishes"]) if card.get("finishes") else []
-                price_type = "normal" if "nonfoil" in finishes else "foil"
-                sc = card["set_code"].lower()
-                cn = card["collector_number"]
-                price_keys.append((sc, cn, price_type))
-
-            unique_cards = list({(sc, cn) for sc, cn, _ in price_keys})
-            ph = ",".join("(?,?)" for _ in unique_cards)
-            params_q = [v for pair in unique_cards for v in pair]
-            price_map: dict = {}
-            for r in conn.execute(
-                f"SELECT set_code, collector_number, source, price_type, price "
-                f"FROM latest_prices WHERE (set_code, collector_number) IN ({ph})",
-                params_q,
-            ).fetchall():
-                price_map[(r["set_code"], r["collector_number"], r["source"], r["price_type"])] = str(r["price"])
-
-            # Bulk CK URL lookup
-            ck_url_map: dict = {}
-            if self.generator:
-                pids = [card["printing_id"] for card in cards]
-                ph2 = ",".join("?" for _ in pids)
-                for r in conn.execute(
-                    f"SELECT printing_id, ck_url, ck_url_foil FROM mtgjson_printings WHERE printing_id IN ({ph2})",
-                    pids,
-                ).fetchall():
-                    ck_url_map[r["printing_id"]] = (r["ck_url"] or "", r["ck_url_foil"] or "")
-
-            for i, card in enumerate(cards):
-                sc, cn, pt = price_keys[i]
-                card["ck_price"] = price_map.get((sc, cn, "cardkingdom", f"buylist_{pt}")) or price_map.get((sc, cn, "cardkingdom", pt))
-                card["tcg_price"] = price_map.get((sc, cn, "tcgplayer", pt))
-                foil = card["finish"] in ("foil", "etched")
-                urls = ck_url_map.get(card["printing_id"], ("", ""))
-                card["ck_url"] = (urls[1] if foil else urls[0]) or urls[0]
-
+        cards = self._finish_deck_cards(repo.get_cards_for_state(deck_id, zone=zone))
         conn.close()
         self._send_json(cards)
 
@@ -6488,7 +6436,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if row:
                 commander = dict(row)
         # Get deck cards grouped by type, collapsed by printing_id
-        cards = repo.get_cards_for_state(deck_id)
+        cards = self._finish_deck_cards(repo.get_cards_for_state(deck_id))
         groups = {}
         type_order = ["Creatures", "Planeswalkers", "Instants", "Sorceries",
                       "Enchantments", "Artifacts", "Lands", "Other"]

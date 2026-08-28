@@ -6,7 +6,22 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from mtg_collector.db.collector_number import number_sortable
+from mtg_collector.db.enrich import (
+    COPY_IS_FOIL,
+    PRINTING_IS_FOIL,
+    enrich_columns,
+    enrich_joins,
+)
 from mtg_collector.utils import now_iso, parse_json_array, to_json_array
+
+# Prices and the Card Kingdom link, rendered by the deck page beside the
+# collection page's copies of the same cards.  Laid out to sit inside the
+# queries below; see mtg_collector/db/enrich.py for the two finish rules.
+_JOIN_SEP = "\n            "
+_COPY_ENRICH_JOINS = _JOIN_SEP.join(enrich_joins(COPY_IS_FOIL))
+_COPY_ENRICH_COLUMNS = enrich_columns(COPY_IS_FOIL)
+_PRINTING_ENRICH_JOINS = _JOIN_SEP.join(enrich_joins(PRINTING_IS_FOIL))
+_PRINTING_ENRICH_COLUMNS = enrich_columns(PRINTING_IS_FOIL)
 
 
 @dataclass
@@ -2149,7 +2164,11 @@ class DeckRepository:
         return dict(row) if row else None
 
     def get_cards(self, deck_id: int, zone: Optional[str] = None) -> List[Dict[str, Any]]:
-        query = """
+        # A constructed deck holds physical copies, so it prices each one in
+        # the finish that copy was recorded in -- the same rule
+        # /api/collection uses, which is why the two pages agree.  A row whose
+        # collection entry is gone has a NULL finish and prices as nonfoil.
+        query = f"""
             SELECT c.id, dc.printing_id, c.finish, c.condition, c.language,
                    c.purchase_price, c.acquired_at, dc.zone AS deck_zone,
                    dc.quantity,
@@ -2159,12 +2178,14 @@ class DeckRepository:
                    card.name, card.type_line, card.mana_cost, card.cmc,
                    card.colors, card.color_identity, p.oracle_id,
                    p.layout,
-                   s.set_name
+                   s.set_name,
+                   {_COPY_ENRICH_COLUMNS}
             FROM deck_cards dc
             JOIN printings p ON dc.printing_id = p.printing_id
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
             LEFT JOIN collection c ON dc.collection_id = c.id
+            {_COPY_ENRICH_JOINS}
             WHERE dc.deck_id = ?
         """
         params: list = [deck_id]
@@ -2301,7 +2322,10 @@ class DeckRepository:
         if not row or row["state_id"] == DECK_STATE_CONSTRUCTED:
             return self.get_cards(deck_id, zone=zone)
 
-        query = """
+        # An expected card is a printing you may not hold, so there is no copy
+        # to take a finish from and the printing is priced instead: nonfoil if
+        # it was printed that way, foil if it only exists foil or etched.
+        query = f"""
             SELECT NULL as id, e.printing_id, 'nonfoil' as finish,
                    NULL as condition, NULL as language,
                    NULL as purchase_price, NULL as acquired_at,
@@ -2312,11 +2336,13 @@ class DeckRepository:
                    card.name, card.type_line, card.mana_cost, card.cmc,
                    card.colors, card.color_identity, p.oracle_id,
                    p.layout,
-                   s.set_name
+                   s.set_name,
+                   {_PRINTING_ENRICH_COLUMNS}
             FROM deck_expected_cards e
             JOIN printings p ON e.printing_id = p.printing_id
             JOIN cards card ON p.oracle_id = card.oracle_id
             JOIN sets s ON p.set_code = s.set_code
+            {_PRINTING_ENRICH_JOINS}
             WHERE e.deck_id = ?
         """
         params: list = [deck_id]

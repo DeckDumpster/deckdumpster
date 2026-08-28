@@ -276,6 +276,32 @@ id, and the last day stored. `mtg data fetch-prices` rebuilds after each import;
 rebuilds on the request that first finds the table stale, because otherwise one added card
 would leave the chart on the slow route until the next 06:00 timer run.
 
+### Price and Card Kingdom link
+
+Every list of cards this app renders carries the same three derived values — `ck_price`,
+`tcg_price`, `ck_url` — and `mtg_collector/db/enrich.py` is the one definition of them.
+They are **LEFT JOINs on the query that needs them, never a second pass**: the passes they
+replaced built `IN (...)` clauses sized by the result, which on /api/collection reached
+225,618 bound parameters against a `SQLITE_MAX_VARIABLE_NUMBER` of 250,000 (de-ckq). Every
+join binds zero parameters and matches at most one row. `tests/test_collection_enrichment.py`
+and `tests/test_deck_enrichment.py` each assert that no statement's parameter count grows
+with the result, so a reintroduced "bulk lookup" fails there.
+
+**Which finish to price in is the caller's fact**, which is why `enrich_joins` /
+`enrich_columns` take a SQL predicate for it rather than baking one in. A list of *copies*
+passes `COPY_IS_FOIL` (`c.finish`, etched priced as foil) — /api/collection, and a
+constructed deck, which is why the deck page and the collection page show one number for
+one card. A list of *printings* passes `PRINTING_IS_FOIL` (the printing's `finishes`) —
+/api/set-browse, and an idea/ready deck's expected list, because a card you may not hold
+has no copy to take a finish from. Passing the wrong one is not a formatting difference: it
+shows a foil card at the nonfoil price, which is what the deck page did until de-4qy.
+
+`printing_id` is **not** unique in `mtgjson_printings`, so the `ck_url` join resolves to a
+uuid first, the way `PackGenerator.get_ck_url()` does. That is what makes the collection
+list, the deck page and the card detail page link one double-faced card to one product.
+The query must alias `printings` as `p`, and `collection` as `c` when it uses
+`COPY_IS_FOIL`.
+
 ### Binder browse (`/api/set-browse/:set_code`)
 
 One set laid out as a binder page. `mtg_collector/db/set_browse.py` holds the query;
@@ -293,9 +319,11 @@ leaves `printing_id` as the only join term, so the plan does not depend on stati
 are not there — 44 ms with none at all. Do not "simplify" it back to a direct join.
 
 **Prices key on the printing's `finishes`, not on a copy's `c.finish`** the way
-`_ENRICH_JOINS` does. The pocket this view exists to show you is the one you have *not*
-filled, and it has no copy to take a finish from; a printing that exists in nonfoil is
-priced in nonfoil, a foil-only or etched-only one in foil.
+/api/collection does: this view passes `PRINTING_IS_FOIL` to the shared enrichment, that
+one passes `COPY_IS_FOIL` (see "Price and Card Kingdom link"). The pocket this view exists
+to show you is the one you have *not* filled, and it has no copy to take a finish from; a
+printing that exists in nonfoil is priced in nonfoil, a foil-only or etched-only one in
+foil.
 
 **Sections** are `base` | `extended` | `promo`, decided by `sets.base_set_size` and nothing
 else (see "Set sizes"). With `base_set_size` NULL the set is one
