@@ -77,6 +77,35 @@ bash deploy/teardown.sh feature-xyz         # keeps data volume
 bash deploy/teardown.sh feature-xyz --purge  # removes everything
 ```
 
+## The HTTPS host port is sticky
+
+`setup.sh <name> <port>` pins the host side of the HTTPS publish
+(`PublishPort=<port>:8081`); omitting the port renders `PublishPort=:8081` and
+Podman picks a free one at container start. **Which of the two an instance is
+does not change on its own.** The port given is recorded as `MTGC_PUBLISH_PORT`
+in the instance env file and re-applied when omitted, exactly as `--http-port`
+and `--tls-certs` are, so the missing-unit path in `deploy.sh` — which re-runs
+`setup.sh <name>` with nothing but the name — brings the instance back on the
+port it was created on.
+
+Without the record that move was **silent** (de-f2d): `deploy.sh` discovers the
+port from `podman port` and health-checks whatever it finds, so a `prod` created
+as `setup.sh prod 8081` would come back on a random high port and still report
+healthy, while every bookmark, reverse-proxy target, tunnel route and firewall
+rule pinned to 8081 broke.
+
+An auto-assigned instance records nothing and keeps floating — auto-assign is the
+absence of a port, not a port, and pinning one an instance never asked for would
+be the same bug in the other direction. A later explicit port overrides the
+record; to hand a pinned instance back to auto-assign, delete the line and
+re-render:
+
+```bash
+sed -i '/^MTGC_PUBLISH_PORT=/d' ~/.config/mtgc/<name>.env
+bash deploy/setup.sh <name>
+systemctl --user daemon-reload
+```
+
 ## Container storage: keeping non-prod off the prod disk
 
 Rootless Podman keeps images, layers and volumes under `$HOME`. On the box that

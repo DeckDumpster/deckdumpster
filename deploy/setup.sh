@@ -12,8 +12,8 @@
 #   bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]
 #
 # Examples:
-#   bash deploy/setup.sh prod 8081        # explicit port
-#   bash deploy/setup.sh feature-xyz      # auto-assigns next free port
+#   bash deploy/setup.sh prod 8081        # pin the host port (recorded; sticky)
+#   bash deploy/setup.sh feature-xyz      # no port: Podman assigns one at start
 #   bash deploy/setup.sh test --init      # build + initialize data volume with demo data
 #   bash deploy/setup.sh ui-test --test   # fast setup from pre-built fixture (~seconds)
 #   bash deploy/setup.sh prod 8081 --http-port 8083   # also publish plain HTTP on 127.0.0.1:8083
@@ -28,11 +28,12 @@
 # ever reads them — point MTGC_TLS_CERT / MTGC_TLS_KEY in the instance env file
 # at paths under /certs to use them. Omit it and the generated unit is unchanged.
 #
-# Both flags are STICKY: they are recorded in the instance env file as
-# MTGC_HTTP_PUBLISH_PORT / MTGC_TLS_CERTS_DIR and re-applied when the flag is
-# omitted, so deploy.sh regenerating a missing Quadlet reproduces the unit
-# rather than silently dropping the publish and the mount. An explicit flag
-# overrides the record; delete the line to drop the setting.
+# Both flags are STICKY, and so is an explicitly given [port]: they are recorded
+# in the instance env file as MTGC_HTTP_PUBLISH_PORT / MTGC_TLS_CERTS_DIR /
+# MTGC_PUBLISH_PORT and re-applied when omitted, so deploy.sh regenerating a
+# missing Quadlet reproduces the unit rather than silently dropping the publish,
+# the mount, or the pinned HTTPS host port. An explicit value overrides the
+# record; delete the line to drop the setting.
 #
 # Container storage: rootless Podman's default store lives under $HOME, which on
 # the deployment box is the same disk prod runs from. Set MTGC_STORE_ROOT=<dir>
@@ -112,12 +113,13 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # --- Recorded render inputs ---
 #
 # deploy.sh regenerates a missing Quadlet by re-running this script with the
-# instance name and nothing else. --http-port and --tls-certs are inputs to the
-# render, so unless they are recorded the regenerated unit silently loses both
-# the plaintext publish and the cert mount. Record them in the instance env file
-# — the same place MTGC_TLS_CERT / MTGC_TLS_KEY already live — and fall back to
-# the recorded value when the flag is omitted. An explicit flag always wins; to
-# drop a setting, delete its line from the env file and re-run.
+# instance name and nothing else. --http-port, --tls-certs and the positional
+# port are inputs to the render, so unless they are recorded the regenerated
+# unit silently loses the plaintext publish, the cert mount and the pinned HTTPS
+# host port. Record them in the instance env file — the same place
+# MTGC_TLS_CERT / MTGC_TLS_KEY already live — and fall back to the recorded
+# value when the argument is omitted. An explicit value always wins; to drop a
+# setting, delete its line from the env file and re-run.
 
 recorded() {
     # Last assignment wins, matching how systemd reads an EnvironmentFile.
@@ -137,11 +139,19 @@ fi
 
 # --- Port assignment ---
 
+# The explicit HTTPS host port is recorded for the same reason the two flags are
+# (de-f2d). Without it, regeneration renders PublishPort=:8081 and the instance
+# comes back on a random high port — silently, because deploy.sh's health check
+# discovers the port from `podman port` and so still passes, while every
+# bookmark, reverse proxy, tunnel route and firewall rule pinned to the old port
+# breaks. PORT=0 is the auto-assign sentinel, never a recorded value: an
+# instance created without a port records no line and keeps rendering ":8081".
 if [ ${#POSITIONAL[@]} -ge 2 ]; then
     PORT="${POSITIONAL[1]}"
 else
-    # Let the OS assign an available port at container start
-    PORT=0
+    PORT="$(recorded MTGC_PUBLISH_PORT)"
+    # Nothing recorded — let the OS assign an available port at container start.
+    [ -n "$PORT" ] || PORT=0
 fi
 
 echo "==> MTGC deployment setup"
@@ -256,6 +266,11 @@ record() {
 
 record MTGC_HTTP_PUBLISH_PORT "$HTTP_PORT"
 record MTGC_TLS_CERTS_DIR "$TLS_CERTS"
+if [ "$PORT" = "0" ]; then
+    record MTGC_PUBLISH_PORT ""
+else
+    record MTGC_PUBLISH_PORT "$PORT"
+fi
 
 # --- Host-wide container-store config (de-3mo) ---
 #
