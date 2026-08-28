@@ -19,6 +19,6 @@ notes: >
   "Without a page reload" is asserted, not assumed: a sentinel is set on window
   before the click and read back after, since a reload would clear it.
   The meter must NOT move. Both meters count printings, never copies, and the
-  pocket was already filled. The Set meter is hidden here because the fixture
-  records no base_set_size.
+  pocket was already filled. The Set meter is hidden here because spg is the
+  fixture's one cached set with no base_set_size.
   Per-test DB restore puts the extra copy back, so this leaves nothing behind.

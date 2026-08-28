@@ -5,14 +5,23 @@ involves:
   - "span.set-meter-bar > span.set-meter-fill, width set as a percentage"
   - "span.set-meter-count — 'owned / total', e.g. '12 / 771'"
 fixture_data:
-  base_set_size: "NULL for all 18 cached sets, so total_base is NULL and no 'Set' meter is drawn"
-  meters_expected: "18 — exactly one 'All' meter per set, never two"
-  fdn: "Foundations owns 12 of 771 printings"
+  base_set_size: "stored for 17 of the 18 cached sets; NULL only for spg, whose MTGJSON baseSetSize is 0"
+  meters_expected: "35 — two per set with a boundary, one for spg"
+  fdn: "Foundations owns 12 printings; 291 of its 771 are base set"
+  spg: "Special Guests owns 1 of 165 printings and has no base boundary"
 notes: >
   The base meter always renders before the All meter inside the same
   div.set-meters, so '.set-meter + .set-meter' counts exactly the tiles
-  showing both. With the fixture's sizes all NULL that count must be 0 while
-  .set-meter itself is 18 — one meter per set, none of them a 0/0 bar.
-  1. Assert 18 a.set-tile and 18 div.set-meter. 2. Assert 0 for
+  showing both — 17, against 18 tiles and 35 meters. The one tile without a
+  pair is spg, and its single meter must be the 'All' one, never a 0/0 bar.
+  1. Assert 18 a.set-tile and 35 div.set-meter. 2. Assert 17 for
   '.set-meter + .set-meter'. 3. Assert 'NaN' appears nowhere on the page.
-  4. Assert Foundations' meter reads '12 / 771' and its fill element exists.
+  4. Read Foundations' two meters as (label, count) pairs — ('Set', '12 / 291')
+  then ('All', '12 / 771'), so the base fraction is demonstrably a fraction of
+  the base set and not of the whole printing list — and assert its fill element
+  exists. 5. Read spg's meters the same way and assert the single
+  ('All', '1 / 165').
+  Read the .set-meter-label and .set-meter-count spans, not the meter's
+  innerText: innerText inserts a line break only where the tile happens to
+  wrap, so the same markup comes back as 'Set 12 / 291' on one tile and
+  'All1 / 165' on another.
