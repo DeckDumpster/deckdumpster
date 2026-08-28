@@ -350,22 +350,23 @@ Every body leaves through `CrackPackHandler._respond`, and the caching rules
 follow from **what the response is**, not from a string the caller passed.
 `mtg_collector/http_cache.py` holds the decisions as pure functions.
 
-Three policies, and there is no fourth: `CACHE_DOCUMENT` (`public, no-cache`)
-for HTML and everything under `/static/*`, `CACHE_IMMUTABLE` for the
-ingest-image path (whose headers are unchanged, at `public, max-age=86400,
-immutable`), `CACHE_API` (`private, no-cache`) for JSON. SSE sets its own
-headers and is untouched.
+Four policies, and there is no fifth: `CACHE_DOCUMENT` (`public, no-cache`) for
+HTML and for any `/static/*` URL carrying no digest, `CACHE_HASHED_ASSET`
+(`public, max-age=31536000, immutable`) for a content-addressed asset URL,
+`CACHE_IMMUTABLE` for the ingest-image path (whose headers are unchanged, at
+`public, max-age=86400, immutable`), `CACHE_API` (`private, no-cache`) for JSON.
+SSE sets its own headers and is untouched.
 
-**`immutable` is a promise about the URL, not about the bytes**, and no URL here
-is content-addressed. The ingest-image path rests on a convention — the upload
-handler refuses a name that already exists — which is why its window stays a day
-and not a year; a hash in the URL is what would earn more. `/static/app.css`
-rests on nothing at all: it is rewritten by every deploy, so a long max-age on
-it is the same bug the pages had. Every HTML page was served
-`public, max-age=86400` with no validator, and because `magic.dumpster.cards`
-reaches this process through a Cloudflare tunnel, the edge held each document
-for a day: six deploys landed on 2026-08-25 and the public site showed none of
-them. A hard refresh does not help — it defeats the browser cache, not the edge.
+**`immutable` is a promise about the URL, not about the bytes.** The ingest-image
+path rests on a convention — the upload handler refuses a name that already
+exists — which is why its window stays a day and not a year; a hash in the URL is
+what would earn more. A bare `/static/app.css` rests on nothing at all: it is
+rewritten by every deploy, so a long max-age on it is the same bug the pages had.
+Every HTML page was served `public, max-age=86400` with no validator, and because
+`magic.dumpster.cards` reaches this process through a Cloudflare tunnel, the edge
+held each document for a day: six deploys landed on 2026-08-25 and the public
+site showed none of them. A hard refresh does not help — it defeats the browser
+cache, not the edge.
 
 **The ETag varies with the encoding** — `"<h>"` identity, `"<h>-gzip"` — plus
 `Vary: Accept-Encoding`. One tag for two representations is how a cache serves
@@ -386,6 +387,33 @@ requires; only a well-formed range outside the representation is a 416.
 **Verifying this needs the CDN.** `deploy/cdn-check.sh` compares the edge's ETag
 with the origin's, because every localhost check passed on the evening the
 public site was a day stale. See `deploy/README.md` → "CDN deploy check".
+
+### Content-addressed assets (`/static/shared.<digest>.css`)
+
+`mtg_collector/static_assets.py` is what puts a hash in the URL, and it is the
+only reason any asset may be `immutable`. Pages keep naming their assets by the
+path on disk; **the digest is minted as the document goes out**, so there is no
+build step, no manifest to regenerate, and an edit is live on the next page load.
+`deck_builder.html` names 11 subresources — that was 11 conditional round trips
+per warm load, and it is now none.
+
+- **The digest goes in the filename, never in a path segment.**
+  `vendor/keyrune/keyrune.min.css` asks for `url('fonts/keyrune.woff2')`, which
+  resolves against the directory it was served from. Hashing a directory would
+  404 every glyph — the same break `tests/test_vendored_fonts.py` exists to
+  prevent, arrived at from the other side.
+- **HTML is never content-addressed.** A document's bytes on the wire change
+  whenever an asset it names changes, while its own file does not; a digest taken
+  from that file would be a promise about bytes nobody sent. Documents stay
+  `no-cache` — a document being re-fetched is what makes a deploy visible at all.
+- **A stale digest is a 404, never today's bytes.** Serving current content under
+  a URL that asked for older content is how a client ends up holding the wrong
+  thing under a promise it cannot revalidate away. The only window is a page
+  whose HTML predates the deploy, and that HTML is `no-cache`.
+- **An unhashed `/static/*` URL still works and still revalidates**, exactly as
+  de-dai left it. An asset opts *into* immutability by existing on disk, so a
+  reference naming no file stays the visible 404 it always was, and the two JS
+  files that build `/static/card_back.jpeg` in a string keep today's behaviour.
 
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
