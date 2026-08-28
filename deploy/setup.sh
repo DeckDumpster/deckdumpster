@@ -44,6 +44,10 @@
 # script reads it for every instance EXCEPT prod — see "Container store" below
 # for why the exception is by name rather than by not reading the file at all.
 #
+# Memory: every instance EXCEPT prod is generated with a MemoryMax ceiling, so
+# an ephemeral instance cannot take the box (and with it the CI runner) down.
+# Prod is excluded by name — see "Memory ceiling" below.
+#
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
 #   with your API key). Falls back to .env.example (needs manual editing).
@@ -321,8 +325,39 @@ else
     PORT_MAPPING="${PORT}:8081"
 fi
 
+# --- Memory ceiling (de-4u8g) ---
+#
+# EVERY INSTANCE EXCEPT prod GETS ONE. On 2026-08-27 the CI runner was
+# OOM-killed with ~10 polecats in flight; it does not auto-restart, so CI was
+# dead for ~24 h while 24 PRs queued checks that never ran and main froze. The
+# runner unit is being hardened separately, and that limit does not reach these
+# containers at all: each instance is its own mtgc-<instance>.service with its
+# own cgroup, so a ceiling on the runner bounds everything except the processes
+# actually holding the memory.
+#
+# PROD IS EXCLUDED BY NAME, the same way it is excluded from store.env
+# (de-oqu) — stated positively, as "prod never gets a ceiling", rather than as a
+# guard somewhere that could stop matching. Prod is the one instance whose
+# working set is not something this repo gets to guess at, and it is the one
+# instance where an OOM kill is an outage rather than a failed test.
+#
+# MemoryMax and nothing else. It is the bound; the kernel reclaims page cache
+# before it OOM-kills, so a MemoryHigh beside it would be a second number to
+# keep in sync that buys throttling instead of a kill — and a CI container that
+# has gone slow is harder to read than one that has died.
+#
+# 2G is ~8x measured: a --test instance peaked at 257 MB (cgroup memory.peak)
+# across the whole 158-test integration suite, which is the heaviest thing CI
+# points at one. The number is deliberately not a knob — one constant here, read
+# on the next setup.sh run, and a one-off needs a `systemctl --user edit` drop-in
+# rather than a flag every caller has to remember.
+MEMORY_MAX=""
+if [ "$INSTANCE" != "prod" ]; then
+    MEMORY_MAX="2G"
+fi
+
 bash "$REPO_DIR/deploy/render-quadlet.sh" \
-    "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" \
+    "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" "$MEMORY_MAX" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
 
 # systemd does not inherit our PATH, so the shim that scopes every podman call

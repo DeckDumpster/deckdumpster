@@ -709,6 +709,51 @@ first things to reach for. Nothing prunes automatically and nothing should: an
 instance holding a volume may be someone's live rig, and deleting it is a
 judgement a timer cannot make. The alert exists so a person makes it.
 
+## Memory ceiling on ephemeral instances
+
+> A limit on the CI runner does not reach the containers doing the allocating.
+
+On 2026-08-27 the DeckDumpster CI runner was OOM-killed with roughly ten
+polecats in flight. It does not auto-restart, so CI was dead for about 24 hours:
+24 PRs queued checks that never ran, `main` froze, and the pipeline looked busy
+while landing nothing (de-4u8g).
+
+Hardening the runner unit does not cover this. Every instance is its own
+`mtgc-<instance>.service` with its own cgroup, generated from
+`deploy/mtgc.container` — a `MemoryMax` on the runner bounds the runner and
+nothing it started. So the ceiling goes on the instances:
+
+```ini
+[Service]
+MemoryMax=2G
+```
+
+**Prod is excluded by name**, the same way it is excluded from `store.env`
+(see [Container
+storage](#container-storage-keeping-non-prod-off-the-prod-disk)) and stated the
+same way — *prod never gets a ceiling* — rather than as a guard that could stop
+matching. Prod's working set is not something this repo gets to guess at, and an
+OOM kill there is an outage rather than a failed test. Prod's generated unit
+carries **no** `Memory*` directive at all, not a generous one.
+
+`MemoryMax` and nothing else. It is the bound, and the kernel reclaims page
+cache before it OOM-kills, so a `MemoryHigh` beside it would be a second number
+to keep in sync that buys throttling rather than a kill — and a CI container
+that has gone slow is harder to read than one that has died.
+
+2 G is about 8x measured. A `--test` instance peaked at **257 MB**
+(cgroup `memory.peak`) across the whole 158-test integration suite, which is the
+heaviest thing CI points at one; it idles around 107 MB. That leaves real
+headroom while making concurrent instances additive against a ceiling instead of
+against the box's 15 G of RAM. There is **no flag and no env knob**:
+the value is a constant in `setup.sh`, so a box that needs a different one edits
+it there and every instance picks it up on its next `setup.sh` run. A ceiling
+needed only for one run is a `systemctl --user edit mtgc-<name>` drop-in.
+
+The ceiling is derived from the instance name, not recorded in the env file the
+way `--http-port` and `--tls-certs` are, so the regeneration `deploy.sh`
+performs cannot drop it and there is nothing to go stale.
+
 ## CDN deploy check
 
 > A deploy check that does not traverse the CDN is not a deploy check.
@@ -782,7 +827,7 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 |---|---|
 | `seed.sh [--force]` | Create reusable seed data volume. Run once, all future `--init` clones from it |
 | `setup.sh <name> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]` | Create instance. `--test` uses pre-built fixture (fast, no network). `--init` clones seed volume. Port auto-assigned if omitted. `--http-port` adds a loopback-only plaintext publish — see [Cloudflare Tunnel origin](#cloudflare-tunnel-origin). `--tls-certs` mounts a host cert directory read-only at `/certs` — see [Trusted certificates](#trusted-certificates) |
-| `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
+| `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> <memory-max> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing. `<memory-max>` renders `MemoryMax=` in `[Service]`; empty for prod — see [Memory ceiling on ephemeral instances](#memory-ceiling-on-ephemeral-instances) |
 | `deploy.sh <name>` | Rebuild image and restart one instance. Regenerates the Quadlet via `setup.sh` if it has gone missing — `--http-port` / `--tls-certs` are re-applied from the env file, so the unit is reproduced rather than downgraded |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
