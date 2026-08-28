@@ -4,7 +4,7 @@
 #   pages: [sheets]
 
 description: >
-  With a set selected, I can see the first product auto-selected and sheets
-  rendered. Clicking a different product pill highlights it red, updates
-  the URL hash to include the new product, and reloads the sheet content
-  with different sheet names.
+  With a set loaded, clicking a different product pill reloads the sheet
+  content with that product's sheet names, updates the sheet count, and
+  rewrites the URL hash to name the product I picked. Clicking back to the
+  first product returns its sheets, so the pills switch the view both ways.

@@ -17,6 +17,7 @@ AutoUpdate=local
 Restart=on-failure
 RestartSec=10
 TimeoutStartSec=120
+{{MEMORY_LIMIT}}
 
 [Install]
 WantedBy=default.target

@@ -27,6 +27,12 @@
 #   weekly/  — last 8 (~2 months)
 #   monthly/ — last 12 (~1 year)
 #
+# Free space:
+#   Peak usage is the sqlite snapshot (~DB size) plus the tarball (~30% of DB).
+#   A run that cannot fit first clears any stale staging left by a killed run,
+#   then deletes retained local dailies that S3 already holds — oldest first,
+#   only as many as it needs, and never at all without MTGC_BACKUP_S3_BUCKET.
+#
 # S3 off-site sync (optional):
 #   Set MTGC_BACKUP_S3_BUCKET to enable. Requires `aws` CLI configured.
 #   Skipped silently if unset (local-only mode works out of the box).
@@ -95,27 +101,92 @@ fi
 
 # --- Pre-flight disk-space check ---
 #
-# Need room for: (a) the host-side sqlite snapshot (~DB size), and (b) the
-# compressed tarball (~half of DB size in practice). Bail loudly rather than
-# half-succeed and leave stale staging behind.
+# Peak usage is the host-side sqlite snapshot (~DB size) plus the tarball
+# (~30% of DB for this dataset). The image trees are archived straight from the
+# volume mount, so they cost nothing here beyond their share of the tarball.
+#
+# That bar is high: 1.4× an 11 GB database is ~15% of the single 98 GB root
+# volume prod shares with its own data volume, the retained tarballs and
+# Podman's store. And a night that cannot clear it is lost for good — `aws s3
+# sync` mirrors a directory, so a tarball that was never written can never be
+# backfilled. 42 of the 175 nights from 2026-03-05 went exactly that way, every
+# one of them for want of free space (de-o4e).
+#
+# So before refusing the night, reclaim the two things on that disk that belong
+# to this job: a previous run's abandoned staging copy, and retained local
+# tarballs that S3 is confirmed to already hold.
 
 DB_BYTES=$(stat -c%s "$SRC_DB")
 # Peak usage during backup ≈ snapshot copy + compressed tarball.
-# Compressed tarball runs ~30% of DB size for this dataset (mostly IDs/numbers).
-# Budget 1.4× DB + 200 MB headroom for images and gzip overhead.
+# Compressed tarball runs ~30% of DB size for this dataset (mostly IDs/numbers);
+# budget 40% of it, plus 200 MB for gzip overhead.
 NEEDED_BYTES=$((DB_BYTES + (DB_BYTES * 2 / 5) + 200 * 1024 * 1024))
-AVAIL_BYTES=$(df --output=avail -B1 "$BACKUP_DIR" | tail -1)
+
+# Every measurement of the disk goes through here and sets AVAIL_BYTES. A `df`
+# that cannot answer ends the run: "we could not ask" is not "there is room",
+# the same rule diskcheck.sh applies. Without this the reading is empty, the
+# comparison below is skipped rather than failed, and the run proceeds into a
+# disk it never measured.
+check_avail() {
+    AVAIL_BYTES="$(df --output=avail -B1 "$BACKUP_DIR" | tail -1 || true)"
+    case "$AVAIL_BYTES" in
+        ''|*[!0-9]*)
+            echo "ERROR: could not measure free space at $BACKUP_DIR — df said '${AVAIL_BYTES}'."
+            exit 1
+            ;;
+    esac
+}
+
+# A run killed mid-snapshot — out of disk, or the box going down — leaves up to
+# a whole database in staging with its EXIT trap never fired. Clear it before
+# measuring, or the next run counts its own litter as space it cannot have.
+rm -rf "$STAGING_DIR"
+
+# Retained local dailies are a fast-restore convenience; a missing night is
+# permanent. So spend them, oldest first, until the run fits — but only the ones
+# S3 answers for at the same size, and never without a bucket configured,
+# because then the local copy is the only copy there is.
+reclaim_local_dailies() {
+    [ -n "${MTGC_BACKUP_S3_BUCKET:-}" ] || return 0
+    command -v aws &>/dev/null || return 0
+
+    local tarball name listing remote_size local_size
+    while IFS= read -r tarball; do
+        check_avail
+        [ "$AVAIL_BYTES" -lt "$NEEDED_BYTES" ] || break
+        name="$(basename "$tarball")"
+        local_size="$(stat -c%s "$tarball")"
+        listing="$(aws s3 ls "s3://${MTGC_BACKUP_S3_BUCKET}/mtgc-${INSTANCE}/daily/${name}" || true)"
+        # `aws s3 ls <full key>` answers "<date> <time> <size> <name>"; take the
+        # size off the line whose last field names this tarball, however much of
+        # the key the CLI chose to echo back.
+        remote_size="$(printf '%s\n' "$listing" \
+            | awk -v n="$name" '{ f = $NF; sub(/^.*\//, "", f); if (f == n) { print $(NF - 1); exit } }')"
+        if [ "$remote_size" != "$local_size" ]; then
+            echo "    Keeping ${name} — S3 has ${remote_size:-no such object}, local is ${local_size} bytes."
+            continue
+        fi
+        echo "    Reclaiming ${name} ($((local_size / 1024 / 1024)) MB) — S3 holds it."
+        rm -f "$tarball"
+    done < <(find "$DAILY_DIR" -maxdepth 1 -name 'mtgc-*.tar.gz' | sort)
+}
+
+reclaim_local_dailies
+
+check_avail
 if [ "$AVAIL_BYTES" -lt "$NEEDED_BYTES" ]; then
     AVAIL_MB=$((AVAIL_BYTES / 1024 / 1024))
     NEEDED_MB=$((NEEDED_BYTES / 1024 / 1024))
-    echo "ERROR: only ${AVAIL_MB} MB free at $BACKUP_DIR, need ~${NEEDED_MB} MB."
-    echo "       Free up space (e.g. 'podman image prune -af', prune old backups) and retry."
+    DB_MB=$((DB_BYTES / 1024 / 1024))
+    echo "ERROR: only ${AVAIL_MB} MB free at $BACKUP_DIR, need ~${NEEDED_MB} MB for a ${DB_MB} MB database."
+    echo "       Stale staging and every local backup S3 already holds were reclaimed first."
+    echo "       Free up space (e.g. 'podman image prune -af', point MTGC_BACKUP_DIR at"
+    echo "       another filesystem) and retry."
     exit 1
 fi
 
 # --- Create staging area ---
 
-rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 
@@ -132,23 +203,32 @@ dst.close()
 src.close()
 PY
 
-# --- Copy images directly from the volume mount ---
+# --- Create tarball ---
+#
+# The images are read straight from the volume mount rather than copied into
+# staging first. On prod that is ~1 GB the run no longer has to have free —
+# against a budget that only ever set 200 MB aside for them, so the copy could
+# take the run past a check it had already passed. Reading them live is no more
+# exposed than the copy was: `cp -a` fails just the same on a file deleted from
+# under it (`/api/ingest2` can delete one), and neither sees a file created
+# after the directory was listed.
+#
+# restore.sh needs both directories present in the archive, so an instance that
+# has never had one contributes an empty directory from staging.
 
+TAR_MEMBERS=(-C "$STAGING_DIR" collection.sqlite)
 for IMG_DIR in source_images ingest_images; do
-    echo "==> Copying ${IMG_DIR}..."
     if [ -d "${VOLUME_MOUNT}/${IMG_DIR}" ]; then
-        cp -a "${VOLUME_MOUNT}/${IMG_DIR}" "$STAGING_DIR/${IMG_DIR}"
+        TAR_MEMBERS+=(-C "$VOLUME_MOUNT" "$IMG_DIR")
     else
-        echo "    (no ${IMG_DIR} directory — skipping)"
+        echo "    (no ${IMG_DIR} directory — archiving an empty one)"
         mkdir -p "$STAGING_DIR/${IMG_DIR}"
+        TAR_MEMBERS+=(-C "$STAGING_DIR" "$IMG_DIR")
     fi
 done
 
-# --- Create tarball ---
-
 echo "==> Creating tarball: $TARBALL_NAME"
-tar czf "$DAILY_DIR/$TARBALL_NAME" -C "$STAGING_DIR" \
-    collection.sqlite source_images ingest_images
+tar czf "$DAILY_DIR/$TARBALL_NAME" "${TAR_MEMBERS[@]}"
 
 TARBALL_SIZE=$(du -h "$DAILY_DIR/$TARBALL_NAME" | cut -f1)
 echo "    Size: $TARBALL_SIZE"

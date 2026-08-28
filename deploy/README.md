@@ -77,6 +77,35 @@ bash deploy/teardown.sh feature-xyz         # keeps data volume
 bash deploy/teardown.sh feature-xyz --purge  # removes everything
 ```
 
+## The HTTPS host port is sticky
+
+`setup.sh <name> <port>` pins the host side of the HTTPS publish
+(`PublishPort=<port>:8081`); omitting the port renders `PublishPort=:8081` and
+Podman picks a free one at container start. **Which of the two an instance is
+does not change on its own.** The port given is recorded as `MTGC_PUBLISH_PORT`
+in the instance env file and re-applied when omitted, exactly as `--http-port`
+and `--tls-certs` are, so the missing-unit path in `deploy.sh` — which re-runs
+`setup.sh <name>` with nothing but the name — brings the instance back on the
+port it was created on.
+
+Without the record that move was **silent** (de-f2d): `deploy.sh` discovers the
+port from `podman port` and health-checks whatever it finds, so a `prod` created
+as `setup.sh prod 8081` would come back on a random high port and still report
+healthy, while every bookmark, reverse-proxy target, tunnel route and firewall
+rule pinned to 8081 broke.
+
+An auto-assigned instance records nothing and keeps floating — auto-assign is the
+absence of a port, not a port, and pinning one an instance never asked for would
+be the same bug in the other direction. A later explicit port overrides the
+record; to hand a pinned instance back to auto-assign, delete the line and
+re-render:
+
+```bash
+sed -i '/^MTGC_PUBLISH_PORT=/d' ~/.config/mtgc/<name>.env
+bash deploy/setup.sh <name>
+systemctl --user daemon-reload
+```
+
 ## Container storage: keeping non-prod off the prod disk
 
 Rootless Podman keeps images, layers and volumes under `$HOME`. On the box that
@@ -131,6 +160,18 @@ bash deploy/setup.sh prod 8081
 - The per-instance price / sealed-catalog / EDHREC timer units carry the same
   flags on their `podman exec` lines, because systemd does not inherit the
   `PATH` shim that scopes the scripts.
+- **Two ways into the store, and both stamp the unit.** The documented one is
+  `. deploy/store-lib.sh; mtgc_store_load_config; mtgc_store_activate`. The other
+  is putting the shim on `PATH` yourself —
+  `export PATH="$MTGC_STORE_ROOT/bin:$PATH"` — which is also what an inherited
+  activation looks like from a child's side, and is enough on its own to send
+  every podman call to the right store. The flags stamped into units are derived
+  from `MTGC_STORE_ROOT` rather than read back out of the environment, so neither
+  route can produce an unstamped unit. The `PATH`-only one used to: systemd went
+  to the *default* store, found no image, and the unit sat in a restart loop
+  reporting `pinging container registry localhost: dial tcp 127.0.0.1:443:
+  connection refused` — a network error, while the image was in the alternate
+  store all along (de-nu5).
 - `--root`/`--runroot` per invocation, never a `storage.conf`: the choice cannot
   leak into unrelated podman use on the box.
 - **`prod` never sets the variable**, so prod's generated unit is byte-identical
@@ -266,7 +307,7 @@ It is off unless you turn it on, and turning it on takes **two independent switc
 
 | Switch | Where | Effect |
 |---|---|---|
-| `MTGC_HTTP_PORT=8080` | `~/.config/mtgc/<instance>.env` | The app binds a second, plain-HTTP listener on that **container** port, in addition to the TLS listener on 8081. Unset → one listener, exactly today's behaviour. A non-integer value fails the server at startup — there is no fallback. |
+| `MTGC_HTTP_PORT=8080` | `~/.config/mtgc/<instance>.env` | The app binds a second, plain-HTTP listener on that **container** port, in addition to the TLS listener on 8081. Unset → one listener, exactly today's behaviour, and a **blank value counts as unset** — `MTGC_HTTP_PORT=` disables the listener rather than crash-looping the instance, the same rule `MTGC_TLS_CERT` / `MTGC_TLS_KEY` read themselves by. A non-empty, non-integer value fails the server at startup — there is no fallback. |
 | `bash deploy/setup.sh <name> [port] --http-port <p>` | generated Quadlet unit | Publishes that container port on the **host** as `PublishPort=127.0.0.1:<p>:8080`. Omitted → the line is absent and the unit is byte-identical to a render with no plaintext publish. |
 
 Neither switch does anything useful alone: without the env var nothing is listening on 8080 inside the container; without the flag nothing outside the container namespace can reach it. `8080` is the container-side port the publish targets, so that is the value `MTGC_HTTP_PORT` takes.
@@ -304,6 +345,8 @@ sed -i '/^MTGC_HTTP_PORT=/d' ~/.config/mtgc/<name>.env
 systemctl --user restart mtgc-<name>
 ```
 
+Blanking the line (`MTGC_HTTP_PORT=`) does the same thing; deleting it is tidier.
+
 The app is back to a single TLS listener. No rebuild, no data migration. If the tunnel route was switched to plain HTTP, point it back at `https://localhost:8081` with `noTLSVerify: true`.
 
 To also drop the host publish, delete the recorded line and re-render. Omitting `--http-port` is **not** enough — the flag is sticky by design, so that a regenerated unit reproduces the one it replaces:
@@ -336,7 +379,7 @@ Two switches, same shape as the tunnel origin above: one mounts the files, one t
 | Switch | Where | Effect |
 |---|---|---|
 | `bash deploy/setup.sh <name> [port] --tls-certs <dir>` | generated Quadlet unit | Mounts the host directory at `/certs` inside the container as `Volume=<dir>:/certs:ro,Z`. `/certs` and `:ro` are hardcoded in `render-quadlet.sh`, not operator-supplied. Omitted → no mount line at all. The directory must already exist, or Podman would create it as an empty root-owned mount point. |
-| `MTGC_TLS_CERT` / `MTGC_TLS_KEY` | `~/.config/mtgc/<instance>.env` | Container-side paths to the certificate and private key. Both set → the app serves them on 8081. Neither set → today's self-signed behaviour. |
+| `MTGC_TLS_CERT` / `MTGC_TLS_KEY` | `~/.config/mtgc/<instance>.env` | Container-side paths to the certificate and private key. Both set → the app serves them on 8081. Neither set → today's self-signed behaviour; a blank value counts as unset, matching `MTGC_HTTP_PORT`. |
 
 Setting exactly one of the pair, or pointing either at something that is not a readable file, **fails the server at startup**. There is no fallback to the self-signed certificate: a deployer who believes they are serving a trusted certificate is never silently downgraded to one that warns.
 
@@ -412,6 +455,50 @@ systemctl --user restart mtgc-<name>
 ```
 
 The instance regenerates and serves the self-signed certificate again — browsers warn, `curl -ks` works, nothing else changes. To also drop the mount, re-run `setup.sh` without `--tls-certs` and `systemctl --user daemon-reload`.
+
+## What the nightly backup needs free
+
+> 42 of the 175 nights from 2026-03-05 are missing from the bucket. Every one of
+> them was refused for want of free space, and nothing said so.
+
+`backup.sh` stages an uncompressed host-side sqlite snapshot and writes the
+tarball beside it, so peak usage is ~1.4x the database — on today's 11.4 GB prod
+that is ~15.5 GB, about 15% of the whole 98 GB root volume, and it rises ~91 MB a
+day as the database grows ~65 MB a day. That volume also carries prod's own 19 GB
+data volume, the retained tarballs and Podman's default store, so any transient
+few-GB claim at 03:00 sharp used to cost the night — and a lost night is
+permanent: `aws s3 sync` mirrors a directory, so a tarball that was never written
+can never be backfilled (de-o4e).
+
+Before refusing, the run reclaims what on that disk is its own (de-4e8):
+
+| Reclaimed | Why it was never a claim on the disk |
+|---|---|
+| a previous run's staging directory | a run killed mid-snapshot leaves up to a whole database behind, its EXIT trap never fired |
+| retained local dailies that S3 already holds | the local copies are a fast-restore convenience; the night is not |
+
+Tarballs go oldest first and the loop stops the moment the run fits, so a roomy
+night spends nothing and retention is exactly what it was. One is deleted only
+when `aws s3 ls` answers for it **at the same size** — a half-uploaded object
+answers too — and nothing local is deleted at all without
+`MTGC_BACKUP_S3_BUCKET`, because then the local copy is the only copy. The sync
+runs without `--delete`, so reclaiming locally never removes anything from the
+bucket.
+
+The image trees are archived straight from the volume mount instead of being
+copied into staging first: ~1 GB on prod the run no longer has to have free,
+against a budget that only ever set 200 MB aside for them. Reading them live is
+no more exposed than the copy was — `cp -a` fails just the same on a file
+deleted from under it.
+
+**None of this moves the floor.** The snapshot is a full copy of the database, so
+peak usage cannot go below 1x the database however the tarball is written:
+SQLite's backup API needs a seekable destination, and neither this box's
+`libsqlite3` nor its `sqlite3` shell carries `sqlite_dbpage`, so there is no
+streaming a byte-identical copy into a pipe. The bar keeps rising with the
+database. The durable fix is to put `MTGC_BACKUP_DIR` on a filesystem that is not
+the 98 GB root volume — `/workspaces` is 938 G — which is a host decision about
+where prod's backups live, tracked separately.
 
 ## Backup freshness check
 
@@ -681,13 +768,27 @@ before the 03:00 backup writes its ~3 GB tarball) but enables nothing. Disk is
 host-wide, so enable it on one instance — `prod`.
 
 ```bash
-# 1. Pushover credentials, if not already set — same channel as the backup check.
-#    See "Arming an instance" under Backup freshness check.
+# 1. Install the units, if this instance predates the check. setup.sh is the only
+#    thing that renders them, and it runs at bring-up — deploy.sh re-renders
+#    nothing on its redeploy path, so an instance created before de-yef landed
+#    still does not have them however many times it has auto-deployed since
+#    (de-wxzx). That is prod's case on the deployment box today, and step 3
+#    fails with "Unit not found" rather than arming anything. Check, and if it
+#    is not-found, re-run setup.sh for the instance — it is idempotent and
+#    enables nothing:
+systemctl --user is-enabled mtgc-diskcheck-prod.timer   # not-found => not installed
+bash deploy/setup.sh prod
 
-# 2. Enable the timer.
+# 2. Pushover credentials, if not already set — same channel as the backup check.
+#    See "Arming an instance" under Backup freshness check. An absent
+#    ~/.config/mtgc/alerts.env is not a quiet no-op: alert.sh exits 1 and the
+#    unit fails, so the first real alert is one nobody was paged for. The
+#    already-armed checks are green only because none of them has had to push.
+
+# 3. Enable the timer.
 systemctl --user enable --now mtgc-diskcheck-prod.timer
 
-# 3. Prove it goes RED before trusting it green. A threshold of 0 is one nothing
+# 4. Prove it goes RED before trusting it green. A threshold of 0 is one nothing
 #    can pass — run it and confirm the push actually arrives.
 MTGC_DISK_THRESHOLD=0 bash deploy/diskcheck.sh
 ```
@@ -708,6 +809,51 @@ When it goes red, `deploy/prune-instances.sh` and `podman image prune` are the
 first things to reach for. Nothing prunes automatically and nothing should: an
 instance holding a volume may be someone's live rig, and deleting it is a
 judgement a timer cannot make. The alert exists so a person makes it.
+
+## Memory ceiling on ephemeral instances
+
+> A limit on the CI runner does not reach the containers doing the allocating.
+
+On 2026-08-27 the DeckDumpster CI runner was OOM-killed with roughly ten
+polecats in flight. It does not auto-restart, so CI was dead for about 24 hours:
+24 PRs queued checks that never ran, `main` froze, and the pipeline looked busy
+while landing nothing (de-4u8g).
+
+Hardening the runner unit does not cover this. Every instance is its own
+`mtgc-<instance>.service` with its own cgroup, generated from
+`deploy/mtgc.container` — a `MemoryMax` on the runner bounds the runner and
+nothing it started. So the ceiling goes on the instances:
+
+```ini
+[Service]
+MemoryMax=2G
+```
+
+**Prod is excluded by name**, the same way it is excluded from `store.env`
+(see [Container
+storage](#container-storage-keeping-non-prod-off-the-prod-disk)) and stated the
+same way — *prod never gets a ceiling* — rather than as a guard that could stop
+matching. Prod's working set is not something this repo gets to guess at, and an
+OOM kill there is an outage rather than a failed test. Prod's generated unit
+carries **no** `Memory*` directive at all, not a generous one.
+
+`MemoryMax` and nothing else. It is the bound, and the kernel reclaims page
+cache before it OOM-kills, so a `MemoryHigh` beside it would be a second number
+to keep in sync that buys throttling rather than a kill — and a CI container
+that has gone slow is harder to read than one that has died.
+
+2 G is about 8x measured. A `--test` instance peaked at **257 MB**
+(cgroup `memory.peak`) across the whole 158-test integration suite, which is the
+heaviest thing CI points at one; it idles around 107 MB. That leaves real
+headroom while making concurrent instances additive against a ceiling instead of
+against the box's 15 G of RAM. There is **no flag and no env knob**:
+the value is a constant in `setup.sh`, so a box that needs a different one edits
+it there and every instance picks it up on its next `setup.sh` run. A ceiling
+needed only for one run is a `systemctl --user edit mtgc-<name>` drop-in.
+
+The ceiling is derived from the instance name, not recorded in the env file the
+way `--http-port` and `--tls-certs` are, so the regeneration `deploy.sh`
+performs cannot drop it and there is nothing to go stale.
 
 ## CDN deploy check
 
@@ -782,7 +928,7 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 |---|---|
 | `seed.sh [--force]` | Create reusable seed data volume. Run once, all future `--init` clones from it |
 | `setup.sh <name> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]` | Create instance. `--test` uses pre-built fixture (fast, no network). `--init` clones seed volume. Port auto-assigned if omitted. `--http-port` adds a loopback-only plaintext publish — see [Cloudflare Tunnel origin](#cloudflare-tunnel-origin). `--tls-certs` mounts a host cert directory read-only at `/certs` — see [Trusted certificates](#trusted-certificates) |
-| `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing |
+| `render-quadlet.sh <name> <port-mapping> <http-port> <tls-certs> <memory-max> [template]` | Render the Quadlet unit to stdout. Called by `setup.sh`; standalone for testing. `<memory-max>` renders `MemoryMax=` in `[Service]`; empty for prod — see [Memory ceiling on ephemeral instances](#memory-ceiling-on-ephemeral-instances) |
 | `deploy.sh <name>` | Rebuild image and restart one instance. Regenerates the Quadlet via `setup.sh` if it has gone missing — `--http-port` / `--tls-certs` are re-applied from the env file, so the unit is reproduced rather than downgraded |
 | `teardown.sh <name> [--purge]` | Stop and remove instance. `--purge` deletes data volume and env file |
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
