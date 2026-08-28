@@ -493,20 +493,27 @@ async function loadSets() {
   statusEl.textContent = `${sets.length} sets loaded`;
 }
 
-async function loadProducts(setCode) {
+// `preferred` is the product a deep link named. Checking the first product
+// unconditionally and letting the caller re-check another afterwards is what
+// made every deep link fetch two products' sheets and discard one (de-8ea):
+// /sheets#set=blb&product=play issued collector (240 KB, rendered then thrown
+// away) before play (535 KB, the one asked for). A product the set does not
+// have falls back to the first, which is what the old re-check did too.
+async function loadProducts(setCode, preferred) {
   productRadios.innerHTML = '<span style="color:#888;font-size:0.85rem">Loading...</span>';
   packBtn.disabled = true;
   const res = await fetch(`/api/products?set=${encodeURIComponent(setCode)}`);
   const products = await res.json();
   productRadios.innerHTML = '';
-  products.forEach((p, i) => {
+  const wanted = products.includes(preferred) ? preferred : products[0];
+  products.forEach((p) => {
     const id = `product-${p}`;
     const radio = document.createElement('input');
     radio.type = 'radio';
     radio.name = 'product';
     radio.value = p;
     radio.id = id;
-    if (i === 0) radio.checked = true;
+    if (p === wanted) radio.checked = true;
     radio.addEventListener('change', onSelectionChange);
     const label = document.createElement('label');
     label.htmlFor = id;
@@ -523,14 +530,6 @@ async function loadProducts(setCode) {
 function getSelectedProduct() {
   const checked = productRadios.querySelector('input[name="product"]:checked');
   return checked ? checked.value : '';
-}
-
-function setSelectedProduct(value) {
-  const radio = productRadios.querySelector(`input[name="product"][value="${value}"]`);
-  if (radio) {
-    radio.checked = true;
-    onSelectionChange();
-  }
 }
 
 // --- URL hash ---
@@ -567,29 +566,34 @@ function onSelectionChange() {
   loadSheets();
 }
 
-// Bumped per load so a response that arrives after a newer one can be told
-// apart from the current one. Two loads really are in flight on a deep link:
-// loadProducts() checks the first product and loads it, and only then does
-// the hash select the requested one. Without this the slower of the two wins
-// the DOM, so /sheets#set=blb&product=play rendered `collector` about 40% of
-// the time on a warm container.
-let _sheetsRequest = 0;
+// A newer load supersedes an older one by aborting it, so the older response
+// costs no bandwidth and cannot land in the DOM behind the newer one. Two
+// loads really can be in flight — switch product while the first is still
+// downloading — and before this the slower of the two won: the deep link
+// /sheets#set=blb&product=play rendered `collector` about 40% of the time on
+// a warm container.
+let _sheetsAbort = null;
 
 async function loadSheets() {
   const setCode = selectedSetCode;
   const product = getSelectedProduct();
   if (!setCode || !product) return;
 
-  const request = ++_sheetsRequest;
+  if (_sheetsAbort) _sheetsAbort.abort();
+  const controller = new AbortController();
+  _sheetsAbort = controller;
 
-  content.innerHTML = '<div class="empty-state">Loading sheets...</div>';
   statusEl.textContent = 'Loading...';
 
-  const res = await fetch(`/api/sheets?set=${encodeURIComponent(setCode)}&product=${encodeURIComponent(product)}`);
-  const data = await res.json();
-
-  // A newer load started while this one was in flight; it owns the DOM now.
-  if (request !== _sheetsRequest) return;
+  let data;
+  try {
+    const res = await fetch(`/api/sheets?set=${encodeURIComponent(setCode)}&product=${encodeURIComponent(product)}`, { signal: controller.signal });
+    data = await res.json();
+  } catch (e) {
+    // Our own supersede, not a failure — the newer load owns the DOM.
+    if (e.name === 'AbortError') return;
+    throw e;
+  }
 
   if (data.error) {
     content.innerHTML = `<div class="empty-state">${data.error}</div>`;
@@ -597,7 +601,9 @@ async function loadSheets() {
     return;
   }
 
-  content.innerHTML = '';
+  // Built off-document and swapped in on arrival: blanking `content` first
+  // made a slow load flash an empty page over sheets that were still valid.
+  const frag = document.createDocumentFragment();
 
   // Figure out which variants use which sheets (for sheet headers)
   const sheetUsage = {};
@@ -627,7 +633,7 @@ async function loadSheets() {
   }
   table.appendChild(tbody);
   varSection.body.appendChild(table);
-  content.appendChild(varSection.el);
+  frag.appendChild(varSection.el);
 
   // Sheet sections
   for (const [sheetName, sheet] of Object.entries(data.sheets)) {
@@ -713,8 +719,10 @@ async function loadSheets() {
       sheetSection.body.appendChild(subgroup);
     }
 
-    content.appendChild(sheetSection.el);
+    frag.appendChild(sheetSection.el);
   }
+
+  content.replaceChildren(frag);
 
   const totalCards = Object.values(data.sheets).reduce((s, sh) => s + sh.card_count, 0);
   statusEl.textContent = `${Object.keys(data.sheets).length} sheets, ${totalCards} cards`;
@@ -751,8 +759,7 @@ loadSets().then(async () => {
       // a duplicate loadProducts and race with our awaited one).
       selectedSetCode = s.code;
       setInput.value = `${s.name} (${s.code})`;
-      await loadProducts(s.code);
-      setSelectedProduct(hashParams.product);
+      await loadProducts(s.code, hashParams.product);
     }
   }
 });
