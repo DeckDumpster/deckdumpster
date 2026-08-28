@@ -8,7 +8,6 @@ that regresses silently (a wrong opening balance changes one point, not the
 shape of the chart).
 """
 
-import subprocess
 
 # Identical seed to collection_stats_growth_chart_renders: acquisitions spread
 # over 120 days, price rows only every 5th day so a window start can land in a
@@ -65,23 +64,6 @@ _READ_SERIES = """
 """
 
 
-def _find_container(base_url):
-    """Find the container serving the given base_url by matching its port."""
-    port = base_url.rstrip("/").rsplit(":", 1)[-1]
-    result = subprocess.run(
-        ["podman", "ps", "--format", "{{.Names}}"], capture_output=True, text=True
-    )
-    for name in result.stdout.strip().split("\n"):
-        if not name:
-            continue
-        port_result = subprocess.run(
-            ["podman", "port", name, "8081/tcp"], capture_output=True, text=True
-        )
-        if port in port_result.stdout:
-            return name
-    raise AssertionError(f"no container found serving {base_url}")
-
-
 def _select_range(harness, data_range, expected_points):
     """Click a range pill and wait for the chart to actually carry its series."""
     harness.click_by_selector(
@@ -97,11 +79,7 @@ def _select_range(harness, data_range, expected_points):
 
 
 def steps(harness):
-    container = _find_container(harness.base_url)
-    subprocess.run(
-        ["podman", "exec", container, "python3", "-c", _SEED],
-        capture_output=True, text=True, check=True,
-    )
+    harness.db_exec(_SEED)
 
     harness.navigate("/collection")
     harness.wait_for_visible(".collection-table", timeout=15_000)
