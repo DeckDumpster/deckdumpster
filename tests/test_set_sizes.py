@@ -22,6 +22,7 @@ from mtg_collector.db.schema import (
     get_current_version,
     init_db,
 )
+from mtg_collector.db.set_index import set_index
 from mtg_collector.db.set_sizes import apply_base_set_sizes, apply_total_set_sizes
 from mtg_collector.services.bulk_import import ScryfallBulkClient
 
@@ -303,3 +304,103 @@ def test_the_migrated_fixture_accepts_a_backfill(tmp_path):
 
     assert changed == len(codes)
     conn.close()
+
+
+# ── What the committed fixture carries ──
+#
+# de-1ov: the fixture had neither column, so every cached set in a --test
+# container reported owned_base / total_base as NULL and no test against one
+# could reach the populated path at all.  These pin both branches into the
+# file, because a fixture that reaches only one of them is the bug.
+
+#: The one cached set the fixture deliberately leaves without a boundary.
+#: MTGJSON reports `baseSetSize: 0` for Special Guests and clean_size reads 0
+#: as an absence, so the NULL here is real data rather than a hole poked in the
+#: file to make a test pass.
+FIXTURE_NULL_BASE_SET = "spg"
+
+
+def _migrated_fixture(tmp_path):
+    """The committed fixture, brought forward the way every consumer gets it."""
+    migrated = tmp_path / "test-data.sqlite"
+    shutil.copy(FIXTURE_DB, migrated)
+    conn = sqlite3.connect(migrated)
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    return conn
+
+
+def test_the_fixture_carries_sizes_for_every_cached_set(tmp_path):
+    """Both columns are populated -- except the one deliberate NULL."""
+    conn = _migrated_fixture(tmp_path)
+    rows = conn.execute(
+        "SELECT set_code, base_set_size, total_set_size FROM sets "
+        "WHERE cards_fetched_at IS NOT NULL"
+    ).fetchall()
+    conn.close()
+
+    assert len(rows) > 1, "the fixture caches no sets to size"
+    assert [r["set_code"] for r in rows if r["total_set_size"] is None] == []
+    assert [r["set_code"] for r in rows if r["base_set_size"] is None] == [
+        FIXTURE_NULL_BASE_SET
+    ]
+
+
+def test_the_fixture_reaches_both_meter_states(tmp_path):
+    """One cached set hides the base meter, the rest draw it."""
+    conn = _migrated_fixture(tmp_path)
+    index = {row["set_code"]: row for row in set_index(conn)}
+    conn.close()
+
+    hidden = index[FIXTURE_NULL_BASE_SET]
+    assert hidden["owned_base"] is None
+    assert hidden["total_base"] is None
+    assert hidden["total_all"] > 0, "the all-printings meter is drawn regardless"
+
+    drawn = [row for code, row in index.items() if code != FIXTURE_NULL_BASE_SET]
+    assert drawn, "no cached set draws a base meter"
+    assert all(row["total_base"] is not None for row in drawn)
+
+
+def test_the_fixture_reaches_a_boundary_that_is_not_a_count(tmp_path):
+    """fin stops at 309 with more than 309 printings at or below it.
+
+    The rule the columns exist for -- a size is a boundary, not a count --
+    needs a set where the two differ, or a denominator taken straight from
+    base_set_size would pass every test here and still read 309/309 on a
+    binder with empty pockets.
+    """
+    conn = _migrated_fixture(tmp_path)
+    index = {row["set_code"]: row for row in set_index(conn)}
+    conn.close()
+
+    fin = index["fin"]
+    assert fin["base_set_size"] == FIN_BASE_SET_SIZE
+    assert fin["total_set_size"] == FIN_TOTAL_SET_SIZE
+    assert fin["total_base"] > FIN_BASE_SET_SIZE
+
+
+def test_the_builder_and_the_fixture_agree_on_the_base_sizes(tmp_path):
+    """The constant and the committed binary must not drift apart.
+
+    The fixture is a binary, so the table in build_test_fixture.py is the only
+    readable record of what is in it and the only thing a rebuild would write.
+    A failure here means one of the two was edited without the other.
+    """
+    from scripts.build_test_fixture import FIXTURE_BASE_SET_SIZES
+
+    conn = _migrated_fixture(tmp_path)
+    stored = {
+        row["set_code"]: row["base_set_size"]
+        for row in conn.execute(
+            "SELECT set_code, base_set_size FROM sets WHERE cards_fetched_at IS NOT NULL"
+        )
+    }
+    conn.close()
+
+    # A size of 0 is an absence, not a size -- see clean_size -- so the sets
+    # carrying one are exactly the sets left NULL.
+    expected = {
+        code.lower(): (size or None) for code, size in FIXTURE_BASE_SET_SIZES.items()
+    }
+    assert stored == expected

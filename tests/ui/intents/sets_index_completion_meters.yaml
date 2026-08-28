@@ -5,16 +5,18 @@
 #   pull_requests: []
 #
 # Prerequisites:
-#   Every set in tests/fixtures/test-data.sqlite has base_set_size NULL, so
-#   this fixture reaches only the hidden-base-meter case. de-1ov tracks giving
-#   the fixture real set sizes; when it lands, this scenario should grow an
-#   assertion that a set WITH a stored base size shows both meters.
+#   tests/fixtures/test-data.sqlite stores base_set_size for 17 of its 18
+#   cached sets and leaves spg NULL (MTGJSON reports baseSetSize 0 for Special
+#   Guests), so one /sets render reaches both the drawn and the hidden base
+#   meter. Before de-1ov every set was NULL and only the hidden case existed.
 
 description: >
-  Each set on /sets carries a completion meter reading how much of it I own
-  as a plain "owned / total" fraction with a bar behind it. Where the app
-  does not know where a set's base set ends — which is a permanent, ordinary
-  state for a set no data source reports a size for — the base meter is
-  simply not drawn, rather than rendering an empty 0 / 0 bar or a NaN
-  percentage. Every set still shows its all-printings meter, so no set is
-  left with no completion information at all.
+  Each set on /sets carries completion meters reading how much of it I own
+  as plain "owned / total" fractions with bars behind them: how much of the
+  base set, and how much of every printing in it. The base fraction is
+  measured against the base set, so it is a different number from the
+  all-printings one. Where the app does not know where a set's base set ends
+  — which is a permanent, ordinary state for a set no data source reports a
+  size for — that meter is simply not drawn, rather than rendering an empty
+  0 / 0 bar or a NaN percentage. Every set still shows its all-printings
+  meter, so no set is left with no completion information at all.

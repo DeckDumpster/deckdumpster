@@ -15,12 +15,21 @@ TEMPLATE = REPO_ROOT / "deploy" / "mtgc.container"
 SETUP = REPO_ROOT / "deploy" / "setup.sh"
 
 
-PLACEHOLDERS = ("{{HTTP_PUBLISH}}", "{{TLS_MOUNT}}")
+PLACEHOLDERS = ("{{HTTP_PUBLISH}}", "{{TLS_MOUNT}}", "{{MEMORY_LIMIT}}")
 
 
-def render(instance, port_mapping, http_port, tls_certs=""):
+def render(instance, port_mapping, http_port, tls_certs="", memory_max=""):
     result = subprocess.run(
-        ["bash", str(RENDER), instance, port_mapping, http_port, tls_certs, str(TEMPLATE)],
+        [
+            "bash",
+            str(RENDER),
+            instance,
+            port_mapping,
+            http_port,
+            tls_certs,
+            memory_max,
+            str(TEMPLATE),
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -76,7 +85,7 @@ def test_bind_address_is_not_operator_supplied():
 
 def test_non_numeric_http_port_is_rejected():
     result = subprocess.run(
-        ["bash", str(RENDER), "myinst", ":8081", "0.0.0.0:8083", "", str(TEMPLATE)],
+        ["bash", str(RENDER), "myinst", ":8081", "0.0.0.0:8083", "", "", str(TEMPLATE)],
         capture_output=True,
         text=True,
     )
@@ -153,7 +162,7 @@ def test_tls_mount_combines_with_the_http_publish():
 )
 def test_unsafe_tls_certs_dir_is_rejected(bad):
     result = subprocess.run(
-        ["bash", str(RENDER), "myinst", ":8081", "", bad, str(TEMPLATE)],
+        ["bash", str(RENDER), "myinst", ":8081", "", bad, "", str(TEMPLATE)],
         capture_output=True,
         text=True,
     )
@@ -164,6 +173,74 @@ def test_unsafe_tls_certs_dir_is_rejected(bad):
 
 def test_setup_accepts_tls_certs_flag():
     assert "--tls-certs" in SETUP.read_text()
+
+
+# --- Memory ceiling (de-4u8g) ------------------------------------------------
+#
+# The CI runner was OOM-killed with ~10 polecats in flight and does not
+# auto-restart, so CI was dead ~24 h. Each instance is its own
+# mtgc-<instance>.service with its own cgroup, so a limit on the runner unit
+# does not reach the containers doing the allocating.
+
+
+@pytest.mark.parametrize("port_mapping", [":8081", "8081:8081"])
+def test_unset_memory_max_renders_byte_identical_unit(port_mapping):
+    """UNSET MEANS UNCHANGED: this is how prod's unit is rendered."""
+    unit = render("myinst", port_mapping, "", "", "")
+    assert unit == legacy_render("myinst", port_mapping)
+    assert "{{MEMORY_LIMIT}}" not in unit
+    assert "Memory" not in unit
+
+
+def test_memory_max_renders_a_single_directive():
+    """MemoryMax and nothing else — no MemoryHigh to keep in sync, and a
+    container that has died is easier to read than one that has been throttled."""
+    unit = render("myinst", ":8081", "", "", "2G")
+    memory = [ln for ln in unit.splitlines() if ln.startswith("Memory")]
+    assert memory == ["MemoryMax=2G"]
+
+
+def test_memory_max_lands_in_the_service_section():
+    """A [Container] MemoryMax is not a directive Quadlet knows; the cgroup
+    limit belongs to the generated service."""
+    unit = render("myinst", ":8081", "", "", "2G")
+    sections = {}
+    current = None
+    for line in unit.splitlines():
+        if line.startswith("["):
+            current = line
+            sections[current] = []
+        elif current and line:
+            sections[current].append(line)
+    assert "MemoryMax=2G" in sections["[Service]"]
+
+
+@pytest.mark.parametrize("value", ["2048", "512K", "512M", "2G", "1T"])
+def test_memory_max_accepts_systemd_sizes(value):
+    assert f"MemoryMax={value}" in render("myinst", ":8081", "", "", value)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "2GB",  # systemd size suffixes are single letters
+        "2 G",
+        "infinity",  # a real systemd value, but not one this script hands out
+        "50%",
+        "2G\nExecStartPre=oops",  # would inject a unit directive
+    ],
+)
+def test_unparseable_memory_max_is_rejected(bad):
+    """A size systemd refuses is a unit that never loads — fail here, loudly,
+    rather than shipping a container that cannot start."""
+    result = subprocess.run(
+        ["bash", str(RENDER), "myinst", ":8081", "", "", bad, str(TEMPLATE)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "memory max" in result.stderr
+    assert "MemoryMax" not in result.stdout
 
 
 # --- No renewal strategy is shipped (de-0ue) ---
