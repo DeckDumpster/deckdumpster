@@ -226,3 +226,53 @@ def test_deploy_regenerates_through_setup(host):
     recorded flags."""
     text = DEPLOY.read_text()
     assert 'bash "$SCRIPT_DIR/setup.sh" "$INSTANCE"' in text
+
+
+# --- Memory ceiling (de-4u8g) ------------------------------------------------
+#
+# On 2026-08-27 the CI runner was OOM-killed with ~10 polecats in flight. It
+# does not auto-restart, so CI was dead ~24 h: 24 PRs queued checks that never
+# ran and main froze. The runner unit is hardened separately, and that limit
+# does not reach these containers — each instance is its own
+# mtgc-<instance>.service with its own cgroup, generated from
+# deploy/mtgc.container.
+
+
+def test_an_ephemeral_instance_is_generated_with_a_ceiling(host):
+    """The whole point: an instance that cannot take the box with it."""
+    host.setup("inst", "8083")
+
+    unit = host.quadlet("inst").read_text()
+    assert "MemoryMax=2G" in unit
+
+
+def test_prod_is_generated_without_any_memory_directive(host):
+    """THE PROD EXCLUSION, by name — the same shape as the store.env exception
+    (de-oqu, tests/test_deploy_store.py). Prod's working set is not something
+    this repo gets to guess at, and an OOM kill there is an outage rather than a
+    failed test. NO Memory* directive at all, not a generous one."""
+    host.setup("prod", "8081")
+
+    unit = host.quadlet("prod").read_text()
+    assert "Memory" not in unit
+    assert "{{MEMORY_LIMIT}}" not in unit
+
+
+def test_regenerating_a_missing_quadlet_keeps_the_ceiling(host):
+    """The ceiling is derived from the instance name, not from a recorded flag,
+    so the regeneration deploy.sh performs cannot drop it."""
+    host.setup("inst", "8083")
+    unit = host.quadlet("inst")
+    unit.unlink()
+
+    host.setup("inst")  # deploy.sh regenerates with no flags
+
+    assert "MemoryMax=2G" in unit.read_text()
+
+
+def test_the_ceiling_is_not_recorded_in_the_env_file(host):
+    """It is not an operator setting, so there is nothing to go stale: a box
+    that edits the constant gets the new value on the next setup.sh run."""
+    host.setup("inst", "8083")
+
+    assert "Memory" not in host.env_file("inst").read_text()

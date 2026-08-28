@@ -417,7 +417,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 
 Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
 - `~/.config/mtgc/<instance>.env` — per-instance env.
@@ -477,6 +477,23 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   with nothing to do. `fetch_allprintings` no longer wraps its import in a `try/except`
   that printed a warning — that swallowed exit code is what let a current file on disk sit
   beside a stale database. See `deploy/README.md` → "Catalog refresh".
+- **Every instance EXCEPT `prod` is generated with a `MemoryMax` ceiling** (de-4u8g). On
+  2026-08-27 the CI runner was OOM-killed with ~10 polecats in flight; it does not
+  auto-restart, so CI was dead ~24 h — 24 PRs queued checks that never ran and `main`
+  froze while the pipeline looked busy. Hardening the runner unit does **not** cover this:
+  each instance is its own `mtgc-<instance>.service` with its own cgroup, so a limit on
+  the runner bounds the runner and nothing it started. `prod` is excluded **by name**, the
+  same shape as the `store.env` exception (de-oqu) and stated the same way — *prod never
+  gets a ceiling* — because prod's working set is not something this repo gets to guess at
+  and an OOM kill there is an outage rather than a failed test. Prod's unit carries **no**
+  `Memory*` directive at all, not a generous one. `MemoryMax` and nothing else: it is the
+  bound, the kernel reclaims page cache before it OOM-kills, and a `MemoryHigh` beside it
+  would trade a visible kill for a throttled container — a hung CI job is harder to read
+  than a dead one. There is no flag and no env knob; the value is a constant in `setup.sh`
+  (2 G — ~8x the 257 MB a `--test` instance peaked at across the whole integration suite),
+  so a box needing a different one edits it there. It is derived from the instance name rather than recorded in the env
+  file like `--http-port` / `--tls-certs`, so the regeneration `deploy.sh` performs cannot
+  drop it. See `deploy/README.md` → "Memory ceiling on ephemeral instances".
 - **`deploy/diskcheck.sh` is both the disk alarm and the pre-flight floor** (de-yef). /
   is 98 G and prod serves from it; it hit 100% on 2026-08-08 and again on 2026-08-11, and
   on both nights the backup produced no object and nothing said so (de-o4e). `MTGC_STORE_ROOT`
