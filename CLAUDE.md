@@ -192,6 +192,33 @@ All filtering is one Scryfall-style query bar (`?q=...`). Standard Scryfall keyw
 
 Search compiler lives in `mtg_collector/search/`: `grammar.py` (tokeniser), `transformer.py` (parser → AST), `compiler.py` (AST → SQL), `keywords.py` (canonical name registry), `dates.py` (timezone-aware date parsing).
 
+### The whole-result figures on `/api/collection`
+
+`total`, `total_qty` and `total_value` describe the result rather than the page —
+the client fetches windows as it scrolls, so a page-scoped figure would climb as
+the user scrolled. They are **two scans over two different things**, and that is
+the part to keep. `total` counts result rows. The two sums range over *copies*: a
+result row with no copy has `qty` 0, so it contributes nothing to either sum
+whatever that printing is priced at.
+
+The distinction only bites on the LEFT-JOIN template (`is:unowned`, and the
+`cards=` shared-link list), where a result row need not have a copy — and for
+`is:unowned` none does. So the totals body there **inner-joins `collection`**,
+dropping those rows before the three `latest_prices` joins are reached instead of
+pricing 109,976 of them to add zero. Measured on that result: 7,271 ms for the
+shipped combined statement against 2,515 ms for the pair that replaced it, of
+which the sums are under a millisecond.
+
+**The count cannot ride on that body** — the rows it drops are exactly the ones
+the query is about — so it takes its own statement on that template, and only
+there. The templates that drive from `collection` have a row per result row, and
+one combined scan stays cheaper for them: 792 ms against 1,242 ms split, on
+15,045 copies. Do not unify the two paths in either direction.
+
+`total_qty` / `total_value` are sent on the first window only (de-962). `total` is
+sent on every window, because `deck-builder.js` pages its card picker until
+`offset >= total`.
+
 ### Set sizes
 
 `sets.base_set_size` and `sets.total_set_size` are stored, never derived, and populated at
@@ -228,6 +255,14 @@ of it — which is `year:` matching nothing, the /sets index bucketing them all 
 `released_at IS NULL`, and the deck builder's date filters dropping them. `digital` is the one
 descriptor with no NULL to look for (NOT NULL DEFAULT 0), so it is rewritten for every set the
 payload carries rather than only for rows that look unfilled.
+
+**The test fixture carries both sizes, and `spg` is deliberately NULL.** Until de-1ov the
+fixture had neither column, so every set in a `--test` container reported `owned_base` /
+`total_base` as NULL and no test against one could reach the populated path at all.
+`scripts/build_test_fixture.py` now writes MTGJSON's `baseSetSize` for the sets it caches
+(`total_set_size` already arrived with `ensure_set_cached`), and Special Guests is in that
+table with `0` — which `clean_size` reads as an absence — so one cached set stays NULL and
+both branches have a fixture. Do not "fix" `spg` to a positive number.
 
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
@@ -391,16 +426,16 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 
 Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
 - `~/.config/mtgc/<instance>.env` — per-instance env.
 - `~/.config/containers/systemd/mtgc-<instance>.container` — generated Quadlet unit.
 - Service name: `mtgc-<instance>`; container name: `systemd-mtgc-<instance>`.
 - Server logs a warning and skips OCR processing if `ANTHROPIC_API_KEY` is unset — it does **not** fail to start.
-- `MTGC_HTTP_PORT` (optional, per-instance env) adds a **second, plain-HTTP listener** on that container port alongside the TLS listener on 8081; unset means one listener and today's behaviour. It exists for a host-local Cloudflare Tunnel origin, and is only reachable if `setup.sh --http-port <p>` also published it — always as `PublishPort=127.0.0.1:<p>:8080`, loopback hardcoded so plaintext can never face the LAN. See `deploy/README.md` → "Cloudflare Tunnel origin".
+- `MTGC_HTTP_PORT` (optional, per-instance env) adds a **second, plain-HTTP listener** on that container port alongside the TLS listener on 8081; unset means one listener and today's behaviour, and **blank means unset** — `MTGC_HTTP_PORT=` disables the listener instead of crash-looping on `int('')` (de-2mr), which is the same rule `MTGC_TLS_CERT` / `MTGC_TLS_KEY` already read themselves by and the same rule `setup.sh`'s `record` writes by. A non-empty non-integer is still a hard startup failure. It exists for a host-local Cloudflare Tunnel origin, and is only reachable if `setup.sh --http-port <p>` also published it — always as `PublishPort=127.0.0.1:<p>:8080`, loopback hardcoded so plaintext can never face the LAN. See `deploy/README.md` → "Cloudflare Tunnel origin".
 - `setup.sh --tls-certs <dir>` (optional) mounts a host directory of externally-obtained certificates at `/certs` **read-only** (`Volume=<dir>:/certs:ro,Z`); unset means no mount at all and today's generated unit. The app only reads certs — point `MTGC_TLS_CERT` / `MTGC_TLS_KEY` at paths under `/certs` to use them. Setting only one of the pair, or an unreadable path, fails startup — never a silent downgrade to self-signed. It never obtains or renews certs; that is the operator's job, and this repo deliberately ships no renewal unit and recommends no tool or cadence. How to actually get one (`tailscale cert`, or certbot DNS-01 as a fallback) is in `deploy/README.md` → "Trusted certificates". Note that fixing the self-signed cert's SAN does **not** stop browser warnings — trust is checked before naming.
-- **`--http-port` and `--tls-certs` are sticky.** `setup.sh` records them in the instance env file as `MTGC_HTTP_PUBLISH_PORT` / `MTGC_TLS_CERTS_DIR` and re-applies them when the flag is omitted, because `deploy.sh` regenerates a missing Quadlet by re-running `setup.sh <instance>` with no flags — without the record it would silently drop the plaintext publish (tunnel origin dies quietly) and the cert mount (`/certs` unreadable → crash loop). An explicit flag overrides; to drop a setting, delete its line from the env file. The explicit HTTPS host port is *not* yet recorded (de-f2d).
+- **Every input to the Quadlet render is sticky** — `--http-port`, `--tls-certs`, and the positional HTTPS host port. `setup.sh` records them in the instance env file as `MTGC_HTTP_PUBLISH_PORT` / `MTGC_TLS_CERTS_DIR` / `MTGC_PUBLISH_PORT` and re-applies them when the argument is omitted, because `deploy.sh` regenerates a missing Quadlet by re-running `setup.sh <instance>` with nothing but the name — without the record it would silently drop the plaintext publish (tunnel origin dies quietly), the cert mount (`/certs` unreadable → crash loop), and the pinned port (de-f2d: the instance comes back on a random high port, and `deploy.sh`'s health check finds it via `podman port` and passes, so nothing but the bookmarks and the tunnel route notice). An explicit value overrides; to drop a setting, delete its line from the env file. An instance created with **no** port records nothing and keeps rendering `PublishPort=:8081` — auto-assign is the absence of a port, not a port. `tests/test_deploy_regeneration.py` asserts whole-unit identity across a regeneration, so the next render input added without a record fails there.
 - **`MTGC_STORE_ROOT` (optional) puts a NON-PROD instance's images, layers and volumes in an alternate Podman store** via `--root`/`--runroot` — never a `storage.conf`, so the choice cannot leak into unrelated podman use on the box. Rootless Podman's default store is under `$HOME`, which on the deploy box is the 98G root **prod itself runs from** (34G of it was podman's store, measured 2026-08-11). Unset is a strict no-op: the generated Quadlet, the timer units and every podman call are byte-identical to before. Prod never sets it. The generated Quadlet records the store in `GlobalArgs=`, and `deploy.sh` / `teardown.sh` / `restore.sh` / `backup.sh` / `prune-instances.sh` read it back — an **unstamped** unit means the default store just as definitely, so an inherited activation is dropped, not fallen through. Which disk is host config (`~/.config/mtgc/store.env`), read by CI, `store-teardown.sh`, and `setup.sh` **for every instance except `prod`** (de-oqu) — excluded by name, because `setup.sh` is also how prod is installed and where prod's 19G volume lives is not a host config file's decision. The name check is what makes the variable enforced on the path people actually use: the documented `bash deploy/setup.sh <inst> --test` does not go through `ci.yml`, so scoping the read to CI meant every by-hand bring-up kept writing a gigabyte to prod's disk unless the caller remembered to export it. An explicit `MTGC_STORE_ROOT` still wins for every instance including `prod`, and an explicit empty one is how a single run opts back out. **NEVER `podman system reset`**: it is not scoped by `--root`/`--runroot` and took the sibling project's prod down; `deploy/store-teardown.sh` is the correct way to remove a store. CI proves the
   whole thing end to end on every PR with `deploy/store-isolation-gate.sh` (de-3a0), which
   brings up a real `--test` instance in a probe store and fails if the bytes landed under
@@ -451,6 +486,23 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   with nothing to do. `fetch_allprintings` no longer wraps its import in a `try/except`
   that printed a warning — that swallowed exit code is what let a current file on disk sit
   beside a stale database. See `deploy/README.md` → "Catalog refresh".
+- **Every instance EXCEPT `prod` is generated with a `MemoryMax` ceiling** (de-4u8g). On
+  2026-08-27 the CI runner was OOM-killed with ~10 polecats in flight; it does not
+  auto-restart, so CI was dead ~24 h — 24 PRs queued checks that never ran and `main`
+  froze while the pipeline looked busy. Hardening the runner unit does **not** cover this:
+  each instance is its own `mtgc-<instance>.service` with its own cgroup, so a limit on
+  the runner bounds the runner and nothing it started. `prod` is excluded **by name**, the
+  same shape as the `store.env` exception (de-oqu) and stated the same way — *prod never
+  gets a ceiling* — because prod's working set is not something this repo gets to guess at
+  and an OOM kill there is an outage rather than a failed test. Prod's unit carries **no**
+  `Memory*` directive at all, not a generous one. `MemoryMax` and nothing else: it is the
+  bound, the kernel reclaims page cache before it OOM-kills, and a `MemoryHigh` beside it
+  would trade a visible kill for a throttled container — a hung CI job is harder to read
+  than a dead one. There is no flag and no env knob; the value is a constant in `setup.sh`
+  (2 G — ~8x the 257 MB a `--test` instance peaked at across the whole integration suite),
+  so a box needing a different one edits it there. It is derived from the instance name rather than recorded in the env
+  file like `--http-port` / `--tls-certs`, so the regeneration `deploy.sh` performs cannot
+  drop it. See `deploy/README.md` → "Memory ceiling on ephemeral instances".
 - **`deploy/diskcheck.sh` is both the disk alarm and the pre-flight floor** (de-yef). /
   is 98 G and prod serves from it; it hit 100% on 2026-08-08 and again on 2026-08-11, and
   on both nights the backup produced no object and nothing said so (de-o4e). `MTGC_STORE_ROOT`
@@ -472,6 +524,27 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   and is not the store selection `setup.sh` scopes away from `prod`. It deliberately frees
   nothing — which instance to prune is a judgement a timer cannot make, and
   `deploy/prune-instances.sh` stays by hand. See `deploy/README.md` → "Low-disk check".
+- **`deploy/backup.sh` spends its own retained copies before it loses a night** (de-4e8).
+  Peak usage is the uncompressed host-side snapshot (~1x DB) plus the tarball (~0.3x), so
+  the nightly run demands ~15.5 GB free against an 11.4 GB prod database and rises ~91 MB a
+  day. It shares the 98 GB root volume with prod's data volume, the tarballs and Podman's
+  store, and a refused night is **permanent** — `aws s3 sync` mirrors a directory, so a
+  tarball never written can never be backfilled. That cost 42 of the 175 nights from
+  2026-03-05, every one of them for want of space (de-o4e). So before refusing, the run
+  clears a killed run's abandoned staging (up to a whole database, its EXIT trap never
+  fired) and then deletes retained local dailies **oldest first, stopping the moment it
+  fits** — a roomy night spends nothing and retention is unchanged. A tarball is deleted
+  only when `aws s3 ls` answers for it *at the same size* (a half-uploaded object answers
+  too), and never without `MTGC_BACKUP_S3_BUCKET`, because then the local copy is the only
+  copy; the sync runs without `--delete`, so this never touches the bucket. The image trees
+  are archived straight from the volume mount rather than copied into staging — ~1 GB on
+  prod, against a budget that only ever set 200 MB aside for them, so the copy could carry
+  a run past a check it had already passed. **The floor is 1x the database and cannot be
+  lowered here**: SQLite's backup API needs a seekable destination and this box's sqlite has
+  no `sqlite_dbpage`, so there is no streaming a byte-identical copy into the tarball. What
+  removes the constraint is putting `MTGC_BACKUP_DIR` on a filesystem that is not the root
+  volume, which is a host decision. See `deploy/README.md` → "What the nightly backup needs
+  free".
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
 - Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
 

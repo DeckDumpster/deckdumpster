@@ -17,7 +17,8 @@ notes: >
   The assertion that matters is the reconciliation: the denominator of
   #meter-all-count, the number in #status, and the count of .sheet-card in the
   page are all 440. Before de-epk the meter said 440 while 430 tiles rendered.
-  mkm has base_set_size NULL in the fixture like every other set there, so
-  #meter-base is hidden and everything non-promo lands in 'Base set' — that is
-  the NULL-size shape, not a defect. Only the owned side of the meter depends
-  on demo data, so read the denominator rather than the whole fraction.
+  mkm carries base_set_size 286 in the fixture, so the non-promo printings
+  split into 'Base set' and an extended section — but the promo section, and
+  the reconciliation this scenario is about, are decided by neither. Only the
+  owned side of the meter depends on demo data, so read the denominator rather
+  than the whole fraction.
