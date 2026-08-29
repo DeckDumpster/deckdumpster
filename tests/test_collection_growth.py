@@ -139,6 +139,13 @@ def _growth(db_path, **params):
     return body
 
 
+def _set_price_source(db_path, value):
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE settings SET value = ? WHERE key = 'price_sources'", (value,))
+    conn.commit()
+    conn.close()
+
+
 def _computed(conn, **kwargs):
     kwargs.setdefault("where_sql", growth.UNFILTERED_WHERE)
     kwargs.setdefault("params", [])
@@ -354,6 +361,40 @@ class TestFilteredRequestsGoTheOtherWay:
 
     def test_is_unowned_is_empty(self, db_path):
         assert _growth(db_path, q="is:unowned") == growth.EMPTY_SERIES
+
+
+class TestThePriceFilterIsTheDisplayedPrice:
+    """`price:` selects the same cards here as on the collection page.
+
+    Both reach `latest_prices`, whose key is (set_code, collector_number,
+    source, price_type).  A join that pins neither source nor the copy's finish
+    filters on whatever price any source happened to publish for any finish,
+    so the same query bar described a different collection above the chart than
+    beside it (de-fb1).
+    """
+
+    def test_the_filter_follows_the_configured_source(self, db_path, conn):
+        """Bravo is 10.00 by TCG and 2.00 by Card Kingdom, so `price>5` cannot
+        mean the same thing under both settings — and reading the source the
+        chart is not drawn from is exactly the bug."""
+        assert _growth(db_path, q="price>5")["counts"][-1] == 1
+
+        _set_price_source(db_path, "ck,tcg")
+        assert _growth(db_path, q="price>5") == growth.EMPTY_SERIES
+
+    def test_the_filter_prices_a_copy_by_its_finish(self, db_path, conn):
+        """A foil copy is worth its foil price; the series already values it
+        that way, so the filter that decides whether it is in the series has to
+        agree."""
+        _own(conn, 1, -4, finish="foil")
+        _price(conn, 1, -4, tcg=20.00, price_type="foil")
+        _log_price_fetch(conn)
+        refresh_latest_prices(conn)
+        conn.commit()
+
+        # The foil Alpha at 20.00 and Bravo at 10.00. The two nonfoil Alphas
+        # are 3.00 and stay out.
+        assert _growth(db_path, q="price>5")["counts"][-1] == 2
 
 
 class TestEmptyCollection:
