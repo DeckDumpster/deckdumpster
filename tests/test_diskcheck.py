@@ -426,8 +426,10 @@ def test_deploy_gates_on_room_before_it_rebuilds():
 
 
 def test_ci_gates_on_room_before_it_builds():
-    ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    """de-xz8 moved every CI step into deploy/ci.sh; .github/workflows/ci.yml
+    now calls only that script, so the ordering this pins lives there."""
+    ci = (REPO_ROOT / "deploy" / "ci.sh").read_text()
     gate = ci.index("diskcheck.sh --floor")
     # The store has to be selected first, or the gate measures the wrong disk.
-    assert ci.index("Select container store") < gate
+    assert ci.index("mtgc_store_activate") < gate
     assert gate < ci.index("store-isolation-gate.sh")
