@@ -364,6 +364,7 @@ def test_units_are_installed_and_rendered(tmp_path):
         HOME=str(home),
         PATH=f"{bin_dir}:{env['PATH']}",
         XDG_RUNTIME_DIR=str(tmp_path / "run"),
+        MTGC_DISK_FLOOR_GB="0",
     )
     result = subprocess.run(
         ["bash", str(REPO_ROOT / "deploy" / "setup.sh"), "inst", "8099"],

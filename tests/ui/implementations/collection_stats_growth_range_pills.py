@@ -7,7 +7,6 @@ that clicking an enabled pill moves the active selection while clicking a
 greyed-out one does nothing.
 """
 
-import subprocess
 
 # Spread acquired_at over the last 120 days and write price rows every 5th day
 # (deliberate gaps, so the server-side forward-fill is exercised) for both
@@ -52,31 +51,10 @@ sh.commit()
 """
 
 
-def _find_container(base_url):
-    """Find the container serving the given base_url by matching its port."""
-    port = base_url.rstrip("/").rsplit(":", 1)[-1]
-    result = subprocess.run(
-        ["podman", "ps", "--format", "{{.Names}}"], capture_output=True, text=True
-    )
-    for name in result.stdout.strip().split("\n"):
-        if not name:
-            continue
-        port_result = subprocess.run(
-            ["podman", "port", name, "8081/tcp"], capture_output=True, text=True
-        )
-        if port in port_result.stdout:
-            return name
-    raise AssertionError(f"no container found serving {base_url}")
-
-
 def steps(harness):
     # 120 days of history: long enough for 1M (30) and 3M (90), short enough
     # that 6M (180) and 1Y (365) must be disabled.
-    container = _find_container(harness.base_url)
-    subprocess.run(
-        ["podman", "exec", container, "python3", "-c", _SEED],
-        capture_output=True, text=True, check=True,
-    )
+    harness.db_exec(_SEED)
 
     harness.navigate("/collection")
     harness.wait_for_visible(".collection-table", timeout=15_000)
