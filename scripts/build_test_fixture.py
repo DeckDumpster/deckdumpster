@@ -19,6 +19,7 @@ from pathlib import Path
 from mtg_collector.cli.demo_data import DEMO_CARDS
 from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
 from mtg_collector.db.schema import init_db, refresh_latest_prices
+from mtg_collector.db.set_sizes import apply_base_set_sizes
 from mtg_collector.services.scryfall import ScryfallAPI, ensure_set_cached
 from mtg_collector.utils import now_iso
 
@@ -36,6 +37,46 @@ DEMO_INGEST_SETS = ["tsp", "ddh", "tmp", "8ed", "roe"]
 PRECON_TEST_SETS = ["j25", "spm"]
 
 ALL_SETS = DEMO_SETS + UI_TEST_SETS + DEMO_INGEST_SETS + PRECON_TEST_SETS
+
+# MTGJSON `baseSetSize` for every set above, keyed the way AllPrintings.json
+# keys its `data` object.
+#
+# The other half of the pair needs no table here: `ensure_set_cached` already
+# stores Scryfall's `card_count` as total_set_size for every set it caches
+# (de-igx), so total_set_size lands on its own and stays current with whatever
+# Scryfall reports the day the fixture is rebuilt.  base_set_size has no such
+# source -- it is only in AllPrintings.json, a 537 MB download the fixture
+# builder should not need -- and without it every set in the fixture is one
+# contiguous run, so neither the completion meters on /sets nor the
+# base | extended | promo split on /sets/:set_code can be reached from a
+# --test container at all (de-1ov).
+#
+# SPG is here with 0 deliberately.  MTGJSON reports `baseSetSize: 0` for
+# Special Guests, `clean_size()` reads 0 as an absence rather than a size, and
+# the row is left NULL -- so the fixture keeps exactly one cached set in the
+# permanent, legitimate NULL state the hidden-meter path exists for.  Do not
+# "fix" it to a positive number: the fixture would then have nothing to test
+# that path against.
+FIXTURE_BASE_SET_SIZES = {
+    "8ED": 350,
+    "BLB": 281,
+    "DDH": 80,
+    "DSK": 286,
+    "ECL": 408,
+    "FDN": 291,
+    "FIN": 309,
+    "J25": 779,
+    "LCI": 291,
+    "MH3": 303,
+    "MKM": 286,
+    "OTJ": 286,
+    "ROE": 248,
+    "SPG": 0,
+    "SPM": 198,
+    "TMP": 350,
+    "TSP": 301,
+    "WOE": 276,
+}
 
 # Fallback sealed products — inserted only if not already present from MTGJSON.
 # The first 8 match demo_data.DEMO_SEALED_PRODUCTS category keywords so demo
@@ -245,6 +286,18 @@ def main():
         ok = ensure_set_cached(api, set_code, card_repo, set_repo, printing_repo, conn)
         if not ok:
             print(f"    WARNING: Failed to cache {set_code.upper()}")
+
+    # Store the base-set boundaries.  Written in AllPrintings.json's own shape
+    # and through the same function `mtg data import` uses, so this is the
+    # ingest path with a constant standing in for the file -- and it runs
+    # BEFORE the import below, so a real AllPrintings.json wins wherever it
+    # disagrees.  Both writes are idempotent, so with the same numbers on each
+    # side the second one changes nothing.
+    sized = apply_base_set_sizes(
+        conn,
+        {code: {"baseSetSize": size} for code, size in FIXTURE_BASE_SET_SIZES.items()},
+    )
+    print(f"  Stored base_set_size for {sized} sets")
 
     # Import MTGJSON data if AllPrintings.json is available
     from mtg_collector.cli.data_cmd import get_allprintings_path, import_mtgjson

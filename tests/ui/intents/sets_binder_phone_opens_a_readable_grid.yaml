@@ -1,0 +1,12 @@
+# Scenario: On a phone, a set's binder opens at a readable width
+#
+# Related:
+#   issues: [de-l5l]
+
+description: >
+  I open a set's binder page on my phone for the first time. The grid comes up
+  three cards across, wide enough to actually read the art while I count a
+  physical binder against it — not the six-across wall a desktop gets. The
+  cards-per-row readout agrees with what I am looking at, so the next press of
+  the minus button is not one step behind the screen. On a desktop the same
+  page still opens six across.

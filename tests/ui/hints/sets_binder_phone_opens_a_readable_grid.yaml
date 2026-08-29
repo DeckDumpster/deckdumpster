@@ -1,0 +1,23 @@
+start_page: "/sets/spg"
+involves:
+  - "cards-per-row readout #col-count"
+  - "the card grid itself — .card-grid, whose track count is what the user sees"
+  - "the viewport width, which is the whole subject"
+fixture_data:
+  set: "spg"
+  printings: 165
+  phone_viewport: {width: 390, height: 844}
+  phone_cols: 3
+  desktop_cols: 6
+notes: >
+  The runner navigates to start_page at the harness's 1280x900 before steps()
+  runs, so the desktop reading is already on screen and is asserted first.
+  That load also writes setsGridCols=6, which is exactly what a first phone
+  visit does not have — so the implementation removes the key before resizing.
+  Without that the phone load reads 6 back out of storage and the scenario
+  fails for a reason that has nothing to do with the default.
+  Resize to 390x844 and navigate again: storedCols() reads innerWidth at load,
+  so the resize has to happen before the navigation, not after it.
+  Assert on the layout as well as the readout — getComputedStyle(.card-grid)
+  .gridTemplateColumns resolves to one track per column, which is the thing the
+  user is actually looking at; #col-count only claims to describe it.

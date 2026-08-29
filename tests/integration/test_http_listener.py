@@ -35,7 +35,7 @@ import urllib.request
 
 import pytest
 
-from tests.integration.conftest import _discover_container
+from tests.container_store import discover_container, podman_argv
 
 # The container-internal port the plain listener binds (the CLI's own default).
 # 8081 is the TLS listener and the only EXPOSEd port.
@@ -48,12 +48,12 @@ def plain_publish(instance_name):
 
     Skips the whole module when the instance publishes no such port.
     """
-    container = _discover_container(instance_name)
+    container = discover_container(instance_name)
     if container is None:
         pytest.skip(f"No container found for instance '{instance_name}'")
 
     result = subprocess.run(
-        ["podman", "port", container, _CONTAINER_PLAIN_PORT],
+        [*podman_argv(instance_name), "port", container, _CONTAINER_PLAIN_PORT],
         capture_output=True, text=True,
     )
     if result.returncode != 0 or not result.stdout.strip():

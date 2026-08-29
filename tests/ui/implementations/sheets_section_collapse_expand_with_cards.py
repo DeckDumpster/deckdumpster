@@ -1,30 +1,29 @@
 """
 Hand-written implementation for sheets_section_collapse_expand_with_cards.
 
-Loads BLB play sheets, verifies Variants is expanded and sheet sections
-are collapsed. Expands Common, checks cards and badges, then collapses it.
+Loads BLB play sheets via the deep link, verifies Variants is expanded and
+sheet sections are collapsed. Expands Common, checks cards and badges, then
+collapses it.
 """
 
 
 def steps(harness):
-    # start_page: /sheets — auto-navigated by test runner.
+    # start_page: /sheets#set=blb&product=play — auto-navigated by test runner.
 
-    # Wait for the set input to be ready
-    harness.wait_for_visible("#set-input:not([disabled])", timeout=500)
-
-    # Select BLB set
-    harness.fill_by_selector("#set-input", "Bloom")
-    harness.wait_for_visible("#set-dropdown li", timeout=500)
-    harness.click_by_selector("#set-dropdown li")
-
-    # Wait for products to load
-    harness.wait_for_visible("#product-radios label", timeout=500)
-
-    # Select play product
-    harness.click_by_text("play", exact=True)
-
-    # Wait for sheet sections to render
-    harness.wait_for_visible(".section-header", timeout=500)
+    # Wait for the play render before touching anything. The deep link loads
+    # two products: loadProducts() auto-checks the first one (collector,
+    # 6 sheets) and fires a sheet load for it, then setSelectedProduct()
+    # switches to play and fires a second. Both paint .section-header, so only
+    # the count tells them apart. 5 s (as in the sibling sheets scenarios)
+    # because this is the page load, not an interaction — every wait below
+    # keeps the harness's 500 ms budget.
+    #
+    # The deep link is also what keeps this scenario off the first
+    # /api/sheets for the set: reaching play through the set input and the
+    # product pills put that fetch inside the 500 ms budget, and against a
+    # container that had never served it the wait for .section-header timed
+    # out every time (de-35k).
+    harness.wait_for_text("8 sheets", timeout=5_000)
 
     # Variants section should be expanded by default (first section)
     harness.assert_visible(".section.open")

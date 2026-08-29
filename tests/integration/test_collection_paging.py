@@ -3,8 +3,10 @@ Paging contract for /api/collection.
 
 The endpoint returns a page envelope — {rows, total, limit, offset} — never a
 bare array.  `limit` defaults to 250 and caps at 1000; there is no unbounded
-escape hatch and no sentinel, so every caller takes the same semantics.  A bad
-`limit` or `offset` is a 400, not a silent clamp.
+escape hatch and no sentinel, so every caller takes the same semantics.  A
+caller walking a result it already has the size of may hand that size back as
+`known_total` rather than have it counted again.  A bad `limit`, `offset` or
+`known_total` is a 400, not a silent clamp.
 
 Usage:
     uv run pytest tests/integration/test_collection_paging.py -v --instance <instance>
@@ -133,6 +135,34 @@ class TestOffsetWalk:
         assert body["offset"] == total + 10
 
 
+class TestKnownTotal:
+    """`total` handed back by the caller instead of counted again (de-j9b).
+
+    Every window past the first walked the whole grouped body to re-derive a
+    number the client already had — 929 ms of a 3.2 s window on the full
+    catalogue.  Over HTTP what is visible is that the answer does not change:
+    the saved query is asserted in tests/test_collection_totals.py, which can
+    see the SQL.
+    """
+
+    @pytest.mark.parametrize("query", TEMPLATES)
+    def test_a_window_is_the_same_window_either_way(self, api, query):
+        counted = _page(api, query, limit=1)["total"]
+        if counted < 2:
+            pytest.skip("need at least two rows to ask for a second window")
+
+        plain = _page(api, query, limit=1, offset=1)
+        echoed = _page(api, query, limit=1, offset=1, known_total=counted)
+        assert echoed["total"] == plain["total"] == counted
+        assert echoed["rows"] == plain["rows"]
+
+    def test_the_first_window_still_counts_for_itself(self, api):
+        """Window 0 has the true number for free — it is summing and pricing
+        the whole result in the same scan — so it does not take the caller's."""
+        counted = _page(api, "", limit=1)["total"]
+        assert _page(api, "", limit=1, offset=0, known_total=counted + 500)["total"] == counted
+
+
 class TestRejectsBadPaging:
     """A bad limit/offset is a 400, never a silent clamp."""
 
@@ -146,6 +176,9 @@ class TestRejectsBadPaging:
             "limit=1.5",
             "offset=-1",
             "offset=abc",
+            "known_total=-1",
+            "known_total=abc",
+            "known_total=1.5",
         ],
     )
     def test_rejected_with_400(self, api, params):

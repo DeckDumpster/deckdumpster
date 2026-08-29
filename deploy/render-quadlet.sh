@@ -3,7 +3,8 @@
 # Render the Quadlet unit for an MTGC instance to stdout.
 #
 # Usage:
-#   bash deploy/render-quadlet.sh <instance> <port-mapping> <http-port> <tls-certs> [template]
+#   bash deploy/render-quadlet.sh <instance> <port-mapping> <http-port> <tls-certs> \
+#                                  <memory-max> [template]
 #
 #   <instance>      instance name, substituted for {{INSTANCE}}
 #   <port-mapping>  host:container mapping for the HTTPS listener, e.g. "8081:8081"
@@ -18,15 +19,23 @@
 #                   is mounted at /certs READ-ONLY; the container never writes
 #                   there and never obtains a certificate. The container path
 #                   and the :ro flag are hardcoded here, not operator-supplied.
+#   <memory-max>    memory ceiling for the container's cgroup, e.g. "2G", or ""
+#                   for no ceiling at all. Rendered as MemoryMax= and nothing
+#                   else: MemoryMax is the bound, and the kernel already reclaims
+#                   page cache before it OOM-kills, so a MemoryHigh beside it
+#                   would only add a second number to keep in sync. It would also
+#                   trade a visible kill for a throttled, still-running container
+#                   — a hung CI job is harder to read than a dead one.
 #   [template]      path to mtgc.container (defaults to the one beside this script)
 #
-# With an empty <http-port> / <tls-certs> the output is byte-identical to a render
-# that has no plaintext publish and no cert mount at all — the {{HTTP_PUBLISH}} and
-# {{TLS_MOUNT}} lines are deleted, not blanked.
+# With an empty <http-port> / <tls-certs> / <memory-max> the output is byte-identical
+# to a render that has no plaintext publish, no cert mount and no memory ceiling at
+# all — the {{HTTP_PUBLISH}}, {{TLS_MOUNT}} and {{MEMORY_LIMIT}} lines are deleted,
+# not blanked.
 set -euo pipefail
 
-if [ $# -lt 4 ]; then
-    echo "Usage: bash deploy/render-quadlet.sh <instance> <port-mapping> <http-port> <tls-certs> [template]" >&2
+if [ $# -lt 5 ]; then
+    echo "Usage: bash deploy/render-quadlet.sh <instance> <port-mapping> <http-port> <tls-certs> <memory-max> [template]" >&2
     exit 1
 fi
 
@@ -34,7 +43,8 @@ INSTANCE="$1"
 PORT_MAPPING="$2"
 HTTP_PORT="$3"
 TLS_CERTS="$4"
-TEMPLATE="${5:-$(cd "$(dirname "$0")" && pwd)/mtgc.container}"
+MEMORY_MAX="$5"
+TEMPLATE="${6:-$(cd "$(dirname "$0")" && pwd)/mtgc.container}"
 
 if [ -n "$HTTP_PORT" ]; then
     if ! [[ "$HTTP_PORT" =~ ^[0-9]+$ ]]; then
@@ -59,9 +69,22 @@ else
     TLS_MOUNT_SED="/^{{TLS_MOUNT}}\$/d"
 fi
 
+if [ -n "$MEMORY_MAX" ]; then
+    # A systemd memory size: bytes, or a K/M/G/T suffix. Anything else is a
+    # unit systemd refuses to load, which is a container that never starts.
+    if ! [[ "$MEMORY_MAX" =~ ^[0-9]+[KMGT]?$ ]]; then
+        echo "ERROR: memory max must be a systemd size like 2G, got: $MEMORY_MAX" >&2
+        exit 1
+    fi
+    MEMORY_LIMIT_SED="s|^{{MEMORY_LIMIT}}\$|MemoryMax=${MEMORY_MAX}|"
+else
+    MEMORY_LIMIT_SED="/^{{MEMORY_LIMIT}}\$/d"
+fi
+
 sed \
     -e "s|{{INSTANCE}}|${INSTANCE}|g" \
     -e "s|{{PORT}}:8081|${PORT_MAPPING}|g" \
     -e "$HTTP_PUBLISH_SED" \
     -e "$TLS_MOUNT_SED" \
+    -e "$MEMORY_LIMIT_SED" \
     "$TEMPLATE"
