@@ -886,7 +886,15 @@ It verifies, in order:
 4. the public `Cache-Control` holds the document for under 60s without
    revalidating;
 5. a conditional request through the edge returns 304;
-6. the edge negotiates gzip.
+6. the edge negotiates gzip;
+7. **an asset the document names carries a digest**, and the edge serves it
+   `immutable` and byte-identical to the origin. Since de-l23 every `/static`
+   reference is rewritten to `/static/<name>.<16 hex>.<ext>`; an origin that
+   stopped doing that puts a conditional round trip back on every subresource,
+   and an edge holding different bytes for a digest-bearing URL is a cache
+   nobody can revalidate out of for a year. A document that names no
+   content-addressed asset is itself the finding — this step cannot pass by
+   skipping either.
 
 Both sides are asked with `Accept-Encoding: identity`. The server mints a
 distinct ETag per encoding on purpose (see `mtg_collector/http_cache.py`), and
@@ -934,7 +942,7 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
 | `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or any image its build labelled, turn up in Podman's default store, or if nothing was built. Removes what it catches, on both paths. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
-| `cdn-check.sh [--url U] [--origin U] [--path P]` | Verify the deployed document is what the CDN is actually serving, by comparing edge and origin ETags. Also checks revalidation, gzip and that no document is held for hours — see [CDN deploy check](#cdn-deploy-check) |
+| `cdn-check.sh [--url U] [--origin U] [--path P]` | Verify the deployed document is what the CDN is actually serving, by comparing edge and origin ETags. Also checks revalidation, gzip, that no document is held for hours, and that a content-addressed asset is immutable and identical on both sides — see [CDN deploy check](#cdn-deploy-check) |
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
 | `mtg data check-catalog` (in-container) | Compare the local set list against Scryfall's and exit 1 if it has fallen behind. Read-only — see [Catalog freshness check](#catalog-freshness-check) |

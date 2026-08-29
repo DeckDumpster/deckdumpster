@@ -350,22 +350,23 @@ Every body leaves through `CrackPackHandler._respond`, and the caching rules
 follow from **what the response is**, not from a string the caller passed.
 `mtg_collector/http_cache.py` holds the decisions as pure functions.
 
-Three policies, and there is no fourth: `CACHE_DOCUMENT` (`public, no-cache`)
-for HTML and everything under `/static/*`, `CACHE_IMMUTABLE` for the
-ingest-image path (whose headers are unchanged, at `public, max-age=86400,
-immutable`), `CACHE_API` (`private, no-cache`) for JSON. SSE sets its own
-headers and is untouched.
+Four policies, and there is no fifth: `CACHE_DOCUMENT` (`public, no-cache`) for
+HTML and for any `/static/*` URL carrying no digest, `CACHE_HASHED_ASSET`
+(`public, max-age=31536000, immutable`) for a content-addressed asset URL,
+`CACHE_IMMUTABLE` for the ingest-image path (whose headers are unchanged, at
+`public, max-age=86400, immutable`), `CACHE_API` (`private, no-cache`) for JSON.
+SSE sets its own headers and is untouched.
 
-**`immutable` is a promise about the URL, not about the bytes**, and no URL here
-is content-addressed. The ingest-image path rests on a convention — the upload
-handler refuses a name that already exists — which is why its window stays a day
-and not a year; a hash in the URL is what would earn more. `/static/app.css`
-rests on nothing at all: it is rewritten by every deploy, so a long max-age on
-it is the same bug the pages had. Every HTML page was served
-`public, max-age=86400` with no validator, and because `magic.dumpster.cards`
-reaches this process through a Cloudflare tunnel, the edge held each document
-for a day: six deploys landed on 2026-08-25 and the public site showed none of
-them. A hard refresh does not help — it defeats the browser cache, not the edge.
+**`immutable` is a promise about the URL, not about the bytes.** The ingest-image
+path rests on a convention — the upload handler refuses a name that already
+exists — which is why its window stays a day and not a year; a hash in the URL is
+what would earn more. A bare `/static/app.css` rests on nothing at all: it is
+rewritten by every deploy, so a long max-age on it is the same bug the pages had.
+Every HTML page was served `public, max-age=86400` with no validator, and because
+`magic.dumpster.cards` reaches this process through a Cloudflare tunnel, the edge
+held each document for a day: six deploys landed on 2026-08-25 and the public
+site showed none of them. A hard refresh does not help — it defeats the browser
+cache, not the edge.
 
 **The ETag varies with the encoding** — `"<h>"` identity, `"<h>-gzip"` — plus
 `Vary: Accept-Encoding`. One tag for two representations is how a cache serves
@@ -386,6 +387,33 @@ requires; only a well-formed range outside the representation is a 416.
 **Verifying this needs the CDN.** `deploy/cdn-check.sh` compares the edge's ETag
 with the origin's, because every localhost check passed on the evening the
 public site was a day stale. See `deploy/README.md` → "CDN deploy check".
+
+### Content-addressed assets (`/static/shared.<digest>.css`)
+
+`mtg_collector/static_assets.py` is what puts a hash in the URL, and it is the
+only reason any asset may be `immutable`. Pages keep naming their assets by the
+path on disk; **the digest is minted as the document goes out**, so there is no
+build step, no manifest to regenerate, and an edit is live on the next page load.
+`deck_builder.html` names 11 subresources — that was 11 conditional round trips
+per warm load, and it is now none.
+
+- **The digest goes in the filename, never in a path segment.**
+  `vendor/keyrune/keyrune.min.css` asks for `url('fonts/keyrune.woff2')`, which
+  resolves against the directory it was served from. Hashing a directory would
+  404 every glyph — the same break `tests/test_vendored_fonts.py` exists to
+  prevent, arrived at from the other side.
+- **HTML is never content-addressed.** A document's bytes on the wire change
+  whenever an asset it names changes, while its own file does not; a digest taken
+  from that file would be a promise about bytes nobody sent. Documents stay
+  `no-cache` — a document being re-fetched is what makes a deploy visible at all.
+- **A stale digest is a 404, never today's bytes.** Serving current content under
+  a URL that asked for older content is how a client ends up holding the wrong
+  thing under a promise it cannot revalidate away. The only window is a page
+  whose HTML predates the deploy, and that HTML is `no-cache`.
+- **An unhashed `/static/*` URL still works and still revalidates**, exactly as
+  de-dai left it. An asset opts *into* immutability by existing on disk, so a
+  reference naming no file stays the visible 404 it always was, and the two JS
+  files that build `/static/card_back.jpeg` in a string keep today's behaviour.
 
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
@@ -443,6 +471,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 - **`collection.card_name` is filled by the INSERT/UPDATE statement itself, not by a trigger.** Every write that sets a row's `printing_id` sets `card_name` from the same scalar subquery — `CollectionRepository.add`, `CollectionRepository.update`, the Jumpstart land insert, and `mtg db`'s non-English remap. A trigger would be wrong: under split-DB `printings` is a **temp view** over the ATTACHed shared catalogue, and a trigger body in `main` cannot see temp views, so it would silently write NULL on exactly the deployments that matter. An ordinary statement resolves through the shadow and is correct in both modes. **A hand-written `INSERT INTO collection` leaves the sort key NULL and every name ties** — go through the repository. The repair for an upstream rename is `rebuild_collection_card_names()`, which `mtg data refresh-catalog` runs after `mtg cache all` has carried the rename to `printings`; it lives there rather than in `cache all` because under split-DB that command writes to the *shared* catalogue, where `collection` is somebody else's empty table.
 - **Sort a set by `printings.number_sortable`, never by casting `collector_number`.** `ORDER BY CAST(collector_number AS INTEGER), collector_number` puts `A-248` *before* card #1, because `CAST('A-248' AS INTEGER)` is 0. `number_sortable` is that number encoded so it sorts — namespace, then value, then suffix — computed at ingest by `PrintingRepository.upsert` (`mtg_collector/db/collector_number.py` holds the encoding and the reasoning). It is **not** unique within a set, so close the `ORDER BY` on `p.printing_id` in the same direction; `idx_printings_set_sortable(set_code, number_sortable, printing_id)` carries printing_id for exactly that reason and serves the whole `ORDER BY` off one scan. `rebuild_number_sortable()` is the repair, but the column cannot go stale the way `card_name` can — it reads `collector_number`, which is half of `UNIQUE(set_code, collector_number)`.
 - **A sort's tiebreak must follow the sort's direction.** SQLite reads an index backwards only when every ORDER BY term inverts together, so `p.card_name DESC, p.printing_id ASC` silently falls back to a full sort (4.3 s vs 10 ms). The tiebreak is there to make the order total, which it is in either direction.
+- **The integration and UI conftests resolve `podman` through the instance's Quadlet unit** (`tests/container_store.py`). A bare `podman` sees only the DEFAULT store, and `MTGC_STORE_ROOT` puts every non-prod instance in another one — so the documented `setup.sh <inst> --test` + `pytest --instance <inst>` found no container, skipped, and reported `124 skipped … exit 0`, which reads as a pass (de-1zq). CI was never exposed: `ci.yml` activates the shim and exports it through `GITHUB_PATH`. The unit's `GlobalArgs=` records where the container actually is, and an unstamped unit names the default store just as definitely — which is what keeps `--instance prod` right on a box whose `store.env` opts everything else in. Do not re-derive the runroot; ask `store-lib.sh`. A named `--instance` that resolves to no container now **fails**; with no flag it still skips, so a plain `pytest tests/` stays a unit run.
 
 ## Deployment
 

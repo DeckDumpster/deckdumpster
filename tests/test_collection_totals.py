@@ -11,6 +11,11 @@ server for that to work:
     order the loaded rows against each other and leave the rest of the result in
     the previous query's order.
 
+The other half of the same argument: a figure the client already holds is not
+worth re-deriving when doing so costs a walk of the whole result.  `total_qty`
+and `total_value` are sent on the first window only (de-962), and `total` is
+handed back by the caller rather than counted again (de-j9b).
+
 To run: uv run pytest tests/test_collection_totals.py -v
 """
 
@@ -119,19 +124,32 @@ def _set_price_source(db_path, value):
     conn.close()
 
 
-def _page(db_path, **params):
-    """Call /api/collection and return the whole envelope."""
+def _call(db_path, params, sql_log=None):
+    """Call /api/collection and return the whole envelope.
+
+    `sql_log`, when given, is appended to with every statement the handler
+    executes — which is how the counting a window does can be asserted on
+    rather than inferred from a number that would be the same either way.
+    """
     from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = object.__new__(CrackPackHandler)
     handler.db_path = db_path
     handler.generator = object()  # truthy, never called by this path
+    if sql_log is not None:
+        conn = CrackPackHandler._get_conn(handler)
+        conn.set_trace_callback(sql_log.append)
+        handler._get_conn = lambda: conn
     responses = []
     handler._send_json = lambda obj, status=200: responses.append((status, obj))
     handler._api_collection({k: [str(v)] for k, v in params.items()})
     status, body = responses[-1]
     assert status == 200, body
     return body
+
+
+def _page(db_path, **params):
+    return _call(db_path, params)
 
 
 class TestWholeResultTotals:
@@ -315,6 +333,106 @@ class TestPriceSortDoesNotDuplicateRows:
         by_price = [r["name"] for r in _page(two_source_db, sort="price")["rows"]]
         by_ck = [r["name"] for r in _page(two_source_db, sort="ck_price")["rows"]]
         assert by_price == by_ck
+
+
+#: The statement this whole class exists to keep out of a window: the count
+#: that walks the entire grouped body to re-derive `total`.
+_COUNT_SQL = "SELECT COUNT(*) FROM (SELECT 1"
+
+
+def _counted(sql_log):
+    return any(_COUNT_SQL in stmt for stmt in sql_log)
+
+
+class TestKnownTotal:
+    """`total` handed back by the caller instead of counted again (de-j9b).
+
+    `total` describes the result, so a client walking one it already holds is
+    sent the same number window after window — and every window past the first
+    walks the whole grouped body to re-derive it.  On 110,018 printings that
+    was 929 ms of a 3.2 s window, about 30% of a catalogue walk.
+
+    So the client that has the number sends it back and is given it back.  What
+    is asserted here is the *counting*, not the value: the number is the same
+    either way on a correct client, so a test that only compared totals would
+    pass with the query still running.
+    """
+
+    def test_a_window_counts_when_the_caller_has_nothing_to_offer(self, priced_db):
+        """The behaviour being avoided, pinned so the test below means something."""
+        sql = []
+        body = _call(priced_db, {"limit": 1, "offset": 1}, sql_log=sql)
+        assert body["total"] == TOTAL_ROWS
+        assert _counted(sql), "no count ran; this test can no longer detect one"
+
+    def test_known_total_replaces_the_count(self, priced_db):
+        sql = []
+        body = _call(priced_db, {"limit": 1, "offset": 1, "known_total": TOTAL_ROWS}, sql_log=sql)
+        assert body["total"] == TOTAL_ROWS
+        assert not _counted(sql), "known_total was accepted and the body counted anyway"
+
+    def test_the_caller_is_taken_at_its_word(self, priced_db):
+        """A value that cannot have come from this result still comes back.
+
+        Not an invitation to lie — it is what makes the previous test's claim
+        checkable at the value, and it says plainly that the number is the
+        caller's own to keep correct.  It can only ever be a client handing
+        back what this endpoint gave it.
+        """
+        body = _page(priced_db, limit=1, offset=1, known_total=999)
+        assert body["total"] == 999
+
+    def test_the_page_is_otherwise_unchanged(self, priced_db):
+        """Only the count is skipped — the window itself is the same window."""
+        plain = _page(priced_db, limit=1, offset=1)
+        echoed = _page(priced_db, limit=1, offset=1, known_total=TOTAL_ROWS)
+        assert echoed["rows"] == plain["rows"]
+        assert (echoed["limit"], echoed["offset"]) == (plain["limit"], plain["offset"])
+
+    def test_the_first_window_ignores_it(self, priced_db):
+        """Window 0 counts, sums and prices in one scan it has to run anyway,
+        so it has the true number for free and prefers it."""
+        body = _page(priced_db, limit=1, offset=0, known_total=999)
+        assert body["total"] == TOTAL_ROWS
+
+    def test_a_short_page_ignores_it(self, priced_db):
+        """A page that ran out of rows knows where the result ended, also for
+        free — and that is the branch a walk lands on last."""
+        body = _page(priced_db, limit=3, offset=3, known_total=999)
+        assert len(body["rows"]) == 1
+        assert body["total"] == TOTAL_ROWS
+
+    @pytest.mark.parametrize("query", [{}, {"expand": "copies"}, {"q": "is:unowned"}])
+    def test_every_template_honours_it(self, priced_db, query):
+        """The three query templates share one paging tail; a count added back
+        to any of them individually is what this catches."""
+        sql = []
+        _call(priced_db, {**query, "limit": 1, "offset": 1, "known_total": 42}, sql_log=sql)
+        assert not _counted(sql), f"{query or 'default'} counted anyway"
+
+    def test_a_walk_that_echoes_sees_what_a_walk_that_counts_sees(self, priced_db):
+        """The property the client actually depends on: paging with the number
+        in hand visits the same rows, in the same order, and stops in the same
+        place."""
+        def walk(echo):
+            seen, offset, total = [], 0, None
+            while True:
+                params = {"limit": 1, "offset": offset}
+                if echo and total is not None:
+                    params["known_total"] = total
+                body = _page(priced_db, **params)
+                total = body["total"]
+                if not body["rows"]:
+                    return seen, total
+                seen.extend(r["name"] for r in body["rows"])
+                offset += len(body["rows"])
+                if offset >= total:
+                    return seen, total
+
+        assert walk(echo=True) == walk(echo=False)
+        # Guard the guard: a walk that returned nothing would satisfy the line
+        # above. The default sort is by name, so this is the whole result.
+        assert walk(echo=True) == (["Alpha", "Bravo", "Charlie", "Delta"], TOTAL_ROWS)
 
 
 # --- The LEFT-JOIN template: rows that have no copy -------------------------

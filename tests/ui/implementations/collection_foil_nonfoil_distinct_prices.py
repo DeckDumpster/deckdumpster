@@ -11,52 +11,23 @@ available finishes (p.finishes) instead of the copy's actual finish (c.finish),
 so both rows showed the non-foil price and the foil "$99.00" never appeared.
 """
 
-import subprocess
-
-
-def _find_container(base_url):
-    """Find the container serving the given base_url by matching its port."""
-    try:
-        port = base_url.rstrip("/").rsplit(":", 1)[-1]
-        result = subprocess.run(
-            ["podman", "ps", "--format", "{{.Names}}"],
-            capture_output=True, text=True,
-        )
-        for name in result.stdout.strip().split("\n"):
-            if not name:
-                continue
-            port_result = subprocess.run(
-                ["podman", "port", name, "8081/tcp"],
-                capture_output=True, text=True,
-            )
-            if port in port_result.stdout:
-                return name
-    except Exception:
-        pass
-    return None
-
 
 def steps(harness):
     # Seed distinct foil/non-foil prices into the SHARED reference DB.
     # latest_prices is a shared table (/data/shared.sqlite), not collection.sqlite.
-    container = _find_container(harness.base_url)
-    if container:
-        seed_script = (
-            "import sqlite3\n"
-            "s = sqlite3.connect('/data/shared.sqlite')\n"
-            "s.execute(\"DELETE FROM latest_prices WHERE set_code='fdn' AND collector_number='132'\")\n"
-            "for src, ptype, price in [\n"
-            "    ('tcgplayer','normal','3.00'), ('tcgplayer','foil','99.00'),\n"
-            "    ('cardkingdom','normal','3.30'), ('cardkingdom','foil','110.00')]:\n"
-            "    s.execute(\n"
-            "        'INSERT INTO latest_prices (set_code, collector_number, source, price_type, price, observed_at) '\n"
-            "        \"VALUES (?,?,?,?,?, '2026-06-01T00:00:00Z')\", ('fdn','132',src,ptype,price))\n"
-            "s.commit(); s.close()\n"
-        )
-        subprocess.run(
-            ["podman", "exec", container, "python3", "-c", seed_script],
-            capture_output=True, text=True,
-        )
+    seed_script = (
+        "import sqlite3\n"
+        "s = sqlite3.connect('/data/shared.sqlite')\n"
+        "s.execute(\"DELETE FROM latest_prices WHERE set_code='fdn' AND collector_number='132'\")\n"
+        "for src, ptype, price in [\n"
+        "    ('tcgplayer','normal','3.00'), ('tcgplayer','foil','99.00'),\n"
+        "    ('cardkingdom','normal','3.30'), ('cardkingdom','foil','110.00')]:\n"
+        "    s.execute(\n"
+        "        'INSERT INTO latest_prices (set_code, collector_number, source, price_type, price, observed_at) '\n"
+        "        \"VALUES (?,?,?,?,?, '2026-06-01T00:00:00Z')\", ('fdn','132',src,ptype,price))\n"
+        "s.commit(); s.close()\n"
+    )
+    harness.db_exec(seed_script)
 
     # start_page: /collection — auto-navigated by the test runner.
     # Search for the card owned in both finishes.

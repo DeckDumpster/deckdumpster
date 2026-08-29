@@ -26,10 +26,24 @@ import re
 #: exactly the behaviour a deploy needs: the edge keeps its copy and a matching
 #: ETag turns the next request into a 304 instead of a transfer.
 #:
-#: /static/* is here with the HTML deliberately.  Those URLs carry no content
-#: hash, so a stale style sheet outlives a deploy exactly the way a stale page
-#: does.  Hashed asset URLs are what would let them be immutable.
+#: A /static/* URL with no digest in it is here for that reason: its bytes can
+#: change under a client, so a stale style sheet would outlive a deploy exactly
+#: the way a stale page did.  A digest (see CACHE_HASHED_ASSET) is how an asset
+#: stops paying the conditional round trip that buys.
 CACHE_DOCUMENT = "public, no-cache"
+
+#: A content-addressed asset: /static/shared.<digest>.css (de-l23).  The digest
+#: is of the bytes, so this URL means these bytes and can mean nothing else --
+#: change the file and every page names a different URL on its next load, which
+#: is itself no-cache and so is re-fetched.  Nothing a client holds can be
+#: wrong, so there is nothing for it to ask about: a year, and no conditional
+#: round trip per subresource per page load.
+#:
+#: This is the promise CACHE_IMMUTABLE's docstring says a hash in the URL would
+#: earn, and mtg_collector/static_assets.py is what puts one there.  The two are
+#: separate constants because the ingest path still has no digest, only a
+#: convention, and a convention is worth a day.
+CACHE_HASHED_ASSET = "public, max-age=31536000, immutable"
 
 #: The ingest-image path, and nothing else.  Its value is EXACTLY what that path
 #: already served: this is the one place that was doing caching correctly and it
@@ -41,7 +55,9 @@ CACHE_DOCUMENT = "public, no-cache"
 #: than overwriting it, and the corner path timestamps to the second -- and a
 #: convention has edges: a delete frees a name for re-upload, and two corner
 #: uploads inside one second collide.  A hash in the URL is what would earn a
-#: year.  Do not raise this without putting one there first.
+#: year.  Do not raise this without putting one there first -- CACHE_HASHED_ASSET
+#: is what that looks like once one is there, and it is a different constant
+#: precisely because these URLs still have none.
 CACHE_IMMUTABLE = "public, max-age=86400, immutable"
 
 #: ``private`` keeps collection data out of the shared edge cache; ``no-cache``
