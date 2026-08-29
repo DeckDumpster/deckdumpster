@@ -11,6 +11,11 @@ server for that to work:
     order the loaded rows against each other and leave the rest of the result in
     the previous query's order.
 
+The other half of the same argument: a figure the client already holds is not
+worth re-deriving when doing so costs a walk of the whole result.  `total_qty`
+and `total_value` are sent on the first window only (de-962), and `total` is
+handed back by the caller rather than counted again (de-j9b).
+
 To run: uv run pytest tests/test_collection_totals.py -v
 """
 
@@ -119,19 +124,32 @@ def _set_price_source(db_path, value):
     conn.close()
 
 
-def _page(db_path, **params):
-    """Call /api/collection and return the whole envelope."""
+def _call(db_path, params, sql_log=None):
+    """Call /api/collection and return the whole envelope.
+
+    `sql_log`, when given, is appended to with every statement the handler
+    executes — which is how the counting a window does can be asserted on
+    rather than inferred from a number that would be the same either way.
+    """
     from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = object.__new__(CrackPackHandler)
     handler.db_path = db_path
     handler.generator = object()  # truthy, never called by this path
+    if sql_log is not None:
+        conn = CrackPackHandler._get_conn(handler)
+        conn.set_trace_callback(sql_log.append)
+        handler._get_conn = lambda: conn
     responses = []
     handler._send_json = lambda obj, status=200: responses.append((status, obj))
     handler._api_collection({k: [str(v)] for k, v in params.items()})
     status, body = responses[-1]
     assert status == 200, body
     return body
+
+
+def _page(db_path, **params):
+    return _call(db_path, params)
 
 
 class TestWholeResultTotals:
@@ -315,3 +333,240 @@ class TestPriceSortDoesNotDuplicateRows:
         by_price = [r["name"] for r in _page(two_source_db, sort="price")["rows"]]
         by_ck = [r["name"] for r in _page(two_source_db, sort="ck_price")["rows"]]
         assert by_price == by_ck
+
+
+#: The statement this whole class exists to keep out of a window: the count
+#: that walks the entire grouped body to re-derive `total`.
+_COUNT_SQL = "SELECT COUNT(*) FROM (SELECT 1"
+
+
+def _counted(sql_log):
+    return any(_COUNT_SQL in stmt for stmt in sql_log)
+
+
+class TestKnownTotal:
+    """`total` handed back by the caller instead of counted again (de-j9b).
+
+    `total` describes the result, so a client walking one it already holds is
+    sent the same number window after window — and every window past the first
+    walks the whole grouped body to re-derive it.  On 110,018 printings that
+    was 929 ms of a 3.2 s window, about 30% of a catalogue walk.
+
+    So the client that has the number sends it back and is given it back.  What
+    is asserted here is the *counting*, not the value: the number is the same
+    either way on a correct client, so a test that only compared totals would
+    pass with the query still running.
+    """
+
+    def test_a_window_counts_when_the_caller_has_nothing_to_offer(self, priced_db):
+        """The behaviour being avoided, pinned so the test below means something."""
+        sql = []
+        body = _call(priced_db, {"limit": 1, "offset": 1}, sql_log=sql)
+        assert body["total"] == TOTAL_ROWS
+        assert _counted(sql), "no count ran; this test can no longer detect one"
+
+    def test_known_total_replaces_the_count(self, priced_db):
+        sql = []
+        body = _call(priced_db, {"limit": 1, "offset": 1, "known_total": TOTAL_ROWS}, sql_log=sql)
+        assert body["total"] == TOTAL_ROWS
+        assert not _counted(sql), "known_total was accepted and the body counted anyway"
+
+    def test_the_caller_is_taken_at_its_word(self, priced_db):
+        """A value that cannot have come from this result still comes back.
+
+        Not an invitation to lie — it is what makes the previous test's claim
+        checkable at the value, and it says plainly that the number is the
+        caller's own to keep correct.  It can only ever be a client handing
+        back what this endpoint gave it.
+        """
+        body = _page(priced_db, limit=1, offset=1, known_total=999)
+        assert body["total"] == 999
+
+    def test_the_page_is_otherwise_unchanged(self, priced_db):
+        """Only the count is skipped — the window itself is the same window."""
+        plain = _page(priced_db, limit=1, offset=1)
+        echoed = _page(priced_db, limit=1, offset=1, known_total=TOTAL_ROWS)
+        assert echoed["rows"] == plain["rows"]
+        assert (echoed["limit"], echoed["offset"]) == (plain["limit"], plain["offset"])
+
+    def test_the_first_window_ignores_it(self, priced_db):
+        """Window 0 counts, sums and prices in one scan it has to run anyway,
+        so it has the true number for free and prefers it."""
+        body = _page(priced_db, limit=1, offset=0, known_total=999)
+        assert body["total"] == TOTAL_ROWS
+
+    def test_a_short_page_ignores_it(self, priced_db):
+        """A page that ran out of rows knows where the result ended, also for
+        free — and that is the branch a walk lands on last."""
+        body = _page(priced_db, limit=3, offset=3, known_total=999)
+        assert len(body["rows"]) == 1
+        assert body["total"] == TOTAL_ROWS
+
+    @pytest.mark.parametrize("query", [{}, {"expand": "copies"}, {"q": "is:unowned"}])
+    def test_every_template_honours_it(self, priced_db, query):
+        """The three query templates share one paging tail; a count added back
+        to any of them individually is what this catches."""
+        sql = []
+        _call(priced_db, {**query, "limit": 1, "offset": 1, "known_total": 42}, sql_log=sql)
+        assert not _counted(sql), f"{query or 'default'} counted anyway"
+
+    def test_a_walk_that_echoes_sees_what_a_walk_that_counts_sees(self, priced_db):
+        """The property the client actually depends on: paging with the number
+        in hand visits the same rows, in the same order, and stops in the same
+        place."""
+        def walk(echo):
+            seen, offset, total = [], 0, None
+            while True:
+                params = {"limit": 1, "offset": offset}
+                if echo and total is not None:
+                    params["known_total"] = total
+                body = _page(priced_db, **params)
+                total = body["total"]
+                if not body["rows"]:
+                    return seen, total
+                seen.extend(r["name"] for r in body["rows"])
+                offset += len(body["rows"])
+                if offset >= total:
+                    return seen, total
+
+        assert walk(echo=True) == walk(echo=False)
+        # Guard the guard: a walk that returned nothing would satisfy the line
+        # above. The default sort is by name, so this is the whole result.
+        assert walk(echo=True) == (["Alpha", "Bravo", "Charlie", "Delta"], TOTAL_ROWS)
+
+
+# --- The LEFT-JOIN template: rows that have no copy -------------------------
+#
+# `is:unowned` (and the shared-links `cards=` list) LEFT JOIN `collection`, so a
+# result row can be a card nobody owns: qty 0, and therefore 0 towards
+# total_value whatever that printing is priced at.  The sums are taken over a
+# body that inner-joins the copies for exactly that reason — pricing 109,976
+# copy-less rows to add zero was 6.6 s of a 7.3 s first paint (de-dfb).
+#
+# What that must not cost: `total` counts result rows, copy-less ones included,
+# so it cannot come from the same body.  These pin both halves.
+
+UNOWNED_PRICE = 100.0  # dear on purpose: a sum that reached it would be obvious
+
+
+@pytest.fixture
+def mixed_db():
+    """One owned printing and one owned by nobody, both priced."""
+    with tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False) as f:
+        path = f.name
+
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    init_db(conn)
+    conn.execute("INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test Set')")
+
+    _add_card(conn, 1, "Alpha")
+    _own(conn, 1, "nonfoil", 3)
+    _price(conn, 1, "tcgplayer", "normal", 2.0)
+
+    _add_card(conn, 5, "Echo")  # no copies
+    _price(conn, 5, "tcgplayer", "normal", UNOWNED_PRICE)
+
+    refresh_latest_prices(conn)
+    conn.commit()
+    conn.close()
+    yield path
+    os.unlink(path)
+
+
+def _recorded(db_path, **params):
+    """Call /api/collection, returning (envelope, statements it ran)."""
+    from mtg_collector.cli.crack_pack_server import CrackPackHandler
+
+    statements = []
+
+    class _Recording:
+        def __init__(self, path):
+            self._conn = sqlite3.connect(path)
+            self._conn.row_factory = sqlite3.Row
+
+        def execute(self, sql, sql_params=()):
+            statements.append((sql, list(sql_params)))
+            return self._conn.execute(sql, sql_params)
+
+        def close(self):
+            pass  # the test reads the plans after the handler is done
+
+    rec = _Recording(db_path)
+    handler = object.__new__(CrackPackHandler)
+    handler.db_path = db_path
+    handler.generator = object()
+    handler._get_conn = lambda: rec
+    responses = []
+    handler._send_json = lambda obj, status=200: responses.append((status, obj))
+    handler._api_collection({k: [str(v)] for k, v in params.items()})
+    status, body = responses[-1]
+    assert status == 200, body
+    return body, rec, statements
+
+
+class TestRowsWithNoCopy:
+    def test_unowned_result_is_worth_nothing(self, mixed_db):
+        """One row, priced at $100, owned by nobody.  It is worth $0."""
+        body = _page(mixed_db, q="is:unowned", limit=1)
+        assert body["total"] == 1
+        assert body["total_qty"] == 0
+        assert body["total_value"] == 0
+
+    def test_total_counts_rows_the_sums_skip(self, mixed_db):
+        """The regression the split has to survive.
+
+        A shared-links list is the same LEFT-JOIN template holding one owned
+        card and one unowned one.  `total` is 2 — deck-builder.js pages until
+        `offset >= total`, so a total taken from the copies-only body would
+        stop it a card early — while the sums see only the copies.
+        """
+        body = _page(mixed_db, cards="tst:1,tst:5", limit=1)
+        assert body["total"] == 2
+        assert body["total_qty"] == 3
+        assert body["total_value"] == 6.00
+
+    def test_the_two_templates_agree_on_the_same_card(self, mixed_db):
+        """Alpha is worth the same whichever template found it."""
+        left_join = _page(mixed_db, cards="tst:1", limit=1)
+        default = _page(mixed_db, q="Alpha", limit=1)
+        assert (left_join["total_qty"], left_join["total_value"]) == (
+            default["total_qty"],
+            default["total_value"],
+        )
+
+    def test_the_sums_do_not_walk_the_copyless_rows(self, mixed_db):
+        """Pin the mechanism, not just the answer.
+
+        The sums must reach `collection` through an inner join, so the price
+        joins are never reached for a row with no copy.  A LEFT-JOIN step here
+        means the whole result is being priced again.
+        """
+        _, rec, statements = _recorded(mixed_db, q="is:unowned", limit=1)
+        sums = [(sql, p) for sql, p in statements if "SUM(qty * price)" in sql]
+        assert len(sums) == 1, f"expected one totals statement, got {len(sums)}"
+        sql, sql_params = sums[0]
+        assert "COUNT(*)" not in sql, (
+            "the count is riding on the totals body, which no longer spans the "
+            "result:\n" + sql
+        )
+        plan = [r[3] for r in rec.execute(f"EXPLAIN QUERY PLAN {sql}", sql_params)]
+        rec._conn.close()
+        offending = [s for s in plan if s.startswith("SEARCH c ") and "LEFT-JOIN" in s]
+        assert not offending, (
+            "the totals are still walking rows with no copy:\n  " + "\n  ".join(plan)
+        )
+
+    def test_the_owned_templates_still_count_and_sum_in_one_scan(self, priced_db):
+        """The split is scoped to the template that needs it.
+
+        Where the totals body already drives from `collection` it has a row per
+        result row, so one scan answers all three — 792 ms against 1,242 ms
+        split, on 15,045 copies.
+        """
+        _, rec, statements = _recorded(priced_db, limit=1)
+        rec._conn.close()
+        combined = [sql for sql, _ in statements if "SUM(qty * price)" in sql]
+        assert len(combined) == 1
+        assert "COUNT(*)" in combined[0], combined[0]
+        assert not [sql for sql, _ in statements if sql.startswith("SELECT COUNT(*) FROM (SELECT 1")]

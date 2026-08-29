@@ -16,9 +16,10 @@ notes: >
   spg is the smallest cached set in the fixture (165 printings) and holds
   exactly one owned card, so the owned/unowned contrast is a count of one
   against 164 and the page renders quickly.
-  The fixture records no base_set_size for any set, so every printing lands in
-  the single "Base set" section and the Set completion meter stays hidden —
-  that is the documented NULL degradation, not a missing feature. Assert on the
+  spg is the one cached set in the fixture with no base_set_size — MTGJSON
+  reports 0 for Special Guests — so every printing lands in the single "Base
+  set" section and the Set completion meter stays hidden. That is the
+  documented NULL degradation, not a missing feature. Assert on the
   "All printings" meter only.
   Cards-per-row is checked on the computed grid rather than the readout alone:
   getComputedStyle(.card-grid).gridTemplateColumns resolves to one track per

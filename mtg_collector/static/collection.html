@@ -5,10 +5,10 @@
 <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Collection Browser</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/keyrune@latest/css/keyrune.min.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mana-font@latest/css/mana.min.css">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+<link rel="stylesheet" href="/static/vendor/keyrune/keyrune.min.css">
+<link rel="stylesheet" href="/static/vendor/mana-font/mana.min.css">
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
 <link rel="stylesheet" href="/static/shared-card-table.css">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -3327,7 +3327,14 @@ async function loadPage(pageIdx, generation) {
   // query whose fetch is still inside its 300 ms debounce. Reading it here
   // would page a result that is not the one on screen, and the generation
   // guard below would wave it through — nothing has bumped the generation yet.
-  const res = await fetch(`/api/collection?${currentQuery}&limit=${PAGE_SIZE}&offset=${offset}`);
+  // known_total: the server would otherwise walk the whole grouped body again
+  // to re-derive a count this page already has and does not read back from the
+  // response — 929 ms of a 3.2 s window on the full catalogue (de-j9b). Page 0
+  // never reaches here (fetchCollection loads it and marks it 'loaded'), and
+  // ensurePagesForRange returns early until totalMatches is set, so there is
+  // always a real number to send.
+  const res = await fetch(
+    `/api/collection?${currentQuery}&limit=${PAGE_SIZE}&offset=${offset}&known_total=${totalMatches}`);
   const data = await res.json();
   // The query moved on while this was in flight; its rows belong to a result
   // that is no longer on screen, and allCards has already been replaced.

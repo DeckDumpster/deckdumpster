@@ -1,60 +1,31 @@
 """
 Hand-written implementation for collection_price_chart.
 
-Seeds price data via podman exec python3, opens the card modal for a card with
+Seeds price data via harness.db_exec, opens the card modal for a card with
 price data, and verifies the price chart appears. Then opens a card
 with no price data and confirms the chart section is hidden.
 """
 
-import subprocess
-
-
-def _find_container(base_url):
-    """Find the container serving the given base_url by matching its port."""
-    try:
-        port = base_url.rstrip("/").rsplit(":", 1)[-1]
-        result = subprocess.run(
-            ["podman", "ps", "--format", "{{.Names}}"],
-            capture_output=True, text=True,
-        )
-        for name in result.stdout.strip().split("\n"):
-            if not name:
-                continue
-            port_result = subprocess.run(
-                ["podman", "port", name, "8081/tcp"],
-                capture_output=True, text=True,
-            )
-            if port in port_result.stdout:
-                return name
-    except Exception:
-        pass
-    return None
-
 
 def steps(harness):
-    # Seed price data into the database via podman exec python3.
-    container = _find_container(harness.base_url)
-    if container:
-        seed_script = (
-            "import sqlite3, datetime as dt\n"
-            "conn = sqlite3.connect('/data/collection.sqlite')\n"
-            "conn.execute('''\n"
-            "  INSERT OR IGNORE INTO prices\n"
-            "  (set_code, collector_number, source, price_type, price, observed_at)\n"
-            "  VALUES\n"
-            "  ('blb','124','tcgplayer','normal',8.50,date('now','-60 days')),\n"
-            "  ('blb','124','tcgplayer','normal',9.00,date('now','-45 days')),\n"
-            "  ('blb','124','tcgplayer','normal',10.00,date('now','-30 days')),\n"
-            "  ('blb','124','tcgplayer','normal',10.50,date('now','-15 days')),\n"
-            "  ('blb','124','tcgplayer','normal',10.46,date('now'))\n"
-            "''')\n"
-            "conn.commit()\n"
-            "conn.close()\n"
-        )
-        subprocess.run(
-            ["podman", "exec", container, "python3", "-c", seed_script],
-            capture_output=True, text=True,
-        )
+    # Seed price data into the database inside the container.
+    seed_script = (
+        "import sqlite3, datetime as dt\n"
+        "conn = sqlite3.connect('/data/collection.sqlite')\n"
+        "conn.execute('''\n"
+        "  INSERT OR IGNORE INTO prices\n"
+        "  (set_code, collector_number, source, price_type, price, observed_at)\n"
+        "  VALUES\n"
+        "  ('blb','124','tcgplayer','normal',8.50,date('now','-60 days')),\n"
+        "  ('blb','124','tcgplayer','normal',9.00,date('now','-45 days')),\n"
+        "  ('blb','124','tcgplayer','normal',10.00,date('now','-30 days')),\n"
+        "  ('blb','124','tcgplayer','normal',10.50,date('now','-15 days')),\n"
+        "  ('blb','124','tcgplayer','normal',10.46,date('now'))\n"
+        "''')\n"
+        "conn.commit()\n"
+        "conn.close()\n"
+    )
+    harness.db_exec(seed_script)
 
     # start_page: /collection — auto-navigated by test runner.
     # Search for Artist's Talent (blb/124) which has seeded price data.
@@ -77,10 +48,13 @@ def steps(harness):
     harness.click_by_selector("#modal-close")
     harness.wait_for_hidden("#card-modal-overlay.active", timeout=5_000)
 
-    # Now open a card with no price data to verify chart is hidden.
-    # Clear search first then type new term to ensure debounced re-fetch fires.
-    harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "")
-    harness.page.wait_for_timeout(400)  # debounce
+    # Now open a card with no price data to verify chart is hidden. Typing the
+    # new term directly is deliberate: `fill` replaces the whole value and fires
+    # the input event either way, so clearing first only bought a second
+    # debounced re-fetch that re-rendered the entire 43-card fixture — and the
+    # next keystroke then landed on a busy main thread (measured 696 ms against
+    # this suite's 500 ms interaction budget). The delay used to be hidden by
+    # the `podman ps` scan this scenario ran to find its own container (de-1zq).
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Orazca")
     # Wait for the card grid to update — exactly 1 entry for Orazca.
     harness.wait_for_text("1 card", timeout=5_000)

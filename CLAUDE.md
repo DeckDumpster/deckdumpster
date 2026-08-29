@@ -192,6 +192,33 @@ All filtering is one Scryfall-style query bar (`?q=...`). Standard Scryfall keyw
 
 Search compiler lives in `mtg_collector/search/`: `grammar.py` (tokeniser), `transformer.py` (parser → AST), `compiler.py` (AST → SQL), `keywords.py` (canonical name registry), `dates.py` (timezone-aware date parsing).
 
+### The whole-result figures on `/api/collection`
+
+`total`, `total_qty` and `total_value` describe the result rather than the page —
+the client fetches windows as it scrolls, so a page-scoped figure would climb as
+the user scrolled. They are **two scans over two different things**, and that is
+the part to keep. `total` counts result rows. The two sums range over *copies*: a
+result row with no copy has `qty` 0, so it contributes nothing to either sum
+whatever that printing is priced at.
+
+The distinction only bites on the LEFT-JOIN template (`is:unowned`, and the
+`cards=` shared-link list), where a result row need not have a copy — and for
+`is:unowned` none does. So the totals body there **inner-joins `collection`**,
+dropping those rows before the three `latest_prices` joins are reached instead of
+pricing 109,976 of them to add zero. Measured on that result: 7,271 ms for the
+shipped combined statement against 2,515 ms for the pair that replaced it, of
+which the sums are under a millisecond.
+
+**The count cannot ride on that body** — the rows it drops are exactly the ones
+the query is about — so it takes its own statement on that template, and only
+there. The templates that drive from `collection` have a row per result row, and
+one combined scan stays cheaper for them: 792 ms against 1,242 ms split, on
+15,045 copies. Do not unify the two paths in either direction.
+
+`total_qty` / `total_value` are sent on the first window only (de-962). `total` is
+sent on every window, because `deck-builder.js` pages its card picker until
+`offset >= total`.
+
 ### Set sizes
 
 `sets.base_set_size` and `sets.total_set_size` are stored, never derived, and populated at
@@ -220,6 +247,14 @@ it already walks. Neither runs on a timer, so an existing database is brought fo
 `mtg data backfill-set-sizes` (one Scryfall `/sets` call plus local `AllPrintings.json`,
 batched, and idempotent: a second run writes zero rows). See `mtg_collector/db/set_sizes.py`.
 
+**The test fixture carries both sizes, and `spg` is deliberately NULL.** Until de-1ov the
+fixture had neither column, so every set in a `--test` container reported `owned_base` /
+`total_base` as NULL and no test against one could reach the populated path at all.
+`scripts/build_test_fixture.py` now writes MTGJSON's `baseSetSize` for the sets it caches
+(`total_set_size` already arrived with `ensure_set_cached`), and Special Guests is in that
+table with `0` — which `clean_size` reads as an absence — so one cached set stays NULL and
+both branches have a fixture. Do not "fix" `spg` to a positive number.
+
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
 holds both. A **query** is aggregated day by day inside SQLite from `collection` + `prices`;
@@ -241,6 +276,32 @@ id, and the last day stored. `mtg data fetch-prices` rebuilds after each import;
 rebuilds on the request that first finds the table stale, because otherwise one added card
 would leave the chart on the slow route until the next 06:00 timer run.
 
+### Price and Card Kingdom link
+
+Every list of cards this app renders carries the same three derived values — `ck_price`,
+`tcg_price`, `ck_url` — and `mtg_collector/db/enrich.py` is the one definition of them.
+They are **LEFT JOINs on the query that needs them, never a second pass**: the passes they
+replaced built `IN (...)` clauses sized by the result, which on /api/collection reached
+225,618 bound parameters against a `SQLITE_MAX_VARIABLE_NUMBER` of 250,000 (de-ckq). Every
+join binds zero parameters and matches at most one row. `tests/test_collection_enrichment.py`
+and `tests/test_deck_enrichment.py` each assert that no statement's parameter count grows
+with the result, so a reintroduced "bulk lookup" fails there.
+
+**Which finish to price in is the caller's fact**, which is why `enrich_joins` /
+`enrich_columns` take a SQL predicate for it rather than baking one in. A list of *copies*
+passes `COPY_IS_FOIL` (`c.finish`, etched priced as foil) — /api/collection, and a
+constructed deck, which is why the deck page and the collection page show one number for
+one card. A list of *printings* passes `PRINTING_IS_FOIL` (the printing's `finishes`) —
+/api/set-browse, and an idea/ready deck's expected list, because a card you may not hold
+has no copy to take a finish from. Passing the wrong one is not a formatting difference: it
+shows a foil card at the nonfoil price, which is what the deck page did until de-4qy.
+
+`printing_id` is **not** unique in `mtgjson_printings`, so the `ck_url` join resolves to a
+uuid first, the way `PackGenerator.get_ck_url()` does. That is what makes the collection
+list, the deck page and the card detail page link one double-faced card to one product.
+The query must alias `printings` as `p`, and `collection` as `c` when it uses
+`COPY_IS_FOIL`.
+
 ### Binder browse (`/api/set-browse/:set_code`)
 
 One set laid out as a binder page. `mtg_collector/db/set_browse.py` holds the query;
@@ -258,9 +319,11 @@ leaves `printing_id` as the only join term, so the plan does not depend on stati
 are not there — 44 ms with none at all. Do not "simplify" it back to a direct join.
 
 **Prices key on the printing's `finishes`, not on a copy's `c.finish`** the way
-`_ENRICH_JOINS` does. The pocket this view exists to show you is the one you have *not*
-filled, and it has no copy to take a finish from; a printing that exists in nonfoil is
-priced in nonfoil, a foil-only or etched-only one in foil.
+/api/collection does: this view passes `PRINTING_IS_FOIL` to the shared enrichment, that
+one passes `COPY_IS_FOIL` (see "Price and Card Kingdom link"). The pocket this view exists
+to show you is the one you have *not* filled, and it has no copy to take a finish from; a
+printing that exists in nonfoil is priced in nonfoil, a foil-only or etched-only one in
+foil.
 
 **Sections** are `base` | `extended` | `promo`, decided by `sets.base_set_size` and nothing
 else (see "Set sizes"). With `base_set_size` NULL the set is one
@@ -287,22 +350,23 @@ Every body leaves through `CrackPackHandler._respond`, and the caching rules
 follow from **what the response is**, not from a string the caller passed.
 `mtg_collector/http_cache.py` holds the decisions as pure functions.
 
-Three policies, and there is no fourth: `CACHE_DOCUMENT` (`public, no-cache`)
-for HTML and everything under `/static/*`, `CACHE_IMMUTABLE` for the
-ingest-image path (whose headers are unchanged, at `public, max-age=86400,
-immutable`), `CACHE_API` (`private, no-cache`) for JSON. SSE sets its own
-headers and is untouched.
+Four policies, and there is no fifth: `CACHE_DOCUMENT` (`public, no-cache`) for
+HTML and for any `/static/*` URL carrying no digest, `CACHE_HASHED_ASSET`
+(`public, max-age=31536000, immutable`) for a content-addressed asset URL,
+`CACHE_IMMUTABLE` for the ingest-image path (whose headers are unchanged, at
+`public, max-age=86400, immutable`), `CACHE_API` (`private, no-cache`) for JSON.
+SSE sets its own headers and is untouched.
 
-**`immutable` is a promise about the URL, not about the bytes**, and no URL here
-is content-addressed. The ingest-image path rests on a convention — the upload
-handler refuses a name that already exists — which is why its window stays a day
-and not a year; a hash in the URL is what would earn more. `/static/app.css`
-rests on nothing at all: it is rewritten by every deploy, so a long max-age on
-it is the same bug the pages had. Every HTML page was served
-`public, max-age=86400` with no validator, and because `magic.dumpster.cards`
-reaches this process through a Cloudflare tunnel, the edge held each document
-for a day: six deploys landed on 2026-08-25 and the public site showed none of
-them. A hard refresh does not help — it defeats the browser cache, not the edge.
+**`immutable` is a promise about the URL, not about the bytes.** The ingest-image
+path rests on a convention — the upload handler refuses a name that already
+exists — which is why its window stays a day and not a year; a hash in the URL is
+what would earn more. A bare `/static/app.css` rests on nothing at all: it is
+rewritten by every deploy, so a long max-age on it is the same bug the pages had.
+Every HTML page was served `public, max-age=86400` with no validator, and because
+`magic.dumpster.cards` reaches this process through a Cloudflare tunnel, the edge
+held each document for a day: six deploys landed on 2026-08-25 and the public
+site showed none of them. A hard refresh does not help — it defeats the browser
+cache, not the edge.
 
 **The ETag varies with the encoding** — `"<h>"` identity, `"<h>-gzip"` — plus
 `Vary: Accept-Encoding`. One tag for two representations is how a cache serves
@@ -323,6 +387,33 @@ requires; only a well-formed range outside the representation is a 416.
 **Verifying this needs the CDN.** `deploy/cdn-check.sh` compares the edge's ETag
 with the origin's, because every localhost check passed on the evening the
 public site was a day stale. See `deploy/README.md` → "CDN deploy check".
+
+### Content-addressed assets (`/static/shared.<digest>.css`)
+
+`mtg_collector/static_assets.py` is what puts a hash in the URL, and it is the
+only reason any asset may be `immutable`. Pages keep naming their assets by the
+path on disk; **the digest is minted as the document goes out**, so there is no
+build step, no manifest to regenerate, and an edit is live on the next page load.
+`deck_builder.html` names 11 subresources — that was 11 conditional round trips
+per warm load, and it is now none.
+
+- **The digest goes in the filename, never in a path segment.**
+  `vendor/keyrune/keyrune.min.css` asks for `url('fonts/keyrune.woff2')`, which
+  resolves against the directory it was served from. Hashing a directory would
+  404 every glyph — the same break `tests/test_vendored_fonts.py` exists to
+  prevent, arrived at from the other side.
+- **HTML is never content-addressed.** A document's bytes on the wire change
+  whenever an asset it names changes, while its own file does not; a digest taken
+  from that file would be a promise about bytes nobody sent. Documents stay
+  `no-cache` — a document being re-fetched is what makes a deploy visible at all.
+- **A stale digest is a 404, never today's bytes.** Serving current content under
+  a URL that asked for older content is how a client ends up holding the wrong
+  thing under a promise it cannot revalidate away. The only window is a page
+  whose HTML predates the deploy, and that HTML is `no-cache`.
+- **An unhashed `/static/*` URL still works and still revalidates**, exactly as
+  de-dai left it. An asset opts *into* immutability by existing on disk, so a
+  reference naming no file stays the visible 404 it always was, and the two JS
+  files that build `/static/card_back.jpeg` in a string keep today's behaviour.
 
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
@@ -377,21 +468,22 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 - **`printings.card_name` is a denormalised copy of `cards.name`.** It exists so the collection's default sort can be served by `idx_printings_card_name(card_name, printing_id)`. Sort on `p.card_name`, never `card.name`: `/api/collection` groups by `p.printing_id`, which pins `printings` as the driving table, so `idx_cards_name` is unreachable for ordering no matter what the tiebreak is (measured 2.3 s vs 8.8 ms on 109,976 rows). **The GROUP BY must lead with the same column** or the sort just moves into the grouping and nothing is gained. `PrintingRepository.upsert` fills it; `rebuild_card_names()` runs beside `rebuild_fts()` after `mtg cache` to repair upstream renames.
 - **Sort a set by `printings.number_sortable`, never by casting `collector_number`.** `ORDER BY CAST(collector_number AS INTEGER), collector_number` puts `A-248` *before* card #1, because `CAST('A-248' AS INTEGER)` is 0. `number_sortable` is that number encoded so it sorts — namespace, then value, then suffix — computed at ingest by `PrintingRepository.upsert` (`mtg_collector/db/collector_number.py` holds the encoding and the reasoning). It is **not** unique within a set, so close the `ORDER BY` on `p.printing_id` in the same direction; `idx_printings_set_sortable(set_code, number_sortable, printing_id)` carries printing_id for exactly that reason and serves the whole `ORDER BY` off one scan. `rebuild_number_sortable()` is the repair, but the column cannot go stale the way `card_name` can — it reads `collector_number`, which is half of `UNIQUE(set_code, collector_number)`.
 - **A sort's tiebreak must follow the sort's direction.** SQLite reads an index backwards only when every ORDER BY term inverts together, so `p.card_name DESC, p.printing_id ASC` silently falls back to a full sort (4.3 s vs 10 ms). The tiebreak is there to make the order total, which it is in either direction.
+- **The integration and UI conftests resolve `podman` through the instance's Quadlet unit** (`tests/container_store.py`). A bare `podman` sees only the DEFAULT store, and `MTGC_STORE_ROOT` puts every non-prod instance in another one — so the documented `setup.sh <inst> --test` + `pytest --instance <inst>` found no container, skipped, and reported `124 skipped … exit 0`, which reads as a pass (de-1zq). CI was never exposed: `ci.yml` activates the shim and exports it through `GITHUB_PATH`. The unit's `GlobalArgs=` records where the container actually is, and an unstamped unit names the default store just as definitely — which is what keeps `--instance prod` right on a box whose `store.env` opts everything else in. Do not re-derive the runroot; ask `store-lib.sh`. A named `--instance` that resolves to no container now **fails**; with no flag it still skips, so a plain `pytest tests/` stays a unit run.
 
 ## Deployment
 
 Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/units-lib.sh` (renders the timer units for one instance, and lists the ones a host has; sourced by setup/deploy/teardown/prune), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/units-lib.sh` (renders the timer units for one instance, and lists the ones a host has; sourced by setup/deploy/teardown/prune), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
 - `~/.config/mtgc/<instance>.env` — per-instance env.
 - `~/.config/containers/systemd/mtgc-<instance>.container` — generated Quadlet unit.
 - Service name: `mtgc-<instance>`; container name: `systemd-mtgc-<instance>`.
 - Server logs a warning and skips OCR processing if `ANTHROPIC_API_KEY` is unset — it does **not** fail to start.
-- `MTGC_HTTP_PORT` (optional, per-instance env) adds a **second, plain-HTTP listener** on that container port alongside the TLS listener on 8081; unset means one listener and today's behaviour. It exists for a host-local Cloudflare Tunnel origin, and is only reachable if `setup.sh --http-port <p>` also published it — always as `PublishPort=127.0.0.1:<p>:8080`, loopback hardcoded so plaintext can never face the LAN. See `deploy/README.md` → "Cloudflare Tunnel origin".
+- `MTGC_HTTP_PORT` (optional, per-instance env) adds a **second, plain-HTTP listener** on that container port alongside the TLS listener on 8081; unset means one listener and today's behaviour, and **blank means unset** — `MTGC_HTTP_PORT=` disables the listener instead of crash-looping on `int('')` (de-2mr), which is the same rule `MTGC_TLS_CERT` / `MTGC_TLS_KEY` already read themselves by and the same rule `setup.sh`'s `record` writes by. A non-empty non-integer is still a hard startup failure. It exists for a host-local Cloudflare Tunnel origin, and is only reachable if `setup.sh --http-port <p>` also published it — always as `PublishPort=127.0.0.1:<p>:8080`, loopback hardcoded so plaintext can never face the LAN. See `deploy/README.md` → "Cloudflare Tunnel origin".
 - `setup.sh --tls-certs <dir>` (optional) mounts a host directory of externally-obtained certificates at `/certs` **read-only** (`Volume=<dir>:/certs:ro,Z`); unset means no mount at all and today's generated unit. The app only reads certs — point `MTGC_TLS_CERT` / `MTGC_TLS_KEY` at paths under `/certs` to use them. Setting only one of the pair, or an unreadable path, fails startup — never a silent downgrade to self-signed. It never obtains or renews certs; that is the operator's job, and this repo deliberately ships no renewal unit and recommends no tool or cadence. How to actually get one (`tailscale cert`, or certbot DNS-01 as a fallback) is in `deploy/README.md` → "Trusted certificates". Note that fixing the self-signed cert's SAN does **not** stop browser warnings — trust is checked before naming.
-- **`--http-port` and `--tls-certs` are sticky.** `setup.sh` records them in the instance env file as `MTGC_HTTP_PUBLISH_PORT` / `MTGC_TLS_CERTS_DIR` and re-applies them when the flag is omitted, because `deploy.sh` regenerates a missing Quadlet by re-running `setup.sh <instance>` with no flags — without the record it would silently drop the plaintext publish (tunnel origin dies quietly) and the cert mount (`/certs` unreadable → crash loop). An explicit flag overrides; to drop a setting, delete its line from the env file. The explicit HTTPS host port is *not* yet recorded (de-f2d).
+- **Every input to the Quadlet render is sticky** — `--http-port`, `--tls-certs`, and the positional HTTPS host port. `setup.sh` records them in the instance env file as `MTGC_HTTP_PUBLISH_PORT` / `MTGC_TLS_CERTS_DIR` / `MTGC_PUBLISH_PORT` and re-applies them when the argument is omitted, because `deploy.sh` regenerates a missing Quadlet by re-running `setup.sh <instance>` with nothing but the name — without the record it would silently drop the plaintext publish (tunnel origin dies quietly), the cert mount (`/certs` unreadable → crash loop), and the pinned port (de-f2d: the instance comes back on a random high port, and `deploy.sh`'s health check finds it via `podman port` and passes, so nothing but the bookmarks and the tunnel route notice). An explicit value overrides; to drop a setting, delete its line from the env file. An instance created with **no** port records nothing and keeps rendering `PublishPort=:8081` — auto-assign is the absence of a port, not a port. `tests/test_deploy_regeneration.py` asserts whole-unit identity across a regeneration, so the next render input added without a record fails there.
 - **`MTGC_STORE_ROOT` (optional) puts a NON-PROD instance's images, layers and volumes in an alternate Podman store** via `--root`/`--runroot` — never a `storage.conf`, so the choice cannot leak into unrelated podman use on the box. Rootless Podman's default store is under `$HOME`, which on the deploy box is the 98G root **prod itself runs from** (34G of it was podman's store, measured 2026-08-11). Unset is a strict no-op: the generated Quadlet, the timer units and every podman call are byte-identical to before. Prod never sets it. The generated Quadlet records the store in `GlobalArgs=`, and `deploy.sh` / `teardown.sh` / `restore.sh` / `backup.sh` / `prune-instances.sh` read it back — an **unstamped** unit means the default store just as definitely, so an inherited activation is dropped, not fallen through. Which disk is host config (`~/.config/mtgc/store.env`), read by CI, `store-teardown.sh`, and `setup.sh` **for every instance except `prod`** (de-oqu) — excluded by name, because `setup.sh` is also how prod is installed and where prod's 19G volume lives is not a host config file's decision. The name check is what makes the variable enforced on the path people actually use: the documented `bash deploy/setup.sh <inst> --test` does not go through `ci.yml`, so scoping the read to CI meant every by-hand bring-up kept writing a gigabyte to prod's disk unless the caller remembered to export it. An explicit `MTGC_STORE_ROOT` still wins for every instance including `prod`, and an explicit empty one is how a single run opts back out. **NEVER `podman system reset`**: it is not scoped by `--root`/`--runroot` and took the sibling project's prod down; `deploy/store-teardown.sh` is the correct way to remove a store. CI proves the
   whole thing end to end on every PR with `deploy/store-isolation-gate.sh` (de-3a0), which
   brings up a real `--test` instance in a probe store and fails if the bytes landed under
@@ -463,6 +555,23 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   with nothing to do. `fetch_allprintings` no longer wraps its import in a `try/except`
   that printed a warning — that swallowed exit code is what let a current file on disk sit
   beside a stale database. See `deploy/README.md` → "Catalog refresh".
+- **Every instance EXCEPT `prod` is generated with a `MemoryMax` ceiling** (de-4u8g). On
+  2026-08-27 the CI runner was OOM-killed with ~10 polecats in flight; it does not
+  auto-restart, so CI was dead ~24 h — 24 PRs queued checks that never ran and `main`
+  froze while the pipeline looked busy. Hardening the runner unit does **not** cover this:
+  each instance is its own `mtgc-<instance>.service` with its own cgroup, so a limit on
+  the runner bounds the runner and nothing it started. `prod` is excluded **by name**, the
+  same shape as the `store.env` exception (de-oqu) and stated the same way — *prod never
+  gets a ceiling* — because prod's working set is not something this repo gets to guess at
+  and an OOM kill there is an outage rather than a failed test. Prod's unit carries **no**
+  `Memory*` directive at all, not a generous one. `MemoryMax` and nothing else: it is the
+  bound, the kernel reclaims page cache before it OOM-kills, and a `MemoryHigh` beside it
+  would trade a visible kill for a throttled container — a hung CI job is harder to read
+  than a dead one. There is no flag and no env knob; the value is a constant in `setup.sh`
+  (2 G — ~8x the 257 MB a `--test` instance peaked at across the whole integration suite),
+  so a box needing a different one edits it there. It is derived from the instance name rather than recorded in the env
+  file like `--http-port` / `--tls-certs`, so the regeneration `deploy.sh` performs cannot
+  drop it. See `deploy/README.md` → "Memory ceiling on ephemeral instances".
 - **`deploy/diskcheck.sh` is both the disk alarm and the pre-flight floor** (de-yef). /
   is 98 G and prod serves from it; it hit 100% on 2026-08-08 and again on 2026-08-11, and
   on both nights the backup produced no object and nothing said so (de-o4e). `MTGC_STORE_ROOT`
@@ -484,6 +593,27 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   and is not the store selection `setup.sh` scopes away from `prod`. It deliberately frees
   nothing — which instance to prune is a judgement a timer cannot make, and
   `deploy/prune-instances.sh` stays by hand. See `deploy/README.md` → "Low-disk check".
+- **`deploy/backup.sh` spends its own retained copies before it loses a night** (de-4e8).
+  Peak usage is the uncompressed host-side snapshot (~1x DB) plus the tarball (~0.3x), so
+  the nightly run demands ~15.5 GB free against an 11.4 GB prod database and rises ~91 MB a
+  day. It shares the 98 GB root volume with prod's data volume, the tarballs and Podman's
+  store, and a refused night is **permanent** — `aws s3 sync` mirrors a directory, so a
+  tarball never written can never be backfilled. That cost 42 of the 175 nights from
+  2026-03-05, every one of them for want of space (de-o4e). So before refusing, the run
+  clears a killed run's abandoned staging (up to a whole database, its EXIT trap never
+  fired) and then deletes retained local dailies **oldest first, stopping the moment it
+  fits** — a roomy night spends nothing and retention is unchanged. A tarball is deleted
+  only when `aws s3 ls` answers for it *at the same size* (a half-uploaded object answers
+  too), and never without `MTGC_BACKUP_S3_BUCKET`, because then the local copy is the only
+  copy; the sync runs without `--delete`, so this never touches the bucket. The image trees
+  are archived straight from the volume mount rather than copied into staging — ~1 GB on
+  prod, against a budget that only ever set 200 MB aside for them, so the copy could carry
+  a run past a check it had already passed. **The floor is 1x the database and cannot be
+  lowered here**: SQLite's backup API needs a seekable destination and this box's sqlite has
+  no `sqlite_dbpage`, so there is no streaming a byte-identical copy into the tarball. What
+  removes the constraint is putting `MTGC_BACKUP_DIR` on a filesystem that is not the root
+  volume, which is a host decision. See `deploy/README.md` → "What the nightly backup needs
+  free".
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
 - Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
 
@@ -572,3 +702,41 @@ uv run pytest tests/ui/ -v --instance <instance>
 4. Runs the new tests against the container before tearing down.
 
 Do **not** create or modify UI scenario tests outside `/qa-finish`. Per-test DB isolation is via session-scoped `sqlite3.backup()` snapshot + per-test restore (see `tests/ui/conftest.py`).
+
+### Timeout budgets
+
+**Every timeout in `tests/ui/` comes from `tests/ui/budget.py`, and there are two of
+them.** `INTERACTION_BUDGET_MS` (500) is the app's answer to an interaction on a page
+that is already loaded — the deliberate UX budget the collection-payload work exists to
+defend. `ROUND_TRIP_BUDGET_MS` (5 000) is anything that crosses to the server and back: a
+page load, a text assertion backed by a fetch, and **any action that might navigate**,
+because `page.click` blocks until a navigation the click started commits. A 500 ms click
+timeout was a navigation budget wearing an interaction budget's clothes, and that is
+literally how a *successful* click failed a test — Playwright's call log showed the click
+landed and the page reached `/sets`, and the harness raised anyway (de-6q2).
+
+**Both are scaled by `host_contention()` — runnable tasks per CPU, floored at 1.0.** A
+wall-clock budget on a shared box measures the box. On the 4-CPU deployment box at load
+average 61-85, a `tests/ui -k sets_` run gave 14 failures of which **14 were Playwright
+timeouts and 0 were assertion failures**; re-running the same scenarios alone passed. A
+suite that reds without a single assertion firing is measuring the other tenants. On a
+quiet box the factor is 1.0 and every timeout is byte-identical to what it was before, so
+a payload regression still reds on the machine where you actually measure. Do **not**
+raise a base budget to make a scenario pass — that is the thing being measured. If a
+scenario is slow because of its own *setup*, move that setup under the page-load budget (a
+deep-link `start_page`), as `sheets_card_zoom_overlay` and `sheets_deep_link_url_hash` do.
+
+`TIMEOUT_CEILING_MS` (30 000) is Playwright's own default action timeout — the line past
+which contention stops being the explanation. It caps what contention may *add*; it never
+shrinks a timeout a caller asked for outright. The factor is sampled **once per scenario**
+and held: timeouts that drift step to step make a failure unreproducible from its own log.
+
+`tests/test_ui_budget.py` is the guard, and it is default-deny in **both** directions — an
+AST walk over `replay.py`, `harness.py` and `test_nav_reachability.py` fails a
+timeout-bearing Playwright call that writes a number at the call site *or* omits the
+timeout entirely. A literal per call site is the obvious half: with a 500 written twenty
+times, raising the budget means finding all twenty, and the ones nobody found are the ones
+that flake. **A missing timeout is the half that hides**, because there is nothing at the
+call site to read — the call silently inherits Playwright's own 30 s, which no budget
+scales. `test_every_routed_page_links_back_to_the_homepage` navigated that way and errored
+on `/crack` at a load the budgeted calls in the same run sailed through.

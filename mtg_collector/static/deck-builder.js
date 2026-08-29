@@ -766,7 +766,12 @@
     let total = 0;
     let exhausted = false;
     for (let page = 0; page < PICKER_PAGE_CAP; page++) {
-      const res = await fetch(`/api/collection?${query}&limit=${PICKER_PAGE_SIZE}&offset=${offset}`);
+      // Every window past the first re-counts the whole result server-side to
+      // re-derive the number this loop is already holding (de-j9b). Hand it
+      // back instead; the first page has nothing to hand back and asks for it.
+      const known = page === 0 ? '' : `&known_total=${total}`;
+      const res = await fetch(
+        `/api/collection?${query}&limit=${PICKER_PAGE_SIZE}&offset=${offset}${known}`);
       const data = await res.json();
       total = data.total;
       kept.push(...keepFrom(data.rows));

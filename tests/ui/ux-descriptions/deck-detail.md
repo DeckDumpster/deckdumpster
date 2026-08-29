@@ -273,12 +273,12 @@ The card picker search fires on every `input` event with no debounce. Each keyst
 
 All three modal backdrops (`.modal-backdrop`) have click event listeners that check if the click target is the backdrop itself (not the modal content inside). If so, the `.active` class is removed, closing the modal.
 
-### External CSS/Font Dependencies
+### CSS/Font Dependencies
 
-The page loads three external CSS resources via CDN:
+The page loads two icon-font stylesheets, both served by this app from `/static/vendor/`:
 - `keyrune` -- MTG set symbol icon font (referenced but not actively used on this page)
 - `mana-font` -- Mana symbol icon font (used by `renderMana()` for mana cost display)
-- These are loaded from `cdn.jsdelivr.net` and require network access
+- Neither requires network access
 
 ---
 

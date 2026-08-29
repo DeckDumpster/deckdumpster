@@ -1,4 +1,4 @@
-start_page: /sheets
+start_page: "/sheets#set=blb&product=play"
 involves:
   - "collapsible sections .section with .section-header and .section-body"
   - "section open state .section.open (body visible when open)"
@@ -6,12 +6,19 @@ involves:
   - "card images .sheet-card-img-wrap img"
   - "pull-rate badges .badge.pull-rate"
   - "Variants section (first section, expanded by default)"
+  - "status #status showing sheet/card counts (8 sheets for blb play)"
 fixture_data:
   set: "blb"
   product: "play"
 notes: >
-  Load BLB play sheets via deep link. Variants section is .section.open by
-  default. Sheet sections (Common, etc.) are collapsed (no .open class).
-  Click the "Common" section-header to expand it. Verify .sheet-card
-  elements and .badge.pull-rate are visible. Click the header again to
-  collapse. Verify .sheet-card elements are hidden.
+  Load BLB play sheets via the deep link so the sheet fetch and render happen
+  under the page-load budget rather than mid-scenario: driving the set input
+  and the product pills by hand spends the 500 ms interaction budget on the
+  first /api/sheets for the set, which against a container that has never
+  served it does not come back in time.
+  Wait on "8 sheets" (play has 8, collector has 6) rather than .section-header,
+  which cannot tell the two products apart — the deep link loads both.
+  Variants is .section.open by default; sheet sections (Common, etc.) are
+  collapsed. Click the "Common" section-header to expand it. Verify
+  .sheet-card elements and .badge.pull-rate are visible. Click the header
+  again to collapse.
