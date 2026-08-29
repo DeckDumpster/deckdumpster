@@ -116,10 +116,15 @@ def steps(harness):
 - `press_key(key, *, selector=None)`
 - `scroll(direction)` -- "up" or "down"
 
-**Waiting:**
-- `wait_for_visible(selector, timeout=5_000)`
-- `wait_for_hidden(selector, timeout=5_000)`
-- `wait_for_text(text, timeout=5_000)`
+**Waiting:** (`timeout` defaults to `INTERACTION_BUDGET_MS`; pass one only when the
+step genuinely waits on something slower than an interaction, and pass a
+`tests/ui/budget.py` constant, never a bare number — every timeout the harness uses
+is scaled by host contention there, and a literal at the call site is the flake
+`de-6q2` fixed)
+- `wait_for_visible(selector, timeout=...)`
+- `wait_for_attached(selector, timeout=...)`
+- `wait_for_hidden(selector, timeout=...)`
+- `wait_for_text(text, timeout=...)`
 
 **Assertions:**
 - `assert_visible(selector)`

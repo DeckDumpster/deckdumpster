@@ -15,9 +15,10 @@ def steps(harness):
     # load; every assertion below keeps the 500 ms interaction budget.
     harness.wait_for_text("165 printings", timeout=5_000)
 
-    # The fixture records no base_set_size, so the whole set is one contiguous
-    # run — every pre-2019 set's shape, and the NULL degradation the endpoint
-    # documents.
+    # spg is the one cached set the fixture leaves with no base_set_size
+    # (MTGJSON reports 0 for Special Guests), so the whole set is one
+    # contiguous run — every pre-2019 set's shape, and the NULL degradation the
+    # endpoint documents.
     harness.assert_text_present("Base set")
 
     # Cards-per-row, checked on the layout rather than the label: one grid

@@ -55,6 +55,14 @@ mtgc_store_activate
 # hand-run interrupted partway.
 trap 'bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true' EXIT
 
+# Before the job writes several gigabytes: is there room? A run that fills the
+# disk does not fail as a disk error -- at 697M free a cargo link reported
+# `ld terminated with signal 7 [Bus error]`, which reads as a broken
+# toolchain. This runs after the store is selected, so it measures the disk
+# the build will actually write to (de-yef).
+echo "==> Disk floor"
+bash deploy/diskcheck.sh --floor "${MTGC_STORE_ROOT:-$HOME}"
+
 echo "==> Clean up stale containers and images"
 bash deploy/teardown.sh "$INSTANCE" --purge 2>/dev/null || true
 podman image prune -f 2>/dev/null || true

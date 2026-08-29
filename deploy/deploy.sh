@@ -42,16 +42,26 @@ mtgc_store_activate
 QUADLET_FILE="$HOME/.config/containers/systemd/${SERVICE_NAME}.container"
 
 # If Quadlet doesn't exist yet, delegate to setup.sh for initial install.
-# Passing only the instance name is safe: setup.sh reloads --http-port and
-# --tls-certs from MTGC_HTTP_PUBLISH_PORT / MTGC_TLS_CERTS_DIR in the instance
-# env file, so a regenerated unit keeps the plaintext publish and the cert
-# mount instead of silently dropping them.
+# Passing only the instance name is safe: setup.sh reloads --http-port,
+# --tls-certs and the explicit HTTPS host port from MTGC_HTTP_PUBLISH_PORT /
+# MTGC_TLS_CERTS_DIR / MTGC_PUBLISH_PORT in the instance env file, so a
+# regenerated unit keeps the plaintext publish, the cert mount and the port it
+# was created on instead of silently dropping them. The port matters most
+# quietly of the three: the health check below discovers the port from
+# `podman port`, so a moved instance still reports healthy.
 if [ ! -f "$QUADLET_FILE" ]; then
     echo "==> No Quadlet found for $INSTANCE, running initial setup..."
     bash "$SCRIPT_DIR/setup.sh" "$INSTANCE"
     echo "==> Starting $SERVICE_NAME..."
     systemctl --user start "$SERVICE_NAME"
 else
+    # Before writing another ~1 GB of layers: is there room? This is prod's
+    # redeploy path, so a build that runs out mid-way leaves a partial image and
+    # then restarts the live service against it. Gated on the store adopted
+    # above — prod's unit carries none, so prod measures the disk it runs from.
+    # There is no bypass flag; MTGC_DISK_FLOOR_GB is the only knob (de-yef).
+    bash "$SCRIPT_DIR/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
+
     echo "==> Building container image (mtgc:latest)..."
     podman build -t mtgc:latest -f Containerfile \
         -v "${HOME}/.cache/uv:/root/.cache/uv:z" .

@@ -12,8 +12,8 @@
 #   bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]
 #
 # Examples:
-#   bash deploy/setup.sh prod 8081        # explicit port
-#   bash deploy/setup.sh feature-xyz      # auto-assigns next free port
+#   bash deploy/setup.sh prod 8081        # pin the host port (recorded; sticky)
+#   bash deploy/setup.sh feature-xyz      # no port: Podman assigns one at start
 #   bash deploy/setup.sh test --init      # build + initialize data volume with demo data
 #   bash deploy/setup.sh ui-test --test   # fast setup from pre-built fixture (~seconds)
 #   bash deploy/setup.sh prod 8081 --http-port 8083   # also publish plain HTTP on 127.0.0.1:8083
@@ -28,11 +28,12 @@
 # ever reads them — point MTGC_TLS_CERT / MTGC_TLS_KEY in the instance env file
 # at paths under /certs to use them. Omit it and the generated unit is unchanged.
 #
-# Both flags are STICKY: they are recorded in the instance env file as
-# MTGC_HTTP_PUBLISH_PORT / MTGC_TLS_CERTS_DIR and re-applied when the flag is
-# omitted, so deploy.sh regenerating a missing Quadlet reproduces the unit
-# rather than silently dropping the publish and the mount. An explicit flag
-# overrides the record; delete the line to drop the setting.
+# Both flags are STICKY, and so is an explicitly given [port]: they are recorded
+# in the instance env file as MTGC_HTTP_PUBLISH_PORT / MTGC_TLS_CERTS_DIR /
+# MTGC_PUBLISH_PORT and re-applied when omitted, so deploy.sh regenerating a
+# missing Quadlet reproduces the unit rather than silently dropping the publish,
+# the mount, or the pinned HTTPS host port. An explicit value overrides the
+# record; delete the line to drop the setting.
 #
 # Container storage: rootless Podman's default store lives under $HOME, which on
 # the deployment box is the same disk prod runs from. Set MTGC_STORE_ROOT=<dir>
@@ -43,6 +44,10 @@
 # A box can name its non-prod store once, in ~/.config/mtgc/store.env, and this
 # script reads it for every instance EXCEPT prod — see "Container store" below
 # for why the exception is by name rather than by not reading the file at all.
+#
+# Memory: every instance EXCEPT prod is generated with a MemoryMax ceiling, so
+# an ephemeral instance cannot take the box (and with it the CI runner) down.
+# Prod is excluded by name — see "Memory ceiling" below.
 #
 # Env file:
 #   Copies from ~/.config/mtgc/default.env if it exists (set this up once
@@ -108,12 +113,13 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # --- Recorded render inputs ---
 #
 # deploy.sh regenerates a missing Quadlet by re-running this script with the
-# instance name and nothing else. --http-port and --tls-certs are inputs to the
-# render, so unless they are recorded the regenerated unit silently loses both
-# the plaintext publish and the cert mount. Record them in the instance env file
-# — the same place MTGC_TLS_CERT / MTGC_TLS_KEY already live — and fall back to
-# the recorded value when the flag is omitted. An explicit flag always wins; to
-# drop a setting, delete its line from the env file and re-run.
+# instance name and nothing else. --http-port, --tls-certs and the positional
+# port are inputs to the render, so unless they are recorded the regenerated
+# unit silently loses the plaintext publish, the cert mount and the pinned HTTPS
+# host port. Record them in the instance env file — the same place
+# MTGC_TLS_CERT / MTGC_TLS_KEY already live — and fall back to the recorded
+# value when the argument is omitted. An explicit value always wins; to drop a
+# setting, delete its line from the env file and re-run.
 
 recorded() {
     # Last assignment wins, matching how systemd reads an EnvironmentFile.
@@ -133,11 +139,19 @@ fi
 
 # --- Port assignment ---
 
+# The explicit HTTPS host port is recorded for the same reason the two flags are
+# (de-f2d). Without it, regeneration renders PublishPort=:8081 and the instance
+# comes back on a random high port — silently, because deploy.sh's health check
+# discovers the port from `podman port` and so still passes, while every
+# bookmark, reverse proxy, tunnel route and firewall rule pinned to the old port
+# breaks. PORT=0 is the auto-assign sentinel, never a recorded value: an
+# instance created without a port records no line and keeps rendering ":8081".
 if [ ${#POSITIONAL[@]} -ge 2 ]; then
     PORT="${POSITIONAL[1]}"
 else
-    # Let the OS assign an available port at container start
-    PORT=0
+    PORT="$(recorded MTGC_PUBLISH_PORT)"
+    # Nothing recorded — let the OS assign an available port at container start.
+    [ -n "$PORT" ] || PORT=0
 fi
 
 echo "==> MTGC deployment setup"
@@ -252,6 +266,11 @@ record() {
 
 record MTGC_HTTP_PUBLISH_PORT "$HTTP_PORT"
 record MTGC_TLS_CERTS_DIR "$TLS_CERTS"
+if [ "$PORT" = "0" ]; then
+    record MTGC_PUBLISH_PORT ""
+else
+    record MTGC_PUBLISH_PORT "$PORT"
+fi
 
 # --- Host-wide container-store config (de-3mo) ---
 #
@@ -285,6 +304,21 @@ EOF
     echo "    Wrote ${STORE_ENV} (container store; commented out = Podman's default)."
 fi
 
+# --- Disk floor ---
+
+# Before writing a multi-gigabyte image and volume: is there room? Running out
+# mid-build does not announce itself as a disk problem — at 697M free a cargo
+# link died with `ld terminated with signal 7 [Bus error]`, which reads as a
+# broken toolchain — and on the two nights / hit 100% the thing that silently
+# stopped working was the backup, not the build. This is also the bound de-yef
+# asked for: several full-scale rigs standing up at once genuinely did not fit,
+# and nothing said no.
+#
+# Checked against the store resolved above, so it measures the disk THIS run
+# will actually write to rather than a default. To push past it once, set
+# MTGC_DISK_FLOOR_GB — the threshold is the only knob, there is no bypass flag.
+bash "$REPO_DIR/deploy/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
+
 # --- Build container image ---
 
 echo "==> Building container image (mtgc:latest)..."
@@ -306,8 +340,39 @@ else
     PORT_MAPPING="${PORT}:8081"
 fi
 
+# --- Memory ceiling (de-4u8g) ---
+#
+# EVERY INSTANCE EXCEPT prod GETS ONE. On 2026-08-27 the CI runner was
+# OOM-killed with ~10 polecats in flight; it does not auto-restart, so CI was
+# dead for ~24 h while 24 PRs queued checks that never ran and main froze. The
+# runner unit is being hardened separately, and that limit does not reach these
+# containers at all: each instance is its own mtgc-<instance>.service with its
+# own cgroup, so a ceiling on the runner bounds everything except the processes
+# actually holding the memory.
+#
+# PROD IS EXCLUDED BY NAME, the same way it is excluded from store.env
+# (de-oqu) — stated positively, as "prod never gets a ceiling", rather than as a
+# guard somewhere that could stop matching. Prod is the one instance whose
+# working set is not something this repo gets to guess at, and it is the one
+# instance where an OOM kill is an outage rather than a failed test.
+#
+# MemoryMax and nothing else. It is the bound; the kernel reclaims page cache
+# before it OOM-kills, so a MemoryHigh beside it would be a second number to
+# keep in sync that buys throttling instead of a kill — and a CI container that
+# has gone slow is harder to read than one that has died.
+#
+# 2G is ~8x measured: a --test instance peaked at 257 MB (cgroup memory.peak)
+# across the whole 158-test integration suite, which is the heaviest thing CI
+# points at one. The number is deliberately not a knob — one constant here, read
+# on the next setup.sh run, and a one-off needs a `systemctl --user edit` drop-in
+# rather than a flag every caller has to remember.
+MEMORY_MAX=""
+if [ "$INSTANCE" != "prod" ]; then
+    MEMORY_MAX="2G"
+fi
+
 bash "$REPO_DIR/deploy/render-quadlet.sh" \
-    "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" \
+    "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" "$MEMORY_MAX" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
 
 # systemd does not inherit our PATH, so the shim that scopes every podman call
@@ -329,7 +394,7 @@ fi
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_USER_DIR"
 
-for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-catalog-check mtgc-edhrec; do
+for UNIT_PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-catalog-check mtgc-catalog-refresh mtgc-diskcheck mtgc-edhrec; do
     echo "==> Installing ${UNIT_PREFIX} timer"
     for EXT in service timer; do
         sed -e "s|{{INSTANCE}}|${INSTANCE}|g" \
@@ -484,5 +549,7 @@ echo "  Sealed:     systemctl --user enable --now mtgc-sealed-catalog-${INSTANCE
 echo "  Backup:     systemctl --user enable --now mtgc-backup-${INSTANCE}.timer"
 echo "  Bkp check:  systemctl --user enable --now mtgc-backup-check-${INSTANCE}.timer"
 echo "  Cat check:  systemctl --user enable --now mtgc-catalog-check-${INSTANCE}.timer"
+echo "  Cat refr:   systemctl --user enable --now mtgc-catalog-refresh-${INSTANCE}.timer"
+echo "  Disk check: systemctl --user enable --now mtgc-diskcheck-${INSTANCE}.timer"
 echo "  EDHREC:     systemctl --user enable --now mtgc-edhrec-${INSTANCE}.timer"
 echo "  Teardown:   bash deploy/teardown.sh $INSTANCE"

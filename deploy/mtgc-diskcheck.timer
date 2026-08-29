@@ -1,0 +1,14 @@
+[Unit]
+Description=MTGC low-disk check timer ({{INSTANCE}})
+
+[Timer]
+# Daily, before the 03:00 backup rather than after it: the backup writes a ~3 GB
+# tarball to this disk, so being told the night before that there is no room for
+# it is the warning worth having. Both times / hit 100%, the backup was what
+# silently did not run.
+OnCalendar=*-*-* 22:00:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target
