@@ -16,6 +16,6 @@ notes: >
   every one of them an early-alphabet name. Reversing those in the browser
   would leave another "A..." name on top. Only an ordering applied across all
   7,603 rows can put "Zur's Weirding" there, so that string is the assertion.
-  Do not use the price column for this — the fixture has no prices at all for
-  unowned printings (0 of 7,603), so every row ties and asc and desc return
-  the identical order.
+  The price column would also discriminate now that the fixture prices the
+  unowned catalogue (de-9tb); it did not when this was written, and the name
+  column is kept because "Zur's Weirding" is a fixed string a price is not.
