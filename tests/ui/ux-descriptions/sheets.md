@@ -64,9 +64,9 @@ There is no shared site navigation bar. The only way back to the homepage is the
 6. User selects a set by clicking a dropdown item, or using ArrowDown/ArrowUp + Enter.
 7. Input text updates to `"{Set Name} ({code})"`. Dropdown closes.
 8. `/api/products?set={code}` is fetched. Product radio area shows "Loading...".
-9. Product radio pills appear. The first product is auto-selected.
+9. Product radio pills appear. The product named in the hash is auto-selected, or the first product when there is no hash.
 10. "Open Pack" button becomes enabled.
-11. `/api/sheets?set={code}&product={product}` is fetched automatically. Content area shows "Loading sheets...".
+11. `/api/sheets?set={code}&product={product}` is fetched automatically — exactly once, for the selected product. Status shows "Loading..."; the content area keeps whatever it was showing until the new sheets are ready.
 12. URL hash updates to `#set={code}&product={product}`.
 13. Sheets render: Variants section (open by default) + one collapsed section per sheet.
 
@@ -74,8 +74,8 @@ There is no shared site navigation bar. The only way back to the homepage is the
 
 1. User clicks a different product radio pill.
 2. The pill highlights (red background). The `change` event fires.
-3. URL hash updates. Sheets reload via `/api/sheets` with the new product.
-4. Content area replaces with new sheet data.
+3. URL hash updates. Sheets reload via `/api/sheets` with the new product. A load still in flight is aborted, so the superseded response neither transfers nor renders.
+4. Content area replaces with new sheet data, in one swap on arrival.
 
 ### Flow 3: Explore Sheet Contents
 
@@ -105,7 +105,7 @@ There is no shared site navigation bar. The only way back to the homepage is the
 1. User navigates to `/sheets#set=blb&product=play`.
 2. Page loads, fetches sets.
 3. After sets load, the hash is parsed. The matching set is auto-selected.
-4. Products for that set are fetched. The hash-specified product is auto-selected.
+4. Products for that set are fetched. The hash-specified product is auto-selected before any sheets are requested, so only that product's sheets are fetched.
 5. Sheets load and render immediately without user interaction.
 
 ### Flow 7: Keyboard Navigation in Set Dropdown
@@ -296,7 +296,7 @@ Badges are generated dynamically based on card data and settings:
 ### Set and Product Selected, Sheets Loading
 - Product radio pills visible; one highlighted (red)
 - Pack button: enabled
-- Content area: shows "Loading sheets..." empty state
+- Content area: unchanged — the previous sheets, or the initial empty state on the first load
 - Status: "Loading..."
 
 ### Sheets Loaded (Normal State)

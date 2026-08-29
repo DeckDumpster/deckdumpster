@@ -26,6 +26,8 @@
 #   4. The public Cache-Control has no multi-hour max-age.
 #   5. A conditional re-request through the edge returns 304.
 #   6. The edge negotiates gzip.
+#   7. An asset the document names is content-addressed, and the edge serves it
+#      immutable and identical to the origin (de-l23).
 #
 # NO CHECK MAY PASS BY SKIPPING. There is no flag, no unset variable and no
 # environment in which this exits 0 without having asked both sides and compared
@@ -175,5 +177,57 @@ GZIP_ENC="$(header_value "$GZIP_DUMP" content-encoding)"
 printf '%s' "$GZIP_ENC" | grep -qi gzip \
     || fail "the edge served '${GZIP_ENC:-no}' content-encoding to a client offering gzip."
 
+# ── 7. The assets the document names ────────────────────────────────────────
+#
+# Since de-l23 the server rewrites each /static reference to carry the digest of
+# its bytes, and answers that URL `immutable` for a year. Two things can go
+# wrong at the edge and neither is visible from localhost: the rewrite may not
+# reach the public document at all, and the edge may serve an asset that is not
+# what the origin holds -- which, under a year-long promise, is a cache nobody
+# can revalidate out of. Both are checked here for the same reason step 3
+# exists.
+#
+# This step cannot pass by skipping either: a document that names no
+# content-addressed asset is itself the finding.
+BODY="$(curl -sS -k -m 20 "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' \
+    "${PUBLIC_URL}${DOC_PATH}" 2>/dev/null)"
+ASSET_PATH="$(printf '%s' "$BODY" \
+    | grep -oE '/static/[A-Za-z0-9_./-]+\.[0-9a-f]{16}\.[A-Za-z0-9]+' | head -n1)"
+[ -n "$ASSET_PATH" ] \
+    || fail "the public document names no content-addressed asset. Every /static
+    reference should carry a digest (/static/shared.<16 hex>.css); without one
+    each asset costs a conditional round trip per page load, and an origin that
+    stopped rewriting them is the reason."
+
+ASSET_ORIGIN="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
+[ "$(status_of "$ASSET_ORIGIN")" = "200" ] \
+    || fail "the origin answered '$(status_of "$ASSET_ORIGIN")' for ${ASSET_PATH}, an asset
+    URL its own document names. The page renders unstyled."
+
+ASSET_DUMP="$(headers_of "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' \
+    "${PUBLIC_URL}${ASSET_PATH}")"
+assert_not_access_wall "$ASSET_DUMP"
+[ "$(status_of "$ASSET_DUMP")" = "200" ] \
+    || fail "the edge answered '$(status_of "$ASSET_DUMP")' for ${ASSET_PATH}.
+    $(transport_error "$ASSET_DUMP")
+    The document names it, so the page renders unstyled for every user."
+
+ASSET_CC="$(header_value "$ASSET_DUMP" cache-control)"
+ASSET_MAX_AGE="$(printf '%s' "$ASSET_CC" | grep -oE '(^|[^-])max-age=[0-9]+' | grep -oE '[0-9]+$' | sort -n | tail -n1)"
+printf '%s' "$ASSET_CC" | grep -qi immutable && [ -n "$ASSET_MAX_AGE" ] && [ "$ASSET_MAX_AGE" -ge 86400 ] \
+    || fail "a content-addressed asset is served '${ASSET_CC:-no Cache-Control}'. The digest
+    in ${ASSET_PATH} is what makes a long immutable window correct; serving it
+    without one pays for the URL and takes none of the benefit."
+
+if [ "$(normalise_etag "$(header_value "$ASSET_DUMP" etag)")" \
+     != "$(normalise_etag "$(header_value "$ASSET_ORIGIN" etag)")" ]; then
+    fail "the edge is serving DIFFERENT bytes than the origin for ${ASSET_PATH}.
+    origin ETag $(header_value "$ASSET_ORIGIN" etag)
+    public ETag $(header_value "$ASSET_DUMP" etag)
+    A digest-bearing URL means one exact byte string, and the edge is promising
+    to hold what it has for ${ASSET_MAX_AGE}s. Purge this path."
+fi
+
 echo "cdn-check: OK — ${PUBLIC_URL}${DOC_PATH} matches the origin (ETag ${PUBLIC_ETAG}),"
 echo "           revalidates (304), negotiates gzip, and is not held past ${MAX_AGE:-0}s."
+echo "           ${ASSET_PATH} matches the origin and is immutable for ${ASSET_MAX_AGE}s."

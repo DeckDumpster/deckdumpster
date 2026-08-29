@@ -6,7 +6,6 @@ default 3-month range, then verifies the chart opens on ALL rather than leaving
 a greyed-out pill selected, and still renders the real series.
 """
 
-import subprocess
 
 # As collection_stats_growth_chart_renders, but compressed to 20 days with
 # prices every 2nd day.
@@ -49,30 +48,9 @@ sh.commit()
 """
 
 
-def _find_container(base_url):
-    """Find the container serving the given base_url by matching its port."""
-    port = base_url.rstrip("/").rsplit(":", 1)[-1]
-    result = subprocess.run(
-        ["podman", "ps", "--format", "{{.Names}}"], capture_output=True, text=True
-    )
-    for name in result.stdout.strip().split("\n"):
-        if not name:
-            continue
-        port_result = subprocess.run(
-            ["podman", "port", name, "8081/tcp"], capture_output=True, text=True
-        )
-        if port in port_result.stdout:
-            return name
-    raise AssertionError(f"no container found serving {base_url}")
-
-
 def steps(harness):
     # 20 days of history: shorter than every finite range pill.
-    container = _find_container(harness.base_url)
-    subprocess.run(
-        ["podman", "exec", container, "python3", "-c", _SEED],
-        capture_output=True, text=True, check=True,
-    )
+    harness.db_exec(_SEED)
 
     harness.navigate("/collection")
     harness.wait_for_visible(".collection-table", timeout=15_000)

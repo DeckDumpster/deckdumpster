@@ -15,62 +15,76 @@ The fixture discovers the port automatically via `podman port`.
 """
 
 import json
+import ssl
 import subprocess
 import urllib.request
-import ssl
 
 import pytest
+
+from tests.container_store import discover_container, podman_argv
+
+# Resolved in the fixture rather than registered as the option's default, so
+# "the operator named an instance" stays distinguishable from "nobody asked".
+# See _missing_container below for why that distinction decides an outcome.
+DEFAULT_INSTANCE = "integration-test"
 
 
 def pytest_addoption(parser):
     parser.addoption(
         "--instance",
-        default="integration-test",
+        default=None,
         help="Container instance name to test against (default: integration-test)",
     )
 
 
 @pytest.fixture(scope="session")
 def instance_name(request):
-    return request.config.getoption("--instance")
+    return request.config.getoption("--instance") or DEFAULT_INSTANCE
 
 
-def _discover_container(instance_name):
-    """Try both container name patterns: systemd-mtgc-{name} (Linux) and mtgc-{name} (macOS)."""
-    for candidate in [f"systemd-mtgc-{instance_name}", f"mtgc-{instance_name}"]:
-        try:
-            subprocess.run(
-                ["podman", "container", "exists", candidate],
-                capture_output=True, check=True,
-            )
-            return candidate
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            continue
-    return None
+def _missing_container(request, instance_name):
+    """No container for the instance: fail if it was asked for, skip if not.
+
+    An all-skipped run exits 0 and reads as a pass, which is the masking de-1zq
+    was filed about — so `--instance <name>` that resolves to nothing is an
+    error, not a skip. Without the flag there is nothing to be wrong about: the
+    default instance is simply not set up, and a plain `pytest tests/` (which
+    collects this directory) must stay a unit run.
+    """
+    message = (
+        f"No container found for instance '{instance_name}'. "
+        f"Start it with: bash deploy/setup.sh {instance_name} --init && "
+        f"systemctl --user start mtgc-{instance_name}"
+    )
+    if request.config.getoption("--instance"):
+        pytest.fail(message, pytrace=False)
+    pytest.skip(message)
 
 
 @pytest.fixture(scope="session")
-def base_url(instance_name):
+def base_url(request, instance_name):
     """Discover the HTTPS base URL for the running container instance."""
-    container_name = _discover_container(instance_name)
+    container_name = discover_container(instance_name)
     if container_name is None:
-        pytest.skip(
-            f"No container found for instance '{instance_name}'. "
-            f"Start it with: bash deploy/setup.sh {instance_name} --init && "
-            f"systemctl --user start mtgc-{instance_name}"
-        )
+        _missing_container(request, instance_name)
 
+    # Past this point the container exists, so every remaining way to end up
+    # without a URL is a broken instance rather than an absent one — reported,
+    # never skipped past.
     try:
         result = subprocess.run(
-            ["podman", "port", container_name, "8081/tcp"],
+            [*podman_argv(instance_name), "port", container_name, "8081/tcp"],
             capture_output=True, text=True, check=True,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pytest.skip(f"Could not query port for '{container_name}'")
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        pytest.fail(f"Could not query port for '{container_name}': {exc}", pytrace=False)
 
     port_line = result.stdout.strip()
     if not port_line:
-        pytest.skip(f"Could not determine port for '{container_name}'")
+        pytest.fail(
+            f"'{container_name}' publishes no port for 8081/tcp — is it running?",
+            pytrace=False,
+        )
 
     # Parse "0.0.0.0:36305" -> 36305
     port = port_line.split(":")[-1]
@@ -83,8 +97,8 @@ def base_url(instance_name):
     try:
         req = urllib.request.Request(f"{url}/")
         urllib.request.urlopen(req, context=ctx, timeout=5)
-    except Exception:
-        pytest.skip(f"Instance at {url} not responding")
+    except Exception as exc:
+        pytest.fail(f"Instance at {url} not responding: {exc}", pytrace=False)
 
     return url
 
@@ -145,12 +159,13 @@ def _restore_container_after_suite(instance_name):
     No-op when there is no container (the skip path), so local runs against a
     remote/base URL are unaffected.
     """
-    container = _discover_container(instance_name)
+    container = discover_container(instance_name)
     if container is None:
         yield
         return
+    podman = podman_argv(instance_name)
     snapshot = subprocess.run(
-        ["podman", "exec", container, "bash", "-c", _INTEG_BACKUP_CMD],
+        [*podman, "exec", container, "bash", "-c", _INTEG_BACKUP_CMD],
         capture_output=True, text=True,
     )
     # If the snapshot itself failed, don't pretend we can restore — fail loudly
@@ -158,11 +173,11 @@ def _restore_container_after_suite(instance_name):
     snapshot.check_returncode()
     yield
     subprocess.run(
-        ["podman", "exec", container, "bash", "-c", _INTEG_RESTORE_CMD],
+        [*podman, "exec", container, "bash", "-c", _INTEG_RESTORE_CMD],
         check=True, capture_output=True, text=True,
     )
     subprocess.run(
-        ["podman", "exec", container, "rm", "-f",
+        [*podman, "exec", container, "rm", "-f",
          _CONTAINER_DB_BACKUP, _CONTAINER_SHARED_DB_BACKUP],
         capture_output=True,
     )

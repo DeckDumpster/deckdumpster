@@ -28,7 +28,13 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
 from mtg_collector.db.collector_number import SUFFIX_ROOM
-from mtg_collector.db.mtgjson_faces import front_face_uuid_sql
+from mtg_collector.db.enrich import (
+    CK_PRICE_SQL,
+    PRINTING_IS_FOIL,
+    TCG_PRICE_SQL,
+    enrich_columns,
+    enrich_joins,
+)
 
 #: Where a printing sits in the binder.  `base` is the numbered run the set was
 #: printed with, `extended` the boosterfun treatments above it, `promo` the
@@ -82,23 +88,6 @@ FOIL_KIND_EXTRAS = frozenset({
     "neonink", "serialized",
 })
 
-# The finish a *printing* is priced and linked in.  _ENRICH_JOINS keys the same
-# thing on `c.finish`, the finish of a copy in hand -- which is exactly wrong
-# here, because the pocket this endpoint exists to show you is the one you have
-# not filled, and an unowned printing has no copy to take a finish from.  A
-# printing that exists in nonfoil is priced in nonfoil; one that does not (foil-
-# only and etched-only printings, 718 of the 7,645-printing fixture) is priced
-# in foil.
-#
-# `finishes` is a JSON array in a TEXT column, so this is a substring test; no
-# other finish value contains "nonfoil".
-_HAS_NONFOIL = "p.finishes LIKE '%nonfoil%'"
-
-
-def _finish_case(nonfoil: str, foil: str) -> str:
-    return f"CASE WHEN {_HAS_NONFOIL} THEN '{nonfoil}' ELSE '{foil}' END"
-
-
 # Copies held, aggregated once for the whole collection and joined in as a
 # single row per printing.
 #
@@ -122,39 +111,14 @@ _OWNED_JOIN = """
 
 _QTY_SQL = "COALESCE(_own.qty, 0)"
 
-#: latest_prices has PRIMARY KEY (set_code, collector_number, source,
-#: price_type), so pinning both makes every price join single-row.
-_ENRICH_JOINS = f"""
-    LEFT JOIN latest_prices _ck_buy ON _ck_buy.set_code = p.set_code
-         AND _ck_buy.collector_number = p.collector_number
-         AND _ck_buy.source = 'cardkingdom'
-         AND _ck_buy.price_type = {_finish_case('buylist_normal', 'buylist_foil')}
-    LEFT JOIN latest_prices _ck_retail ON _ck_retail.set_code = p.set_code
-         AND _ck_retail.collector_number = p.collector_number
-         AND _ck_retail.source = 'cardkingdom'
-         AND _ck_retail.price_type = {_finish_case('normal', 'foil')}
-    LEFT JOIN latest_prices _tcg ON _tcg.set_code = p.set_code
-         AND _tcg.collector_number = p.collector_number
-         AND _tcg.source = 'tcgplayer'
-         AND _tcg.price_type = {_finish_case('normal', 'foil')}
-    -- printing_id is not unique in mtgjson_printings: one row per face of a
-    -- double-faced card, both carrying the same Scryfall id with a different
-    -- Card Kingdom link.  Resolve to the front face's uuid so the join stays
-    -- single-row and links the pocket the grid draws -- mtgjson_faces holds
-    -- the rule, shared with /api/collection and the card detail page.
-    LEFT JOIN mtgjson_printings _mp ON _mp.uuid =
-         {front_face_uuid_sql('p.printing_id')}
-"""
-
-_CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
-_TCG_PRICE_SQL = "_tcg.price"
-
-_ENRICH_COLUMNS = f"""
-    {_CK_PRICE_SQL} AS ck_price,
-    {_TCG_PRICE_SQL} AS tcg_price,
-    COALESCE(NULLIF(CASE WHEN {_HAS_NONFOIL} THEN _mp.ck_url ELSE _mp.ck_url_foil END, ''),
-             _mp.ck_url, '') AS ck_url
-"""
+# The prices and the Card Kingdom link, shared with /api/collection and the
+# deck page (mtg_collector/db/enrich.py).  Keyed on the *printing's* finishes:
+# /api/collection keys the same joins on `c.finish`, the finish of a copy in
+# hand, which is exactly wrong here because the pocket this endpoint exists to
+# show you is the one you have not filled and an unowned printing has no copy
+# to take a finish from.
+_ENRICH_JOINS = "\n    ".join(enrich_joins(PRINTING_IS_FOIL))
+_ENRICH_COLUMNS = enrich_columns(PRINTING_IS_FOIL)
 
 #: Which binder section a printing belongs to, given :base_ceiling.
 #:
@@ -234,7 +198,7 @@ def browse_set(
     ).fetchone()
 
     ceiling = base_ceiling(set_row["base_set_size"])
-    display_price_sql = _CK_PRICE_SQL if display_source == "ck" else _TCG_PRICE_SQL
+    display_price_sql = CK_PRICE_SQL if display_source == "ck" else TCG_PRICE_SQL
     sort_col = _SORT_COLUMNS.get(view.sort) or display_price_sql
     order_dir = "DESC" if view.order == "desc" else "ASC"
 

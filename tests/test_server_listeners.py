@@ -195,3 +195,44 @@ def test_non_integer_http_port_raises_and_binds_nothing(clean_env, tmp_path):
         assert isinstance(error[0], ValueError)
         assert "eighty-eighty" in str(error[0])
         assert created == [], "nothing should bind when the port is unparseable"
+
+
+# --- Blank means unset, for every startup switch (de-2mr) --------------------
+#
+# MTGC_HTTP_PORT and MTGC_TLS_CERT / MTGC_TLS_KEY were introduced in the same
+# epic and disagreed about what a blanked-out line means: the TLS pair read it
+# as unset, while MTGC_HTTP_PORT= raised out of int('') and crash-looped the
+# instance. Blanking a line instead of deleting it is a normal way to disable a
+# setting — setup.sh's own `record` deletes a key rather than writing an empty
+# one — so these pin the single rule both now read.
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t "])
+def test_blank_http_port_means_unset(clean_env, blank):
+    clean_env.setenv("MTGC_HTTP_PORT", blank)
+    assert cps._resolve_http_port() is None
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t "])
+def test_blank_tls_cert_pair_means_unset(clean_env, blank):
+    """The same rule on the other switch, so the two cannot drift apart again."""
+    clean_env.setenv("MTGC_TLS_CERT", blank)
+    clean_env.setenv("MTGC_TLS_KEY", blank)
+    assert cps._resolve_external_tls_paths() is None
+
+
+def test_blank_http_port_constructs_a_single_listener(clean_env, tmp_path):
+    """End to end: blanking the line disables the listener, it does not crash."""
+    clean_env.setenv("MTGC_HTTP_PORT", "")
+    with _server_process(clean_env, tmp_path) as (created, error, _thread):
+        _wait_for_listeners(created, 1, error)
+        assert _wait_for_root(created[0], "http") == 200
+        assert len(created) == 1, f"expected one listener, got {len(created)}"
+
+
+def test_whitespace_padded_http_port_still_binds(clean_env, tmp_path):
+    """A value with stray whitespace is a port, not a typo — int() would raise."""
+    clean_env.setenv("MTGC_HTTP_PORT", " 0 ")
+    with _server_process(clean_env, tmp_path) as (created, error, _thread):
+        _wait_for_listeners(created, 2, error)
+        assert _wait_for_root(created[1], "http") == 200
