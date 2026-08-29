@@ -3327,7 +3327,14 @@ async function loadPage(pageIdx, generation) {
   // query whose fetch is still inside its 300 ms debounce. Reading it here
   // would page a result that is not the one on screen, and the generation
   // guard below would wave it through — nothing has bumped the generation yet.
-  const res = await fetch(`/api/collection?${currentQuery}&limit=${PAGE_SIZE}&offset=${offset}`);
+  // known_total: the server would otherwise walk the whole grouped body again
+  // to re-derive a count this page already has and does not read back from the
+  // response — 929 ms of a 3.2 s window on the full catalogue (de-j9b). Page 0
+  // never reaches here (fetchCollection loads it and marks it 'loaded'), and
+  // ensurePagesForRange returns early until totalMatches is set, so there is
+  // always a real number to send.
+  const res = await fetch(
+    `/api/collection?${currentQuery}&limit=${PAGE_SIZE}&offset=${offset}&known_total=${totalMatches}`);
   const data = await res.json();
   // The query moved on while this was in flight; its rows belong to a result
   // that is no longer on screen, and allCards has already been replaced.

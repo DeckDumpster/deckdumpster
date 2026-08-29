@@ -1,12 +1,11 @@
 """
 Hand-written implementation for collection_stats_growth_chart_renders.
 
-Seeds acquisition history and price history via podman exec, then opens the
+Seeds acquisition history and price history via harness.db_exec, then opens the
 result-stats modal and verifies the "Growth over time" chart actually renders
 instead of falling back to the empty-state placeholder.
 """
 
-import subprocess
 
 # Spread acquired_at over the last 120 days and write price rows every 5th day
 # (deliberate gaps, so the server-side forward-fill is exercised) for both
@@ -51,31 +50,10 @@ sh.commit()
 """
 
 
-def _find_container(base_url):
-    """Find the container serving the given base_url by matching its port."""
-    port = base_url.rstrip("/").rsplit(":", 1)[-1]
-    result = subprocess.run(
-        ["podman", "ps", "--format", "{{.Names}}"], capture_output=True, text=True
-    )
-    for name in result.stdout.strip().split("\n"):
-        if not name:
-            continue
-        port_result = subprocess.run(
-            ["podman", "port", name, "8081/tcp"], capture_output=True, text=True
-        )
-        if port in port_result.stdout:
-            return name
-    raise AssertionError(f"no container found serving {base_url}")
-
-
 def steps(harness):
     # The --test fixture has no acquisition spread and almost no prices, so
     # the chart would otherwise be a single point at $0.
-    container = _find_container(harness.base_url)
-    subprocess.run(
-        ["podman", "exec", container, "python3", "-c", _SEED],
-        capture_output=True, text=True, check=True,
-    )
+    harness.db_exec(_SEED)
 
     # Reload so the collection list is served from the seeded DB.
     harness.navigate("/collection")

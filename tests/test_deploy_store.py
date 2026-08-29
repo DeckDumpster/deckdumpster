@@ -328,6 +328,125 @@ def test_the_runroot_is_keyed_to_the_graph_root(host):
     assert runroot("a") != runroot("b")
 
 
+def _activate(host, *, path_only=False, script=None):
+    """Run a command in a shell that has the store, one of the two ways a shell
+    can get it: the documented source-and-activate, or PATH alone."""
+    inherit = (
+        'export PATH="$MTGC_STORE_ROOT/bin:$PATH"'
+        if path_only
+        else f". {DEPLOY}/store-lib.sh && mtgc_store_activate"
+    )
+    return subprocess.run(
+        ["bash", "-c", f"{inherit}{'; ' if path_only else ' && '}{script or 'true'}"],
+        capture_output=True,
+        text=True,
+        env={**host.env, "MTGC_STORE_ROOT": str(host.store)},
+        cwd=str(REPO_ROOT),
+    )
+
+
+def test_a_path_only_activation_still_stamps_the_quadlet(host):
+    """de-nu5. `export PATH="$MTGC_STORE_ROOT/bin:$PATH"` is enough to put every
+    podman call in the store — that is the whole point of the shim, and it is
+    what mtgc_store_is_activated already reads as "in a store". The flags have
+    to be derived from the store root rather than assumed to have been exported
+    by an ancestor, or setup.sh renders a unit with no GlobalArgs=: systemd goes
+    to the DEFAULT store, finds no image, and sits in a restart loop pinging
+    localhost:443 while the image is in the alternate store."""
+    _activate(host)  # a first activation, which is what writes the shim to disk
+
+    result = _activate(host, path_only=True, script=f"bash {SETUP} inst 8083")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    unit = host.quadlet("inst").read_text()
+    line = next(ln for ln in unit.splitlines() if ln.startswith("GlobalArgs="))
+    assert f"--root={host.store}/storage" in line
+
+
+def test_a_path_only_activation_flags_the_timer_units(host):
+    """Same omission, one step further out: unflagged timers fire against the
+    default store and fail with "no such container"."""
+    _activate(host)
+
+    result = _activate(host, path_only=True, script=f"bash {SETUP} inst 8083")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    text = host.service("mtgc-prices", "inst").read_text()
+    assert f"ExecStart=podman --root={host.store}/storage --runroot=" in text
+
+
+def test_a_path_only_activation_moves_tmpdir(host):
+    """Build staging is why TMPDIR moves at all: left at its default it lands on
+    /var/tmp, the disk prod runs from. A script reached this way — setup.sh is
+    one — sources this file and activates like any other, so it is the activate
+    call that has to move TMPDIR, not the ancestor that never made one."""
+    _activate(host)
+
+    result = _activate(
+        host,
+        path_only=True,
+        script=f'. {DEPLOY}/store-lib.sh && mtgc_store_activate && printf %s "$TMPDIR"',
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == f"{host.store}/tmp"
+
+
+def test_a_nested_activation_keeps_the_original_tmpdir_to_restore(host):
+    """TMPDIR is moved by whichever activation gets there first; a second one
+    inside the same tree must not record the store's own tmp as the value
+    mtgc_store_deactivate puts back."""
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f". {DEPLOY}/store-lib.sh && mtgc_store_activate && mtgc_store_activate "
+            f"&& mtgc_store_deactivate && printf %s \"$TMPDIR\"",
+        ],
+        capture_output=True,
+        text=True,
+        env={**host.env, "MTGC_STORE_ROOT": str(host.store), "TMPDIR": "/var/tmp"},
+        cwd=str(REPO_ROOT),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "/var/tmp"
+
+
+def test_a_shim_on_path_that_is_gone_is_refused(host):
+    """What a shell that ran mtgc_store_teardown looks like: the shim lived
+    inside the store root it deleted. Proceeding would stamp units for a store
+    that no longer exists while `podman` resolved to the real one on the default
+    store — the split this file exists to prevent."""
+    _activate(host)
+    (host.store / "bin" / "podman").unlink()
+
+    result = _activate(host, path_only=True, script=f"bash {SETUP} inst 8083")
+
+    assert result.returncode != 0
+    assert "no podman shim" in result.stdout + result.stderr
+    assert not host.quadlet("inst").exists()
+
+
+def test_a_teardown_after_the_shim_is_gone_refuses(host):
+    """The sharp end of the same check. Every removal in mtgc_store_teardown is
+    a bare `podman` that relies on the shim for its scoping, and every one ends
+    in `|| true`. With the shim deleted but its directory still on PATH, the
+    shell resolves `podman` to the real one on the DEFAULT store — prod's — and
+    `rm -af` / `volume rm -af` / `rmi -af` run there, silently."""
+    _activate(host)
+    (host.store / "bin" / "podman").unlink()
+    host.log.write_text("")
+
+    result = _activate(
+        host,
+        path_only=True,
+        script=f". {DEPLOY}/store-lib.sh && mtgc_store_teardown",
+    )
+
+    assert result.returncode != 0
+    assert "no podman shim" in result.stdout + result.stderr
+    assert host.calls() == [], host.calls()
+
+
 def test_a_relative_store_root_is_refused(host):
     result = host.setup("inst", "8083", store="relative/dir", check=False)
 
