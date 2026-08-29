@@ -1,5 +1,5 @@
 """
-Unit tests for /api/collection's limit/offset parsing.
+Unit tests for /api/collection's paging parameters: limit, offset, known_total.
 
 The HTTP contract is covered by tests/integration/test_collection_paging.py;
 these run in the fast tier with no container, and pin the part that decides
@@ -12,6 +12,7 @@ from mtg_collector.cli.crack_pack_server import (
     COLLECTION_LIMIT_DEFAULT,
     COLLECTION_LIMIT_MAX,
     PageParamError,
+    _parse_known_total,
     _parse_page_params,
 )
 
@@ -63,3 +64,25 @@ class TestRejected:
     def test_raises(self, kw):
         with pytest.raises(PageParamError):
             _parse_page_params(_params(**kw))
+
+
+class TestKnownTotal:
+    """`known_total` is the count the caller already holds, handed back so the
+    server does not walk the whole grouped body to re-derive it (de-j9b)."""
+
+    def test_absent_means_count_it(self):
+        assert _parse_known_total({}) is None
+
+    def test_blank_means_count_it(self):
+        assert _parse_known_total(_params(known_total="")) is None
+
+    @pytest.mark.parametrize("total", [0, 1, 108630])
+    def test_accepted(self, total):
+        assert _parse_known_total(_params(known_total=total)) == total
+
+    @pytest.mark.parametrize("raw", [-1, "abc", "1.5", "250; DROP TABLE collection"])
+    def test_rejected(self, raw):
+        """A 400, not a silent 0 — a total the caller cannot see the server
+        ignored is a page count that reads as a short result."""
+        with pytest.raises(PageParamError):
+            _parse_known_total(_params(known_total=raw))

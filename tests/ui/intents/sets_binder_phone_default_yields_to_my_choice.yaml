@@ -1,0 +1,11 @@
+# Scenario: The phone default is a starting point, not a preference
+#
+# Related:
+#   issues: [de-l5l]
+
+description: >
+  On my phone the binder opens three cards across, and I widen it because I
+  would rather see more of the set at once. When I come back to that set the
+  grid is the width I chose, not the width it started at — the narrow opening
+  value is where the page starts when it knows nothing about me, and it stops
+  having an opinion the moment I express one.

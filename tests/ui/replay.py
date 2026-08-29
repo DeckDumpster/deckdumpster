@@ -8,6 +8,7 @@ a screenshot and DOM snapshot for evidence.
 
 import json
 import logging
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,11 +55,17 @@ class ReplayResult:
 class ReplayHarness:
     """Execute a generated implementation with zero Claude calls."""
 
-    def __init__(self, page, base_url: str, screenshot_dir: Path, scenario_name: str):
+    def __init__(self, page, base_url: str, screenshot_dir: Path, scenario_name: str,
+                 container: str | None = None, podman: list | None = None):
         self.page = page
         self.base_url = base_url
         self.screenshot_dir = screenshot_dir
         self.scenario_name = scenario_name
+        # How to reach the instance's database (see db_exec). Both come from the
+        # session fixtures that already resolved them; None means the run has no
+        # container to reach (--base-url).
+        self.container = container
+        self.podman = podman or ["podman"]
         self._step = 0
         self._steps: list[ReplayStep] = []
         # Sampled once, held for the whole scenario. A factor re-read per step
@@ -76,6 +83,31 @@ class ReplayHarness:
 
     def _budget(self, base_ms: int) -> int:
         return budget_ms(base_ms, self._contention)
+
+    # ── Fixture seeding ────────────────────────────────────────────────
+
+    def db_exec(self, script: str):
+        """Run `script` under python3 inside the instance's container.
+
+        A handful of scenarios assert on data the fixture cannot hold — price
+        history, acquisition dates spread over months — and seed it directly.
+        They used to rediscover the container themselves with a bare
+        `podman ps`, which sees only the DEFAULT store: with MTGC_STORE_ROOT
+        set (de-3mo) that found nothing, the seed silently did not run and the
+        scenario asserted against an empty table (de-1zq). The container and
+        the store flags are resolved once, by the conftest, and handed here.
+
+        Failures raise. A scenario whose fixture did not land must not go on to
+        assert on it.
+        """
+        if self.container is None:
+            raise RuntimeError(
+                "db_exec needs a container: run with --instance, not --base-url"
+            )
+        subprocess.run(
+            [*self.podman, "exec", self.container, "python3", "-c", script],
+            check=True, capture_output=True, text=True,
+        )
 
     # ── Navigation ─────────────────────────────────────────────────────
 

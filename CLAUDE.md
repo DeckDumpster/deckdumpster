@@ -276,6 +276,32 @@ id, and the last day stored. `mtg data fetch-prices` rebuilds after each import;
 rebuilds on the request that first finds the table stale, because otherwise one added card
 would leave the chart on the slow route until the next 06:00 timer run.
 
+### Price and Card Kingdom link
+
+Every list of cards this app renders carries the same three derived values — `ck_price`,
+`tcg_price`, `ck_url` — and `mtg_collector/db/enrich.py` is the one definition of them.
+They are **LEFT JOINs on the query that needs them, never a second pass**: the passes they
+replaced built `IN (...)` clauses sized by the result, which on /api/collection reached
+225,618 bound parameters against a `SQLITE_MAX_VARIABLE_NUMBER` of 250,000 (de-ckq). Every
+join binds zero parameters and matches at most one row. `tests/test_collection_enrichment.py`
+and `tests/test_deck_enrichment.py` each assert that no statement's parameter count grows
+with the result, so a reintroduced "bulk lookup" fails there.
+
+**Which finish to price in is the caller's fact**, which is why `enrich_joins` /
+`enrich_columns` take a SQL predicate for it rather than baking one in. A list of *copies*
+passes `COPY_IS_FOIL` (`c.finish`, etched priced as foil) — /api/collection, and a
+constructed deck, which is why the deck page and the collection page show one number for
+one card. A list of *printings* passes `PRINTING_IS_FOIL` (the printing's `finishes`) —
+/api/set-browse, and an idea/ready deck's expected list, because a card you may not hold
+has no copy to take a finish from. Passing the wrong one is not a formatting difference: it
+shows a foil card at the nonfoil price, which is what the deck page did until de-4qy.
+
+`printing_id` is **not** unique in `mtgjson_printings`, so the `ck_url` join resolves to a
+uuid first, the way `PackGenerator.get_ck_url()` does. That is what makes the collection
+list, the deck page and the card detail page link one double-faced card to one product.
+The query must alias `printings` as `p`, and `collection` as `c` when it uses
+`COPY_IS_FOIL`.
+
 ### Binder browse (`/api/set-browse/:set_code`)
 
 One set laid out as a binder page. `mtg_collector/db/set_browse.py` holds the query;
@@ -293,9 +319,11 @@ leaves `printing_id` as the only join term, so the plan does not depend on stati
 are not there — 44 ms with none at all. Do not "simplify" it back to a direct join.
 
 **Prices key on the printing's `finishes`, not on a copy's `c.finish`** the way
-`_ENRICH_JOINS` does. The pocket this view exists to show you is the one you have *not*
-filled, and it has no copy to take a finish from; a printing that exists in nonfoil is
-priced in nonfoil, a foil-only or etched-only one in foil.
+/api/collection does: this view passes `PRINTING_IS_FOIL` to the shared enrichment, that
+one passes `COPY_IS_FOIL` (see "Price and Card Kingdom link"). The pocket this view exists
+to show you is the one you have *not* filled, and it has no copy to take a finish from; a
+printing that exists in nonfoil is priced in nonfoil, a foil-only or etched-only one in
+foil.
 
 **Sections** are `base` | `extended` | `promo`, decided by `sets.base_set_size` and nothing
 else (see "Set sizes"). With `base_set_size` NULL the set is one
@@ -322,22 +350,23 @@ Every body leaves through `CrackPackHandler._respond`, and the caching rules
 follow from **what the response is**, not from a string the caller passed.
 `mtg_collector/http_cache.py` holds the decisions as pure functions.
 
-Three policies, and there is no fourth: `CACHE_DOCUMENT` (`public, no-cache`)
-for HTML and everything under `/static/*`, `CACHE_IMMUTABLE` for the
-ingest-image path (whose headers are unchanged, at `public, max-age=86400,
-immutable`), `CACHE_API` (`private, no-cache`) for JSON. SSE sets its own
-headers and is untouched.
+Four policies, and there is no fifth: `CACHE_DOCUMENT` (`public, no-cache`) for
+HTML and for any `/static/*` URL carrying no digest, `CACHE_HASHED_ASSET`
+(`public, max-age=31536000, immutable`) for a content-addressed asset URL,
+`CACHE_IMMUTABLE` for the ingest-image path (whose headers are unchanged, at
+`public, max-age=86400, immutable`), `CACHE_API` (`private, no-cache`) for JSON.
+SSE sets its own headers and is untouched.
 
-**`immutable` is a promise about the URL, not about the bytes**, and no URL here
-is content-addressed. The ingest-image path rests on a convention — the upload
-handler refuses a name that already exists — which is why its window stays a day
-and not a year; a hash in the URL is what would earn more. `/static/app.css`
-rests on nothing at all: it is rewritten by every deploy, so a long max-age on
-it is the same bug the pages had. Every HTML page was served
-`public, max-age=86400` with no validator, and because `magic.dumpster.cards`
-reaches this process through a Cloudflare tunnel, the edge held each document
-for a day: six deploys landed on 2026-08-25 and the public site showed none of
-them. A hard refresh does not help — it defeats the browser cache, not the edge.
+**`immutable` is a promise about the URL, not about the bytes.** The ingest-image
+path rests on a convention — the upload handler refuses a name that already
+exists — which is why its window stays a day and not a year; a hash in the URL is
+what would earn more. A bare `/static/app.css` rests on nothing at all: it is
+rewritten by every deploy, so a long max-age on it is the same bug the pages had.
+Every HTML page was served `public, max-age=86400` with no validator, and because
+`magic.dumpster.cards` reaches this process through a Cloudflare tunnel, the edge
+held each document for a day: six deploys landed on 2026-08-25 and the public
+site showed none of them. A hard refresh does not help — it defeats the browser
+cache, not the edge.
 
 **The ETag varies with the encoding** — `"<h>"` identity, `"<h>-gzip"` — plus
 `Vary: Accept-Encoding`. One tag for two representations is how a cache serves
@@ -358,6 +387,33 @@ requires; only a well-formed range outside the representation is a 416.
 **Verifying this needs the CDN.** `deploy/cdn-check.sh` compares the edge's ETag
 with the origin's, because every localhost check passed on the evening the
 public site was a day stale. See `deploy/README.md` → "CDN deploy check".
+
+### Content-addressed assets (`/static/shared.<digest>.css`)
+
+`mtg_collector/static_assets.py` is what puts a hash in the URL, and it is the
+only reason any asset may be `immutable`. Pages keep naming their assets by the
+path on disk; **the digest is minted as the document goes out**, so there is no
+build step, no manifest to regenerate, and an edit is live on the next page load.
+`deck_builder.html` names 11 subresources — that was 11 conditional round trips
+per warm load, and it is now none.
+
+- **The digest goes in the filename, never in a path segment.**
+  `vendor/keyrune/keyrune.min.css` asks for `url('fonts/keyrune.woff2')`, which
+  resolves against the directory it was served from. Hashing a directory would
+  404 every glyph — the same break `tests/test_vendored_fonts.py` exists to
+  prevent, arrived at from the other side.
+- **HTML is never content-addressed.** A document's bytes on the wire change
+  whenever an asset it names changes, while its own file does not; a digest taken
+  from that file would be a promise about bytes nobody sent. Documents stay
+  `no-cache` — a document being re-fetched is what makes a deploy visible at all.
+- **A stale digest is a 404, never today's bytes.** Serving current content under
+  a URL that asked for older content is how a client ends up holding the wrong
+  thing under a promise it cannot revalidate away. The only window is a page
+  whose HTML predates the deploy, and that HTML is `no-cache`.
+- **An unhashed `/static/*` URL still works and still revalidates**, exactly as
+  de-dai left it. An asset opts *into* immutability by existing on disk, so a
+  reference naming no file stays the visible 404 it always was, and the two JS
+  files that build `/static/card_back.jpeg` in a string keep today's behaviour.
 
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
@@ -423,6 +479,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 - **`printings.card_name` is a denormalised copy of `cards.name`.** It exists so the collection's default sort can be served by `idx_printings_card_name(card_name, printing_id)`. Sort on `p.card_name`, never `card.name`: `/api/collection` groups by `p.printing_id`, which pins `printings` as the driving table, so `idx_cards_name` is unreachable for ordering no matter what the tiebreak is (measured 2.3 s vs 8.8 ms on 109,976 rows). **The GROUP BY must lead with the same column** or the sort just moves into the grouping and nothing is gained. `PrintingRepository.upsert` fills it; `rebuild_card_names()` runs beside `rebuild_fts()` after `mtg cache` to repair upstream renames.
 - **Sort a set by `printings.number_sortable`, never by casting `collector_number`.** `ORDER BY CAST(collector_number AS INTEGER), collector_number` puts `A-248` *before* card #1, because `CAST('A-248' AS INTEGER)` is 0. `number_sortable` is that number encoded so it sorts — namespace, then value, then suffix — computed at ingest by `PrintingRepository.upsert` (`mtg_collector/db/collector_number.py` holds the encoding and the reasoning). It is **not** unique within a set, so close the `ORDER BY` on `p.printing_id` in the same direction; `idx_printings_set_sortable(set_code, number_sortable, printing_id)` carries printing_id for exactly that reason and serves the whole `ORDER BY` off one scan. `rebuild_number_sortable()` is the repair, but the column cannot go stale the way `card_name` can — it reads `collector_number`, which is half of `UNIQUE(set_code, collector_number)`.
 - **A sort's tiebreak must follow the sort's direction.** SQLite reads an index backwards only when every ORDER BY term inverts together, so `p.card_name DESC, p.printing_id ASC` silently falls back to a full sort (4.3 s vs 10 ms). The tiebreak is there to make the order total, which it is in either direction.
+- **The integration and UI conftests resolve `podman` through the instance's Quadlet unit** (`tests/container_store.py`). A bare `podman` sees only the DEFAULT store, and `MTGC_STORE_ROOT` puts every non-prod instance in another one — so the documented `setup.sh <inst> --test` + `pytest --instance <inst>` found no container, skipped, and reported `124 skipped … exit 0`, which reads as a pass (de-1zq). CI was never exposed: `ci.yml` activates the shim and exports it through `GITHUB_PATH`. The unit's `GlobalArgs=` records where the container actually is, and an unstamped unit names the default store just as definitely — which is what keeps `--instance prod` right on a box whose `store.env` opts everything else in. Do not re-derive the runroot; ask `store-lib.sh`. A named `--instance` that resolves to no container now **fails**; with no flag it still skips, so a plain `pytest tests/` stays a unit run.
 
 ## Deployment
 

@@ -24,6 +24,8 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import sync_playwright
 
+from tests.container_store import discover_container, podman_argv
+
 log = logging.getLogger(__name__)
 
 # DB paths inside the container (data volume mount point).
@@ -71,7 +73,7 @@ def pytest_addoption(parser):
     # when both test directories are collected together.
     for opt_args, opt_kwargs in [
         (["--instance"], dict(
-            default="integration-test",
+            default=None,
             help="Container instance name to test against (default: integration-test)",
         )),
         (["--base-url"], dict(
@@ -158,23 +160,25 @@ def pytest_runtest_logreport(report):
     _emit(f"  {icon} {report.outcome.upper()} {report.nodeid} ({report.duration:.1f}s)")
 
 
+# Resolved in the fixture rather than registered as the option's default, so
+# "the operator named an instance" stays distinguishable from "nobody asked".
+DEFAULT_INSTANCE = "integration-test"
+
+
 @pytest.fixture(scope="session")
 def instance_name(request):
-    return request.config.getoption("--instance")
+    return request.config.getoption("--instance") or DEFAULT_INSTANCE
 
 
-def _discover_container(instance_name):
-    """Try both container name patterns: systemd-mtgc-{name} (Linux) and mtgc-{name} (macOS)."""
-    for candidate in [f"systemd-mtgc-{instance_name}", f"mtgc-{instance_name}"]:
-        try:
-            subprocess.run(
-                ["podman", "container", "exists", candidate],
-                capture_output=True, check=True,
-            )
-            return candidate
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            continue
-    return None
+@pytest.fixture(scope="session")
+def podman(instance_name):
+    """`podman`, scoped to the store this instance's container lives in.
+
+    A bare `podman` sees only the default store, and MTGC_STORE_ROOT (de-3mo)
+    puts every non-prod instance somewhere else — so container discovery found
+    nothing and this suite skipped itself into a green run (de-1zq).
+    """
+    return podman_argv(instance_name)
 
 
 @pytest.fixture(scope="session")
@@ -182,21 +186,29 @@ def container_name(request, instance_name):
     """Resolve and expose the container name for DB snapshot/restore.
 
     Returns None when --base-url is provided (no container needed).
+
+    A named instance that resolves to no container is an error, not a skip: an
+    all-skipped run exits 0 and reads as a pass, which is the masking de-1zq was
+    filed about. Without `--instance` there is nothing to be wrong about — the
+    default instance is simply not set up.
     """
     if request.config.getoption("--base-url"):
         return None
-    name = _discover_container(instance_name)
+    name = discover_container(instance_name)
     if name is None:
-        pytest.skip(
+        message = (
             f"No container found for instance '{instance_name}'. "
             f"Start it with: bash deploy/setup.sh {instance_name} --init && "
             f"systemctl --user start mtgc-{instance_name}"
         )
+        if request.config.getoption("--instance"):
+            pytest.fail(message, pytrace=False)
+        pytest.skip(message)
     return name
 
 
 @pytest.fixture(scope="session")
-def base_url(request, instance_name, container_name):
+def base_url(request, instance_name, container_name, podman):
     """Discover the base URL for the running server.
 
     Use --base-url to point at a local dev server directly (e.g.
@@ -214,21 +226,27 @@ def base_url(request, instance_name, container_name):
                 ctx.verify_mode = ssl.CERT_NONE
                 kwargs["context"] = ctx
             urllib.request.urlopen(req, **kwargs)
-        except Exception:
-            pytest.skip(f"Server at {explicit} not responding")
+        except Exception as exc:
+            pytest.fail(f"Server at {explicit} not responding: {exc}", pytrace=False)
         return explicit
 
+    # The container exists by now (container_name saw to that), so every
+    # remaining way to end up without a URL is a broken instance rather than an
+    # absent one — reported, never skipped past.
     try:
         result = subprocess.run(
-            ["podman", "port", container_name, "8081/tcp"],
+            [*podman, "port", container_name, "8081/tcp"],
             capture_output=True, text=True, check=True,
         )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pytest.skip(f"Could not query port for '{container_name}'")
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        pytest.fail(f"Could not query port for '{container_name}': {exc}", pytrace=False)
 
     port_line = result.stdout.strip()
     if not port_line:
-        pytest.skip(f"Could not determine port for '{container_name}'")
+        pytest.fail(
+            f"'{container_name}' publishes no port for 8081/tcp — is it running?",
+            pytrace=False,
+        )
 
     port = port_line.split(":")[-1]
     url = f"https://localhost:{port}"
@@ -240,14 +258,14 @@ def base_url(request, instance_name, container_name):
     try:
         req = urllib.request.Request(f"{url}/")
         urllib.request.urlopen(req, context=ctx, timeout=5)
-    except Exception:
-        pytest.skip(f"Instance at {url} not responding")
+    except Exception as exc:
+        pytest.fail(f"Instance at {url} not responding: {exc}", pytrace=False)
 
     return url
 
 
 @pytest.fixture(scope="session")
-def _db_snapshot(container_name):
+def _db_snapshot(container_name, podman):
     """Create a one-time DB snapshot at session start for per-test restore.
 
     No-op when running against a local server (--base-url, no container).
@@ -257,19 +275,19 @@ def _db_snapshot(container_name):
         return
     log.info("Creating DB snapshot in container %s", container_name)
     subprocess.run(
-        ["podman", "exec", container_name, "bash", "-c", _BACKUP_CMD],
+        [*podman, "exec", container_name, "bash", "-c", _BACKUP_CMD],
         check=True, capture_output=True, text=True,
     )
     yield container_name
     # Clean up the backup file.
     subprocess.run(
-        ["podman", "exec", container_name, "rm", "-f", _CONTAINER_DB_BACKUP],
+        [*podman, "exec", container_name, "rm", "-f", _CONTAINER_DB_BACKUP],
         capture_output=True,
     )
 
 
 @pytest.fixture(autouse=True)
-def _restore_db(_db_snapshot):
+def _restore_db(_db_snapshot, podman):
     """Restore the DB to its snapshot state after each test.
 
     No-op when running against a local server (--base-url, no container).
@@ -280,7 +298,7 @@ def _restore_db(_db_snapshot):
         return
     log.info("Restoring DB snapshot in container %s", container)
     subprocess.run(
-        ["podman", "exec", container, "bash", "-c", _RESTORE_CMD],
+        [*podman, "exec", container, "bash", "-c", _RESTORE_CMD],
         check=True, capture_output=True, text=True,
     )
 
