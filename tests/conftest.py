@@ -51,7 +51,15 @@ def pytest_report_header(config):
 def pytest_sessionstart(session):
     global _progress_file, _session_start
     _session_start = time.monotonic()
-    os.makedirs(os.path.dirname(_PROGRESS_PATH), exist_ok=True)
+    cache_dir = os.path.dirname(_PROGRESS_PATH)
+    os.makedirs(cache_dir, exist_ok=True)
+    # pytest's own cacheprovider only writes .gitignore when IT creates
+    # .pytest_cache -- and we may beat it to that here, so write it ourselves
+    # rather than depend on hook ordering (de-bj7).
+    gitignore = os.path.join(cache_dir, ".gitignore")
+    if not os.path.exists(gitignore):
+        with open(gitignore, "w") as f:
+            f.write("# Created by pytest automatically.\n*\n")
     _progress_file = open(_PROGRESS_PATH, "w")
     _progress_file.write(json.dumps({
         "event": "session_start",
