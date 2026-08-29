@@ -466,6 +466,17 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 ## Known pitfalls
 
 - **Prices join on `(set_code, collector_number)`, NOT `printing_id`.** The `prices` table has no FK to `printings`. Always join through set_code + collector_number.
+- **A `latest_prices` join must pin `source` *and* `price_type`.** Its key is
+  `(set_code, collector_number, source, price_type)`, so pinning price_type alone
+  matches a card priced by both TCG and Card Kingdom twice — and the templates
+  that carry no GROUP BY (`expand=copies`) then return, count and page that card
+  twice: 600 owned copies reported as 1200 (de-fb1). There is deliberately no
+  such join left in `crack_pack_server.py`: `sort=price`, the status-line totals
+  and the `price:` keyword all resolve to `_display_price()`, whose joins pin
+  both columns and so match at most one row. The `price:` keyword compiles to
+  `search.PRICE_EXPR`, an alias the compiler cannot resolve on its own (it has
+  no `settings` to say which source), which each endpoint substitutes with the
+  price it displays.
 - **`deck_id` and `binder_id` are mutually exclusive.** A collection entry cannot be in both. The repository returns HTTP 409 on conflict. Use `move_cards()` to reassign atomically.
 - **JSON arrays stored as TEXT.** `colors`, `finishes`, `promo_types`, `keywords` are JSON-encoded strings. Use `json.loads()`, never SQL array operations.
 - **Card not in local DB → tell user to run `mtg cache all`.** Do not fall back to Scryfall API.

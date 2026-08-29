@@ -22,7 +22,7 @@ partially exercisable.
 
 - `set_value_select_set_and_analyze` -- Focus the search input, verify dropdown opens. Type a partial name to filter, click a set. Verify a pill appears, Analyze button enables. Click Analyze. Verify loading message appears then disappears, and the filter bar, chart canvas, summary stats row, and top 20 table section all become visible. This merges the proposed `set_value_select_set_and_pills` and `set_value_basic_analysis` into one end-to-end flow, which is how a real user would operate the page.
 
-- `set_value_summary_stats` -- After running an analysis, verify the summary row shows: Total Cards (nonzero), With Prices (can be 0 in fixture), Median, and the four tier percentages (Chaff, Modest, High, Premium). Even with all-zero prices, this verifies the stats row renders and labels are correct. Can assert "Total Cards" > 0 and "With Prices" = 0 for the fixture.
+- `set_value_summary_stats` -- After running an analysis, verify the summary row shows: Total Cards (nonzero), With Prices, Median, and the four tier percentages (Chaff, Modest, High, Premium). Superseded by de-9tb: the fixture now prices the catalogue, so "With Prices" is nonzero and below "Total Cards", and the median and tiers carry real values. It was 0 when this was approved.
 
 - `set_value_filter_rarity` -- After analysis, deactivate the "C" (Common) pill. Verify the stat-total count decreases (proving the filter took effect). Reactivate it, verify the count returns. This is the single best filter test because rarity distribution exists even without prices -- the "Total Cards" stat changes regardless of price data.
 
@@ -53,6 +53,6 @@ partially exercisable.
 - `set_value_set_search_filter` -- Redundant with search behavior tested in `set_value_select_set_and_analyze`.
 - `set_value_dropdown_selected_highlight` -- Minor visual detail (red text on selected set). Low regression risk.
 - `set_value_home_link_navigation` -- Trivial navigation link. Zero regression value.
-- `set_value_no_priced_cards_edge_case` -- This IS the default fixture state, so it is already implicitly tested by every other intent. No dedicated intent needed.
+- `set_value_no_priced_cards_edge_case` -- Was the default fixture state when this was approved, so it needed no dedicated intent. De-9tb priced the catalogue; reaching this state now takes a set whose printings are all unpriced, and nothing asserts it.
 - `set_value_select_set_and_pills` -- Merged into `set_value_select_set_and_analyze`.
 - `set_value_basic_analysis` -- Merged into `set_value_select_set_and_analyze`.

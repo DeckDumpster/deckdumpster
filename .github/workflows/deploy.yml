@@ -26,35 +26,10 @@ jobs:
       - name: Build and restart
         run: bash /opt/mtgc-${{ env.INSTANCE }}/deploy/deploy.sh ${{ env.INSTANCE }}
 
-  deploy-native:
-    runs-on: [self-hosted, thaen]
-    steps:
-      - name: Pull latest code
-        run: git -C /opt/deckdumpster-code pull --ff-only origin main
-
-      - name: Sync dependencies
-        run: cd /opt/deckdumpster-code && uv sync --no-dev
-
-      - name: Restart server
-        run: launchctl kickstart -k gui/$(id -u)/com.deckdumpster.server
-
-      - name: Health check
-        run: |
-          for i in 1 2 3 4 5; do
-            if curl -sk --max-time 5 https://localhost:8080/ > /dev/null 2>&1; then
-              echo "Health check passed"
-              exit 0
-            fi
-            echo "Attempt $i/5 — waiting..."
-            sleep 5
-          done
-          echo "Health check failed"
-          exit 1
-
   # A deploy check that does not traverse the CDN is not a deploy check (de-dai).
   #
-  # The job above has always ended by curling localhost, which is exactly what
-  # passed on 2026-08-25 while magic.dumpster.cards served day-old pages. This
+  # Deploys here have always been verified by curling localhost, which is exactly
+  # what passed on 2026-08-25 while magic.dumpster.cards served day-old pages. This
   # asks the public URL the same question and compares its ETag with the
   # origin's, so "deployed" and "visible to users" stop being the same claim.
   #
