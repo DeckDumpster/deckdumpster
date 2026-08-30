@@ -37,8 +37,10 @@ def monolithic_db():
         "VALUES ('oracle-1', 'Split Test Card', '{W}', 'Creature', '[\"W\"]')"
     )
     conn.execute(
-        "INSERT INTO printings (printing_id, oracle_id, set_code, collector_number, rarity) "
-        "VALUES ('print-1', 'oracle-1', 'tst', '1', 'R')"
+        # card_name is the denormalised sort key PrintingRepository.upsert fills;
+        # written here too, because collection.card_name is copied from it.
+        "INSERT INTO printings (printing_id, oracle_id, set_code, collector_number, rarity, card_name) "
+        "VALUES ('print-1', 'oracle-1', 'tst', '1', 'R', 'Split Test Card')"
     )
     conn.execute(
         "INSERT INTO collection (printing_id, status, finish, condition, acquired_at, source) "
@@ -160,6 +162,54 @@ def test_split_then_attach_round_trip(monolithic_db):
 
     conn.close()
     os.unlink(shared_path)
+
+
+def test_a_collection_write_fills_card_name_through_the_shadow(monolithic_db):
+    """collection.card_name is filled by the INSERT, and must be under split-DB too.
+
+    This is why it is a scalar subquery in the statement and not a trigger: after
+    a prune `main.printings` is empty and the real catalogue is behind a temp
+    view over the ATTACHed shared DB. An ordinary statement resolves through
+    that shadow; a trigger body in `main` cannot see temp views at all, so it
+    would write NULL here — silently, and only on the deployments that use this
+    mode. NULL is unrecoverable at read time: it is what the default collection
+    page sorts on.
+    """
+    from mtg_collector.cli.db_cmd import run_split
+    from mtg_collector.db.models import CollectionEntry, CollectionRepository
+
+    shared_path = monolithic_db.replace(".sqlite", "-shared.sqlite")
+
+    class FakeArgs:
+        db_path = monolithic_db
+        shared_out = shared_path
+        prune = True
+
+    run_split(FakeArgs())
+
+    conn = sqlite3.connect(monolithic_db)
+    conn.row_factory = sqlite3.Row
+    attach_shared(conn, shared_path)
+    # Nothing to read the name from in this database itself.
+    assert conn.execute("SELECT COUNT(*) FROM main.printings").fetchone()[0] == 0
+
+    new_id = CollectionRepository(conn).add(
+        CollectionEntry(
+            id=None,
+            printing_id="print-1",
+            finish="foil",
+            acquired_at="2025-02-02T00:00:00.000Z",
+            source="manual",
+            status="owned",
+        )
+    )
+    conn.commit()
+    name = conn.execute(
+        "SELECT card_name FROM collection WHERE id = ?", (new_id,)
+    ).fetchone()[0]
+    conn.close()
+    os.unlink(shared_path)
+    assert name == "Split Test Card"
 
 
 # ── get_connection() auto-ATTACH tests ──

@@ -138,7 +138,7 @@ class TestMigrationV39ToV40:
             INSERT INTO schema_version (version, applied_at) VALUES (39, '2025-01-01');
 
             -- mtgjson_printings arrived at v16, so a v39 database has it.  Present
-            -- here so migrations that add a column to it -- v50 adds `side` -- have
+            -- here so migrations that add a column to it -- v51 adds `side` -- have
             -- something to alter.
             CREATE TABLE mtgjson_printings (
                 uuid TEXT PRIMARY KEY, printing_id TEXT, name TEXT NOT NULL,

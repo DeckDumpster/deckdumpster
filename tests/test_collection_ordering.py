@@ -19,6 +19,7 @@ from collections import Counter
 import pytest
 
 from mtg_collector.cli.crack_pack_server import CrackPackHandler
+from mtg_collector.db.models import CollectionEntry, CollectionRepository
 from mtg_collector.db.schema import init_db
 
 # Sort options offered by the collection page (keys of the handler's sort_map).
@@ -89,10 +90,19 @@ def db_path(tmp_path_factory):
             " price, observed_at) VALUES (?, ?, 'tcgplayer', 'normal', 1.5, '2026-01-01')",
             (set_code, collector_number),
         )
-        cursor = conn.execute(
-            "INSERT INTO collection (printing_id, finish, condition, acquired_at, source, status)"
-            " VALUES (?, 'nonfoil', 'Near Mint', ?, 'manual', 'owned')",
-            (printing_id, _ACQUIRED),
+        # Through the repository: it is what fills collection.card_name, which
+        # the collection-driven templates sort on.  A raw INSERT would leave
+        # the sort key NULL and make every name tie for the wrong reason.
+        entry_id = CollectionRepository(conn).add(
+            CollectionEntry(
+                id=None,
+                printing_id=printing_id,
+                finish="nonfoil",
+                condition="Near Mint",
+                acquired_at=_ACQUIRED,
+                source="manual",
+                status="owned",
+            )
         )
         # Half the copies sit in a deck, so expand=copies exercises its
         # deck_cards join with both matched and unmatched rows.
@@ -100,7 +110,7 @@ def db_path(tmp_path_factory):
             conn.execute(
                 "INSERT INTO deck_cards (deck_id, printing_id, collection_id, zone, quantity)"
                 " VALUES (1, ?, ?, 'mainboard', 1)",
-                (printing_id, cursor.lastrowid),
+                (printing_id, entry_id),
             )
     conn.commit()
     conn.close()
@@ -181,10 +191,11 @@ def _cast_int(collector_number):
 
 def _key_value(term, row, conn):
     """The value one ORDER BY term produced for one response row."""
-    # p.card_name is cards.name denormalised onto printings so the default sort
-    # can be served by an index; it is the same value, and the payload exposes
-    # it the same way (`name` is the flavor name when there is one).
-    if term in ("card.name", "p.card_name"):
+    # card_name is cards.name denormalised onto printings *and* onto collection
+    # so that whichever table a template drives from carries its own sort key.
+    # Both hold the same value, and the payload exposes it the same way (`name`
+    # is the flavor name when there is one).
+    if term in ("card.name", "p.card_name", "c.card_name"):
         return row.get("oracle_name") or row["name"]
     if term == "card.cmc":
         return row["cmc"]
@@ -209,7 +220,7 @@ def _key_value(term, row, conn):
         return row["tcg_price"]
     if term == "COALESCE(_ck_buy.price, _ck_retail.price)":
         return row["ck_price"]
-    if term == "p.printing_id":
+    if term in ("p.printing_id", "c.printing_id"):
         return row["printing_id"]
     if term in ("c.finish", "c.condition", "c.status"):
         return row[term.split(".")[1]]
@@ -270,8 +281,9 @@ def test_fixture_ties_on_the_old_key(db_path, template, sort):
     # old key — the name is not repeated as a secondary term, because doing so
     # would break the index prefix that now serves it.
     terms = _order_terms(sql)
-    assert "p.card_name" in terms, terms
-    old_key = terms[: terms.index("p.card_name") + 1]
+    name_terms = [t for t in terms if t in ("p.card_name", "c.card_name")]
+    assert len(name_terms) == 1, terms
+    old_key = terms[: terms.index(name_terms[0]) + 1]
     keys = _keys(rows, old_key, db_path)
     assert len(set(keys)) < len(keys), (
         f"fixture has no ties for sort={sort} ({template}) — "

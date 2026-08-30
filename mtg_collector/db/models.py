@@ -779,8 +779,9 @@ class CollectionRepository:
             (printing_id, finish, condition, language, purchase_price,
              acquired_at, source, source_image, notes, tags, tradelist,
              is_alter, proxy, signed, misprint, status, sale_price, order_id,
-             batch_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             batch_id, card_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT card_name FROM printings WHERE printing_id = ?))
             """,
             (
                 entry.printing_id,
@@ -802,6 +803,13 @@ class CollectionRepository:
                 entry.sale_price,
                 entry.order_id,
                 entry.batch_id,
+                # card_name is denormalised from printings so the default
+                # collection sort can be index-served -- see
+                # idx_collection_card_name.  Read in SQL rather than passed in:
+                # every caller already has the printing_id and none of them has
+                # the name, and this way the copy cannot disagree with the row
+                # it was copied from at the moment it is written.
+                entry.printing_id,
             ),
         )
         new_id = cursor.lastrowid
@@ -853,7 +861,8 @@ class CollectionRepository:
                 status = ?,
                 sale_price = ?,
                 order_id = ?,
-                batch_id = ?
+                batch_id = ?,
+                card_name = (SELECT card_name FROM printings WHERE printing_id = ?)
             WHERE id = ?
             """,
             (
@@ -876,6 +885,9 @@ class CollectionRepository:
                 entry.sale_price,
                 entry.order_id,
                 entry.batch_id,
+                # Re-read alongside printing_id: this statement can repoint a
+                # copy at a different printing, and the sort key has to follow.
+                entry.printing_id,
                 entry.id,
             ),
         )

@@ -158,8 +158,11 @@ def register(subparsers):
     )
 
     data_sub.add_parser(
-        "backfill-set-sizes",
-        help="Populate sets.base_set_size / total_set_size over every cached set",
+        "backfill-sets",
+        help=(
+            "Repair sets.set_type / released_at / digital / base_set_size / "
+            "total_set_size over every cached set"
+        ),
     )
 
     data_sub.add_parser(
@@ -209,10 +212,10 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         import_edhrec(db_path)
-    elif args.data_command == "backfill-set-sizes":
+    elif args.data_command == "backfill-sets":
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
-        backfill_set_sizes(db_path)
+        backfill_sets(db_path)
     elif args.data_command == "check-catalog":
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
@@ -222,7 +225,7 @@ def run(args):
         db_path = get_db_path(getattr(args, "db_path", None))
         refresh_catalog(db_path)
     else:
-        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-set-sizes|check-catalog|refresh-catalog} [options]")
+        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-sets|check-catalog|refresh-catalog} [options]")
         sys.exit(1)
 
 
@@ -274,7 +277,7 @@ def fetch_allprintings(force: bool = False, db_path: str | None = None):
 def import_mtgjson(db_path: str):
     """Import AllPrintings.json into SQLite (printings, booster sheets, configs)."""
     from mtg_collector.db.schema import init_db
-    from mtg_collector.db.set_sizes import apply_base_set_sizes
+    from mtg_collector.db.set_backfill import apply_base_set_sizes
 
     t0 = time.time()
 
@@ -601,27 +604,39 @@ def import_mtgjson(db_path: str):
 
 
 
-def backfill_set_sizes(db_path: str):
-    """Populate base_set_size / total_set_size over every locally cached set.
+def backfill_sets(db_path: str):
+    """Repair the `sets` columns on every locally cached set: descriptors + sizes.
 
-    The entry point for an existing database that predates schema 48.  Both
-    ingest paths write these columns as a side effect now, but neither is a
-    backfill: `mtg cache all` re-downloads ~500 MB of bulk data and reprocesses
-    112k printings, and `mtg data import` rebuilds five tables.  This reads the
-    two size sources and nothing else.
+    The entry point for an existing database whose `sets` rows were written by
+    a path that did not fill them.  Every ingest path writes these columns as a
+    side effect now, but none of them is a backfill: `mtg cache all`
+    re-downloads ~500 MB of bulk data and reprocesses 112k printings, and
+    `mtg data import` rebuilds five tables.  This reads the two catalogue
+    sources and nothing else.
 
-    Idempotent by construction -- see db/set_sizes.py.  Re-running writes zero
-    rows and reports zero.
+    Five columns, and one Scryfall request serves four of them.  The
+    descriptors come first because they are what a stub row is missing
+    (de-mfe): `INSERT OR IGNORE INTO sets (set_code, set_name)` in `mtg data
+    import` and the TCGCSV sealed importer leaves `set_type` and `released_at`
+    NULL and `digital` at its DEFAULT 0, and a NULL `released_at` is what makes
+    `year:` match such a set not at all.
+
+    Idempotent by construction -- see db/set_backfill.py.  Re-running writes
+    zero rows and reports zero.
     """
     from mtg_collector.db.schema import init_db
-    from mtg_collector.db.set_sizes import apply_base_set_sizes, apply_total_set_sizes
+    from mtg_collector.db.set_backfill import (
+        apply_base_set_sizes,
+        apply_set_metadata,
+        apply_total_set_sizes,
+    )
     from mtg_collector.services.scryfall import ScryfallAPI
 
     conn = sqlite3.connect(get_shared_write_path(db_path))
     init_db(conn)
 
     cached = conn.execute("SELECT COUNT(*) FROM sets").fetchone()[0]
-    print(f"Backfilling set sizes over {cached} cached set(s) ...")
+    print(f"Backfilling set metadata over {cached} cached set(s) ...")
 
     print("Fetching set list from Scryfall ...")
     scryfall_sets = ScryfallAPI().get_all_sets()
@@ -629,9 +644,14 @@ def backfill_set_sizes(db_path: str):
         # get_all_sets() turns a request failure into an empty list.  Writing
         # zero rows and reporting success would look exactly like an already
         # current database.
-        print("Scryfall returned no sets — cannot backfill total_set_size.", file=sys.stderr)
+        print("Scryfall returned no sets — cannot backfill.", file=sys.stderr)
         conn.close()
         sys.exit(1)
+
+    metadata_changed = apply_set_metadata(conn, scryfall_sets)
+    for column, changed in metadata_changed.items():
+        print(f"  {column}: {changed} row(s) updated")
+
     total_changed = apply_total_set_sizes(conn, scryfall_sets)
     print(f"  total_set_size: {total_changed} row(s) updated from {len(scryfall_sets)} Scryfall sets")
 
@@ -645,15 +665,20 @@ def backfill_set_sizes(db_path: str):
     else:
         # Not an error and not a fallback: base_set_size stays NULL, which is a
         # value this column is defined to carry, and the UI hides the base
-        # completion bar rather than inventing one.
+        # completion bar rather than inventing one.  The Scryfall columns above
+        # have already landed; this half of the run is the one that did not.
         print(f"AllPrintings.json not found at {path} — base_set_size left as-is.")
         print("Run: mtg data fetch")
 
     remaining = conn.execute(
-        "SELECT SUM(base_set_size IS NULL), SUM(total_set_size IS NULL) FROM sets"
+        "SELECT SUM(set_type IS NULL), SUM(released_at IS NULL),"
+        "       SUM(base_set_size IS NULL), SUM(total_set_size IS NULL) FROM sets"
     ).fetchone()
     conn.close()
-    print(f"  Still NULL: base_set_size {remaining[0]}, total_set_size {remaining[1]}")
+    print(
+        f"  Still NULL: set_type {remaining[0]}, released_at {remaining[1]}, "
+        f"base_set_size {remaining[2]}, total_set_size {remaining[3]}"
+    )
 
 
 def check_catalog(db_path: str) -> int:
@@ -744,14 +769,29 @@ def refresh_catalog(db_path: str):
     daily and Scryfall's bulk export is regenerated daily, so "we already have a
     file" is not a reason to skip, and a skip is indistinguishable from a run
     that had nothing to do.
+
+    Last, the collection's copy of the card name. `cache all` repairs
+    printings.card_name from cards.name, and this carries the same rename the
+    last hop to collection.card_name, which the default collection sort is
+    ordered by. It runs here rather than inside `cache all` because under
+    split-DB that command writes to the *shared* catalogue, where `collection`
+    is somebody else's empty table -- the copy that needs repairing lives in
+    this instance's own database, which is what db_path names in both modes.
     """
     from mtg_collector.cli.cache_cmd import cache_all
+    from mtg_collector.db.connection import get_connection
+    from mtg_collector.db.schema import rebuild_collection_card_names
 
     print("=== Scryfall: sets, cards, printings ===")
     cache_all(db_path=db_path)
 
     print("\n=== MTGJSON: AllPrintings ===")
     fetch_allprintings(force=True, db_path=db_path)
+
+    print("\n=== Collection sort key ===")
+    conn = get_connection(db_path)
+    renamed = rebuild_collection_card_names(conn)
+    print(f"Resynced card_name on {renamed} collection row(s)")
 
 
 def _fetch_mtgjson_version() -> str | None:

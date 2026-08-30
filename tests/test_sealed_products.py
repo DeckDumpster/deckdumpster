@@ -374,7 +374,7 @@ class TestMigrationV18ToV19:
                 applied_at TEXT NOT NULL
             );
             -- mtgjson_printings arrived at v16, so a database at this version has
-            -- it.  Present here so migrations that add a column to it -- v50 adds
+            -- it.  Present here so migrations that add a column to it -- v51 adds
             -- `side` -- have something to alter.
             CREATE TABLE IF NOT EXISTS mtgjson_printings (
                 uuid            TEXT PRIMARY KEY,
@@ -1132,7 +1132,7 @@ class TestMigrationV19ToV20:
                 applied_at TEXT NOT NULL
             );
             -- mtgjson_printings arrived at v16, so a database at this version has
-            -- it.  Present here so migrations that add a column to it -- v50 adds
+            -- it.  Present here so migrations that add a column to it -- v51 adds
             -- `side` -- have something to alter.
             CREATE TABLE IF NOT EXISTS mtgjson_printings (
                 uuid            TEXT PRIMARY KEY,

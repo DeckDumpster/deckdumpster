@@ -16,6 +16,27 @@ from .keywords import COLOR_MAP, RARITY_ALIASES, RARITY_ORDER, STATUS_VALUES
 
 ALL_COLORS = {"W", "U", "B", "R", "G"}
 
+#: What ``price:`` compiles to.  ``latest_prices`` is keyed (set_code,
+#: collector_number, source, price_type), so an alias for it resolves to one row
+#: per card only when **both** source and price_type are pinned — pinning
+#: price_type alone matches a card priced by two sources twice, and a template
+#: with no GROUP BY then returns it twice (de-fb1).
+#:
+#: A caller that renders a price of its own substitutes its own expression for
+#: this one, so the filter selects on the number it displays; ``/api/collection``
+#: does exactly that, and PRICE_JOIN is then never used.  The join below is what
+#: the standalone search path takes instead.  It has no ``settings`` to read, so
+#: it pins the default first source rather than inventing a preference.
+PRICE_EXPR = "_lp.price"
+
+PRICE_JOIN = (
+    "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
+    "\n              AND _lp.collector_number = p.collector_number"
+    "\n              AND _lp.source = 'tcgplayer'"
+    "\n              AND _lp.price_type = CASE WHEN c.finish IN ('foil', 'etched')"
+    " THEN 'foil' ELSE 'normal' END"
+)
+
 
 class CompiledQuery:
     """Result of compiling an AST into SQL."""
@@ -321,8 +342,8 @@ def _compile_comparison(node: ComparisonNode, ctx: CompiledQuery) -> tuple[str, 
     # --- Collection-specific: price ---
     if kw == "price":
         ctx.needs_price_join = True
-        return _compile_numeric("_lp.price", op, val,
-                                extra_where="_lp.price IS NOT NULL")
+        return _compile_numeric(PRICE_EXPR, op, val,
+                                extra_where=f"{PRICE_EXPR} IS NOT NULL")
 
     # --- Collection-specific: deck ---
     if kw == "deck":
@@ -782,7 +803,7 @@ _SORT_MAP = {
     "artist": "p.artist",
     "collector_number": "CAST(p.collector_number AS INTEGER)",
     "added": "c.acquired_at",
-    "price": "_lp.price",
+    "price": PRICE_EXPR,
 }
 
 
@@ -816,11 +837,7 @@ def _build_full_sql(compiled: CompiledQuery, mode: str = "collection",
                 "\n            LEFT JOIN decks d ON dc.deck_id = d.id"
             )
         if compiled.needs_price_join:
-            extra_joins.append(
-                "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
-                "\n              AND _lp.collector_number = p.collector_number"
-                "\n              AND _lp.price_type = 'normal'"
-            )
+            extra_joins.append(PRICE_JOIN)
         if compiled.needs_wishlist_join:
             extra_joins.append(
                 "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id"

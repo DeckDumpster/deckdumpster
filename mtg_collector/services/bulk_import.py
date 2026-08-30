@@ -7,7 +7,7 @@ from typing import Dict, List, Optional
 import requests
 
 from mtg_collector.db.models import Card, Printing, Set
-from mtg_collector.db.set_sizes import clean_size
+from mtg_collector.db.set_backfill import clean_size
 
 
 def resolve_reversible_oracle_id(card_data: Dict) -> bool:

@@ -996,6 +996,13 @@ def _recover_pending_images(db_path):
         print(f"[startup] {len(rows)} pending image(s) waiting — ANTHROPIC_API_KEY not set, skipping processing", flush=True)
 
 
+#: Stand-in for "the card name", substituted per template in _api_collection.
+#: The name is denormalised onto both `printings` and `collection` so that
+#: whichever table a template drives from carries its own sort key; which of
+#: the two copies a query reads is a property of the template, not of the sort.
+_NAME = "<card_name>"
+
+
 # /api/collection prices and Card Kingdom link, folded into the main query.
 # The joins themselves live in mtg_collector/db/enrich.py, because the deck
 # page and the binder-page view render the same three values and used to each
@@ -1013,6 +1020,28 @@ _ENRICH_JOINS = enrich_joins(COPY_IS_FOIL)
 _ENRICH_PRICE_JOINS = enrich_price_joins(COPY_IS_FOIL)
 
 _ENRICH_COLUMNS = enrich_columns(COPY_IS_FOIL)
+
+
+# The one price the client renders, and the joins that expression is built from.
+# The `price_sources` setting picks it: the first entry is the column the table
+# shows, so it is also what `sort=price` orders by, what the status-line totals
+# are summed from, and what the `price:` search keyword filters on.  One number
+# on screen, one number every control acts on.
+_CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
+_TCG_PRICE_SQL = "_tcg.price"
+_CK_PRICE_JOINS = _ENRICH_JOINS[:2]
+_TCG_PRICE_JOINS = _ENRICH_JOINS[2:3]
+
+
+def _display_price(conn) -> tuple[str, str, list[str]]:
+    """(first source, the price expression, the joins that expression needs)."""
+    row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'price_sources'"
+    ).fetchone()
+    first_source = (row["value"] if row else "tcg,ck").split(",")[0]
+    if first_source == "ck":
+        return first_source, _CK_PRICE_SQL, list(_CK_PRICE_JOINS)
+    return first_source, _TCG_PRICE_SQL, list(_TCG_PRICE_JOINS)
 
 
 # Page bounds for /api/collection. Measured on the real payload (108,630 rows
@@ -2271,7 +2300,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         extensions (status:, added:, price:, deck:, binder:, is:wanted, etc.).
         When no status: is in the query, defaults to status:owned.
         """
-        from mtg_collector.search import SearchError, compile_query, parse_query
+        from mtg_collector.search import (
+            PRICE_EXPR,
+            SearchError,
+            compile_query,
+            parse_query,
+        )
 
         try:
             limit, offset = _parse_page_params(params)
@@ -2334,17 +2368,23 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             where_sql = f"{card_filter} AND ({where_sql})" if where_sql != "1=1" else card_filter
 
         # The price column the client renders follows the price_sources
-        # setting, so sorting and the totals below follow it too — otherwise
-        # the table would order itself by a number it is not showing.
-        price_sources_row = conn.execute(
-            "SELECT value FROM settings WHERE key = 'price_sources'"
-        ).fetchone()
-        first_source = (
-            price_sources_row["value"] if price_sources_row else "tcg,ck"
-        ).split(",")[0]
-        _CK_PRICE_SQL = "COALESCE(_ck_buy.price, _ck_retail.price)"
-        _TCG_PRICE_SQL = "_tcg.price"
-        display_price_sql = _CK_PRICE_SQL if first_source == "ck" else _TCG_PRICE_SQL
+        # setting, so sorting, the totals below and the `price:` filter follow
+        # it too — otherwise the table would order itself by, and filter itself
+        # on, a number it is not showing.
+        first_source, display_price_sql, display_price_joins = _display_price(conn)
+
+        # `price:` compiles to a single alias for latest_prices, which the
+        # compiler cannot resolve to one row per card on its own: the key is
+        # (set_code, collector_number, source, price_type), and it has no
+        # `settings` to say which source. Pinning price_type alone matched a
+        # card priced by both TCG and Card Kingdom twice, and expand=copies has
+        # no GROUP BY to collapse it — 600 owned copies were reported and
+        # painted as 1200 (de-fb1). Substituting the displayed price drops the
+        # alias entirely: the joins it is built from are single-row by
+        # construction, and there is no second definition of "the price" left
+        # for a filter to disagree with the column about.
+        if compiled and compiled.needs_price_join:
+            where_sql = where_sql.replace(PRICE_EXPR, display_price_sql)
 
         # Sort: use search engine order:/direction: if present, else URL params.
         # No sort_map value is unique, and neither is the card.name tiebreak
@@ -2352,15 +2392,15 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         # ORDER BY with the columns that identify one output row — the GROUP BY
         # key where there is one, c.id/dc.id for the per-copy template. Without
         # that the order is not total and paged responses drop and duplicate rows.
+        # _NAME is resolved per template to the copy of the name that lives on
+        # that template's *driving* table — p.card_name where printings drives,
+        # c.card_name where collection does. Never card.name: reading the name
+        # across the join cannot be made fast, because the GROUP BY pins the
+        # driving table and cards can therefore never be the outer loop, so
+        # idx_cards_name is unreachable for ordering with or without a tiebreak.
+        # Both copies are denormalised from cards.name and carry the same value.
         sort_map = {
-            # p.card_name, not card.name — same value (it is denormalised from
-            # it), but on the table the grouped templates already drive from, so
-            # idx_printings_card_name(card_name, printing_id) can serve the sort.
-            # Reading it across the join cannot be made fast: GROUP BY
-            # p.printing_id pins printings as the driving table, so cards can
-            # never be the outer loop and idx_cards_name is never reachable for
-            # ordering. Measured on 109,976 rows: 2.3 s -> 8.8 ms.
-            "name": "p.card_name",
+            "name": _NAME,
             "cmc": "card.cmc",
             "rarity": "CASE p.rarity WHEN 'common' THEN 0 WHEN 'uncommon' THEN 1 WHEN 'rare' THEN 2 WHEN 'mythic' THEN 3 ELSE 4 END",
             "set": "p.set_code",
@@ -2386,9 +2426,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "ck_price": _CK_PRICE_SQL,
         }
         if compiled and compiled.order_by:
-            sort_col = sort_map.get(compiled.order_by, "p.card_name")
+            sort_col = sort_map.get(compiled.order_by, _NAME)
         else:
-            sort_col = sort_map.get(sort, "p.card_name")
+            sort_col = sort_map.get(sort, _NAME)
         if compiled and compiled.order_dir == "desc":
             order_dir = "DESC"
         elif order:
@@ -2396,14 +2436,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         else:
             order_dir = "ASC"
 
-        sorting_by_name = sort_col == "p.card_name"
+        sorting_by_name = sort_col == _NAME
 
-        def _order_by(*identity_cols: str) -> str:
-            """ORDER BY for a template, given the columns that identify one row.
+        def _order_by(name_col: str, *identity_cols: str) -> str:
+            """ORDER BY for a template, given its name column and row identity.
 
             The identity columns follow order_dir rather than being pinned ASC.
             An index can only be read backwards when every term inverts
-            together, so `p.card_name DESC, p.printing_id ASC` falls back to a
+            together, so `card_name DESC, printing_id ASC` falls back to a
             full sort — measured 4.3 s against 10 ms for `... DESC, ... DESC`.
             The direction of a tiebreak is arbitrary either way; it is there to
             make the order total, and it is equally total in either direction.
@@ -2411,34 +2451,65 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             The name is added as a secondary sort only when it is not already
             the primary. Repeating it would break the index prefix for nothing.
             """
-            terms = [f"{sort_col} {order_dir}"]
+            terms = [f"{sort_col.replace(_NAME, name_col)} {order_dir}"]
             if not sorting_by_name:
-                terms.append(f"p.card_name {order_dir}")
+                terms.append(f"{name_col} {order_dir}")
             terms.extend(f"{col} {order_dir}" for col in identity_cols)
             return "ORDER BY " + ", ".join(terms)
 
-        def _group_by(*key_cols: str) -> str:
-            """GROUP BY for a template, given its row-identity key.
+        def _group_by(name_col: str, *key_cols: str) -> str:
+            """GROUP BY for a template, given its name column and identity key.
 
             When the sort is by name, the sort column leads the grouping. That
             is a no-op semantically — printing_id is the primary key and so
             functionally determines card_name, meaning the finer key groups
-            exactly the same rows — but it is what lets one scan of
-            idx_printings_card_name satisfy the grouping and the ordering at
-            once. Denormalising without this measured no better than not
-            denormalising at all (2.4 s vs 2.7 s); with it, 8.8 ms.
+            exactly the same rows — but it is what lets one index scan satisfy
+            the grouping and the ordering at once. Denormalising without this
+            measured no better than not denormalising at all (2.4 s vs 2.7 s);
+            with it, 8.8 ms.
             """
             cols = list(key_cols)
             if sorting_by_name:
-                cols.insert(0, "p.card_name")
+                cols.insert(0, name_col)
             return "GROUP BY " + ", ".join(cols)
+
+        def _collection_sort_index() -> str:
+            """The index hint the collection-driven page query needs, if any.
+
+            idx_collection_card_name carries the owned template's entire ORDER
+            BY and GROUP BY, but SQLite will not choose it on its own: every one
+            of these queries constrains c.status (the default adds
+            `status IN ('owned','ordered')` when the query does not), and with
+            **no sqlite_stat1** — nothing in this app runs ANALYZE — the planner
+            guesses that IN term is selective and takes idx_collection_status,
+            paying a temp B-tree over the whole result instead. Measured on
+            110,018 printings / 121,020 owned copies with the column and index
+            in place but no hint: 2.3 s, still on idx_collection_status. With
+            the hint: 6.6 s -> 28 ms for the first page, 6.1 s -> 2.5 s at
+            offset 50,000, 12.5 s -> 50 ms for expand=copies.
+
+            Only when the sort is by name: for any other sort this index orders
+            by the wrong thing, and the planner's own choice is the right one.
+
+            **This is not free for every query.** An ordered scan pays for
+            itself because LIMIT stops it early; a filter selective enough that
+            250 matches are spread across the whole collection makes it walk the
+            lot in name order, which is random access into `collection` and
+            `printings` where the old plan walked rowid order — `s:lci` measured
+            630 ms -> 1.2 s. That is inside the band a filtered search already
+            cost (`r:mythic` was 1.1 s before, and is 112 ms now), and the
+            alternative on this template is the whole-result sort that made the
+            unfiltered page unusable. A unary `+` on the status term instead of
+            this hint was measured too: same first page, but it leaves the
+            planner free to fall back at depth (6.2 s at offset 50,000, against
+            2.5 s here), so it buys a little on the selective-filter case and
+            loses the paging case.
+            """
+            return " INDEXED BY idx_collection_card_name" if sorting_by_name else ""
 
         # Conditional JOINs from the search engine
         # Note: expand_copies and default templates already include dc/d/b joins.
         # Only the shared-links (card_pairs) template needs them dynamically.
-        # _lp now serves only the search engine's `price:` keyword — no sort
-        # resolves to it any more, so sorting no longer drags in a join that
-        # can match a card twice.
         needs_price_join = compiled and compiled.needs_price_join
         needs_wishlist_join = compiled and compiled.needs_wishlist_join
 
@@ -2451,14 +2522,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     joins.append("LEFT JOIN decks d ON dc.deck_id = d.id")
                 if compiled and "b.name" in (compiled.where_sql or ""):
                     joins.append("LEFT JOIN binders b ON c.binder_id = b.id")
-            if needs_price_join:
-                # price_type follows the copy's actual finish so foil copies sort
-                # by their foil price, not the nonfoil price. Etched uses foil.
-                joins.append(
-                    "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
-                    " AND _lp.collector_number = p.collector_number"
-                    " AND _lp.price_type = CASE WHEN c.finish IN ('foil', 'etched') THEN 'foil' ELSE 'normal' END"
-                )
+            if needs_price_join and enrich == "none":
+                # A `price:` filter is written in the display-price columns, so
+                # the count template has to carry their joins even though it
+                # enriches nothing. "full" and "prices" already include them.
+                joins.extend(display_price_joins)
             if needs_wishlist_join:
                 joins.append(
                     "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
@@ -2507,7 +2575,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN orders o ON c.order_id = o.id
                 {joins}
                 WHERE {where_sql}
-                {_group_by("p.printing_id")}
+                {_group_by("p.card_name", "p.printing_id")}
             """
             body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
             count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="none"))
@@ -2521,7 +2589,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 _build_extra_joins(has_deck_binder_joins=False, enrich="prices"),
                 copies_only=True,
             )
-            order_sql = _order_by("p.printing_id")
+            order_sql = _order_by("p.card_name", "p.printing_id")
             agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
             # ...and so `total` cannot be counted off it: the rows it drops are
             # exactly the ones an is:unowned result is made of.
@@ -2554,9 +2622,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     b.name as binder_name,
                     {_ENRICH_COLUMNS}
             """
-            def _body(joins: str) -> str:
+            def _body(joins: str, *, index_hint: str = "") -> str:
                 return f"""
-                FROM collection c
+                FROM collection c{index_hint}
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
@@ -2567,13 +2635,16 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 {joins}
                 WHERE {where_sql}
             """
-            body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
+            body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=True),
+                index_hint=_collection_sort_index(),
+            )
             count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="none"))
             totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="prices"))
             # No GROUP BY on this template: one row per collection entry, so
             # c.id (plus dc.id, which the deck join can duplicate it by) is what
             # identifies a row.
-            order_sql = _order_by("p.printing_id", "c.id", "dc.id")
+            order_sql = _order_by("c.card_name", "c.printing_id", "c.id", "dc.id")
             agg_qty_sql = "1"
             totals_body_spans_result = True
         else:
@@ -2603,9 +2674,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     b.name as binder_name,
                     {_ENRICH_COLUMNS}
             """
-            def _body(joins: str) -> str:
+            # Every key column is read off `collection`, never off `printings`:
+            # they are the same values by the join, but only the collection copy
+            # is what idx_collection_card_name indexes, and SQLite will not
+            # cross the join to prove p.printing_id is c.printing_id.
+            def _body(joins: str, *, index_hint: str = "") -> str:
                 return f"""
-                FROM collection c
+                FROM collection c{index_hint}
                 JOIN printings p ON c.printing_id = p.printing_id
                 JOIN cards card ON p.oracle_id = card.oracle_id
                 JOIN sets s ON p.set_code = s.set_code
@@ -2615,13 +2690,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 LEFT JOIN binders b ON c.binder_id = b.id
                 {joins}
                 WHERE {where_sql}
-                {_group_by("p.printing_id", "c.finish", "c.condition", "c.status", "c.order_id")}
+                {_group_by("c.card_name", "c.printing_id", "c.finish", "c.condition", "c.status", "c.order_id")}
             """
-            body_sql = _body(_build_extra_joins(has_deck_binder_joins=True))
+            # The hint goes on the page query alone. The count and the totals
+            # have no ORDER BY, so for them this index is just a scan of every
+            # collection row in an order nothing asked for.
+            body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=True),
+                index_hint=_collection_sort_index(),
+            )
             count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="none"))
             totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="prices"))
             order_sql = _order_by(
-                "p.printing_id", "c.finish", "c.condition", "c.status", "c.order_id"
+                "c.card_name", "c.printing_id", "c.finish", "c.condition", "c.status", "c.order_id"
             )
             agg_qty_sql = "COUNT(DISTINCT c.id)"
             totals_body_spans_result = True
@@ -3005,7 +3086,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         independent of the window, so the UI can size its range pills.
         """
         from mtg_collector.db import growth
-        from mtg_collector.search import SearchError, compile_query, parse_query
+        from mtg_collector.search import (
+            PRICE_EXPR,
+            SearchError,
+            compile_query,
+            parse_query,
+        )
 
         # Stripped, so a query bar holding nothing but spaces is the unfiltered
         # case it renders as rather than a filter that happens to match all.
@@ -3039,22 +3125,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             else:
                 where_sql = f"{growth.UNFILTERED_WHERE} AND ({where_sql})"
 
-        # Conditional joins (mirrors /api/collection's default template — the
-        # collection-anchored one, since growth is always about owned rows).
-        extra_joins = []
-        if compiled and compiled.needs_price_join:
-            extra_joins.append(
-                "LEFT JOIN latest_prices _lp ON _lp.set_code = p.set_code"
-                " AND _lp.collector_number = p.collector_number AND _lp.price_type = 'normal'"
-            )
-        if compiled and compiled.needs_wishlist_join:
-            extra_joins.append(
-                "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
-            )
-        extra_joins_sql = "\n            ".join(extra_joins)
-
         conn = self._get_conn()
         try:
+            # Conditional joins (mirrors /api/collection's default template —
+            # the collection-anchored one, since growth is always about owned
+            # rows). `price:` is resolved to the displayed price the same way,
+            # so the chart and the table describe the same cards: a join that
+            # pinned neither source nor the copy's finish selected on whichever
+            # price any source happened to publish (de-fb1).
+            extra_joins = []
+            if compiled and compiled.needs_price_join:
+                _, display_price_sql, display_price_joins = _display_price(conn)
+                where_sql = where_sql.replace(PRICE_EXPR, display_price_sql)
+                extra_joins.extend(display_price_joins)
+            if compiled and compiled.needs_wishlist_join:
+                extra_joins.append(
+                    "LEFT JOIN wishlist _wl ON _wl.oracle_id = card.oracle_id AND _wl.fulfilled_at IS NULL"
+                )
+            extra_joins_sql = "\n            ".join(extra_joins)
+
             if q:
                 result = growth.compute_series(
                     conn,
@@ -7154,9 +7243,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 if printing:
                     from mtg_collector.utils import now_iso
                     conn.execute(
-                        """INSERT INTO collection (printing_id, finish, status, source, acquired_at)
-                           VALUES (?, 'nonfoil', 'owned', 'manual', ?)""",
-                        (printing[0], now_iso()),
+                        """INSERT INTO collection (printing_id, finish, status, source,
+                                                   acquired_at, card_name)
+                           VALUES (?, 'nonfoil', 'owned', 'manual', ?,
+                                   (SELECT card_name FROM printings WHERE printing_id = ?))""",
+                        (printing[0], now_iso(), printing[0]),
                     )
 
             expected_cards = []
