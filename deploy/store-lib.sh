@@ -577,3 +577,62 @@ mtgc_store_stamp_service() {
     # match inside the quoted string too, not just at the head of the line.
     sed -i "/^ExecStart=/ s|\\bpodman |podman ${MTGC_STORE_GLOBAL_ARGS} |g" "$1"
 }
+
+# ── Serialising writers to Podman's DEFAULT store ───────────────────────────
+#
+# mtgc_default_store_lock [timeout-seconds] — take the box-wide lock that means
+# "I am writing MTGC build images to Podman's default store." Returns non-zero
+# if the timeout expires. The lock is released when the holding process exits,
+# including on SIGKILL, so there is no stale lock file to clean up and no unlock
+# to forget on an error path.
+#
+# WHY THIS EXISTS. deploy/store-isolation-gate.sh measures the default store
+# either side of a bring-up and attributes every MTGC-labelled image that
+# ARRIVED to itself. That attribution was sound only because of a fact the gate
+# asserts in its own header: "deckdumpster's CI and its prod deploy share a
+# single self-hosted runner, which runs one job at a time."
+#
+# 4c5d9b2 ended that on 2026-08-30. A second runner now answers the `deploy`
+# label — same box, same $HOME, same default store — so a prod deploy and a PR's
+# gate run overlap. At 21:38 that day they did: the gate named three of prod's
+# in-flight build layers as a leak, failed PR #347 on them, and then removed
+# them with `podman rmi -f` while the deploy was still building on top. The
+# deploy died one second later ("layer not known", "identifier is not a
+# container") and the merge of #333 never reached prod.
+#
+# AND IT CANNOT BE FIXED BY BETTER ATTRIBUTION. Podman layers are
+# content-addressed, and the two builds run the same Containerfile from the same
+# base, so concurrent builds mint the SAME image IDs — that run's deploy log
+# shows `--> Using cache` for the very layers the gate flagged. There is no field
+# that tells them apart, because by then they are one object. Excluding the
+# overlap is the only available fix, and this is that exclusion expressed as a
+# mechanism instead of the convention the gate had been resting on.
+#
+# Scope is deliberately narrow: only writers to the DEFAULT store take it. A
+# non-prod deploy builds into its own store and contends with nobody. CI's own
+# jobs are already serialised by having one `rgantt` runner, so in practice this
+# arbitrates exactly two contenders — the gate and a prod deploy.
+MTGC_DEFAULT_STORE_LOCK_FILE="${MTGC_DEFAULT_STORE_LOCK_FILE:-${HOME}/.local/share/mtgc/default-store.lock}"
+
+mtgc_default_store_lock() {
+    local timeout="${1:-1800}"
+    mkdir -p "$(dirname "$MTGC_DEFAULT_STORE_LOCK_FILE")" 2>/dev/null || true
+    # Appended, never truncated: the file is only ever a lock target, and
+    # truncating it would be a write that races with the other holder's open.
+    #
+    # NO `2>/dev/null` ON THIS LINE. Redirections on `exec` apply to the SHELL,
+    # not to a command, so silencing the open silences the caller's stderr for
+    # the rest of the run. Adding it here sent every one of the gate's own
+    # `FAIL:` lines to /dev/null while still failing the run — the gate went red
+    # with no reason printed.
+    exec 9>>"$MTGC_DEFAULT_STORE_LOCK_FILE" || return 1
+    flock -w "$timeout" 9
+}
+
+# mtgc_default_store_unlock — give it back before doing something slow that does
+# not touch the store. Optional: process exit does the same thing.
+mtgc_default_store_unlock() {
+    flock -u 9 2>/dev/null || true
+    # Bare, for the reason above: a redirection on `exec` is the shell's.
+    exec 9>&-
+}

@@ -39,8 +39,10 @@ of which store it "created" each image, volume and container in, which is what
 lets `podman image exists` answer differently per store.
 """
 
+import contextlib
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -154,6 +156,13 @@ case "${1:-}" in
             neighbour)
                 printf 'image %s %s 0\n' neighbour:prod "$STUB_NEIGHBOUR_ID" >> "$STUB_STATE/default"
                 leak_into_default neighbour-layer ;;
+            # deckdumpster's OWN prod deploy, building into the default store on
+            # the second runner while we measure. Trailing 1: it carries the
+            # Containerfile's build label, because it IS an MTGC build — which
+            # is why no filter can tell it from ours.
+            mtgc_neighbour)
+                printf 'image %s %s 1\n' '<none>:<none>' "$STUB_NEIGHBOUR_ID" >> "$STUB_STATE/default"
+                leak_into_default "stub-layer-$STUB_NEIGHBOUR_ID" ;;
             spill)
                 leak_into_default spilled-blobs ;;
         esac
@@ -214,7 +223,7 @@ NOOP_STUB = "#!/usr/bin/env bash\nexit 0\n"
 LINGER_STUB = "#!/usr/bin/env bash\necho 'Linger=yes'\nexit 0\n"
 
 
-def run_gate(tmp_path, mode):
+def run_gate(tmp_path, mode, extra_env=None):
     """Drive the real gate in a throwaway $HOME with podman acting out `mode`."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -268,6 +277,7 @@ def run_gate(tmp_path, mode):
     # real store on the box.
     env.pop("MTGC_STORE_ROOT", None)
     env.pop("MTGC_STORE_GLOBAL_ARGS", None)
+    env.update(extra_env or {})
 
     return subprocess.run(
         ["bash", str(GATE), "gatetest"],
@@ -452,3 +462,100 @@ def test_ci_runs_the_gate():
 
     assert "deploy/ci.sh" in workflow
     assert "deploy/store-isolation-gate.sh" in ci
+
+
+# ── A concurrent prod deploy (de: 2026-08-30) ───────────────────────────────
+#
+# `neighbour` above is another PROJECT writing to the shared default store, and
+# it passes because its images carry no MTGC build label. This is the case that
+# label cannot cover: deckdumpster's own prod deploy, building the same
+# Containerfile on the second runner 4c5d9b2 added, on the same box.
+#
+# It happened on 2026-08-30 at 21:38. The gate named three of that build's
+# layers as a leak, failed PR #347 on them, and `podman rmi -f`'d them while the
+# build was still using them; the deploy died on the missing layer and the merge
+# it was deploying never reached prod. Podman layers are content-addressed and
+# both builds start from the same base, so the two runs' IDs are not merely
+# similar — they are equal, and nothing measurable separates them.
+#
+# So the gate takes a lock instead, and these pin what it does when it cannot
+# get one: report, and touch nothing.
+
+@contextlib.contextmanager
+def lock_held_by_someone_else(home):
+    """Stand in for a prod deploy that got to the lock first."""
+    lock = home / ".local/share/mtgc/default-store.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = subprocess.Popen(["flock", "-x", str(lock), "sleep", "120"])
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if subprocess.run(
+                ["flock", "-n", "-x", str(lock), "true"]
+            ).returncode != 0:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("could not get the stand-in holder to take the lock")
+        yield
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+@pytest.fixture(scope="module")
+def contended(tmp_path_factory):
+    """A prod deploy holds the lock; an MTGC build of its appears in the default
+    store while we measure."""
+    tmp_path = tmp_path_factory.mktemp("contended")
+    (tmp_path / "home").mkdir()
+    with lock_held_by_someone_else(tmp_path / "home"):
+        result = run_gate(
+            tmp_path,
+            "mtgc_neighbour",
+            {"MTGC_STORE_GATE_LOCK_TIMEOUT": "1"},
+        )
+    return result, tmp_path
+
+
+def test_a_concurrent_mtgc_build_does_not_fail_the_gate(contended):
+    """The PR is not this deploy's fault and must not go red for it."""
+    result, _ = contended
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_it_says_it_could_not_attribute_the_arrival(contended):
+    """Silence would be worse than a red run: a leak this gate declined to
+    assert on still has to be visible to whoever reads the log."""
+    result, _ = contended
+    out = result.stdout + result.stderr
+    assert NEIGHBOUR_ID[:12] in out
+    assert "Reported, not asserted" in out
+
+
+def test_it_does_not_reap_a_build_it_could_not_lock(contended):
+    """The destructive half. `podman rmi -f` on a build that is still running is
+    what took prod's deploy down; leaving the bytes is the lesser bug."""
+    _, tmp_path = contended
+    leaked = (
+        tmp_path / "home/.local/share/containers/storage"
+        / f"stub-layer-{NEIGHBOUR_ID}"
+    )
+    assert leaked.exists(), "the gate removed an image it could not attribute"
+
+
+def test_it_still_reaps_a_leak_it_could_attribute(ignored):
+    """The inverse, so the fix above cannot be 'stop reaping'. With the lock in
+    hand an arrival IS ours, and de-y5g's ~1 GB per failing run stays fixed."""
+    result, tmp_path = ignored
+    assert "Removed the images this run left" in result.stdout + result.stderr
+    assert default_store_kb(tmp_path) <= 4 * 1024 + STUB_MB * 1024
+
+
+def test_a_failing_run_says_which_assertion_failed(ignored):
+    """Regression guard, and not a hypothetical: the first version of the lock
+    used `exec 9>>"$f" 2>/dev/null`, and a redirection on `exec` belongs to the
+    SHELL — it silenced every FAIL: line for the rest of the run. The gate went
+    red saying only that something was wrong."""
+    result, _ = ignored
+    assert "FAIL:" in result.stdout + result.stderr
