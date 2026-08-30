@@ -497,7 +497,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 
 Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/units-lib.sh` (renders the timer units for one instance, and lists the ones a host has; sourced by setup/deploy/teardown/prune), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
 - `~/.config/mtgc/<instance>.env` — per-instance env.
@@ -522,6 +522,27 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   run that fails leaves nothing behind — that path used to `exit 1` before its own
   leftover check and cost ~1 GB of prod's disk per failing run.
   See `deploy/README.md` → "Container storage" and `deploy/store-lib.sh`.
+- **`deploy.sh` installs the timer units on every redeploy, and that is the only
+  path they have to an instance that already exists** (de-46k). `deploy.sh` falls
+  back to `setup.sh` only when the Quadlet is *missing*, so for prod — whose
+  Quadlet has existed since day one — a unit added to the repo afterwards reached
+  the host by no route at all: `mtgc-catalog-check` (de-b5q), `mtgc-catalog-refresh`
+  (de-wdq) and `mtgc-diskcheck` (de-yef) were simply absent there, months after
+  each shipped and deployed green. **Installing is not arming**: only unit files
+  are written, and enablement lives in `*.target.wants/` symlinks that rewriting a
+  unit file does not touch, so an armed timer stays armed, a disarmed one stays
+  disarmed, and the install can be unconditional. Arming stays a per-instance
+  decision made once by hand. The unit list is **the directory** —
+  `deploy/mtgc-*.timer` — never a list written down beside it, because a second
+  copy is the same bug one level up and its only symptom is a timer that never
+  fires; a `.timer` with no `.service` is a hard error. `teardown.sh` and
+  `prune-instances.sh` read the other end, the units the *host* has, so a template
+  deleted from the repo cannot leave an armed unit behind for an instance that is
+  gone — `prune-instances.sh` named four of the eight roles and orphaned the rest,
+  and its shortest-prefix match reported `mtgc-backup-check-<inst>` as an instance
+  called `check-<inst>`. See
+  `deploy/units-lib.sh`, `tests/test_deploy_units.py`, and `deploy/README.md` →
+  "Installing timer units".
 - **`mtg data check-catalog` alarms on catalog staleness by outcome, not component
   health** (de-b5q). The catalogue sat two months behind — newest set 2026-06-26 against
   upstream's 2026-08-14 — with every timer green, because every timer asks *did my

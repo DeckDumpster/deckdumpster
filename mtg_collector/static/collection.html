@@ -1865,6 +1865,13 @@ function getRarityColor(rarity) { return RARITY_COLORS[rarity] || '#111'; }
 let _priceChart = null;
 function _destroyPriceChart() { if (_priceChart) { _priceChart.destroy(); _priceChart = null; } }
 
+// renderPriceChart is fire-and-forget from the modal-open handler, so a slow
+// first card's fetch can still be in flight when a second card opens. Without
+// this token, the slow call's late `classList.add('visible')` lands after the
+// fast call already hid the section for a card with no price data -- the
+// chart for the WRONG card flashes back open (de-g0lc).
+let _priceChartToken = 0;
+
 modalOverlay.addEventListener('click', (e) => {
   if (e.target === modalOverlay) { _destroyPriceChart(); modalOverlay.classList.remove('active'); }
 });
@@ -2301,6 +2308,7 @@ const purchaseLinesPlugin = {
 };
 
 async function renderPriceChart(card) {
+  const token = ++_priceChartToken;
   const section = document.getElementById('price-chart-section');
   if (!section) return;
   section.classList.remove('visible');
@@ -2310,6 +2318,7 @@ async function renderPriceChart(card) {
     const res = await fetch(`/api/price-history/${encodeURIComponent(card.set_code)}/${encodeURIComponent(card.collector_number)}`);
     data = await res.json();
   } catch { return; }
+  if (token !== _priceChartToken) return; // a newer card opened while this fetch was in flight
 
   const seriesKeys = Object.keys(data).filter(k => data[k].length > 0);
   if (!seriesKeys.length) return;
@@ -2329,6 +2338,7 @@ async function renderPriceChart(card) {
       }
     }
   } catch {}
+  if (token !== _priceChartToken) return; // a newer card opened while this fetch was in flight
 
   // Find earliest date across all series
   let earliest = Infinity;

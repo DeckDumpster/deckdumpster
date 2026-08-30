@@ -44,14 +44,21 @@ mtgc_store_activate
 
 echo "==> Tearing down $SERVICE_NAME..."
 
-# Stop and disable timers
+# Stop and disable timers. The list comes off the host rather than being
+# written down here: a copy of "which timers exist" kept beside the templates
+# goes stale in both directions, and the direction that matters at teardown is
+# a unit the repo no longer defines but the host still has — left behind armed,
+# firing on a schedule, for an instance that is gone.
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-for PREFIX in mtgc-prices mtgc-sealed-catalog mtgc-backup mtgc-backup-check mtgc-catalog-check mtgc-catalog-refresh mtgc-diskcheck mtgc-edhrec; do
+# shellcheck source=deploy/units-lib.sh
+. "$SCRIPT_DIR/units-lib.sh"
+while IFS= read -r PREFIX; do
+    [ -n "$PREFIX" ] || continue
     systemctl --user stop "${PREFIX}-${INSTANCE}.timer" 2>/dev/null || true
     systemctl --user disable "${PREFIX}-${INSTANCE}.timer" 2>/dev/null || true
     rm -f "${SYSTEMD_USER_DIR}/${PREFIX}-${INSTANCE}.service" \
           "${SYSTEMD_USER_DIR}/${PREFIX}-${INSTANCE}.timer"
-done
+done <<< "$(mtgc_units_installed "$INSTANCE")"
 # The alert template has no timer of its own — it is only ever fired by an
 # OnFailure=, so removing the units above leaves nothing that can start it.
 rm -f "${SYSTEMD_USER_DIR}/mtgc-alert-${INSTANCE}@.service"
