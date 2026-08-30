@@ -152,9 +152,24 @@ PUBLIC_STATUS="$(status_of "$PUBLIC_DUMP")"
     $(transport_error "$PUBLIC_DUMP")"
 
 PUBLIC_ETAG="$(header_value "$PUBLIC_DUMP" etag)"
-[ -n "$PUBLIC_ETAG" ] \
-    || fail "the public URL served no ETag, so the edge is holding a document it can
-    never revalidate. This is the shape of the 2026-08-25 outage."
+if [ -z "$PUBLIC_ETAG" ]; then
+    # PRINT WHAT THE EDGE ACTUALLY SAID. A missing ETag has several causes that
+    # look identical from the outside, and guessing between them has already cost
+    # a round trip each: a Cache Rule overriding origin headers, or one of the
+    # features that REWRITES the body — Cloudflare drops the ETag whenever it
+    # does — Email Obfuscation (on by default), Rocket Loader, HTML minification.
+    # The response headers distinguish them, so show them rather than theorise.
+    echo "cdn-check: edge response headers (origin sent ETag ${ORIGIN_ETAG:-?}):" >&2
+    printf '%s\n' "$PUBLIC_DUMP" | sed -n '2,$p' \
+        | grep -iE '^(cf-|server|content-|cache-control|vary|age|last-modified|x-)' \
+        | sed 's/^/    /' >&2
+    fail "the public URL served no ETag, so the edge is holding a document it can
+    never revalidate. This is the shape of the 2026-08-25 outage.
+    Origin sent one, so something between is stripping it. Cloudflare removes the
+    ETag when it rewrites the body: check Scrape Shield -> Email Obfuscation (ON by
+    default), Speed -> Optimization -> Rocket Loader, and any HTML minification,
+    before assuming a Cache Rule."
+fi
 
 # ── 3. Same document? ───────────────────────────────────────────────────────
 #
