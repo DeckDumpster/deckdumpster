@@ -244,8 +244,17 @@ cached.
 Both ingest paths populate the columns from data they already held — `mtg cache all` from
 the `card_count` it fetches to size its own backfill, `mtg data import` from the set objects
 it already walks. Neither runs on a timer, so an existing database is brought forward by
-`mtg data backfill-set-sizes` (one Scryfall `/sets` call plus local `AllPrintings.json`,
-batched, and idempotent: a second run writes zero rows). See `mtg_collector/db/set_sizes.py`.
+`mtg data backfill-sets` (one Scryfall `/sets` call plus local `AllPrintings.json`,
+batched, and idempotent: a second run writes zero rows). See `mtg_collector/db/set_backfill.py`.
+
+That command repairs `set_type` / `released_at` / `digital` off the same `/sets` payload, and
+for the same reason (de-mfe). A `sets` row is not evidence that Scryfall ever described it:
+`mtg data import` and the TCGCSV sealed importer both create stubs with `INSERT OR IGNORE INTO
+sets (set_code, set_name)`, and 174 of the fixture's 192 sets carry NULL `released_at` because
+of it — which is `year:` matching nothing, the /sets index bucketing them all under
+`released_at IS NULL`, and the deck builder's date filters dropping them. `digital` is the one
+descriptor with no NULL to look for (NOT NULL DEFAULT 0), so it is rewritten for every set the
+payload carries rather than only for rows that look unfilled.
 
 **The test fixture carries both sizes, and `spg` is deliberately NULL.** Until de-1ov the
 fixture had neither column, so every set in a `--test` container reported `owned_base` /

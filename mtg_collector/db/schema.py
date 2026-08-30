@@ -3078,7 +3078,7 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
     MTGJSON's AllPrintings.json, total_set_size from Scryfall's per-set
     card_count -- so there is nothing here to backfill them from without either
     a network call or a ~500 MB JSON parse, and init_db runs in front of every
-    `mtg` command.  The eager backfill is `mtg data backfill-set-sizes`, and
+    `mtg` command.  The eager backfill is `mtg data backfill-sets`, and
     both ingest paths (`mtg cache all`, `mtg data import`) populate the columns
     as a side effect of data they already hold.  Until one of those runs the
     columns are NULL, which is the value the UI is built to degrade on anyway.

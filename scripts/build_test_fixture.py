@@ -19,7 +19,7 @@ from pathlib import Path
 from mtg_collector.cli.demo_data import DEMO_CARDS
 from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
 from mtg_collector.db.schema import init_db, refresh_latest_prices
-from mtg_collector.db.set_sizes import apply_base_set_sizes
+from mtg_collector.db.set_backfill import apply_base_set_sizes
 from mtg_collector.services.scryfall import ScryfallAPI, ensure_set_cached
 from mtg_collector.utils import now_iso
 
