@@ -137,8 +137,18 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
 done
 [ "$ok" = 1 ] || { echo "==> DEPLOY FAILED: never answered on port $PORT"; exit 1; }
 
+# The identity and settle checks apply to a REAL deployment — one systemd is
+# actually supervising. CI builds and runs throwaway instances (`ci-test`) that
+# have no Quadlet at all: `systemd-mtgc-ci-test` never resolves, so a strict
+# identity check fails a build that is fine, and a 90s settle taxes every CI run.
+# The first version of this did both and broke CI on a change to a shell script.
+SUPERVISED=0
+if systemctl --user cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then SUPERVISED=1; fi
+
 echo "==> [2/3] Identity: is the running container the image we just built?"
-if [ -n "${BUILT_IMAGE_ID:-}" ]; then
+if [ "$SUPERVISED" != 1 ]; then
+    echo "    skipped (no ${SERVICE_NAME}.service — unsupervised/CI instance)"
+elif [ -n "${BUILT_IMAGE_ID:-}" ]; then
     RUNNING_IMAGE_ID="$(running_image_id)"
     if [ -z "$RUNNING_IMAGE_ID" ]; then
         echo "==> DEPLOY FAILED: no running container named systemd-${SERVICE_NAME}"
@@ -159,7 +169,14 @@ fi
 # The 2026-08-30 outage lived entirely in this window. 90s covers it with room;
 # override with MTGC_SETTLE_SECONDS=0 for a fast local loop, which is explicit
 # rather than silent.
-SETTLE="${MTGC_SETTLE_SECONDS:-90}"
+# Default the settle ON for supervised instances only. An unsupervised CI
+# instance has nothing that could restart it out from under us, which is the
+# whole failure mode this window exists to catch.
+if [ "$SUPERVISED" = 1 ]; then
+    SETTLE="${MTGC_SETTLE_SECONDS:-90}"
+else
+    SETTLE="${MTGC_SETTLE_SECONDS:-0}"
+fi
 if [ "$SETTLE" -gt 0 ]; then
     echo "==> [3/3] Settling ${SETTLE}s, then re-verifying (the 2026-08-30 window)..."
     sleep "$SETTLE"
