@@ -33,6 +33,9 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=deploy/store-lib.sh
 . "$SCRIPT_DIR/store-lib.sh"
+# shellcheck source=deploy/units-lib.sh
+. "$SCRIPT_DIR/units-lib.sh"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 mtgc_store_activate
 
 DRY_RUN=false
@@ -98,16 +101,27 @@ for f in "$HOME/.config/mtgc/"*.env; do
     CANDIDATES["$name"]=1
 done
 
-# Timer units (prices/sealed-catalog/backup/edhrec, one of each per instance)
+# Timer units — one of each unit this repo defines, per instance. The prefixes
+# come from deploy/mtgc-*.timer rather than being listed here: a hardcoded set
+# of roles went stale the moment a timer was added, and the four it named
+# stopped being all of them.
+UNIT_PREFIXES="$(mtgc_units_list "$REPO_DIR")"
 for f in "$HOME/.config/systemd/user/mtgc-"*.timer; do
     [ -f "$f" ] || continue
     base="$(basename "$f" .timer)"
-    for role in prices sealed-catalog backup edhrec; do
-        prefix="mtgc-${role}-"
+    # LONGEST prefix wins. `mtgc-backup` and `mtgc-backup-check` are both real
+    # units, so matching the short one first reads `mtgc-backup-check-foo` as
+    # an instance called `check-foo` and invents an orphan that never existed.
+    longest=""
+    while IFS= read -r UNIT_PREFIX; do
         case "$base" in
-            "${prefix}"*) CANDIDATES["${base#${prefix}}"]=1 ;;
+            "${UNIT_PREFIX}-"*)
+                [ ${#UNIT_PREFIX} -gt ${#longest} ] && longest="$UNIT_PREFIX"
+                ;;
         esac
-    done
+    done <<< "$UNIT_PREFIXES"
+    [ -n "$longest" ] || continue
+    CANDIDATES["${base#${longest}-}"]=1
 done
 
 # --- Classify each candidate ---
@@ -168,13 +182,18 @@ for inst in "${ORPHANS[@]}"; do
         podman volume rm "mtgc-${inst}-data" 2>/dev/null || true
     )
 
-    # Stop and remove role timers (prices, sealed-catalog, backup, edhrec)
-    for ROLE in prices sealed-catalog backup edhrec; do
-        systemctl --user stop "mtgc-${ROLE}-${inst}.timer" 2>/dev/null || true
-        systemctl --user disable "mtgc-${ROLE}-${inst}.timer" 2>/dev/null || true
-        rm -f "$HOME/.config/systemd/user/mtgc-${ROLE}-${inst}.service" \
-              "$HOME/.config/systemd/user/mtgc-${ROLE}-${inst}.timer"
-    done
+    # Stop and remove this instance's timers. Read off the HOST, like
+    # teardown.sh: a unit whose template has since been deleted from the repo
+    # is exactly the one that would otherwise be left behind — still armed,
+    # still firing, for an instance that is gone.
+    while IFS= read -r PREFIX; do
+        [ -n "$PREFIX" ] || continue
+        systemctl --user stop "${PREFIX}-${inst}.timer" 2>/dev/null || true
+        systemctl --user disable "${PREFIX}-${inst}.timer" 2>/dev/null || true
+        rm -f "$HOME/.config/systemd/user/${PREFIX}-${inst}.service" \
+              "$HOME/.config/systemd/user/${PREFIX}-${inst}.timer"
+    done <<< "$(mtgc_units_installed "$inst")"
+    rm -f "$HOME/.config/systemd/user/mtgc-alert-${inst}@.service"
 
     # Stop main service and remove Quadlet
     systemctl --user stop "mtgc-${inst}" 2>/dev/null || true

@@ -76,5 +76,9 @@ def steps(harness):
     harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
     # Scroll down — chart section should not be visible.
     harness.page.evaluate("document.querySelector('#modal-details').scrollTop = 9999")
-    harness.wait_for_hidden(".price-chart-section.visible", timeout=2_000)
+    # 2_000 here (an outlier against every other wait in this file) flaked
+    # under CI load: the previous card's chart section takes longer than that
+    # to finish hiding after the modal reopens on a busy runner. 5_000 matches
+    # the modal-close wait above it.
+    harness.wait_for_hidden(".price-chart-section.visible", timeout=5_000)
     harness.screenshot("final_state")
