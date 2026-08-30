@@ -51,7 +51,9 @@ For each tier, run the pytest command in the background **without any pipes** (c
 uv run pytest <args> -v --tb=short 2>&1
 ```
 
-The `run_in_background` flag sends output to a file. The progress file at `/tmp/pytest-progress.jsonl` is written in real time by a conftest hook (every test result is flushed immediately).
+The `run_in_background` flag sends output to a file. The progress file at `.pytest_cache/progress.jsonl` **inside this checkout** is written in real time by a conftest hook (every test result is flushed immediately).
+
+The path is per-checkout on purpose: several worktrees of this repo sit on one box and their agents run the unit tier at the same time, so a shared `/tmp/pytest-progress.jsonl` meant each run truncated and interleaved into the other's file — the view below showed another agent's nodeids, and a finished run read as hung. Read the file in the worktree you are running from; never a path in `/tmp`.
 
 ### 4. Monitor progress
 
@@ -59,13 +61,13 @@ While waiting for the background command, periodically read the progress file to
 
 ```bash
 # Count results so far
-grep -c '"event": "test_result"' /tmp/pytest-progress.jsonl
+grep -c '"event": "test_result"' .pytest_cache/progress.jsonl
 
 # See the last few results
-tail -5 /tmp/pytest-progress.jsonl
+tail -5 .pytest_cache/progress.jsonl
 
 # Check for failures
-grep '"outcome": "failed"' /tmp/pytest-progress.jsonl
+grep '"outcome": "failed"' .pytest_cache/progress.jsonl
 ```
 
 Report progress to the user at natural milestones (every ~25% or when failures appear). Use the `Read` tool on the progress file, not `cat` piped through grep.
@@ -81,7 +83,7 @@ When the background command completes, read the full output file and report:
 
 ## Progress File Format
 
-Written to `/tmp/pytest-progress.jsonl` (override via `PYTEST_PROGRESS_FILE` env var). Each line is JSON:
+Written to `.pytest_cache/progress.jsonl` in the checkout being tested, and named in the run's own `progress file:` header line. Override it with the `PYTEST_PROGRESS_FILE` env var; if you do, give each concurrent run its own path. Each line is JSON:
 
 ```jsonl
 {"event": "session_start", "collected": 0, "ts": 1234567890.0}

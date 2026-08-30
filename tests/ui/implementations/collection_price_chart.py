@@ -6,6 +6,12 @@ price data, and verifies the price chart appears. Then opens a card
 with no price data and confirms the chart section is hidden.
 """
 
+# The two demo cards this scenario turns on: blb/124 has the seeded price
+# history, lci/68 has none. A tile renders the card name as its image `alt`,
+# which is the only per-card handle the grid exposes.
+PRICED = "Artist's Talent"
+UNPRICED = "Orazca Puzzle-Door"
+
 
 def steps(harness):
     # Seed price data into the database inside the container.
@@ -31,17 +37,12 @@ def steps(harness):
     # Search for Artist's Talent (blb/124) which has seeded price data.
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Artist's Talent")
     harness.wait_for_visible("tr[data-idx]", timeout=15_000)
-    # Switch to grid view and click the card. Clicking *this card's own tile*
-    # rather than the first one is the whole point: the search input is
-    # debounced 300 ms and the grid keeps rendering the previous result set
-    # until the fetch lands, so ".sheet-card[data-idx]" is whatever that older
-    # result had in slot 0 — here "Acrobatic Cheerleader", which has no prices.
-    # A tile is built from allCards[data-idx] and the click handler reads the
-    # same array, so naming the card in the selector makes the two agree by
-    # construction and lets Playwright's own actionability wait cover the
-    # debounce.
+    # Switch to grid view and click the card by name. `.sheet-card[data-idx]`
+    # would click whichever tile happens to be first, which before this search's
+    # rows land is a card with no price history.
     harness.click_by_selector("#view-grid-btn")
-    harness.click_by_selector('.sheet-card:has(img[alt^="Artist"])')
+    harness.wait_for_attached(f'.sheet-card img[alt="{PRICED}"]', timeout=15_000)
+    harness.click_by_selector(f'.sheet-card:has(img[alt="{PRICED}"])')
     # Wait for modal to appear.
     harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
     # Scroll down in the modal to see the price chart.
@@ -64,21 +65,17 @@ def steps(harness):
     # this suite's 500 ms interaction budget). The delay used to be hidden by
     # the `podman ps` scan this scenario ran to find its own container (de-1zq).
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Orazca")
-    # Do NOT wait on the status line here. Artist's Talent and Orazca
-    # Puzzle-Door are both single owned copies in the demo data, so it reads
-    # "1 card" before and after — a wait on it is satisfied by the previous
-    # render, immediately, and never waits for anything (de-g0lc). The click
-    # then landed at ~200 ms, before the 300 ms debounce had even fired, and
-    # opened the modal on the *previous* card: measured, deterministically,
-    # against a live container. Waiting for this card's own tile cannot pass
-    # early — the tile does not exist until the new result has rendered.
-    harness.click_by_selector('.sheet-card:has(img[alt^="Orazca"])')
+    # Wait for the *new* card, not for a count. Both searches match exactly one
+    # entry, so "1 card" was already on the page from the previous search and
+    # the wait returned without the grid having changed at all — measured: the
+    # text is present before the fill is even typed. The click then landed on
+    # the priced card's own tile, its modal re-opened with the chart still
+    # visible, and the assertion below failed 5 s later on a page that had never
+    # moved on (de-bj7). Naming the card is what makes this a barrier.
+    harness.wait_for_attached(f'.sheet-card img[alt="{UNPRICED}"]', timeout=5_000)
+    harness.click_by_selector(f'.sheet-card:has(img[alt="{UNPRICED}"])')
     harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
     # Scroll down — chart section should not be visible.
     harness.page.evaluate("document.querySelector('#modal-details').scrollTop = 9999")
-    # 2_000 here (an outlier against every other wait in this file) flaked
-    # under CI load: the previous card's chart section takes longer than that
-    # to finish hiding after the modal reopens on a busy runner. 5_000 matches
-    # the modal-close wait above it.
-    harness.wait_for_hidden(".price-chart-section.visible", timeout=5_000)
+    harness.wait_for_hidden(".price-chart-section.visible", timeout=2_000)
     harness.screenshot("final_state")
