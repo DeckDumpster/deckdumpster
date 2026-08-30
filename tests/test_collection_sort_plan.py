@@ -1,15 +1,26 @@
-"""The default collection sort must not sort the whole result.
+"""The collection sort must not sort the whole result — on any template.
 
-/api/collection groups by p.printing_id, which pins printings as the driving
-table.  cards can therefore never become the outer loop, so idx_cards_name can
-never satisfy `ORDER BY card.name` — with or without a tiebreak.  Measured at
-catalogue scale (109,976 rows) the plan ended in USE TEMP B-TREE FOR ORDER BY
-and the page query took 2.3 s to hand back 250 rows.
+Reading the name across the join cannot be made fast: the GROUP BY pins the
+driving table, so `cards` can never become the outer loop and idx_cards_name can
+never satisfy `ORDER BY card.name`, with or without a tiebreak.  Measured at
+catalogue scale the plan ended in USE TEMP B-TREE FOR ORDER BY and the page
+query took seconds to hand back 250 rows.
 
-The fix is idx_printings_card_name(card_name, printing_id) plus a GROUP BY led
-by the same column, so one index scan serves the grouping and the ordering
-together and LIMIT stops it early: 2.3 s -> 8.8 ms.  Both halves are load-
-bearing, which is what the parametrised plan test below pins down.
+The fix is one denormalised name column *per driving table*, each with an index
+that also carries that template's row identity, plus a GROUP BY led by the same
+column so one index scan serves the grouping and the ordering together and LIMIT
+stops it early:
+
+  printings-driven (is:unowned, shared links)
+      idx_printings_card_name(card_name, printing_id)          2.3 s -> 8.8 ms
+  collection-driven (the owned default, expand=copies)
+      idx_collection_card_name(card_name, printing_id, finish,
+                               condition, status, order_id)    3.5 s -> 25 ms
+
+Every half is load-bearing — the column, the leading GROUP BY term, and (for the
+collection index) the INDEXED BY hint, because with no ANALYZE the planner takes
+idx_collection_status instead.  That is what the parametrised plan tests below
+pin down.
 
 To run: uv run pytest tests/test_collection_sort_plan.py -v
 """
@@ -20,7 +31,14 @@ from pathlib import Path
 
 import pytest
 
-from mtg_collector.db.models import Card, CardRepository, Printing, PrintingRepository
+from mtg_collector.db.models import (
+    Card,
+    CardRepository,
+    CollectionEntry,
+    CollectionRepository,
+    Printing,
+    PrintingRepository,
+)
 from mtg_collector.db.schema import init_db
 
 NOW = "2025-01-01T00:00:00.000Z"
@@ -44,6 +62,7 @@ def catalog_db():
         "INSERT INTO sets (set_code, set_name, set_type) VALUES ('tst', 'Test Set', 'core')"
     )
     cards, printings = CardRepository(conn), PrintingRepository(conn)
+    collection = CollectionRepository(conn)
     n = 0
     for name_idx, name in enumerate(NAMES):
         cards.upsert(Card(oracle_id=f"oracle-{name_idx}", name=name, type_line="Creature"))
@@ -58,10 +77,18 @@ def catalog_db():
                     rarity="rare",
                 )
             )
-            conn.execute(
-                "INSERT INTO collection (printing_id, finish, acquired_at, source, status) "
-                "VALUES (?, 'nonfoil', ?, 'manual', 'owned')",
-                (f"print-{n:04d}", NOW),
+            # Through the repository, never raw SQL: collection.card_name is
+            # filled by the INSERT statement itself, so a hand-written insert
+            # leaves the sort key NULL and every name ties.
+            collection.add(
+                CollectionEntry(
+                    id=None,
+                    printing_id=f"print-{n:04d}",
+                    finish="nonfoil",
+                    acquired_at=NOW,
+                    source="manual",
+                    status="owned",
+                )
             )
     conn.commit()
     conn.close()
@@ -163,24 +190,70 @@ class TestNoWholeResultSort:
             + "\n  ".join(plan)
         )
 
-    def test_the_owned_template_sorts_at_most_once(self, catalog_db):
-        """The owned template drives from `collection`, so no index on printings
-        can serve its ordering — but it must not sort twice.
+    def test_the_owned_template_does_not_sort_at_all(self, catalog_db):
+        """The owned template drives from `collection`, so it needs its own index.
 
-        It used to pay a temp B-tree for the grouping *and* another for the
-        ordering. Leading the grouping with the sort column makes the grouping's
-        own sort produce the order too: measured 2.2 s -> 2.0 s at offset 0 and
-        3.6 s -> 2.4 s at offset 50,000 on a 100,045-copy collection. Making
-        this path index-served needs the same denormalisation on `collection`
-        and is filed separately.
+        No index on `printings` can order it — the sort key has to be on the
+        driving table. idx_collection_card_name carries the name *and* the
+        template's whole row-identity key, so one scan of it answers the
+        grouping and the ordering together and LIMIT stops it after a page.
+        Measured on 110,018 printings / 121,020 owned copies: 3.5 s -> 25 ms.
         """
         _, rec = _run_collection(catalog_db)
         sql, sql_params = _page_query(rec)
         plan = _plan(rec, sql, sql_params)
         rec.really_close()
 
-        sorts = [s for s in plan if "TEMP B-TREE FOR GROUP BY" in s or "TEMP B-TREE FOR ORDER BY" in s]
-        assert len(sorts) <= 1, "the result is being sorted twice:\n  " + "\n  ".join(plan)
+        sorts = [
+            s for s in plan
+            if "TEMP B-TREE FOR GROUP BY" in s or "TEMP B-TREE FOR ORDER BY" in s
+        ]
+        assert not sorts, "the result is still being sorted:\n  " + "\n  ".join(plan)
+        assert any("idx_collection_card_name" in step for step in plan), (
+            "the sort is not being served by idx_collection_card_name:\n  "
+            + "\n  ".join(plan)
+        )
+
+    def test_the_hint_is_what_makes_the_planner_take_it(self, catalog_db):
+        """The index alone is not enough, so the hint has to be in the SQL.
+
+        Every one of these queries constrains c.status — the default adds
+        `status IN ('owned','ordered')` when the query does not — and with no
+        sqlite_stat1 (nothing in this app runs ANALYZE) the planner guesses that
+        term is selective and takes idx_collection_status, sorting the whole
+        result instead. Measured with the column and index in place but no hint:
+        2.3 s, still on idx_collection_status.
+        """
+        _, rec = _run_collection(catalog_db)
+        sql, sql_params = _page_query(rec)
+        unhinted = sql.replace(" INDEXED BY idx_collection_card_name", "")
+        assert unhinted != sql, "the page query carries no index hint"
+        plan = _plan(rec, unhinted, sql_params)
+        rec.really_close()
+
+        assert any("TEMP B-TREE FOR GROUP BY" in step for step in plan), (
+            "the planner now finds the index unaided; the hint may be removable, "
+            "but re-measure at catalogue scale before believing it:\n  "
+            + "\n  ".join(plan)
+        )
+
+    def test_expand_copies_reads_the_index_too(self, catalog_db):
+        """The per-copy template drives from `collection` as well.
+
+        Its row identity ends in c.id/dc.id, which the index cannot carry, so a
+        block sort of the trailing terms remains — but the name and printing_id
+        prefix comes off the index, which is the part that scales with the
+        collection.
+        """
+        _, rec = _run_collection(catalog_db, expand="copies")
+        sql, sql_params = _page_query(rec)
+        plan = _plan(rec, sql, sql_params)
+        rec.really_close()
+
+        assert any("idx_collection_card_name" in step for step in plan), (
+            "the per-copy sort is not being served by the index:\n  "
+            + "\n  ".join(plan)
+        )
 
     def test_descending_tiebreak_follows_the_sort(self, catalog_db):
         """A DESC sort with ASC tiebreaks cannot be read off one index.
@@ -257,7 +330,71 @@ class TestPagingStaysCorrect:
 
 
 class TestDenormalisedNameStaysInSync:
-    """printings.card_name is a copy, so what keeps it true matters."""
+    """Both card_name columns are copies, so what keeps them true matters."""
+
+    def test_the_repository_fills_the_collection_copy(self, catalog_db):
+        """CollectionRepository.add reads the name off printings in the INSERT."""
+        conn = sqlite3.connect(catalog_db)
+        blank = conn.execute(
+            "SELECT COUNT(*) FROM collection WHERE card_name IS NULL"
+        ).fetchone()[0]
+        stale = conn.execute(
+            "SELECT COUNT(*) FROM collection c JOIN printings p"
+            " ON p.printing_id = c.printing_id WHERE c.card_name IS NOT p.card_name"
+        ).fetchone()[0]
+        conn.close()
+        assert (blank, stale) == (0, 0)
+
+    def test_repointing_a_copy_moves_its_sort_key(self, catalog_db):
+        """CollectionRepository.update can repoint a copy at another printing.
+
+        The sort key has to follow, or the copy sorts under the card it used to
+        be — the one case a write-time fill could get wrong and no rebuild would
+        notice, because `printings` never changed.
+        """
+        from mtg_collector.db.models import CollectionRepository
+
+        conn = sqlite3.connect(catalog_db)
+        conn.row_factory = sqlite3.Row
+        repo = CollectionRepository(conn)
+        entry = repo.get(1)
+        assert entry is not None
+        # print-0001 is an Ancestral Recall; the last printing is an Elvish Mystic.
+        target = f"print-{len(NAMES) * PRINTINGS_PER_NAME:04d}"
+        entry.printing_id = target
+        assert repo.update(entry)
+        conn.commit()
+
+        moved = conn.execute("SELECT card_name FROM collection WHERE id = 1").fetchone()[0]
+        conn.close()
+        assert moved == NAMES[-1]
+
+    def test_rebuild_repairs_a_rename_on_the_collection_copy(self, catalog_db):
+        """A rename reaches `collection` one hop behind `printings`.
+
+        `mtg data refresh-catalog` runs rebuild_card_names() (cards -> printings)
+        and then rebuild_collection_card_names() (printings -> collection), so
+        the staleness window is the same one printings.card_name already has.
+        """
+        from mtg_collector.db.schema import (
+            rebuild_card_names,
+            rebuild_collection_card_names,
+        )
+
+        conn = sqlite3.connect(catalog_db)
+        conn.execute("UPDATE cards SET name = 'Renamed Recall' WHERE oracle_id = 'oracle-0'")
+        conn.commit()
+        rebuild_card_names(conn)
+
+        assert rebuild_collection_card_names(conn) == PRINTINGS_PER_NAME
+        stale = conn.execute(
+            "SELECT COUNT(*) FROM collection c JOIN printings p"
+            " ON p.printing_id = c.printing_id WHERE c.card_name IS NOT p.card_name"
+        ).fetchone()[0]
+        # Idempotent: a second pass has nothing left to correct.
+        assert rebuild_collection_card_names(conn) == 0
+        conn.close()
+        assert stale == 0
 
     def test_upsert_fills_it_from_cards(self, catalog_db):
         conn = sqlite3.connect(catalog_db)
