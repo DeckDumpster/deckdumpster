@@ -5,6 +5,7 @@ import random
 import sqlite3
 
 from mtg_collector.db.connection import attach_shared, get_db_path, get_shared_db_path
+from mtg_collector.db.mtgjson_faces import front_face_sql
 
 
 class PackGenerator:
@@ -310,7 +311,7 @@ class PackGenerator:
         """Get Card Kingdom product URL for a card by printing ID."""
         conn = self._connect()
         row = conn.execute(
-            "SELECT ck_url, ck_url_foil FROM mtgjson_printings WHERE printing_id = ?",
+            front_face_sql("ck_url, ck_url_foil"),
             (printing_id,),
         ).fetchone()
         conn.close()
@@ -325,7 +326,7 @@ class PackGenerator:
         """Look up MTGJSON uuid for a printing ID."""
         conn = self._connect()
         row = conn.execute(
-            "SELECT uuid FROM mtgjson_printings WHERE printing_id = ?",
+            front_face_sql("uuid"),
             (printing_id,),
         ).fetchone()
         conn.close()

@@ -35,6 +35,8 @@ The query must alias `printings` as `p`, and `collection` as `c` if it uses
 
 from typing import List
 
+from mtg_collector.db.mtgjson_faces import front_face_uuid_sql
+
 #: A copy in hand: `collection.finish` records what was actually acquired.
 #: Etched prices as foil.  A NULL finish -- a row reached through a LEFT JOIN
 #: that found no copy -- prices as nonfoil.
@@ -79,10 +81,14 @@ def enrich_price_joins(is_foil: str) -> List[str]:
 
 
 #: Resolve the double-faced ambiguity to one uuid before joining.  See the
-#: module docstring.
+#: module docstring. `printing_id` is not unique in `mtgjson_printings` --
+#: MTGJSON emits one row per face of a double-faced card, both carrying the
+#: same scryfallId with a different Card Kingdom link each -- so this must
+#: resolve to the front face's uuid (mtgjson_faces) rather than pick whichever
+#: row a bare LIMIT 1 happens to return first (de-xpu).
 CK_URL_JOIN = (
     "LEFT JOIN mtgjson_printings _mp ON _mp.uuid ="
-    " (SELECT uuid FROM mtgjson_printings WHERE printing_id = p.printing_id LIMIT 1)"
+    f" {front_face_uuid_sql('p.printing_id')}"
 )
 
 

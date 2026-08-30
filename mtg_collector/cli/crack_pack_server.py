@@ -1008,9 +1008,10 @@ _NAME = "<card_name>"
 # page and the binder-page view render the same three values and used to each
 # carry their own copy of the logic; see that module for why every join binds
 # zero parameters and matches at most one row.
-#
 # This endpoint lists *copies*, so it prices each one in the finish it was
-# recorded in.
+# recorded in. The Card Kingdom link resolves to the front face's uuid
+# (mtgjson_faces, via enrich.py) so this page, /card/:set/:cn, the binder grid
+# and the deck page cannot drift into linking one card to two products.
 _ENRICH_JOINS = enrich_joins(COPY_IS_FOIL)
 
 # The price joins alone -- every _ENRICH_JOINS entry that a display price can be
