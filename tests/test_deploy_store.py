@@ -92,9 +92,17 @@ class Host:
         # tests/test_diskcheck.py's subject, not this file's.
         self.env["MTGC_DISK_FLOOR_GB"] = "0"
         # Inherited from the developer's own shell it would silently opt every
-        # test into a real store.
+        # test into a real store. Since de-xz8, CI's own deploy/ci.sh activates
+        # a real store before `uv run pytest` even starts -- inherited unpopped,
+        # mtgc_store_activate's own idempotency guard (store-lib.sh: "already
+        # activated if MTGC_STORE_PREV_TMPDIR is set") saw that flag already
+        # set from ci.sh's real activation and skipped moving TMPDIR at all, so
+        # a subprocess here saw the CI runner's real, unmoved TMPDIR instead of
+        # one derived from this fixture's own tmp_path-based store (de-af5w).
         self.env.pop("MTGC_STORE_ROOT", None)
         self.env.pop("MTGC_STORE_GLOBAL_ARGS", None)
+        self.env.pop("TMPDIR", None)
+        self.env.pop("MTGC_STORE_PREV_TMPDIR", None)
 
     def run(self, script, *args, store=None, check=True):
         env = dict(self.env)
