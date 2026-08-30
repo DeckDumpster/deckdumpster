@@ -31,9 +31,17 @@ def steps(harness):
     # Search for Artist's Talent (blb/124) which has seeded price data.
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Artist's Talent")
     harness.wait_for_visible("tr[data-idx]", timeout=15_000)
-    # Switch to grid view and click the card.
+    # Switch to grid view and click the card. Clicking *this card's own tile*
+    # rather than the first one is the whole point: the search input is
+    # debounced 300 ms and the grid keeps rendering the previous result set
+    # until the fetch lands, so ".sheet-card[data-idx]" is whatever that older
+    # result had in slot 0 — here "Acrobatic Cheerleader", which has no prices.
+    # A tile is built from allCards[data-idx] and the click handler reads the
+    # same array, so naming the card in the selector makes the two agree by
+    # construction and lets Playwright's own actionability wait cover the
+    # debounce.
     harness.click_by_selector("#view-grid-btn")
-    harness.click_by_selector(".sheet-card[data-idx]")
+    harness.click_by_selector('.sheet-card:has(img[alt^="Artist"])')
     # Wait for modal to appear.
     harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
     # Scroll down in the modal to see the price chart.
@@ -56,9 +64,15 @@ def steps(harness):
     # this suite's 500 ms interaction budget). The delay used to be hidden by
     # the `podman ps` scan this scenario ran to find its own container (de-1zq).
     harness.fill_by_placeholder("Search (e.g. t:creature c:r mv>=3)", "Orazca")
-    # Wait for the card grid to update — exactly 1 entry for Orazca.
-    harness.wait_for_text("1 card", timeout=5_000)
-    harness.click_by_selector(".sheet-card[data-idx]")
+    # Do NOT wait on the status line here. Artist's Talent and Orazca
+    # Puzzle-Door are both single owned copies in the demo data, so it reads
+    # "1 card" before and after — a wait on it is satisfied by the previous
+    # render, immediately, and never waits for anything (de-g0lc). The click
+    # then landed at ~200 ms, before the 300 ms debounce had even fired, and
+    # opened the modal on the *previous* card: measured, deterministically,
+    # against a live container. Waiting for this card's own tile cannot pass
+    # early — the tile does not exist until the new result has rendered.
+    harness.click_by_selector('.sheet-card:has(img[alt^="Orazca"])')
     harness.wait_for_visible("#card-modal-overlay.active", timeout=10_000)
     # Scroll down — chart section should not be visible.
     harness.page.evaluate("document.querySelector('#modal-details').scrollTop = 9999")
