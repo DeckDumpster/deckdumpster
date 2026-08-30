@@ -95,11 +95,34 @@ status_of()    { printf '%s\n' "$1" | grep -E '^http/' | tail -n1 | awk '{print 
 # sends the reader to the deploy and the cache — neither of which is wrong.
 assert_not_access_wall() {
     local dump="$1"
-    if printf '%s\n' "$dump" | grep -qi 'cloudflareaccess\.com'; then
-        fail "the public URL was answered by the Cloudflare Access login page, not by the app.
-    Nothing about the deploy has been verified. Set CF_ACCESS_CLIENT_ID and
-    CF_ACCESS_CLIENT_SECRET to an Access service token and run this again."
+    printf '%s\n' "$dump" | grep -qi 'cloudflareaccess\.com' || return 0
+
+    # Distinguish "no token" from "token refused". These need opposite actions and
+    # the message used to assert the first unconditionally — which on 2026-08-30
+    # sent two readers in a row to re-add secrets that had been set the day before.
+    # A wrong diagnosis that is trusted costs more than no diagnosis at all, and
+    # that principle has to hold for this branch too.
+    if [ ${#ACCESS_ARGS[@]} -eq 0 ]; then
+        fail "the public URL was answered by the Cloudflare Access login page, and no
+    service token was supplied. Nothing about the deploy has been verified. Set
+    CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to an Access service token."
     fi
+
+    # A token WAS sent and Access still refused it. The redirect names the team
+    # domain and carries the application's `aud` tag, which is the field that says
+    # WHICH Access application refused — the usual cause is a Service Auth policy
+    # attached to a different application than the one covering this hostname.
+    local team aud
+    team=$(printf '%s\n' "$dump" | grep -oiE '[a-z0-9-]+\.cloudflareaccess\.com' | head -1)
+    aud=$(printf '%s\n' "$dump" | grep -oE 'kid=[0-9a-f]{64}' | head -1 | cut -d= -f2)
+    fail "the public URL was answered by the Cloudflare Access login page even though a
+    service token WAS supplied — so the token is being refused, not missing.
+    Nothing about the deploy has been verified.
+      team domain: ${team:-unknown}
+      application: ${aud:-unknown}
+    Check that an Access policy on THAT application has Action = 'Service Auth' and
+    includes THIS token. A Service Auth policy on a different application, or one
+    that includes a different token, produces exactly this."
 }
 
 # ── 1. The origin ───────────────────────────────────────────────────────────

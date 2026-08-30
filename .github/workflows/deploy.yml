@@ -14,8 +14,19 @@ env:
   INSTANCE: ${{ github.event.inputs.instance || 'prod' }}
 
 jobs:
+  # Both jobs run on the `deploy`-labelled runner, NOT `rgantt`.
+  #
+  # deckdumpster had one runner carrying `self-hosted,X64,Linux,rgantt`, and ci.yml's
+  # `test` job targets the same labels. With 11 polecats running CI, deploys starved
+  # behind them: on 2026-08-30 four merges to main had deploys queued and never run,
+  # the oldest for about four hours, while the PRs showed merged and green. The queue
+  # was the only place it was visible.
+  #
+  # `mtgc-deploy` answers only to `deploy`, so a deploy can never queue behind polecat
+  # CI. It is the same physical box, so heavy CI can still make a deploy slower — but
+  # it can no longer block one.
   deploy:
-    runs-on: [self-hosted, rgantt]
+    runs-on: [self-hosted, deploy]
     steps:
       - name: Pull latest code
         run: git -C /opt/mtgc-${{ env.INSTANCE }} pull --ff-only origin ${{ github.ref_name }}
@@ -26,35 +37,10 @@ jobs:
       - name: Build and restart
         run: bash /opt/mtgc-${{ env.INSTANCE }}/deploy/deploy.sh ${{ env.INSTANCE }}
 
-  deploy-native:
-    runs-on: [self-hosted, thaen]
-    steps:
-      - name: Pull latest code
-        run: git -C /opt/deckdumpster-code pull --ff-only origin main
-
-      - name: Sync dependencies
-        run: cd /opt/deckdumpster-code && uv sync --no-dev
-
-      - name: Restart server
-        run: launchctl kickstart -k gui/$(id -u)/com.deckdumpster.server
-
-      - name: Health check
-        run: |
-          for i in 1 2 3 4 5; do
-            if curl -sk --max-time 5 https://localhost:8080/ > /dev/null 2>&1; then
-              echo "Health check passed"
-              exit 0
-            fi
-            echo "Attempt $i/5 — waiting..."
-            sleep 5
-          done
-          echo "Health check failed"
-          exit 1
-
   # A deploy check that does not traverse the CDN is not a deploy check (de-dai).
   #
-  # The job above has always ended by curling localhost, which is exactly what
-  # passed on 2026-08-25 while magic.dumpster.cards served day-old pages. This
+  # Deploys here have always been verified by curling localhost, which is exactly
+  # what passed on 2026-08-25 while magic.dumpster.cards served day-old pages. This
   # asks the public URL the same question and compares its ETag with the
   # origin's, so "deployed" and "visible to users" stop being the same claim.
   #
@@ -67,7 +53,7 @@ jobs:
   cdn-check:
     needs: deploy
     if: ${{ (github.event.inputs.instance || 'prod') == 'prod' }}
-    runs-on: [self-hosted, rgantt]
+    runs-on: [self-hosted, deploy]
     steps:
       - uses: actions/checkout@v4
 

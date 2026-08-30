@@ -166,6 +166,58 @@ def mock_allprintings(tmp_path):
     return path
 
 
+@pytest.fixture
+def mock_allprintings_dfc(tmp_path):
+    """One double-faced card: two rows, one Scryfall id, one Card Kingdom link.
+
+    Modelled on the 19 groups in tests/fixtures/test-data.sqlite where only the
+    front face carries a purchaseUrls.cardKingdom.  The back face is listed
+    first and its uuid sorts first, so neither document order nor uuid order
+    can be mistaken for having picked the front one.
+    """
+    data = {
+        "data": {
+            "DFC": {
+                "name": "Double Faced Set",
+                "cards": [
+                    {
+                        "uuid": "uuid-a-back",
+                        "name": "Front Face // Back Face",
+                        "number": "1",
+                        "setCode": "dfc",
+                        "rarity": "rare",
+                        "borderColor": "black",
+                        "isFullArt": False,
+                        "side": "b",
+                        "identifiers": {"scryfallId": "scry-dfc01"},
+                        "purchaseUrls": {},
+                    },
+                    {
+                        "uuid": "uuid-z-front",
+                        "name": "Front Face // Back Face",
+                        "number": "1",
+                        "setCode": "dfc",
+                        "rarity": "rare",
+                        "borderColor": "black",
+                        "isFullArt": False,
+                        "side": "a",
+                        "identifiers": {"scryfallId": "scry-dfc01"},
+                        "purchaseUrls": {
+                            "cardKingdom": "https://ck.com/front-face",
+                            "cardKingdomFoil": "https://ck.com/front-face-foil",
+                        },
+                    },
+                ],
+            }
+        }
+    }
+    # A distinct filename: tmp_path is per-test, so sharing "AllPrintings.json"
+    # with mock_allprintings would have whichever fixture ran last win.
+    path = tmp_path / "AllPrintings-dfc.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
 def _run_import(db_path, mock_path):
     """Helper to run import_mtgjson with mocked AllPrintings path."""
     from mtg_collector.cli.data_cmd import import_mtgjson
@@ -242,6 +294,25 @@ class TestImportMtgjson:
         assert row["printing_id"] == "scry-r01"
         assert row["ck_url"] == "https://ck.com/lotus"
         assert row["ck_url_foil"] == "https://ck.com/lotus-foil"
+        conn.close()
+
+    def test_side_is_stored(self, test_db, mock_allprintings, mock_allprintings_dfc):
+        """MTGJSON's `side` is the only thing that says which face a row is."""
+        db_path, _ = test_db
+        _run_import(db_path, mock_allprintings)
+
+        conn = sqlite3.connect(db_path)
+        assert conn.execute(
+            "SELECT side FROM mtgjson_printings WHERE uuid = 'uuid-r01'"
+        ).fetchone()[0] is None  # single-faced: absent upstream, NULL here
+        conn.close()
+
+        _run_import(db_path, mock_allprintings_dfc)
+        conn = sqlite3.connect(db_path)
+        sides = dict(conn.execute(
+            "SELECT uuid, side FROM mtgjson_printings WHERE printing_id = 'scry-dfc01'"
+        ).fetchall())
+        assert sides == {"uuid-z-front": "a", "uuid-a-back": "b"}
         conn.close()
 
     def test_idempotent(self, test_db, mock_allprintings):
@@ -350,6 +421,20 @@ class TestPackGeneratorSQL:
         assert gen.get_uuid_for_printing_id("scry-c01") == "uuid-c01"
         assert gen.get_uuid_for_printing_id("scry-r01") == "uuid-r01"
         assert gen.get_uuid_for_printing_id("nonexistent") is None
+
+    def test_get_ck_url_takes_the_front_face(self, test_db, mock_allprintings_dfc):
+        """printing_id is not unique: both faces of a DFC carry the same one.
+
+        The back face here has no Card Kingdom link at all, so resolving to it
+        loses the link rather than pointing at a different product.
+        """
+        db_path, _ = test_db
+        _run_import(db_path, mock_allprintings_dfc)
+
+        gen = PackGenerator(db_path)
+        assert gen.get_ck_url("scry-dfc01") == "https://ck.com/front-face"
+        assert gen.get_ck_url("scry-dfc01", foil=True) == "https://ck.com/front-face-foil"
+        assert gen.get_uuid_for_printing_id("scry-dfc01") == "uuid-z-front"
 
     def test_get_sheet_data(self, test_db, mock_allprintings):
         """get_sheet_data returns correct structure."""

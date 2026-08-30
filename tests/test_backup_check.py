@@ -364,6 +364,10 @@ def test_units_are_installed_and_rendered(tmp_path):
         HOME=str(home),
         PATH=f"{bin_dir}:{env['PATH']}",
         XDG_RUNTIME_DIR=str(tmp_path / "run"),
+        # setup.sh gates on free space before it would write a gigabyte of
+        # image layers (de-yef). This stubs podman and writes a handful of unit
+        # files, and pytest's tmp_path is on /tmp, which is not the disk the
+        # gate exists to protect.
         MTGC_DISK_FLOOR_GB="0",
     )
     result = subprocess.run(

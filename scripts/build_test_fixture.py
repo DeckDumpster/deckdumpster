@@ -10,13 +10,16 @@ Usage:
     uv run python scripts/build_test_fixture.py
 """
 
+import hashlib
+import json
 import sqlite3
 import uuid
 from pathlib import Path
 
+from mtg_collector.cli.demo_data import DEMO_CARDS
 from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
-from mtg_collector.db.schema import init_db
-from mtg_collector.db.set_sizes import apply_base_set_sizes
+from mtg_collector.db.schema import init_db, refresh_latest_prices
+from mtg_collector.db.set_backfill import apply_base_set_sizes
 from mtg_collector.services.scryfall import ScryfallAPI, ensure_set_cached
 from mtg_collector.utils import now_iso
 
@@ -136,7 +139,210 @@ SEALED_CATEGORY_PRICES = {
     "limited_aid_tool": 28.00,
 }
 
+# Single-card price seeding.
+#
+# Every row seeded here is for a printing the demo collection does NOT hold, so
+# the owned side of the fixture prices exactly as it did before this existed:
+# blb/124's five-point history below is still the only price on a demo card, and
+# the collection page, its totals and the price chart all read what they always
+# read.  DEMO_CARDS is imported rather than restated so the two cannot drift.
+#
+# The unowned side is what needed it.  0 of the 7,603 printings the demo
+# collection does not hold carried any price, so on `is:unowned` every row tied
+# at NULL and `sort=price` returned an identical order ascending and descending
+# — and `is:unowned` is the only place a >250-row page and price ordering meet,
+# which left the widest paging path untestable for the column users sort by most
+# (de-9tb).  A UI scenario that tried it looked broken when it was the data.
+#
+# Prices are derived from the printing_id, never drawn: the fixture is a
+# committed 57 MB binary, and a rebuild that reshuffled every price would land as
+# a multi-megabyte diff that changed nothing.
+CARD_OBSERVED_AT = "2026-04-01"
+
+# (low, high) USD, per Scryfall rarity.  Roughly the real shape of a set — the
+# bands overlap, so rarity correlates with price without deciding it, and no
+# sort can pass by ordering on rarity instead.
+CARD_PRICE_BANDS = {
+    "common": (0.02, 1.50),
+    "uncommon": (0.05, 4.00),
+    "rare": (0.25, 30.00),
+    "mythic": (0.75, 120.00),
+}
+
+# Fraction of priced printings that also get a Card Kingdom row, and the
+# fraction of those that additionally get a buylist row.
+#
+# The Card Kingdom retail row carries the SAME price_type as the TCGplayer one,
+# which is the shape the bug lives in: latest_prices is keyed (set_code,
+# collector_number, source, price_type), so a join that pins price_type and not
+# source matches such a printing twice.  The grouped templates collapse it; the
+# per-copy one does not.  tests/test_collection_totals.py had to synthesise this
+# itself because the shared fixture could not show it.
+CARD_CK_SHARE = 0.45
+CARD_CK_BUYLIST_SHARE = 0.5
+
+
+def _price_spread(printing_id: str, salt: str) -> float:
+    """A stable 0..1 drawn from the printing's own identity."""
+    digest = hashlib.sha256(f"{printing_id}:{salt}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") / (1 << 64)
+
+
+def seed_card_prices(conn: sqlite3.Connection) -> int:
+    """Give the unowned catalogue prices.  Returns the rows written to `prices`.
+
+    A printing is priced in the finishes it actually has — nonfoil as `normal`,
+    foil or etched as `foil` — because that is what a price feed publishes.  The
+    718 foil-only and etched-only printings therefore have no `normal` price, and
+    since an unowned row has no copy to take a finish from it prices as `normal`,
+    that leaves ~9% of `is:unowned` legitimately blank.  The NULL-price render
+    and NULL-sort paths stay covered without an invented rule for skipping rows.
+
+    Callers must refresh latest_prices afterwards.
+    """
+    held = {(sc, cn) for sc, cn, *_ in DEMO_CARDS}
+
+    rows = conn.execute(
+        "SELECT printing_id, set_code, collector_number, rarity, finishes "
+        "FROM printings ORDER BY set_code, printing_id"
+    ).fetchall()
+
+    written = 0
+    for row in rows:
+        key = (row["set_code"], row["collector_number"])
+        if key in held:
+            continue
+
+        finishes = set(json.loads(row["finishes"] or "[]"))
+        price_types = []
+        if "nonfoil" in finishes:
+            price_types.append("normal")
+        if finishes & {"foil", "etched"}:
+            price_types.append("foil")
+        if not price_types:
+            continue
+
+        pid = row["printing_id"]
+        lo, hi = CARD_PRICE_BANDS.get(row["rarity"], CARD_PRICE_BANDS["common"])
+        # Squared, so the draw piles up at the cheap end the way a real set does:
+        # mostly chaff, with a thin tail. A flat draw would make the median of
+        # every set land halfway up its band and flatten /set-value's tiers.
+        base = round(lo + (hi - lo) * _price_spread(pid, "tcg") ** 2, 2)
+        foil = round(base * (1.5 + 3.0 * _price_spread(pid, "foil")), 2)
+        tcg = {"normal": max(base, 0.01), "foil": max(foil, 0.01)}
+
+        # Card Kingdom disagrees with TCGplayer by a different multiplier per
+        # printing, spanning 0.55x to 1.85x. A fixed ratio would leave the two
+        # sources in the same rank order, and `sort=ck_price` could then pass
+        # while silently sorting on the TCGplayer price.
+        ck_ratio = 0.55 + 1.30 * _price_spread(pid, "ck")
+        wants_ck = _price_spread(pid, "ck-pick") < CARD_CK_SHARE
+        wants_buylist = wants_ck and _price_spread(pid, "bl-pick") < CARD_CK_BUYLIST_SHARE
+
+        for price_type in price_types:
+            emit = [("tcgplayer", price_type, tcg[price_type])]
+            if wants_ck:
+                retail = max(round(tcg[price_type] * ck_ratio, 2), 0.01)
+                emit.append(("cardkingdom", price_type, retail))
+                if wants_buylist:
+                    emit.append(
+                        ("cardkingdom", f"buylist_{price_type}", max(round(retail * 0.55, 2), 0.01))
+                    )
+            for source, ptype, price in emit:
+                conn.execute(
+                    "INSERT OR IGNORE INTO prices "
+                    "(set_code, collector_number, source, price_type, price, observed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (row["set_code"], row["collector_number"], source, ptype, price,
+                     CARD_OBSERVED_AT),
+                )
+                written += 1
+
+    return written
+
+
 OUTPUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "test-data.sqlite"
+
+
+def backfill_mtgjson_side(conn):
+    """Fill mtgjson_printings.side from AllPrintings.json.
+
+    `mtg data import` writes `side` as it walks the file, so a full rebuild of
+    this fixture gets it for nothing.  This is the repair for the *committed*
+    file, which predates the column: rebuilding a 60 MB binary to add one
+    column would rewrite every price and every printing in it, and the fixture
+    is deliberately held at an older schema version besides.
+
+    Idempotent — `side` is a property of the MTGJSON row and nothing here
+    derives it — and it adds the column when it is absent, matching the guard
+    in `_migrate_v50_to_v51` so a later `init_db` on a copy is still a no-op.
+
+    Returns (updated, unresolved): rows corrected, and rows whose uuid this
+    AllPrintings.json does not carry, which is what a fixture built against a
+    newer catalogue than the file on disk looks like.
+
+    AllPrintings.json is read one set at a time rather than with a single
+    json.load: the file is ~540 MB and parsing it whole needs several GB.
+    """
+    from mtg_collector.cli.data_cmd import get_allprintings_path
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(mtgjson_printings)")}
+    if "side" not in columns:
+        conn.execute("ALTER TABLE mtgjson_printings ADD COLUMN side TEXT")
+
+    wanted = {r[0] for r in conn.execute("SELECT uuid FROM mtgjson_printings")}
+    sides = {}
+    for set_obj in _iter_allprintings_sets(get_allprintings_path()):
+        for key in ("cards", "tokens"):
+            for card in set_obj.get(key, []):
+                if card.get("uuid") in wanted:
+                    sides[card["uuid"]] = card.get("side")
+
+    cursor = conn.execute("SELECT uuid, side FROM mtgjson_printings")
+    stale = [(sides[u], u) for u, current in cursor if u in sides and current != sides[u]]
+    conn.executemany("UPDATE mtgjson_printings SET side = ? WHERE uuid = ?", stale)
+    return len(stale), len(wanted - set(sides))
+
+
+#: Every set object in AllPrintings.json opens with `baseSetSize`, MTGJSON's
+#: keys being alphabetical, and no other object in the file does.
+_SET_ANCHOR = '{"baseSetSize"'
+
+
+def _iter_allprintings_sets(path):
+    """Yield each set object under AllPrintings' top-level `data`, parsed alone.
+
+    The file is ~540 MB and one json.load of it needs several GB, which this
+    box does not have to spare.  Sets are located by their opening key and
+    handed to `raw_decode`, which parses exactly one value and reports where it
+    ended — so nothing here has to count braces, and a `{R}` in a card's rules
+    text cannot be mistaken for structure.
+    """
+    import json as _json
+
+    decoder = _json.JSONDecoder()
+    chunk = 1 << 23
+    with open(path, encoding="utf-8") as f:
+        buf = f.read(chunk)
+        while True:
+            start = buf.find(_SET_ANCHOR)
+            while start == -1:
+                more = f.read(chunk)
+                if not more:
+                    return
+                buf = buf[-len(_SET_ANCHOR):] + more
+                start = buf.find(_SET_ANCHOR)
+            while True:
+                try:
+                    obj, end = decoder.raw_decode(buf, start)
+                    break
+                except ValueError:
+                    more = f.read(chunk)
+                    if not more:
+                        raise
+                    buf += more
+            yield obj
+            buf = buf[end:]
 
 
 def main():
@@ -238,12 +444,15 @@ def main():
             "VALUES (?, ?, ?, ?, ?, ?)",
             (sc, cn, src, pt, price, observed),
         )
-    conn.execute(
-        "INSERT OR REPLACE INTO latest_prices (set_code, collector_number, source, price_type, price, observed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("blb", "124", "tcgplayer", "normal", 10.46, "2026-04-01"),
-    )
     print(f"  Seeded {len(price_rows)} price rows for blb/124")
+
+    # Give the rest of the catalogue prices — see the note on CARD_OBSERVED_AT.
+    print("  Seeding single-card prices for the unowned catalogue...")
+    written = seed_card_prices(conn)
+    # latest_prices is materialized from prices rather than written alongside it,
+    # so the two cannot disagree about which observation is the latest.
+    latest = refresh_latest_prices(conn)
+    print(f"    {written} price rows -> {latest} latest_prices rows")
 
     # Seed sealed prices. All rows share SEALED_OBSERVED_AT — see the note there.
     print("  Seeding sealed price data...")

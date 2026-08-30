@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 49
+SCHEMA_VERSION = 51
 
 
 class SchemaIntegrityError(Exception):
@@ -234,10 +234,26 @@ CREATE TABLE IF NOT EXISTS collection (
     sale_price REAL,
     order_id INTEGER REFERENCES orders(id),
     binder_id INTEGER REFERENCES binders(id) ON DELETE SET NULL,
-    batch_id INTEGER REFERENCES batches(id)
+    batch_id INTEGER REFERENCES batches(id),
+    -- Denormalised copy of printings.card_name, which is itself a copy of
+    -- cards.name.  It exists so the default collection sort can be served by
+    -- an index: /api/collection's owned template drives from `collection`, so
+    -- no index on `printings` can order it, and reading the name across the
+    -- join costs a temp B-tree over the whole result before LIMIT takes 250.
+    -- See idx_collection_card_name below.
+    card_name TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_collection_binder ON collection(binder_id);
 CREATE INDEX IF NOT EXISTS idx_collection_batch ON collection(batch_id);
+-- The default collection page's whole ORDER BY *and* GROUP BY, in one scan.
+-- The trailing columns are the owned template's row-identity key, so grouping
+-- and ordering are both satisfied by reading this index in order and LIMIT
+-- stops it after 250 groups.  Measured on 110,018 printings / 121,020 owned
+-- copies: 6.6 s -> 28 ms for the first page, 12.5 s -> 50 ms for expand=copies.
+-- Drop a column and the grouping needs its own sort again, which is the whole
+-- cost this removes.
+CREATE INDEX IF NOT EXISTS idx_collection_card_name
+    ON collection(card_name, printing_id, finish, condition, status, order_id);
 
 -- Status audit log (append-only)
 CREATE TABLE IF NOT EXISTS status_log (
@@ -423,9 +439,25 @@ CREATE TABLE IF NOT EXISTS mtgjson_printings (
     frame_effects   TEXT,
     ck_url          TEXT,
     ck_url_foil     TEXT,
-    imported_at     TEXT NOT NULL
+    imported_at     TEXT NOT NULL,
+    -- MTGJSON's `side`: 'a' for the front face of a multi-face card, 'b'/'c'/'d'
+    -- for the rest, NULL for a single-faced one.  printing_id is NOT unique here
+    -- -- every face carries the same Scryfall id with its own Card Kingdom link
+    -- -- so this is the only column that says which row is the card you see.
+    -- Read it through mtg_collector/db/mtgjson_faces.py, never by hand.
+    --
+    -- Last, and that is load-bearing: `mtg db split` copies each table with
+    -- `INSERT INTO shared.t SELECT * FROM main.t`, which pairs columns by
+    -- position.  ALTER TABLE ADD COLUMN appends, so a migrated database has
+    -- this column last; declaring it anywhere else here would shift `side` and
+    -- `imported_at` past each other on a deployed instance and fail the copy
+    -- on imported_at's NOT NULL.
+    side            TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_mtgjson_printing ON mtgjson_printings(printing_id);
+-- Carries the whole of the front-face resolution in mtgjson_faces:
+-- seek on printing_id, then side then uuid already in order, so the
+-- ORDER BY costs no sorter.  set_browse's plan test asserts on that.
+CREATE INDEX IF NOT EXISTS idx_mtgjson_printing ON mtgjson_printings(printing_id, side, uuid);
 CREATE INDEX IF NOT EXISTS idx_mtgjson_set ON mtgjson_printings(set_code);
 
 -- MTGJSON booster sheet entries (uuid/weight per sheet)
@@ -997,6 +1029,10 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v47_to_v48(conn)
         if current < 49:
             _migrate_v48_to_v49(conn)
+        if current < 50:
+            _migrate_v49_to_v50(conn)
+        if current < 51:
+            _migrate_v50_to_v51(conn)
 
     # Record schema version
     conn.execute(
@@ -3060,7 +3096,7 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
     MTGJSON's AllPrintings.json, total_set_size from Scryfall's per-set
     card_count -- so there is nothing here to backfill them from without either
     a network call or a ~500 MB JSON parse, and init_db runs in front of every
-    `mtg` command.  The eager backfill is `mtg data backfill-set-sizes`, and
+    `mtg` command.  The eager backfill is `mtg data backfill-sets`, and
     both ingest paths (`mtg cache all`, `mtg data import`) populate the columns
     as a side effect of data they already hold.  Until one of those runs the
     columns are NULL, which is the value the UI is built to degrade on anyway.
@@ -3070,6 +3106,98 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sets ADD COLUMN base_set_size INTEGER")
     if "total_set_size" not in columns:
         conn.execute("ALTER TABLE sets ADD COLUMN total_set_size INTEGER")
+
+
+def _migrate_v50_to_v51(conn: sqlite3.Connection):
+    """Add mtgjson_printings.side — which face of a card the row describes.
+
+    Additive only, and deliberately left NULL.  `side` comes from
+    AllPrintings.json and there is nothing in the database to derive it from:
+    the two rows a double-faced card produces differ only in `uuid` and their
+    Card Kingdom links, both of which are opaque.  A ~500 MB JSON parse in
+    front of every `mtg` command is not the price of a column, so the fill is
+    the ordinary re-import — `mtg data refresh-catalog`, which the
+    mtgc-catalog-refresh timer runs daily at 01:00.
+
+    Until it runs, `side` is NULL on every row and mtgjson_faces resolves a
+    duplicated printing_id on `uuid` alone: one row per card rather than
+    whichever the seek reached first, which is already what the old query
+    lacked.  The re-import then makes it the front face.
+    """
+    from mtg_collector.db.connection import suspend_shared_shadow
+
+    # Both statements name mtgjson_printings, which is a SHARED_TABLE: with the
+    # shadow up the name resolves to a temp view, and SQLite answers "cannot add
+    # a column to a view" / "views may not be indexed" rather than touching the
+    # table.  Same reason init_db suspends it around SCHEMA_SQL.
+    with suspend_shared_shadow(conn):
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(mtgjson_printings)")}
+        if "side" not in columns:
+            conn.execute("ALTER TABLE mtgjson_printings ADD COLUMN side TEXT")
+        # idx_mtgjson_printing widens to (printing_id, side, uuid) so the
+        # resolution's ORDER BY is read off the index.  A widening is a
+        # replacement, which CREATE INDEX IF NOT EXISTS would skip.
+        conn.execute("DROP INDEX IF EXISTS idx_mtgjson_printing")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mtgjson_printing "
+            "ON mtgjson_printings(printing_id, side, uuid)"
+        )
+
+
+def _migrate_v49_to_v50(conn: sqlite3.Connection):
+    """Denormalise printings.card_name onto collection so the owned sort has an index.
+
+    v46 did this for the printings-driven templates.  The owned/default
+    template drives from `collection`, so no index on `printings` can order it
+    -- see idx_collection_card_name in SCHEMA_SQL for the measurement.
+
+    Backfilling ~121k rows and building the index takes a few seconds.  Under
+    split-DB the read of `printings` resolves through the temp shadow views to
+    the ATTACHed shared catalogue, which is where the names actually are;
+    `collection` is never shared, so the write always lands in this database.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(collection)")}
+    if "card_name" not in columns:
+        conn.execute("ALTER TABLE collection ADD COLUMN card_name TEXT")
+    rebuild_collection_card_names(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_collection_card_name "
+        "ON collection(card_name, printing_id, finish, condition, status, order_id)"
+    )
+
+
+def rebuild_collection_card_names(conn):
+    """Resync collection.card_name from printings.card_name.
+
+    Returns the number of rows corrected.
+
+    Every write that sets a collection row's printing_id sets card_name from
+    the same subquery, so this is not how the column is normally filled -- it
+    is the v50 backfill, and the repair for the one thing those writes cannot
+    see: a card renamed upstream.  A rename lands in `cards`, rebuild_card_names()
+    carries it to `printings`, and this carries it the last hop.  `mtg data
+    refresh-catalog` runs both, in that order, so the staleness window is the
+    same one printings.card_name already has: until the next catalogue refresh
+    a renamed card sorts under its previous name, and nothing displayed is
+    affected -- the sort is the only thing that reads this column.
+
+    Idempotent: the WHERE clause matches only rows whose copy disagrees, so a
+    second run corrects nothing.
+    """
+    cursor = conn.execute(
+        """
+        UPDATE collection SET card_name = (
+            SELECT p.card_name FROM printings p
+            WHERE p.printing_id = collection.printing_id
+        )
+        WHERE card_name IS NOT (
+            SELECT p.card_name FROM printings p
+            WHERE p.printing_id = collection.printing_id
+        )
+        """
+    )
+    conn.commit()
+    return cursor.rowcount
 
 
 def rebuild_card_names(conn):

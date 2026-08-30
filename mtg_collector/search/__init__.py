@@ -17,7 +17,13 @@ from .ast_nodes import (
     NotNode,
     OrNode,
 )
-from .compiler import CompiledQuery, compile_query, execute_search, explain
+from .compiler import (
+    PRICE_EXPR,
+    CompiledQuery,
+    compile_query,
+    execute_search,
+    explain,
+)
 from .grammar import SearchError, parse_query
 
 __all__ = [
@@ -27,6 +33,7 @@ __all__ = [
     "explain",
     "SearchError",
     "CompiledQuery",
+    "PRICE_EXPR",
     "ASTNode",
     "AndNode",
     "OrNode",
