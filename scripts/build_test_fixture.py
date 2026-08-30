@@ -264,6 +264,87 @@ def seed_card_prices(conn: sqlite3.Connection) -> int:
 OUTPUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "test-data.sqlite"
 
 
+def backfill_mtgjson_side(conn):
+    """Fill mtgjson_printings.side from AllPrintings.json.
+
+    `mtg data import` writes `side` as it walks the file, so a full rebuild of
+    this fixture gets it for nothing.  This is the repair for the *committed*
+    file, which predates the column: rebuilding a 60 MB binary to add one
+    column would rewrite every price and every printing in it, and the fixture
+    is deliberately held at an older schema version besides.
+
+    Idempotent — `side` is a property of the MTGJSON row and nothing here
+    derives it — and it adds the column when it is absent, matching the guard
+    in `_migrate_v50_to_v51` so a later `init_db` on a copy is still a no-op.
+
+    Returns (updated, unresolved): rows corrected, and rows whose uuid this
+    AllPrintings.json does not carry, which is what a fixture built against a
+    newer catalogue than the file on disk looks like.
+
+    AllPrintings.json is read one set at a time rather than with a single
+    json.load: the file is ~540 MB and parsing it whole needs several GB.
+    """
+    from mtg_collector.cli.data_cmd import get_allprintings_path
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(mtgjson_printings)")}
+    if "side" not in columns:
+        conn.execute("ALTER TABLE mtgjson_printings ADD COLUMN side TEXT")
+
+    wanted = {r[0] for r in conn.execute("SELECT uuid FROM mtgjson_printings")}
+    sides = {}
+    for set_obj in _iter_allprintings_sets(get_allprintings_path()):
+        for key in ("cards", "tokens"):
+            for card in set_obj.get(key, []):
+                if card.get("uuid") in wanted:
+                    sides[card["uuid"]] = card.get("side")
+
+    cursor = conn.execute("SELECT uuid, side FROM mtgjson_printings")
+    stale = [(sides[u], u) for u, current in cursor if u in sides and current != sides[u]]
+    conn.executemany("UPDATE mtgjson_printings SET side = ? WHERE uuid = ?", stale)
+    return len(stale), len(wanted - set(sides))
+
+
+#: Every set object in AllPrintings.json opens with `baseSetSize`, MTGJSON's
+#: keys being alphabetical, and no other object in the file does.
+_SET_ANCHOR = '{"baseSetSize"'
+
+
+def _iter_allprintings_sets(path):
+    """Yield each set object under AllPrintings' top-level `data`, parsed alone.
+
+    The file is ~540 MB and one json.load of it needs several GB, which this
+    box does not have to spare.  Sets are located by their opening key and
+    handed to `raw_decode`, which parses exactly one value and reports where it
+    ended — so nothing here has to count braces, and a `{R}` in a card's rules
+    text cannot be mistaken for structure.
+    """
+    import json as _json
+
+    decoder = _json.JSONDecoder()
+    chunk = 1 << 23
+    with open(path, encoding="utf-8") as f:
+        buf = f.read(chunk)
+        while True:
+            start = buf.find(_SET_ANCHOR)
+            while start == -1:
+                more = f.read(chunk)
+                if not more:
+                    return
+                buf = buf[-len(_SET_ANCHOR):] + more
+                start = buf.find(_SET_ANCHOR)
+            while True:
+                try:
+                    obj, end = decoder.raw_decode(buf, start)
+                    break
+                except ValueError:
+                    more = f.read(chunk)
+                    if not more:
+                        raise
+                    buf += more
+            yield obj
+            buf = buf[end:]
+
+
 def main():
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT.unlink(missing_ok=True)

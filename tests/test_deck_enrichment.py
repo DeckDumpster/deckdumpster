@@ -62,11 +62,11 @@ def _price(conn, cn, source, price_type, price):
     )
 
 
-def _mtgjson(conn, n, ck_url, ck_url_foil, uuid_suffix=""):
+def _mtgjson(conn, n, ck_url, ck_url_foil, uuid_suffix="", side=None):
     conn.execute(
-        "INSERT INTO mtgjson_printings (uuid, printing_id, name, set_code, number, ck_url, ck_url_foil, imported_at) "
-        "VALUES (?, ?, 'x', 'tst', ?, ?, ?, '2025-01-01')",
-        (f"uuid-{n}{uuid_suffix}", f"print-{n}", str(n), ck_url, ck_url_foil),
+        "INSERT INTO mtgjson_printings (uuid, printing_id, name, set_code, number, ck_url, ck_url_foil, imported_at, side) "
+        "VALUES (?, ?, 'x', 'tst', ?, ?, ?, '2025-01-01', ?)",
+        (f"uuid-{n}{uuid_suffix}", f"print-{n}", str(n), ck_url, ck_url_foil, side),
     )
 
 
@@ -99,12 +99,14 @@ def deck_db():
     _mtgjson(conn, 1, "https://ck/alpha", "https://ck/alpha-foil")
 
     # 2 — a double-faced card: two mtgjson rows share the printing_id, each
-    # with its own Card Kingdom link.  The uuids are ordered against insertion
-    # order so a join that sorted by uuid would pick the back face.
+    # with its own Card Kingdom link.  `side` names the front face ('a') and
+    # the uuids are ordered AGAINST it (front sorts last by uuid), so a join
+    # that fell back to bare uuid ordering rather than `side` first would pick
+    # the back face.
     _add_card(conn, 2, "Bravo")
     _price(conn, 2, "tcgplayer", "normal", 3.0)
-    _mtgjson(conn, 2, "https://ck/bravo-front", "https://ck/bravo-front-foil", uuid_suffix="-z")
-    _mtgjson(conn, 2, "https://ck/bravo-back", "https://ck/bravo-back-foil", uuid_suffix="-a")
+    _mtgjson(conn, 2, "https://ck/bravo-front", "https://ck/bravo-front-foil", uuid_suffix="-z", side="a")
+    _mtgjson(conn, 2, "https://ck/bravo-back", "https://ck/bravo-back-foil", uuid_suffix="-a", side="b")
 
     # 3 — a foil-only printing: there is no nonfoil price to fall back to.
     _add_card(conn, 3, "Charlie", finishes='["foil"]')

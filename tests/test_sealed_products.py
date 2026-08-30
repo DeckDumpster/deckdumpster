@@ -373,6 +373,23 @@ class TestMigrationV18ToV19:
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL
             );
+            -- mtgjson_printings arrived at v16, so a database at this version has
+            -- it.  Present here so migrations that add a column to it -- v51 adds
+            -- `side` -- have something to alter.
+            CREATE TABLE IF NOT EXISTS mtgjson_printings (
+                uuid            TEXT PRIMARY KEY,
+                printing_id     TEXT,
+                name            TEXT NOT NULL,
+                set_code        TEXT NOT NULL,
+                number          TEXT NOT NULL,
+                rarity          TEXT,
+                border_color    TEXT,
+                is_full_art     INTEGER DEFAULT 0,
+                frame_effects   TEXT,
+                ck_url          TEXT,
+                ck_url_foil     TEXT,
+                imported_at     TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS cards (
                 oracle_id TEXT PRIMARY KEY,
                 name TEXT NOT NULL
@@ -1113,6 +1130,23 @@ class TestMigrationV19ToV20:
             CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL
+            );
+            -- mtgjson_printings arrived at v16, so a database at this version has
+            -- it.  Present here so migrations that add a column to it -- v51 adds
+            -- `side` -- have something to alter.
+            CREATE TABLE IF NOT EXISTS mtgjson_printings (
+                uuid            TEXT PRIMARY KEY,
+                printing_id     TEXT,
+                name            TEXT NOT NULL,
+                set_code        TEXT NOT NULL,
+                number          TEXT NOT NULL,
+                rarity          TEXT,
+                border_color    TEXT,
+                is_full_art     INTEGER DEFAULT 0,
+                frame_effects   TEXT,
+                ck_url          TEXT,
+                ck_url_foil     TEXT,
+                imported_at     TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS cards (
                 oracle_id TEXT PRIMARY KEY,

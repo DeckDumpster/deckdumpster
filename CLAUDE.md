@@ -59,6 +59,9 @@ uv run pytest tests/ui/ -v --instance <instance>
 
 # Always-skipped: 7 order parser tests need real vendor HTML files (not in repo).
 
+# 6. Everything CI runs, in one script (~25 min; the whole of ci.yml)
+INSTANCE=ci-<yourname> bash deploy/ci.sh
+
 # --- App ---
 mtg setup                                              # DB + Scryfall cache + MTGJSON
 mtg setup --demo                                       # + ~50 demo cards
@@ -76,6 +79,18 @@ bash deploy/teardown.sh <name> [--purge]               # Stop / remove
 bash deploy/prune-instances.sh                         # Clean up orphaned test instances
 systemctl --user start mtgc-<name>                     # Start / status
 ```
+
+## What CI runs
+
+`.github/workflows/ci.yml` checks out the repo and runs `bash deploy/ci.sh`. It has no
+other step, so **anything not invoked from `deploy/ci.sh` never runs in CI** — wire new
+gates in there. The script is the only list; keeping the steps inline in the workflow is
+what made a red CI impossible to reproduce locally, and left the rig's agent instructions —
+which live outside this repo — describing a `deploy/ci.sh` that did not exist (de-xz8).
+
+Run it by hand with an instance name of your own — `INSTANCE` defaults to `ci-test`, which
+is the self-hosted runner's own instance, and the runner shares a machine with your
+worktree. The UI tier needs `ANTHROPIC_API_KEY`; CI passes it in as a repository secret.
 
 ## Web routes
 
@@ -484,7 +499,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 - **HTML pages share no JS imports (legacy).** Helpers like `getRarityColor()` and `formatPrice()` are inlined in older pages. New pages should use `shared.css` + `shared.js`. Don't introduce a new ad-hoc price formatter — use `formatPrice` (or copy its body verbatim if the page can't load `shared.js`).
 - **Restoring DB snapshots with `cp` under WAL mode is broken.** See the "WAL mode" patterns section. Use `sqlite3.backup()`.
 - **Never use `rowid` on a shared reference table.** Deployed instances ATTACH `shared.sqlite` and shadow every table in `SHARED_TABLES` with a temp `CREATE VIEW … AS SELECT * FROM shared.<t>`. Views have no rowid, and SQLite resolves `rowid` against one to **NULL rather than an error** — so a join keyed on it silently matches nothing instead of failing loudly. Key on a real unique column (`uuid`, `printing_id`, the PK).
-- **`mtgjson_printings.printing_id` is not unique.** The PK is `uuid`; MTGJSON emits one row per face of a double-faced card, and both faces carry the same Scryfall id with a *different* Card Kingdom link. Anything joining on `printing_id` must resolve to a single row first, the way `PackGenerator.get_ck_url()` and `_ENRICH_JOINS` in `crack_pack_server.py` do, or it multiplies rows.
+- **`mtgjson_printings.printing_id` is not unique.** The PK is `uuid`; MTGJSON emits one row per face of a double-faced card, and both faces carry the same Scryfall id with a *different* Card Kingdom link. **`side` is what says which row is the front face** — `'a'`, against `'b'`/`'c'`/`'d'` for the rest and NULL for a single-faced card — and `mtg_collector/db/mtgjson_faces.py` is the one place that reads it. Resolve through `front_face_sql` / `front_face_uuid_sql` / `front_face_bulk_sql`; never join on `printing_id` directly, which both multiplies rows and picks a face by query plan. In 19 of the 335 duplicated groups in the fixture only the front face has a Card Kingdom link at all, so landing on the back one loses the link (de-xpu); elsewhere the two links redirect to the same product. `side` is populated at import and is NULL on any database that has not been re-imported since — the daily `mtgc-catalog-refresh` run fills it, and until then the resolution is deterministic on `uuid` rather than correct.
 - **The card name is denormalised twice, once per driving table.** `printings.card_name` and `collection.card_name` are both copies of `cards.name`, and which one a query reads is a property of the *template*, never a preference: `/api/collection` has a printings-driven template (`is:unowned`, shared links) and two collection-driven ones (the owned default, `expand=copies`), and only the copy on the driving table can be indexed for that template's order. Sorting on `card.name` is unreachable in every case — the GROUP BY pins the driving table, so `cards` can never be the outer loop and `idx_cards_name` cannot serve the ordering no matter what the tiebreak is. Measured on 110,018 printings / 121,020 owned copies: 2.3 s vs 8.8 ms (printings), 6.6 s vs 28 ms (collection, first page), 12.5 s vs 50 ms (`expand=copies`). **Each template's GROUP BY must lead with its own name column** or the sort just moves into the grouping and nothing is gained, and the collection-driven templates must key their GROUP BY/ORDER BY on `c.printing_id`, not `p.printing_id` — the same value, but SQLite will not cross the join to prove it, and `idx_collection_card_name` only carries the collection one.
 - **`idx_collection_card_name` needs the `INDEXED BY` hint; the planner will not find it.** Every collection-driven query constrains `c.status` (the endpoint adds `status IN ('owned','ordered')` when the query does not), and with **no `sqlite_stat1`** — nothing here runs `ANALYZE` — SQLite guesses that `IN` is selective and takes `idx_collection_status`, paying a temp B-tree over the whole result. Measured with the column and index in place but no hint: 2.3 s, still on `idx_collection_status`. The hint goes on the **page query only**, and only when the sort is by name: the count and the totals have no ORDER BY, so for them the index is just a scan in an order nobody asked for. It is **not free for every query** — an ordered scan pays for itself because LIMIT stops it early, so a filter selective enough to spread 250 matches across the whole collection makes it walk the lot in name order (`s:lci` 630 ms → 1.2 s), where a less selective one wins big (`r:mythic` 1.1 s → 112 ms). That is the trade, and it is inside the band a filtered search already cost.
 - **Each copy has its own writer and its own repair.** `PrintingRepository.upsert` fills `printings.card_name`, and `rebuild_card_names()` runs beside `rebuild_fts()` after `mtg cache` to carry an upstream rename to it. The index each copy exists for is `idx_printings_card_name(card_name, printing_id)` and `idx_collection_card_name(card_name, printing_id, finish, condition, status, order_id)` — the collection one carries the owned template's whole row-identity key, so dropping a column from it puts the grouping back on its own sort.
@@ -497,7 +512,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 
 Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/units-lib.sh` (renders the timer units for one instance, and lists the ones a host has; sourced by setup/deploy/teardown/prune), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
 - `~/.config/mtgc/<instance>.env` — per-instance env.
@@ -522,6 +537,27 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   run that fails leaves nothing behind — that path used to `exit 1` before its own
   leftover check and cost ~1 GB of prod's disk per failing run.
   See `deploy/README.md` → "Container storage" and `deploy/store-lib.sh`.
+- **`deploy.sh` installs the timer units on every redeploy, and that is the only
+  path they have to an instance that already exists** (de-46k). `deploy.sh` falls
+  back to `setup.sh` only when the Quadlet is *missing*, so for prod — whose
+  Quadlet has existed since day one — a unit added to the repo afterwards reached
+  the host by no route at all: `mtgc-catalog-check` (de-b5q), `mtgc-catalog-refresh`
+  (de-wdq) and `mtgc-diskcheck` (de-yef) were simply absent there, months after
+  each shipped and deployed green. **Installing is not arming**: only unit files
+  are written, and enablement lives in `*.target.wants/` symlinks that rewriting a
+  unit file does not touch, so an armed timer stays armed, a disarmed one stays
+  disarmed, and the install can be unconditional. Arming stays a per-instance
+  decision made once by hand. The unit list is **the directory** —
+  `deploy/mtgc-*.timer` — never a list written down beside it, because a second
+  copy is the same bug one level up and its only symptom is a timer that never
+  fires; a `.timer` with no `.service` is a hard error. `teardown.sh` and
+  `prune-instances.sh` read the other end, the units the *host* has, so a template
+  deleted from the repo cannot leave an armed unit behind for an instance that is
+  gone — `prune-instances.sh` named four of the eight roles and orphaned the rest,
+  and its shortest-prefix match reported `mtgc-backup-check-<inst>` as an instance
+  called `check-<inst>`. See
+  `deploy/units-lib.sh`, `tests/test_deploy_units.py`, and `deploy/README.md` →
+  "Installing timer units".
 - **`mtg data check-catalog` alarms on catalog staleness by outcome, not component
   health** (de-b5q). The catalogue sat two months behind — newest set 2026-06-26 against
   upstream's 2026-08-14 — with every timer green, because every timer asks *did my

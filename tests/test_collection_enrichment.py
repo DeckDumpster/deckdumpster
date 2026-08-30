@@ -52,11 +52,11 @@ def _price(conn, cn, source, price_type, price):
     )
 
 
-def _mtgjson(conn, n, ck_url, ck_url_foil, uuid_suffix=""):
+def _mtgjson(conn, n, ck_url, ck_url_foil, uuid_suffix="", side=None):
     conn.execute(
-        "INSERT INTO mtgjson_printings (uuid, printing_id, name, set_code, number, ck_url, ck_url_foil, imported_at) "
-        "VALUES (?, ?, 'x', 'tst', ?, ?, ?, '2025-01-01')",
-        (f"uuid-{n}{uuid_suffix}", f"print-{n}", str(n), ck_url, ck_url_foil),
+        "INSERT INTO mtgjson_printings (uuid, printing_id, name, set_code, number, ck_url, ck_url_foil, side, imported_at) "
+        "VALUES (?, ?, 'x', 'tst', ?, ?, ?, ?, '2025-01-01')",
+        (f"uuid-{n}{uuid_suffix}", f"print-{n}", str(n), ck_url, ck_url_foil, side),
     )
 
 
@@ -82,15 +82,16 @@ def enriched_db():
 
     # 2 — foil, no CK buylist: falls back to the CK retail foil price.  Two
     # mtgjson rows share the printing_id, as MTGJSON emits for a double-faced
-    # card.  The uuids are ordered against insertion order on purpose, so a
-    # join that sorted by uuid would pick the back face and fail the test.
+    # card.  Insertion order, uuid order and side order all disagree on
+    # purpose: the back face is inserted last and sorts first by uuid, so only
+    # a resolution that reads `side` picks the front one.
     _add_card(conn, 2, "Bravo")
     _own(conn, 2, "foil")
     _price(conn, 2, "tcgplayer", "foil", 12.5)
     _price(conn, 2, "cardkingdom", "foil", 9.0)
     _price(conn, 2, "tcgplayer", "normal", 1.0)  # must NOT be picked for a foil copy
-    _mtgjson(conn, 2, "https://ck/bravo-front", "https://ck/bravo-front-foil", uuid_suffix="-z")
-    _mtgjson(conn, 2, "https://ck/bravo-back", "https://ck/bravo-back-foil", uuid_suffix="-a")
+    _mtgjson(conn, 2, "https://ck/bravo-front", "https://ck/bravo-front-foil", uuid_suffix="-z", side="a")
+    _mtgjson(conn, 2, "https://ck/bravo-back", "https://ck/bravo-back-foil", uuid_suffix="-a", side="b")
 
     # 3 — etched prices as foil, and falls back to the nonfoil URL when there
     # is no foil one.
@@ -110,6 +111,26 @@ def enriched_db():
     _price(conn, 5, "tcgplayer", "normal", 7.25)
     _price(conn, 5, "tcgplayer", "foil", 70.0)
     _mtgjson(conn, 5, "https://ck/echo", "https://ck/echo-foil")
+
+    # 6 — a double-faced card whose *back* face has no Card Kingdom link at
+    # all.  19 of the 335 duplicated printing_ids in the test fixture look like
+    # this, and they are the ones where picking the wrong face is visible: the
+    # card renders with no link rather than a link to the same product.  The
+    # back face is inserted first, so a seek that takes whichever row comes
+    # first gets the empty one.
+    _add_card(conn, 6, "Foxtrot")
+    _own(conn, 6, "nonfoil")
+    _mtgjson(conn, 6, "", "", uuid_suffix="-back", side="b")
+    _mtgjson(conn, 6, "https://ck/foxtrot", "https://ck/foxtrot-foil", uuid_suffix="-front", side="a")
+
+    # 7 — the same shape on a database imported before `side` existed: both
+    # rows NULL.  Nothing can name the front face here, so what is left to
+    # guarantee is that the card still resolves to exactly one row and the same
+    # one every time — the next catalogue re-import supplies the rest.
+    _add_card(conn, 7, "Golf")
+    _own(conn, 7, "nonfoil")
+    _mtgjson(conn, 7, "https://ck/golf-z", "", uuid_suffix="-z")
+    _mtgjson(conn, 7, "https://ck/golf-a", "", uuid_suffix="-a")
 
     refresh_latest_prices(conn)
     conn.commit()
@@ -233,6 +254,72 @@ def test_duplicate_mtgjson_printing_id_agrees_with_get_ck_url(enriched_db):
     assert cards["Bravo"]["ck_url"] == "https://ck/bravo-front-foil"
 
 
+def test_ck_url_is_the_front_face_when_the_back_face_has_none(enriched_db):
+    """A back face with an empty Card Kingdom link must not win the resolution.
+
+    MTGJSON emits one row per face and only the front one carries a link for
+    some cards, so a lookup that takes whichever row the seek reached first
+    renders the card with no "buy" link at all.
+    """
+    cards = _collection(enriched_db)
+    assert cards["Foxtrot"]["ck_url"] == "https://ck/foxtrot"
+
+
+def test_null_side_still_resolves_to_one_row_and_one_link(enriched_db):
+    """A database not yet re-imported has `side` NULL on every row.
+
+    `side` comes from AllPrintings.json and no migration can derive it, so
+    until the next catalogue refresh the order falls to `uuid` alone.  That is
+    not the front face, but it is one row and the same row on every query,
+    which is what the join being single-row depends on.
+    """
+    handler = _make_handler(enriched_db)
+    handler._api_collection({"q": ["Golf"]})
+    _, body = handler._responses[-1]
+    assert [r["name"] for r in body["rows"]] == ["Golf"]
+    assert body["rows"][0]["ck_url"] == "https://ck/golf-a"
+
+
+def test_deck_cards_ck_url_agrees_with_the_collection(enriched_db):
+    """/api/decks/:id/cards linked a double-faced card to the *back* face.
+
+    Its bulk lookup keyed a dict on printing_id, so the last row of the pair
+    won — the opposite face from the one /api/collection and /card/:set/:cn
+    show for the same card.
+    """
+    conn = sqlite3.connect(enriched_db)
+    # state_id 3 is "constructed" — the state whose card list comes from
+    # deck_cards, which is what the deck page reads.
+    conn.execute(
+        "INSERT INTO decks (id, name, state_id, created_at, updated_at) "
+        "VALUES (1, 'Test Deck', 3, ?, ?)",
+        (NOW, NOW),
+    )
+    for collection_id, printing_id in conn.execute(
+        "SELECT id, printing_id FROM collection WHERE printing_id IN ('print-2', 'print-6')"
+    ).fetchall():
+        conn.execute(
+            "INSERT INTO deck_cards (deck_id, collection_id, printing_id, zone, quantity) "
+            "VALUES (1, ?, ?, 'mainboard', 1)",
+            (collection_id, printing_id),
+        )
+    conn.commit()
+    conn.close()
+
+    from_collection = _collection(enriched_db)
+
+    handler = _make_handler(enriched_db)
+    handler._api_deck_cards(1, {})
+    status, rows = handler._responses[-1]
+    assert status == 200, rows
+    from_deck = {r["name"]: r for r in rows}
+
+    assert from_deck["Bravo"]["ck_url"] == from_collection["Bravo"]["ck_url"]
+    assert from_deck["Bravo"]["ck_url"] == "https://ck/bravo-front-foil"
+    assert from_deck["Foxtrot"]["ck_url"] == from_collection["Foxtrot"]["ck_url"]
+    assert from_deck["Foxtrot"]["ck_url"] == "https://ck/foxtrot"
+
+
 def test_enrichment_survives_the_shared_reference_db(enriched_db, tmp_path):
     """Deployed instances read cards/prices/mtgjson through ATTACHed shadow views.
 
@@ -284,7 +371,7 @@ def test_enrichment_applies_to_expand_copies_template(enriched_db):
     handler = _make_handler(enriched_db)
     handler._api_collection({"expand": ["copies"]})
     _, body = handler._responses[-1]
-    assert body["total"] == 4, [c["name"] for c in body["rows"]]
+    assert body["total"] == 6, [c["name"] for c in body["rows"]]
     cards = {c["name"]: c for c in body["rows"]}
     assert cards["Bravo"]["ck_price"] == "9.0"
     assert cards["Bravo"]["ck_url"] == "https://ck/bravo-front-foil"
@@ -295,7 +382,7 @@ def test_enrichment_joins_do_not_multiply_rows(enriched_db):
     handler = _make_handler(enriched_db)
     handler._api_collection({})
     _, body = handler._responses[-1]
-    assert body["total"] == 4, [c["name"] for c in body["rows"]]
+    assert body["total"] == 6, [c["name"] for c in body["rows"]]
 
 
 # ── The assertion that keeps it fixed ──

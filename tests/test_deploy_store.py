@@ -83,6 +83,12 @@ class Host:
         self.env["HOME"] = str(self.home)
         self.env["PATH"] = f"{bin_dir}:{self.env['PATH']}"
         self.env["XDG_RUNTIME_DIR"] = str(tmp_path / "run")
+        # setup.sh gates on free space before it would write a gigabyte of image
+        # layers (de-yef). These tests stub podman and write a handful of unit
+        # files, and pytest's tmp_path is on /tmp, which is not the disk the gate
+        # exists to protect — so use the documented knob rather than letting a full
+        # /tmp fail the suite for a reason the suite is not about.
+        self.env["MTGC_DISK_FLOOR_GB"] = "0"
         self.env["PODMAN_LOG"] = str(self.log)
         # The floor gate (de-yef) measures the filesystem the run will write to,
         # which under a tmp_path $HOME is pytest's scratch disk, not the deploy box's.
@@ -92,9 +98,17 @@ class Host:
         # tests/test_diskcheck.py's subject, not this file's.
         self.env["MTGC_DISK_FLOOR_GB"] = "0"
         # Inherited from the developer's own shell it would silently opt every
-        # test into a real store.
+        # test into a real store. Since de-xz8, CI's own deploy/ci.sh activates
+        # a real store before `uv run pytest` even starts -- inherited unpopped,
+        # mtgc_store_activate's own idempotency guard (store-lib.sh: "already
+        # activated if MTGC_STORE_PREV_TMPDIR is set") saw that flag already
+        # set from ci.sh's real activation and skipped moving TMPDIR at all, so
+        # a subprocess here saw the CI runner's real, unmoved TMPDIR instead of
+        # one derived from this fixture's own tmp_path-based store (de-af5w).
         self.env.pop("MTGC_STORE_ROOT", None)
         self.env.pop("MTGC_STORE_GLOBAL_ARGS", None)
+        self.env.pop("TMPDIR", None)
+        self.env.pop("MTGC_STORE_PREV_TMPDIR", None)
 
     def run(self, script, *args, store=None, check=True):
         env = dict(self.env)

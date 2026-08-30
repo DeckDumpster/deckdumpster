@@ -304,7 +304,7 @@ leaked_image_ids() {
 # On a PASSING run this finds nothing: the build went into the probe store,
 # which is `rm -rf`'d wholesale. It only ever bites on a FAILING run — which is
 # exactly the case the gate exists to detect, and exactly the case that used to
-# leave ~1 GB behind on the disk prod runs from. Compounded by CI: ci.yml's
+# leave ~1 GB behind on the disk prod runs from. Compounded by CI: deploy/ci.sh's
 # `podman image prune -f` runs AFTER store selection, so it is shim-scoped to
 # the alternate store and never collects these. A PR that fails the gate
 # repeatedly added about a gigabyte per run.
