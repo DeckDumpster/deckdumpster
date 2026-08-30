@@ -442,7 +442,13 @@ def test_it_refuses_to_run_against_prod():
 
 def test_ci_runs_the_gate():
     """Anything CI does not invoke is a hand-only check, and this one exists
-    precisely because the convention it guards was never checked."""
-    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
+    precisely because the convention it guards was never checked.
 
-    assert "deploy/store-isolation-gate.sh" in workflow
+    CI is `ci.yml` -> `deploy/ci.sh` -> the gate (de-xz8), so both links are
+    asserted: a gate invoked from a script nothing calls is still hand-only.
+    """
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
+    ci = (REPO_ROOT / "deploy/ci.sh").read_text()
+
+    assert "deploy/ci.sh" in workflow
+    assert "deploy/store-isolation-gate.sh" in ci

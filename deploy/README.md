@@ -226,7 +226,7 @@ removes, so it cannot detect a leak and then leave it on the disk. That used to
 be exactly what happened: a failing run `exit 1`'d before its own
 leave-nothing-behind check, and the teardown it did run removed only
 `mtgc:<instance>` — a *tag*, off an image `mtgc:latest` still held. Measured at
-983 MB left on prod's disk per failing run, and CI's `podman image prune -f`
+983 MB left on prod's disk per failing run, and `deploy/ci.sh`'s `podman image prune -f`
 never collected it because that runs after store selection and is shim-scoped to
 the alternate store (de-y5g). A PR that failed the gate repeatedly added about a
 gigabyte a run.
@@ -942,6 +942,7 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 | `store-lib.sh` | Sourced — resolves which Podman store an instance's image and volume live in (`MTGC_STORE_ROOT`). See [Container storage](#container-storage-keeping-non-prod-off-the-prod-disk) |
 | `store-teardown.sh` | Remove an alternate container store outright. Refuses when none is configured; never `podman system reset` |
 | `store-isolation-gate.sh [name]` | CI gate — brings up a `--test` instance in a probe store and fails if this instance's objects, or any image its build labelled, turn up in Podman's default store, or if nothing was built. Removes what it catches, on both paths. See [The gate that keeps this true](#the-gate-that-keeps-this-true) |
+| `ci.sh` | Everything CI runs, in one script: store selection, the disk floor check, the isolation gate, `uv sync`, a `--test` bring-up and all three pytest tiers. `.github/workflows/ci.yml` calls this and nothing else, so a gate wired in here runs in CI *and* by hand. `INSTANCE` defaults to the runner's `ci-test` — override it for a hand run. See [CI](#ci) |
 | `cdn-check.sh [--url U] [--origin U] [--path P]` | Verify the deployed document is what the CDN is actually serving, by comparing edge and origin ETags. Also checks revalidation, gzip, that no document is held for hours, and that a content-addressed asset is immutable and identical on both sides — see [CDN deploy check](#cdn-deploy-check) |
 | `backup-check.sh [name]` | Verify the newest S3 backup is recent and plausibly sized, then ping the off-box monitor. Read-only; exits 1 on any doubt — see [Backup freshness check](#backup-freshness-check) |
 | `alert.sh "<title>" "<message>"` | Push to Pushover. Shared by `backup-check.sh` and `mtgc-alert-<name>@.service`. Exits 1 if the channel is unconfigured, so a dropped alert cannot pass as sent |
@@ -950,6 +951,24 @@ catch, with a `curl` PATH shim, so none of the above is only ever seen green.
 | `diskcheck.sh [--floor [path...]]` | Alert when a watched filesystem is over `MTGC_DISK_THRESHOLD`% used; `--floor` instead exits 1 when one has less than `MTGC_DISK_FLOOR_GB` free. Called by `setup.sh`, `deploy.sh` and CI before they write gigabytes — see [Low-disk check](#low-disk-check) |
 
 ## CI
+
+`.github/workflows/ci.yml` checks out the repo and runs `bash deploy/ci.sh`. That is its
+only step, so **anything not invoked from `deploy/ci.sh` never runs in CI** — a new gate
+goes in the script, not the workflow. Keeping the steps inline in YAML meant a red CI could
+not be reproduced locally, and left the rig's agent instructions — which live outside this
+repo, and so could not be corrected from inside it — pointing at a `deploy/ci.sh` that did
+not exist; de-3a0 read that instruction, found no such file and stopped (de-xz8).
+
+Run the whole job by hand with an instance name of your own:
+
+```bash
+INSTANCE=ci-<yourname> bash deploy/ci.sh
+```
+
+`INSTANCE` defaults to `ci-test`, which is the self-hosted runner's own instance — and the
+runner shares a machine with your worktree, so taking the default mid-job tears its
+container down. The UI tier drives Claude Vision and needs `ANTHROPIC_API_KEY`; CI passes
+it in as a repository secret, and without it that tier fails loudly rather than skipping.
 
 Push to main auto-deploys `prod`. Use workflow_dispatch to deploy other instances by name.
 

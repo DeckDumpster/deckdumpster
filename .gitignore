@@ -36,3 +36,6 @@ plans/
 !.claude/hooks/
 !.claude/skills/
 .claude/skills/jumpstart/host
+
+# uv cache (deploy/ci.sh default)
+.uv-cache/
