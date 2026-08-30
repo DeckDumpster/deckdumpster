@@ -66,24 +66,16 @@ else
     podman build -t mtgc:latest -f Containerfile \
         -v "${HOME}/.cache/uv:/root/.cache/uv:z" .
     podman tag mtgc:latest "mtgc:${INSTANCE}"
+    # Remember exactly what we built, so the verification below can prove the
+    # RUNNING container is this image and not an older one that happened to
+    # survive. store-lib.sh's own header warns about a deploy tagging into one
+    # store while systemd serves another; on 2026-08-30 a worse version of that
+    # untagged mtgc:prod out from under the live unit entirely.
+    BUILT_IMAGE_ID="$(podman image inspect --format '{{.Id}}' "mtgc:${INSTANCE}" 2>/dev/null || true)"
+    echo "==> Built image ${BUILT_IMAGE_ID:0:12}"
 
-    # Reinstall the timer units from this checkout. deploy.sh runs setup.sh
-    # only when the Quadlet is missing (above), so for an instance that already
-    # exists this is the ONLY path a unit added to the repo can travel — and
-    # without it, it travelled none. prod ran for months with
-    # mtgc-catalog-check, mtgc-catalog-refresh and mtgc-diskcheck absent from
-    # the host entirely, each of them a feature that had landed on main and
-    # deployed (de-46k).
-    #
-    # Unconditional because it is safe to be: it rewrites unit files, never
-    # enable state, so an armed timer stays armed and a disarmed one stays
-    # disarmed. Arming is still a per-instance decision made once, by hand.
-    echo "==> Installing timer units from this checkout..."
-    # shellcheck source=deploy/units-lib.sh
-    . "$SCRIPT_DIR/units-lib.sh"
-    # Ends in `systemctl --user daemon-reload`, which is also what picks up any
-    # Quadlet change — hence no second reload here.
-    mtgc_install_units "$INSTANCE" "$REPO_DIR"
+    echo "==> Reloading systemd (picks up Quadlet changes)..."
+    systemctl --user daemon-reload
 
     echo "==> Restarting $SERVICE_NAME..."
     systemctl --user restart "$SERVICE_NAME"
@@ -105,16 +97,87 @@ if [ -z "$PORT" ]; then
     exit 1
 fi
 echo "==> Listening on port $PORT"
+# ── Deployment safety check ──────────────────────────────────────────────────
+#
+# WHAT THIS ANSWERS, and why the old version did not.
+#
+# The old check curled `/` once, printed "passed" and exited. On 2026-08-30 it
+# passed at 02:11 and the container died at 02:12:33 — 90 seconds later — after
+# a store-gate run untagged mtgc:prod out from under the live unit. podman then
+# treated the tag as a REGISTRY reference, crash-looped 4195 times, and prod was
+# down for 15.5 hours. Nothing looked again, because the deploy had already said
+# it was fine.
+#
+# So the question is not "did it start". It is:
+#   1. Is the container serving the image we JUST BUILT, or an older survivor?
+#   2. Does it answer through the real entry point?
+#   3. Is it STILL doing both once it has settled?
+#
+# (3) is the one that matters most and is the cheapest to get wrong: a deploy
+# that verifies at t+2s and never looks again cannot distinguish "healthy" from
+# "about to die". Nothing here touches the CDN — Cloudflare Access makes edge
+# caching structurally impossible on this hostname, so a CDN assertion tests a
+# property that cannot be violated and only produces noise.
 MAX_ATTEMPTS=15
-echo "==> Health check: $SERVICE_NAME (port $PORT)..."
+
+serving() {
+    curl -skf --connect-timeout 3 "https://localhost:${PORT}/" >/dev/null 2>&1
+}
+
+running_image_id() {
+    podman inspect --format '{{.Image}}' "systemd-${SERVICE_NAME}" 2>/dev/null || true
+}
+
+echo "==> [1/3] Health check: $SERVICE_NAME (port $PORT)..."
+ok=0
 for i in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -skf --connect-timeout 3 "https://localhost:${PORT}/" > /dev/null 2>&1; then
-        echo "==> Health check passed (attempt $i/$MAX_ATTEMPTS)"
-        exit 0
-    fi
-    echo "    Attempt $i/$MAX_ATTEMPTS failed, waiting 2s..."
+    if serving; then echo "    answering (attempt $i/$MAX_ATTEMPTS)"; ok=1; break; fi
+    echo "    attempt $i/$MAX_ATTEMPTS failed, waiting 2s..."
     sleep 2
 done
+[ "$ok" = 1 ] || { echo "==> DEPLOY FAILED: never answered on port $PORT"; exit 1; }
 
-echo "==> Health check FAILED after $MAX_ATTEMPTS attempts"
-exit 1
+echo "==> [2/3] Identity: is the running container the image we just built?"
+if [ -n "${BUILT_IMAGE_ID:-}" ]; then
+    RUNNING_IMAGE_ID="$(running_image_id)"
+    if [ -z "$RUNNING_IMAGE_ID" ]; then
+        echo "==> DEPLOY FAILED: no running container named systemd-${SERVICE_NAME}"
+        exit 1
+    fi
+    if [ "$RUNNING_IMAGE_ID" != "$BUILT_IMAGE_ID" ]; then
+        echo "==> DEPLOY FAILED: serving ${RUNNING_IMAGE_ID:0:12}, built ${BUILT_IMAGE_ID:0:12}."
+        echo "    The restart came up on a DIFFERENT image than this deploy produced —"
+        echo "    the deploy would report success while users keep seeing old code."
+        exit 1
+    fi
+    echo "    serving ${RUNNING_IMAGE_ID:0:12}, matches the build"
+else
+    echo "    skipped (no build in this run — restart-only path)"
+fi
+
+# ── [3/3] Settle ────────────────────────────────────────────────────────────
+# The 2026-08-30 outage lived entirely in this window. 90s covers it with room;
+# override with MTGC_SETTLE_SECONDS=0 for a fast local loop, which is explicit
+# rather than silent.
+SETTLE="${MTGC_SETTLE_SECONDS:-90}"
+if [ "$SETTLE" -gt 0 ]; then
+    echo "==> [3/3] Settling ${SETTLE}s, then re-verifying (the 2026-08-30 window)..."
+    sleep "$SETTLE"
+    if ! serving; then
+        echo "==> DEPLOY FAILED: answered at first, then stopped within ${SETTLE}s."
+        echo "    This is the 2026-08-30 shape exactly. Check:"
+        echo "      systemctl --user status ${SERVICE_NAME}"
+        echo "      podman images | grep ${SERVICE_NAME#mtgc-}"
+        exit 1
+    fi
+    if [ -n "${BUILT_IMAGE_ID:-}" ] && [ "$(running_image_id)" != "$BUILT_IMAGE_ID" ]; then
+        echo "==> DEPLOY FAILED: the container was replaced during the settle window."
+        exit 1
+    fi
+    echo "    still serving the built image after ${SETTLE}s"
+else
+    echo "==> [3/3] Settle skipped (MTGC_SETTLE_SECONDS=0)"
+fi
+
+echo "==> Deploy verified: serving, correct image, stable."
+exit 0
