@@ -14,8 +14,19 @@ env:
   INSTANCE: ${{ github.event.inputs.instance || 'prod' }}
 
 jobs:
+  # Both jobs run on the `deploy`-labelled runner, NOT `rgantt`.
+  #
+  # deckdumpster had one runner carrying `self-hosted,X64,Linux,rgantt`, and ci.yml's
+  # `test` job targets the same labels. With 11 polecats running CI, deploys starved
+  # behind them: on 2026-08-30 four merges to main had deploys queued and never run,
+  # the oldest for about four hours, while the PRs showed merged and green. The queue
+  # was the only place it was visible.
+  #
+  # `mtgc-deploy` answers only to `deploy`, so a deploy can never queue behind polecat
+  # CI. It is the same physical box, so heavy CI can still make a deploy slower — but
+  # it can no longer block one.
   deploy:
-    runs-on: [self-hosted, rgantt]
+    runs-on: [self-hosted, deploy]
     steps:
       - name: Pull latest code
         run: git -C /opt/mtgc-${{ env.INSTANCE }} pull --ff-only origin ${{ github.ref_name }}
@@ -42,7 +53,7 @@ jobs:
   cdn-check:
     needs: deploy
     if: ${{ (github.event.inputs.instance || 'prod') == 'prod' }}
-    runs-on: [self-hosted, rgantt]
+    runs-on: [self-hosted, deploy]
     steps:
       - uses: actions/checkout@v4
 
