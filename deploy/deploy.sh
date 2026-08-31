@@ -41,6 +41,41 @@ mtgc_store_activate
 
 QUADLET_FILE="$HOME/.config/containers/systemd/${SERVICE_NAME}.container"
 
+# Nothing else may write MTGC build images to Podman's default store while this
+# build runs. Prod builds there — that is the disk it runs from — and since
+# 4c5d9b2 gave deploys their own runner on the same box, a PR's
+# store-isolation-gate.sh run overlaps this one. On 2026-08-30 21:38 the gate
+# read three of this build's in-flight layers as a leak and `podman rmi -f`'d
+# them mid-build; the deploy died with "layer not known" and that merge never
+# reached prod. See mtgc_default_store_lock in store-lib.sh for why the two
+# cannot be told apart after the fact.
+#
+# Only when this instance builds into the DEFAULT store. A non-prod instance has
+# a store of its own, contends with nobody, and should not queue behind CI.
+#
+# Failing here is deliberate, and it is the one place this script prefers a red
+# deploy to a completed one: the alternative is building on layers a gate is
+# about to delete, which is the exact failure above and produces a deploy that
+# reports success while prod serves the old image. The default 30 minutes is
+# roughly six gate runs, so reaching it means the lock is held by something
+# stuck rather than something working.
+HELD_STORE_LOCK=false
+DEPLOY_LOCK_TIMEOUT="${MTGC_DEPLOY_LOCK_TIMEOUT:-1800}"
+if [ -z "${MTGC_STORE_ROOT:-}" ]; then
+    echo "==> Waiting for the default-store build lock..."
+    if mtgc_default_store_lock "$DEPLOY_LOCK_TIMEOUT"; then
+        HELD_STORE_LOCK=true
+    else
+        echo "==> DEPLOY FAILED: no default-store build lock after ${DEPLOY_LOCK_TIMEOUT}s." >&2
+        echo "    Something else is writing MTGC images to ${HOME}/.local/share/containers." >&2
+        echo "    Lock: $MTGC_DEFAULT_STORE_LOCK_FILE" >&2
+        if command -v fuser >/dev/null 2>&1; then
+            echo "    Held by: $(fuser "$MTGC_DEFAULT_STORE_LOCK_FILE" 2>&1 | tr -d '\n')" >&2
+        fi
+        exit 1
+    fi
+fi
+
 # If Quadlet doesn't exist yet, delegate to setup.sh for initial install.
 # Passing only the instance name is safe: setup.sh reloads --http-port,
 # --tls-certs and the explicit HTTPS host port from MTGC_HTTP_PUBLISH_PORT /
@@ -96,6 +131,15 @@ else
     echo "==> Pruning dangling images..."
     podman image prune -f >/dev/null 2>&1 || true
 fi
+
+# Everything that writes to the store is done; the health check below only reads
+# over HTTP. Holding the lock through it would queue a gate run behind a curl
+# loop for no reason.
+if [ "$HELD_STORE_LOCK" = true ]; then
+    mtgc_default_store_unlock
+    HELD_STORE_LOCK=false
+fi
+
 # Wait briefly for the container to start, then discover the assigned port
 sleep 2
 PORT_LINE=$(podman port "systemd-${SERVICE_NAME}" 8081/tcp 2>/dev/null || true)

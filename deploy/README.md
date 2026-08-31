@@ -264,6 +264,32 @@ the default store by that label and ignores anything that was already there at
 baseline — `mtgc:prod`, the base image, other instances' images all legitimately
 live in it — so only what arrived during the run can fail.
 
+**The one writer the label cannot exclude is our own prod deploy.** It builds the
+same `Containerfile` from the same base, so its images carry the same label —
+and because podman layers are content-addressed, its layer IDs are not merely
+similar to the gate's but *equal*. Nothing measurable separates them.
+
+That was harmless while CI and the deploy shared one runner and one job ran at a
+time, which is what the gate assumed. `4c5d9b2` ended it on 2026-08-30 by giving
+deploys their own runner on the same box, and at 21:38 that day the gate read
+three of a live prod build's layers as a leak, failed a PR on them, and
+`podman rmi -f`'d them out from under the running build. The deploy died on the
+missing layer and the merge it was carrying never reached prod.
+
+So the gate no longer assumes exclusivity, it takes it: `mtgc_default_store_lock`
+(`store-lib.sh`) is held across the whole measurement, and `deploy.sh` takes the
+same lock around a build that writes to the default store. Only default-store
+writers contend — an instance with a store of its own queues behind nobody — and
+CI's jobs are already serialised by having one `rgantt` runner, so in practice
+this arbitrates the gate against a prod deploy and nothing else.
+
+If the gate cannot get the lock it does **not** go red: it still runs every
+assertion, but reports new MTGC images rather than blaming them on itself, and
+reaps nothing. A PR going red because a deploy overlapped it is how a gate's
+tolerance gets raised until it stops meaning anything. A deploy that cannot get
+the lock does the opposite and fails, because the alternative is building on
+layers something else is about to delete.
+
 Walking `podman image history` from the tag, which is what this did first, has a
 983 MB blind spot: the `Containerfile` is multi-stage, and the **builder stage**
 is a full image that is untagged and is *not* an ancestor of the runtime image,

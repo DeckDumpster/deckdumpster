@@ -22,6 +22,7 @@ which is how "was this call scoped to the right store" is asserted.
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -110,10 +111,11 @@ class Host:
         self.env.pop("TMPDIR", None)
         self.env.pop("MTGC_STORE_PREV_TMPDIR", None)
 
-    def run(self, script, *args, store=None, check=True):
+    def run(self, script, *args, store=None, check=True, env_extra=None):
         env = dict(self.env)
         if store is not None:
             env["MTGC_STORE_ROOT"] = str(store)
+        env.update(env_extra or {})
         result = subprocess.run(
             ["bash", str(script), *args],
             capture_output=True,
@@ -732,3 +734,71 @@ def test_store_lib_is_sourced_by_every_deploy_script_that_runs_podman():
         if not runs_podman:
             continue
         assert "store-lib.sh" in text, f"{script.name} runs podman without store-lib.sh"
+
+
+# --- The default-store build lock (2026-08-30) ------------------------------
+#
+# prod builds into Podman's DEFAULT store, and since 4c5d9b2 a prod deploy and a
+# PR's store-isolation-gate.sh run happen on two runners on one box at the same
+# time. On 2026-08-30 21:38 the gate read three of a running deploy's layers as
+# a leak and `podman rmi -f`'d them; the build died on the missing layer and the
+# merge never reached prod.
+#
+# The gate's half is pinned in tests/test_store_isolation_gate.py. This is the
+# deploy's half, and it is worth its own test for the reason this project keeps
+# relearning: an exclusion only one side takes is not an exclusion, and nothing
+# about a deploy that quietly skipped the lock would look wrong until the next
+# time a gate ran beside it.
+
+DEPLOY_SH = DEPLOY / "deploy.sh"
+
+
+def _hold_lock(home):
+    lock = home / ".local/share/mtgc/default-store.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    holder = subprocess.Popen(["flock", "-x", str(lock), "sleep", "120"])
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if subprocess.run(["flock", "-n", "-x", str(lock), "true"]).returncode != 0:
+            return holder
+        time.sleep(0.05)
+    holder.kill()
+    pytest.fail("could not get the stand-in holder to take the lock")
+
+
+def test_a_default_store_deploy_waits_for_the_build_lock(host):
+    """Held by a gate run, prod's deploy must not build anyway. It fails instead,
+    which is loud; building on layers something else is about to delete is the
+    quiet version and it produced a green deploy serving the old image."""
+    host.setup("lockprod", "8099")
+    holder = _hold_lock(host.home)
+    try:
+        result = host.run(
+            DEPLOY_SH, "lockprod", check=False,
+            env_extra={"MTGC_DEPLOY_LOCK_TIMEOUT": "1"},
+        )
+    finally:
+        holder.kill()
+        holder.wait()
+    out = result.stdout + result.stderr
+    assert "no default-store build lock" in out
+    # The load-bearing half. With stubs the run exits non-zero either way, so
+    # "it failed" proves nothing; "it never started the build" is the property.
+    assert "Building container image" not in out
+
+
+def test_a_deploy_with_its_own_store_does_not_wait(host):
+    """An instance with a store of its own writes nowhere near prod's disk, and
+    queueing it behind CI would re-create the starvation 4c5d9b2 fixed."""
+    store = host.tmp_path / "own-store"
+    host.setup("lockalt", "8098", store=store)
+    holder = _hold_lock(host.home)
+    try:
+        result = host.run(
+            DEPLOY_SH, "lockalt", store=store, check=False,
+            env_extra={"MTGC_DEPLOY_LOCK_TIMEOUT": "1"},
+        )
+    finally:
+        holder.kill()
+        holder.wait()
+    assert "no default-store build lock" not in result.stdout + result.stderr

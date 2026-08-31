@@ -69,8 +69,14 @@
 # the run, which is the gate's evidence that nobody else was writing. When
 # something else was, the neighbours are named in the output and the byte
 # comparison is reported instead of asserted, because a number that cannot be
-# attributed is not evidence. Assertions 1 and 2 are unconditional and immune to
-# any of this; they are the teeth.
+# attributed is not evidence.
+#
+# Assertion 1 is unconditional and immune to all of it — it names this instance's
+# own objects, and nothing else on the box makes an mtgc-store-gate anything.
+# Assertion 2 identifies by a label that deckdumpster's PROD DEPLOY also stamps,
+# so it is unconditional only while no prod deploy is building; the gate now
+# takes a lock to guarantee that rather than assume it, and says so in its output
+# when it could not. See "What makes an MTGC build mean this run's" below.
 #
 # THE TOLERANCE is not zero, and that is measured rather than conceded. Even
 # with --root and --runroot set, podman keeps a few things at user scope:
@@ -286,13 +292,28 @@ WORK="$(mktemp -d)"
 # legitimately holds mtgc:prod and older instances' images, and they are none of
 # our business.
 #
-# What makes "an MTGC build" mean "this run's" is that only one thing on this
-# box builds them: deckdumpster's CI and its prod deploy share a single
-# self-hosted runner, which runs one job at a time. The neighbouring projects
-# that DO write to this store continuously (see "The byte delta" above) do not
-# build MTGC images. If that ever stops being true, this over-reports rather
-# than under-reports — it would fail a gate run and remove an image the box
-# would rebuild, not miss a leak.
+# What makes "an MTGC build" mean "this run's" is that nothing else is building
+# one while we measure. That used to be a property of the box — CI and the prod
+# deploy shared a single self-hosted runner, which runs one job at a time — and
+# the version of this comment that said so also said what would happen if it
+# stopped holding: "it would fail a gate run and remove an image the box would
+# rebuild". It stopped holding on 2026-08-30 (4c5d9b2, a second runner for the
+# `deploy` label on the same box), and the consequence was worse than predicted:
+# the removal landed on a build that was still RUNNING, so the box did not
+# rebuild it, the deploy died on the missing layer, and that merge never reached
+# prod.
+#
+# The neighbouring projects that write to this store continuously (see "The byte
+# delta" above) still do not build MTGC images, so they remain invisible here.
+# deckdumpster's own prod deploy is the one writer that is indistinguishable
+# from us — same Containerfile, same base, and podman layers are
+# content-addressed, so its layers and ours are not merely similar but the same
+# IDs. No comparison can separate them after the fact.
+#
+# So exclusion replaces attribution: mtgc_default_store_lock (store-lib.sh) is
+# held across the whole measurement, and deploy/deploy.sh takes the same lock
+# around a default-store build. HELD_LOCK below records whether we actually got
+# it, because a gate that assumes it did is back to resting on a convention.
 leaked_image_ids() {
     [ -f "$WORK/image-ids-before" ] || return 0
     mtgc_build_image_ids | grep -vxF -f "$WORK/image-ids-before" || true
@@ -319,6 +340,17 @@ leaked_image_ids() {
 # instead of spinning here.
 reap_leaked_build() {
     local before after remaining=0 pass id
+    # Without the lock, an arrival cannot be shown to be ours, and `podman rmi
+    # -f` on someone else's in-flight build is how a gate run took prod's deploy
+    # down on 2026-08-30. Leaving ~1 GB on the disk is the lesser bug, and it is
+    # reported here rather than left silent.
+    if [ "${HELD_LOCK:-false}" != true ]; then
+        if [ -n "$(leaked_image_ids)" ]; then
+            echo "    NOT removing the MTGC images that arrived: this run never held" \
+                 "the default-store lock, so they cannot be shown to be ours."
+        fi
+        return 0
+    fi
     before="$(size_kb "$DEFAULT_STORE")"
 
     for pass in 1 2 3 4 5; do
@@ -348,6 +380,24 @@ cleanup() {
     [ "$STORE_ENV_WAS_THERE" = true ] || rm -f "$STORE_ENV"
 }
 trap 'cleanup; rm -rf "$WORK"' EXIT
+
+# Exclusive from here to the end of cleanup: the baseline, the bring-up, the
+# assertions and the reap all assume the default store's MTGC inventory changes
+# only because of us. 30 minutes is far past a build; reaching it means a holder
+# is stuck, not busy.
+#
+# A timeout does NOT fail the gate. Every real assertion still runs — this only
+# decides whether new MTGC arrivals can be blamed on us — and a PR going red
+# because a deploy happened to overlap it is precisely the noise that gets a
+# gate's tolerance raised until it means nothing.
+HELD_LOCK=false
+echo "==> Taking the default-store lock..."
+if mtgc_default_store_lock "${MTGC_STORE_GATE_LOCK_TIMEOUT:-1800}"; then
+    HELD_LOCK=true
+else
+    echo "    WARNING: could not take it in 30m. Assertion 2 (identity) will be"
+    echo "             reported rather than asserted, and nothing will be reaped."
+fi
 
 # A previous run that died mid-flight leaves an instance behind, and its image
 # would then be a pre-existing byte the measurement blames on this run.
@@ -406,8 +456,14 @@ fi
 #    finds them, and the baseline is what dates them to this run.
 while read -r id; do
     [ -n "$id" ] || continue
-    fail "image ${id:0:12} — an MTGC build image — arrived in Podman's default" \
-         "store during this run. A build leaked onto the disk prod runs from."
+    if [ "$HELD_LOCK" = true ]; then
+        fail "image ${id:0:12} — an MTGC build image — arrived in Podman's default" \
+             "store during this run. A build leaked onto the disk prod runs from."
+    else
+        echo "    NOTE: image ${id:0:12} — an MTGC build image — arrived in the" \
+             "default store, but this run never held the lock, so it cannot be" \
+             "told from a concurrent prod deploy's. Reported, not asserted."
+    fi
 done < <(leaked_image_ids)
 
 # THE BYTE DELTA, the second instrument — hard, but only while it is
