@@ -126,11 +126,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# An archive with no shared.sqlite landing on a split volume would leave a
+# restored collection beside whatever catalogue happened to be there, and the
+# instance would serve it: under split-DB every shared table is a temp view over
+# that file, so the mismatch is invisible from the collection side and the
+# restore reports OK. Refuse instead. This is what a tarball written before
+# de-hal looks like — backup.sh archived collection.sqlite and nothing else, so
+# every backup of a split instance taken until then is one of these.
+if [ ! -f "$STAGING_DIR/shared.sqlite" ] \
+        && podman exec "$TEMP_CONTAINER" sh -c '[ -f /data/shared.sqlite ]'; then
+    echo "ERROR: $VOLUME_NAME is split (it has shared.sqlite) but this backup has none."
+    echo "    Restoring it would leave the new collection beside the old catalogue."
+    echo "    Restore a backup taken after de-hal, or delete /data/shared.sqlite from"
+    echo "    the volume first to restore this instance as monolithic."
+    exit 1
+fi
+
 # Copy database
 echo "    Restoring collection.sqlite..."
 podman cp "$STAGING_DIR/collection.sqlite" "$TEMP_CONTAINER:/data/collection.sqlite"
 
-# Copy shared database if present (from db split)
+# The reference catalogue of a split instance (cards, printings, sets, and the
+# append-only price series). Absent from a monolithic instance's archive, where
+# collection.sqlite holds those tables itself.
 if [ -f "$STAGING_DIR/shared.sqlite" ]; then
     echo "    Restoring shared.sqlite..."
     podman cp "$STAGING_DIR/shared.sqlite" "$TEMP_CONTAINER:/data/shared.sqlite"
@@ -158,7 +176,7 @@ sleep 3
 
 echo "==> Verifying database integrity..."
 VERIFY_RESULT=$(podman exec "$CONTAINER" python3 -c "
-import sqlite3
+import os, sqlite3
 db = sqlite3.connect('/data/collection.sqlite')
 # Quick integrity check
 result = db.execute('PRAGMA integrity_check').fetchone()[0]
@@ -167,8 +185,21 @@ if result != 'ok':
     exit(1)
 # Count collections as a sanity check
 count = db.execute('SELECT COUNT(*) FROM collection').fetchone()[0]
-print(f'OK — {count} collection entries')
 db.close()
+# On a split instance the catalogue the app actually serves is in the second
+# file, and an empty one reads as a healthy instance with no cards in the world.
+shared = '/data/shared.sqlite'
+if os.path.exists(shared):
+    sh = sqlite3.connect(shared)
+    result = sh.execute('PRAGMA integrity_check').fetchone()[0]
+    if result != 'ok':
+        print(f'SHARED INTEGRITY CHECK FAILED: {result}')
+        exit(1)
+    printings = sh.execute('SELECT COUNT(*) FROM printings').fetchone()[0]
+    sh.close()
+    print(f'OK — {count} collection entries, {printings} shared printings')
+else:
+    print(f'OK — {count} collection entries')
 " 2>&1)
 
 echo "    $VERIFY_RESULT"

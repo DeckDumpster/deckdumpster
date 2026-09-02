@@ -566,6 +566,34 @@ against a budget that only ever set 200 MB aside for them. Reading them live is
 no more exposed than the copy was — `cp -a` fails just the same on a file
 deleted from under it.
 
+**A split instance has a second database, and it is snapshotted too** (de-hal).
+`mtg db split` moves the reference catalogue onto `shared.sqlite` beside the
+collection, and the instance ATTACHes it and shadows every table in
+`SHARED_TABLES` with a view over it — so what is missing from a restore without
+it is every card, printing and set, and the `prices` / `price_fetch_log` series,
+which is append-only and cannot be re-fetched for a day that has passed. It goes
+through `sqlite3.backup()` for the same reason the collection does: it is a live
+WAL database, written by `mtgc-prices` and `mtgc-catalog-refresh`. That puts both
+files in staging at once, so **the budget is 1.4x every database on the volume**,
+not 1.4x the collection — which on a split instance is dominated by the
+catalogue, and is the reason to move `MTGC_BACKUP_DIR` off the root volume before
+splitting prod. A monolithic instance archives no empty stand-in the way the
+image trees do: the file's presence is what tells `restore.sh` the instance is
+split.
+
+`restore.sh` refuses an archive with no `shared.sqlite` onto a volume that has
+one, rather than landing a new collection beside the old catalogue. Every backup
+taken of a split instance before de-hal is that shape — `backup.sh` archived the
+collection and nothing else — and under split-DB the mismatch is invisible from
+the collection side, so the run would otherwise print "Restore complete!". Delete
+`/data/shared.sqlite` from the volume to restore such an instance as monolithic
+on purpose.
+
+Only the copy on the instance's own data volume. The other split shape —
+`setup.sh` mounting `mtgc-shared-ref` read-only at `/shared` for several
+instances at once — is one volume serving N instances and is not this job's to
+take N copies of; that it is backed up by nothing is de-okee.
+
 **None of this moves the floor.** The snapshot is a full copy of the database, so
 peak usage cannot go below 1x the database however the tarball is written:
 SQLite's backup API needs a seekable destination, and neither this box's
