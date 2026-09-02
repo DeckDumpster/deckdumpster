@@ -51,18 +51,31 @@ def _dump(status="200", etag=ETAG, cache="public, no-cache", extra=()):
 ASSET_URL = "/static/shared.0123456789abcdef.css"
 ASSET_ETAG = '"0123456789abcdef0123456789abcdef"'
 ASSET_CACHE = "public, max-age=31536000, immutable"
-DOCUMENT_BODY = f'<!doctype html><link rel="stylesheet" href="{ASSET_URL}">'
 
-# The happy path: origin and edge agree, the edge revalidates, gzip negotiated,
-# and the asset the document names is immutable and identical on both sides.
+#: The element that says "this is the app". A 200 alone proves nothing: an error
+#: page, a maintenance shell and an Access interstitial are all 200s.
+MARKER = "<title>MTG Collection Tools</title>"
+DOCUMENT_BODY = f'<!doctype html>{MARKER}<link rel="stylesheet" href="{ASSET_URL}">'
+#: The asset bytes, which are what the two sides are compared on now.
+ASSET_BYTES = "body{color:#e0e0e0}\n"
+
+# The happy path. Request order, and it is load-bearing for every test below:
+#   1 origin headers        5 asset headers at the origin
+#   2 edge headers          6 asset headers at the edge
+#   3 document body         7 asset BODY at the origin
+#   4 gzip headers          8 asset BODY at the edge
+#
+# There is no conditional request any more: the 304 step needed an ETag to send
+# as If-None-Match, and the ETag assertions are gone (per Ryan, 2026-09-01).
 GREEN = {
     1: _dump(),
     2: _dump(),
-    3: _dump(status="304"),
+    3: DOCUMENT_BODY,
     4: _dump(extra=["content-encoding: gzip"]),
-    5: DOCUMENT_BODY,
+    5: _dump(etag=ASSET_ETAG, cache=ASSET_CACHE),
     6: _dump(etag=ASSET_ETAG, cache=ASSET_CACHE),
-    7: _dump(etag=ASSET_ETAG, cache=ASSET_CACHE),
+    7: ASSET_BYTES,
+    8: ASSET_BYTES,
 }
 
 
@@ -130,13 +143,23 @@ def test_it_cannot_pass_without_asking_both_sides(tmp_path):
 # ── Every failure it claims to catch ────────────────────────────────────────
 
 
-def test_stale_edge_is_caught(tmp_path):
-    """THE outage: the edge serving a different document than the origin."""
-    responses = {**GREEN, 2: _dump(etag='"deadbeefdeadbeef"')}
-    proc, _ = _run(tmp_path, responses)
+def test_a_200_that_is_not_the_app_is_caught(tmp_path):
+    """THE outage, restated without ETags: something answers at that URL and it
+    is not the deploy. An error page, a maintenance shell and an Access
+    interstitial all answer 200, so the status alone proves nothing."""
+    proc, _ = _run(tmp_path, {**GREEN, 3: "<!doctype html><title>502 Bad Gateway</title>"})
     assert proc.returncode == 1
-    assert "DIFFERENT document" in proc.stderr
-    assert "not visible to users" in proc.stderr
+    assert "does not contain" in proc.stderr
+    assert MARKER in proc.stderr, "the message must name what it looked for"
+
+
+def test_the_marker_is_overridable(tmp_path):
+    """The title will move eventually, and a check nobody can adjust gets
+    commented out rather than corrected."""
+    body = "<!doctype html><h1>Renamed</h1>" + f'<link rel="stylesheet" href="{ASSET_URL}">'
+    proc, _ = _run(tmp_path, {**GREEN, 3: body},
+                   env={"MTGC_PUBLIC_MARKER": "<h1>Renamed</h1>"})
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_long_max_age_on_a_document_is_caught(tmp_path):
@@ -160,28 +183,6 @@ def test_s_maxage_is_not_mistaken_for_max_age(tmp_path):
     responses = {**GREEN, 2: _dump(cache="public, no-cache, stale-while-revalidate=86400")}
     proc, _ = _run(tmp_path, responses)
     assert proc.returncode == 0, proc.stderr
-
-
-def test_missing_validator_at_the_edge_is_caught(tmp_path):
-    responses = {**GREEN, 2: _dump(etag=None)}
-    proc, _ = _run(tmp_path, responses)
-    assert proc.returncode == 1
-    assert "no ETag" in proc.stderr
-
-
-def test_missing_validator_at_the_origin_is_caught(tmp_path):
-    responses = {**GREEN, 1: _dump(etag=None)}
-    proc, _ = _run(tmp_path, responses)
-    assert proc.returncode == 1
-    assert "origin served no ETag" in proc.stderr
-
-
-def test_edge_that_does_not_revalidate_is_caught(tmp_path):
-    """A 200 to a conditional request means every page load is a full transfer."""
-    responses = {**GREEN, 3: _dump()}
-    proc, _ = _run(tmp_path, responses)
-    assert proc.returncode == 1
-    assert "not 304" in proc.stderr
 
 
 def test_edge_that_does_not_compress_is_caught(tmp_path):
@@ -210,20 +211,20 @@ def test_dead_edge_is_caught(tmp_path):
 def test_a_document_naming_no_hashed_asset_is_caught(tmp_path):
     """An origin that stopped rewriting references is a silent regression: the
     site still works, and every asset goes back to costing a round trip."""
-    proc, _ = _run(tmp_path, {**GREEN, 5: '<link rel="stylesheet" href="/static/shared.css">'})
+    proc, _ = _run(tmp_path, {**GREEN, 3: MARKER + '<link rel="stylesheet" href="/static/shared.css">'})
     assert proc.returncode == 1
     assert "names no content-addressed asset" in proc.stderr
 
 
 def test_an_asset_the_edge_cannot_serve_is_caught(tmp_path):
     """The document names it, so a 404 here is every user's page unstyled."""
-    proc, _ = _run(tmp_path, {**GREEN, 7: _dump(status="404", etag=None, cache=None)})
+    proc, _ = _run(tmp_path, {**GREEN, 6: _dump(status="404", etag=None, cache=None)})
     assert proc.returncode == 1
     assert "'404'" in proc.stderr
 
 
 def test_an_asset_missing_at_the_origin_is_caught(tmp_path):
-    proc, _ = _run(tmp_path, {**GREEN, 6: _dump(status="404", etag=None, cache=None)})
+    proc, _ = _run(tmp_path, {**GREEN, 5: _dump(status="404", etag=None, cache=None)})
     assert proc.returncode == 1
     assert "renders unstyled" in proc.stderr
 
@@ -231,33 +232,36 @@ def test_an_asset_missing_at_the_origin_is_caught(tmp_path):
 def test_an_asset_not_served_immutable_is_caught(tmp_path):
     """The digest in the URL is the whole reason the long window is correct;
     paying for the URL and taking none of the benefit is the regression."""
-    proc, _ = _run(tmp_path, {**GREEN, 7: _dump(etag=ASSET_ETAG, cache="public, no-cache")})
+    proc, _ = _run(tmp_path, {**GREEN, 6: _dump(etag=ASSET_ETAG, cache="public, no-cache")})
     assert proc.returncode == 1
     assert "content-addressed asset is served" in proc.stderr
 
 
 def test_an_edge_holding_different_bytes_for_a_hashed_url_is_caught(tmp_path):
     """A digest names one byte string. Under a year-long promise, an edge
-    holding another is a cache nobody can revalidate out of."""
-    proc, _ = _run(tmp_path, {**GREEN, 7: _dump(etag='"deadbeefdeadbeefdeadbeefdeadbeef"',
-                                                cache=ASSET_CACHE)})
+    holding another is a cache nobody can revalidate out of.
+
+    Compared by sha256 of the BODIES now, not by ETag: Cloudflare is free to
+    rewrite or drop a validator, and did. It is not free to change the bytes."""
+    proc, _ = _run(tmp_path, {**GREEN, 8: "body{color:#ff0000}\n"})
     assert proc.returncode == 1
     assert "DIFFERENT bytes" in proc.stderr
+    assert "sha256" in proc.stderr
 
 
 # ── The Access wall, diagnosed by name ──────────────────────────────────────
 
 
 def test_access_login_page_is_named_not_reported_as_a_mismatch(tmp_path):
-    """Undiagnosed, this reads as "the ETags differ" and sends the reader to
-    the deploy and the cache, neither of which is wrong."""
+    """Undiagnosed, this reads as "the document is not the app" and sends the
+    reader to the deploy and the cache, neither of which is wrong."""
     wall = ("HTTP/2 302\r\n"
             "location: https://ryangantt.cloudflareaccess.com/cdn-cgi/access/login/magic\r\n\r\n")
     proc, _ = _run(tmp_path, {**GREEN, 2: wall})
     assert proc.returncode == 1
     assert "Cloudflare Access login page" in proc.stderr
     assert "CF_ACCESS_CLIENT_ID" in proc.stderr
-    assert "DIFFERENT document" not in proc.stderr
+    assert "does not contain" not in proc.stderr
 
 
 def test_service_token_is_sent_on_every_public_request(tmp_path):
