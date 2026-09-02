@@ -652,6 +652,24 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   removes the constraint is putting `MTGC_BACKUP_DIR` on a filesystem that is not the root
   volume, which is a host decision. See `deploy/README.md` → "What the nightly backup needs
   free".
+- **The backup takes every database on the instance's data volume, not just the
+  collection** (de-hal). A split instance keeps the reference catalogue in
+  `shared.sqlite` beside `collection.sqlite`, and the instance ATTACHes it and shadows
+  every table in `SHARED_TABLES` with a view over it — so an archive without it restores
+  an instance with no card, printing or set data, and no `prices` / `price_fetch_log`,
+  which is append-only and cannot be re-fetched for a day that has passed. `restore.sh`
+  had known how to put it back since the split shipped, and its `if present` branch could
+  never be true. Both files go through **`sqlite3.backup()`**, never a copy: the catalogue
+  is written by `mtgc-prices` and `mtgc-catalog-refresh`, so it is no more quiescent than
+  the collection. Both are therefore in staging at once and **the disk budget is 1.4x
+  every database on the volume**. A monolithic instance archives **no** empty stand-in the
+  way the image trees do — the file's presence is what tells `restore.sh` the instance is
+  split — and `restore.sh` **refuses** an archive without it onto a volume that has one,
+  because landing a new collection beside the old catalogue is invisible from the
+  collection side and would print "Restore complete!". Only the copy on the instance's own
+  data volume: the `mtgc-shared-ref` shape is one read-only volume serving N instances,
+  and that nothing backs it up is de-okee. See `deploy/README.md` → "What the nightly
+  backup needs free".
 - CI: push to `main` → auto-deploys `prod` at `/opt/mtgc-prod/`. Workflow dispatch (`gh workflow run deploy.yml -f instance=<name>`) for everything else.
 - Deploy repo (private CI config + Quadlet host paths): see git history; the repo's CI workflow lives in `.github/workflows/`.
 

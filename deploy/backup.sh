@@ -12,6 +12,7 @@
 #
 # What gets backed up:
 #   - collection.sqlite  (online snapshot via sqlite3.backup())
+#   - shared.sqlite      (online snapshot; only when the volume has one)
 #   - source_images/     (original uploaded photos)
 #   - ingest_images/     (processed ingestion images)
 #
@@ -28,7 +29,8 @@
 #   monthly/ — last 12 (~1 year)
 #
 # Free space:
-#   Peak usage is the sqlite snapshot (~DB size) plus the tarball (~30% of DB).
+#   Peak usage is the sqlite snapshots (~size of every database on the volume)
+#   plus the tarball (~30% of them).
 #   A run that cannot fit first clears any stale staging left by a killed run,
 #   then deletes retained local dailies that S3 already holds — oldest first,
 #   only as many as it needs, and never at all without MTGC_BACKUP_S3_BUCKET.
@@ -99,11 +101,27 @@ if [ ! -f "$SRC_DB" ]; then
     exit 1
 fi
 
+# A split instance keeps the reference catalogue in a second database beside the
+# collection, and `restore.sh` has always known how to put it back — but nothing
+# ever put it in the tarball, so its "if present" could not be true (de-hal).
+# What is missing without it is not a cache: `prices` and `price_fetch_log` are
+# in SHARED_TABLES, and a price series is append-only, so a night's history that
+# is gone cannot be re-fetched. The instance ATTACHes this file and shadows every
+# shared table with a view over it, so a restore onto a fresh volume lands an
+# instance with no card, printing, set or price data at all.
+#
+# Only the copy on the instance's own data volume. `setup.sh` also has a mode
+# that mounts `mtgc-shared-ref` read-only at /shared for several instances at
+# once; that volume is nobody's instance data and is not this script's to take
+# N copies of (de-okee).
+SRC_SHARED="${VOLUME_MOUNT}/shared.sqlite"
+
 # --- Pre-flight disk-space check ---
 #
-# Peak usage is the host-side sqlite snapshot (~DB size) plus the tarball
-# (~30% of DB for this dataset). The image trees are archived straight from the
-# volume mount, so they cost nothing here beyond their share of the tarball.
+# Peak usage is the host-side sqlite snapshots -- the collection, plus the shared
+# catalogue on a split instance -- and the tarball (~30% of them for this
+# dataset). The image trees are archived straight from the volume mount, so they
+# cost nothing here beyond their share of the tarball.
 #
 # That bar is high: 1.4× an 11 GB database is ~15% of the single 98 GB root
 # volume prod shares with its own data volume, the retained tarballs and
@@ -117,10 +135,20 @@ fi
 # tarballs that S3 is confirmed to already hold.
 
 DB_BYTES=$(stat -c%s "$SRC_DB")
-# Peak usage during backup ≈ snapshot copy + compressed tarball.
-# Compressed tarball runs ~30% of DB size for this dataset (mostly IDs/numbers);
-# budget 40% of it, plus 200 MB for gzip overhead.
-NEEDED_BYTES=$((DB_BYTES + (DB_BYTES * 2 / 5) + 200 * 1024 * 1024))
+# The shared catalogue is snapshotted the same way and so is on the disk at the
+# same time; it is part of the peak, not a rounding error. On a split instance it
+# is the larger of the two files by a wide margin.
+SHARED_BYTES=0
+SHARED_NOTE=""
+if [ -f "$SRC_SHARED" ]; then
+    SHARED_BYTES=$(stat -c%s "$SRC_SHARED")
+    SHARED_NOTE=" plus a $((SHARED_BYTES / 1024 / 1024)) MB shared catalogue"
+fi
+SNAPSHOT_BYTES=$((DB_BYTES + SHARED_BYTES))
+# Peak usage during backup ≈ snapshot copies + compressed tarball.
+# Compressed tarball runs ~30% of database size for this dataset (mostly
+# IDs/numbers); budget 40% of it, plus 200 MB for gzip overhead.
+NEEDED_BYTES=$((SNAPSHOT_BYTES + (SNAPSHOT_BYTES * 2 / 5) + 200 * 1024 * 1024))
 
 # Every measurement of the disk goes through here and sets AVAIL_BYTES. A `df`
 # that cannot answer ends the run: "we could not ask" is not "there is room",
@@ -178,7 +206,7 @@ if [ "$AVAIL_BYTES" -lt "$NEEDED_BYTES" ]; then
     AVAIL_MB=$((AVAIL_BYTES / 1024 / 1024))
     NEEDED_MB=$((NEEDED_BYTES / 1024 / 1024))
     DB_MB=$((DB_BYTES / 1024 / 1024))
-    echo "ERROR: only ${AVAIL_MB} MB free at $BACKUP_DIR, need ~${NEEDED_MB} MB for a ${DB_MB} MB database."
+    echo "ERROR: only ${AVAIL_MB} MB free at $BACKUP_DIR, need ~${NEEDED_MB} MB for a ${DB_MB} MB database${SHARED_NOTE}."
     echo "       Stale staging and every local backup S3 already holds were reclaimed first."
     echo "       Free up space (e.g. 'podman image prune -af', point MTGC_BACKUP_DIR at"
     echo "       another filesystem) and retry."
@@ -190,10 +218,16 @@ fi
 mkdir -p "$STAGING_DIR"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 
-# --- Snapshot SQLite database (host-side) ---
+# --- Snapshot SQLite databases (host-side) ---
+#
+# Both files go through sqlite3.backup(). A plain copy of a WAL database leaves
+# its WAL behind, and under sustained writes the copy is missing frames -- the
+# same rule tests/ui/conftest.py restores under. The shared catalogue is written
+# by mtgc-prices and mtgc-catalog-refresh, so it is no more quiescent than the
+# collection is.
 
-echo "==> Creating SQLite snapshot from $SRC_DB ..."
-python3 - "$SRC_DB" "$STAGING_DIR/collection.sqlite" <<'PY'
+snapshot_db() {
+    python3 - "$1" "$2" <<'PY'
 import sys, sqlite3
 src_path, dst_path = sys.argv[1], sys.argv[2]
 src = sqlite3.connect(src_path, timeout=60)
@@ -202,6 +236,15 @@ src.backup(dst)
 dst.close()
 src.close()
 PY
+}
+
+echo "==> Creating SQLite snapshot from $SRC_DB ..."
+snapshot_db "$SRC_DB" "$STAGING_DIR/collection.sqlite"
+
+if [ -f "$SRC_SHARED" ]; then
+    echo "==> Creating SQLite snapshot from $SRC_SHARED ..."
+    snapshot_db "$SRC_SHARED" "$STAGING_DIR/shared.sqlite"
+fi
 
 # --- Create tarball ---
 #
@@ -217,6 +260,12 @@ PY
 # has never had one contributes an empty directory from staging.
 
 TAR_MEMBERS=(-C "$STAGING_DIR" collection.sqlite)
+# Present exactly when the instance is split. A monolithic instance archives no
+# empty stand-in the way the image trees do: restore.sh copies the images
+# unconditionally, but shared.sqlite is what tells it the instance is split.
+if [ -f "$SRC_SHARED" ]; then
+    TAR_MEMBERS+=(shared.sqlite)
+fi
 for IMG_DIR in source_images ingest_images; do
     if [ -d "${VOLUME_MOUNT}/${IMG_DIR}" ]; then
         TAR_MEMBERS+=(-C "$VOLUME_MOUNT" "$IMG_DIR")

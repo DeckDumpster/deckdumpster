@@ -69,12 +69,12 @@ exec "$REAL_TAR" "$@"
 """
 
 
-def _make_db(path, rows):
+def _make_db(path, rows, table="collection"):
     """A real SQLite database, big enough that its size is the dominant term."""
     conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE collection (id INTEGER PRIMARY KEY, blob TEXT)")
+    conn.execute(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY, blob TEXT)")
     conn.executemany(
-        "INSERT INTO collection (blob) VALUES (?)", [("x" * 512,) for _ in range(rows)]
+        f"INSERT INTO {table} (blob) VALUES (?)", [("x" * 512,) for _ in range(rows)]
     )
     conn.commit()
     conn.close()
@@ -134,10 +134,25 @@ class Rig:
         return (self.volume / "collection.sqlite").stat().st_size
 
     @property
+    def shared_bytes(self):
+        shared = self.volume / "shared.sqlite"
+        return shared.stat().st_size if shared.exists() else 0
+
+    @property
     def needed_bytes(self):
-        """The script's own budget: snapshot + 40% for the tarball + 200 MB."""
-        db = self.db_bytes
-        return db + (db * 2 // 5) + 200 * MB
+        """The script's own budget: snapshots + 40% for the tarball + 200 MB."""
+        snapshots = self.db_bytes + self.shared_bytes
+        return snapshots + (snapshots * 2 // 5) + 200 * MB
+
+    def split(self, rows=8000):
+        """Make this a split instance: a reference catalogue beside the collection.
+
+        `setup.sh --test` and every instance created before the shared-ref volume
+        existed look like this — `mtg db split --shared-out /data/shared.sqlite`
+        onto the instance's own data volume, which is where `restore.sh` puts one
+        back.
+        """
+        _make_db(self.volume / "shared.sqlite", rows, table="printings")
 
     def plant_daily(self, name, size, in_s3=True, s3_size=None):
         """A retained local tarball, optionally with an S3 object behind it."""
@@ -396,3 +411,94 @@ def test_a_disk_that_cannot_be_measured_is_a_failure(rig):
     assert result.returncode == 1
     assert "could not measure free space" in result.stdout
     assert rig.dailies == ["mtgc-prod-20260825-030001.tar.gz"]
+
+
+# --- The shared catalogue of a split instance (de-hal) ---
+#
+# `restore.sh` has always had an "if present" branch for shared.sqlite, and it
+# could never be true: nothing put the file in the tarball. A restore onto a
+# fresh volume therefore landed an instance whose every shared table is a temp
+# view over a file that is not there — no cards, no printings, no sets, and no
+# price series, which is append-only and cannot be re-fetched for a day gone by.
+
+
+def test_a_split_instances_catalogue_is_in_the_tarball(rig, tmp_path):
+    """The whole point: restore.sh's `if present` can now be true."""
+    rig.split()
+    result = rig.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    tarball = next(iter(rig.daily.glob("mtgc-prod-*.tar.gz")))
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    with tarfile.open(tarball) as tf:
+        assert "shared.sqlite" in tf.getnames()
+        with tf.extractfile("shared.sqlite") as src:
+            (restored / "shared.sqlite").write_bytes(src.read())
+
+    conn = sqlite3.connect(restored / "shared.sqlite")
+    assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert conn.execute("SELECT COUNT(*) FROM printings").fetchone()[0] == 8000
+    conn.close()
+
+
+def test_a_monolithic_instance_archives_no_catalogue(rig):
+    """shared.sqlite is what tells restore.sh the instance is split.
+
+    The image trees contribute an empty directory when the instance has never
+    had one, because restore.sh copies those unconditionally. An empty stand-in
+    here would instead announce a split that did not happen.
+    """
+    result = rig.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    tarball = next(iter(rig.daily.glob("mtgc-prod-*.tar.gz")))
+    with tarfile.open(tarball) as tf:
+        assert "shared.sqlite" not in tf.getnames()
+
+
+def test_the_catalogue_is_snapshotted_not_copied(rig):
+    """It is a live WAL database, written by mtgc-prices and mtgc-catalog-refresh.
+
+    A plain copy leaves the WAL behind and under sustained writes is missing
+    frames — the rule tests/ui/conftest.py restores under. Being in staging at
+    tar time is what says it went through sqlite3.backup(); the image trees, by
+    contrast, are read straight from the volume mount and are never staged.
+    """
+    rig.split()
+    result = rig.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    assert sorted(rig.staging_at_tar_time) == ["collection.sqlite", "shared.sqlite"]
+
+
+def test_the_catalogue_counts_against_the_disk_budget(rig):
+    """Both snapshots are on the disk at once, so both are part of the peak.
+
+    A night sized for the collection alone would pass the check and then run out
+    mid-snapshot — which is not how running out of disk presents (at 697 MB free
+    a cargo link once reported `ld terminated with signal 7 [Bus error]`).
+    """
+    rig.split()
+    collection_only = rig.db_bytes + (rig.db_bytes * 2 // 5) + 200 * MB
+    rig.free_space(collection_only + 5 * MB)
+
+    result = rig.run()
+
+    assert result.returncode == 1
+    shared_mb = rig.shared_bytes // MB
+    assert f"plus a {shared_mb} MB shared catalogue" in result.stdout
+
+
+def test_a_split_night_that_fits_still_completes(rig):
+    """The budget rose; it did not become unmeetable."""
+    rig.split()
+    rig.free_space(rig.needed_bytes + 10 * MB)
+
+    result = rig.run()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    tarball = next(iter(rig.daily.glob("mtgc-prod-*.tar.gz")))
+    with tarfile.open(tarball) as tf:
+        assert "shared.sqlite" in tf.getnames()
+        assert "collection.sqlite" in tf.getnames()
