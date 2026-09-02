@@ -437,8 +437,21 @@ if [ "$TEST" = "true" ]; then
 
     echo "==> Initializing data from fixture via backup/restore pipeline..."
 
-    # 1. Populate a temporary volume with fixture + sample data
-    podman volume create "$TEMP_VOL" >/dev/null 2>&1 || true
+    # 1. Populate a temporary volume with fixture + sample data.
+    #
+    # It must start EMPTY. A run that dies between here and the `podman volume
+    # rm` in step 3 leaves this volume behind holding a collection.sqlite that
+    # `db split --prune` has already emptied of reference data; splitting that
+    # again writes a shared.sqlite with zero rows in cards / printings / sets,
+    # and nothing errors. The instance comes up, serves 200s, and every list
+    # endpoint answers honestly about a catalogue that is not there — which
+    # reads as a bug in whatever you were testing (de-8eu).
+    #
+    # The removal is best-effort ("if one is there, drop it"); the guarantee is
+    # `volume create`, which is no longer allowed to fail quietly — a name that
+    # still exists at this point is a hard error rather than a silent reuse.
+    podman volume rm -f "$TEMP_VOL" >/dev/null 2>&1 || true
+    podman volume create "$TEMP_VOL" >/dev/null
     podman run --rm \
         -v "${TEMP_VOL}:/data:Z" \
         -e MTGC_HOME=/data \

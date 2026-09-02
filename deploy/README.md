@@ -126,6 +126,30 @@ bash deploy/teardown.sh feature-xyz         # keeps data volume
 bash deploy/teardown.sh feature-xyz --purge  # removes everything
 ```
 
+### The fixture volume starts empty
+
+`--test` populates a temporary volume — `mtgc-<instance>-data-setup` — with the
+committed fixture, runs `mtg db split --shared-out /data/shared.sqlite --prune`
+against it, tars the result, and removes the volume. **A run that dies anywhere
+between the create and that removal leaves the volume behind with the split
+already applied**, so its `collection.sqlite` has no cards, printings or sets
+left in it.
+
+Reusing that volume used to be silent in both directions: `podman volume create`
+was `|| true`, so an existing one was adopted rather than reported, and the
+re-run split copied zero rows into a fresh `shared.sqlite` and printed `Done!`.
+The instance came up, served 200s, and answered every list endpoint honestly
+about a catalogue that was not there — which reads as a bug in whatever change
+you were testing, and cost a cycle to that reading on 2026-08-27 (de-8eu).
+
+So the volume is removed before it is created. The removal is best-effort; the
+guarantee is `volume create`, which is no longer allowed to fail quietly — a
+name that survives the removal is a hard error rather than a silent reuse. The
+same outcome is refused a second time one level down: `mtg db split` exits 1 if
+the source has **0 rows in `printings`**, before `--shared-out` is opened, so a
+re-split can neither write an empty shared DB nor empty one that already holds
+the catalogue.
+
 ## The HTTPS host port is sticky
 
 `setup.sh <name> <port>` pins the host side of the HTTPS publish
