@@ -2,6 +2,7 @@
 
 import re
 import sqlite3
+from contextlib import nullcontext
 
 from mtg_collector.db.collector_number import number_sortable
 
@@ -880,6 +881,57 @@ def get_current_version(conn: sqlite3.Connection) -> int:
         return 0
 
 
+_MIGRATION_NAME_RE = re.compile(r"^_migrate_v(\d+)_to_v(\d+)$")
+
+#: Migrations that must run with the shared shadow left UP.
+#:
+#: Every other migration is DDL over `main`, and DDL must not see the shadow --
+#: see the comment in init_db.  Suspending is therefore the default, which makes
+#: this list the whole of the exception: a migration added tomorrow is guarded
+#: without anyone remembering to guard it.  A name earns a place here only by
+#: reading the shared catalogue to write a local table, which is a backfill and
+#: nothing else -- v50 fills `collection.card_name` from `printings`, and on a
+#: pruned split instance the names are only in `shared`.  Suspending there would
+#: not fail; it would read the emptied `main.printings` and write NULL over
+#: every row, which is the sort key silently gone.
+_SHADOW_TRANSPARENT_MIGRATIONS = frozenset({"_migrate_v49_to_v50"})
+
+
+def _migrations():
+    """Every migration in this module, in version order.
+
+    The list IS the module.  A dispatch chain written down beside the functions
+    is a second copy of the same fact, and its failure mode is a migration that
+    exists and is never called -- silent, and surfacing much later as a column
+    nothing added.  Discovered by name instead, and checked here: a gap, a
+    non-consecutive pair, or a SCHEMA_VERSION with no migration behind it is a
+    hard error on the next `mtg` command rather than a skip.
+    """
+    found = {}
+    for name, obj in globals().items():
+        match = _MIGRATION_NAME_RE.match(name)
+        if not match or not callable(obj):
+            continue
+        source, target = int(match.group(1)), int(match.group(2))
+        if target != source + 1:
+            raise SchemaIntegrityError(
+                f"{name} spans more than one version; a migration must step "
+                "exactly one version so the dispatch can order it."
+            )
+        found[target] = obj
+
+    expected = set(range(2, SCHEMA_VERSION + 1))
+    missing = sorted(expected - set(found))
+    unexpected = sorted(set(found) - expected)
+    if missing or unexpected:
+        raise SchemaIntegrityError(
+            f"Migration chain does not reach SCHEMA_VERSION {SCHEMA_VERSION}: "
+            f"no migration to version(s) {missing}; "
+            f"migration(s) past it to version(s) {unexpected}."
+        )
+    return [(version, found[version]) for version in sorted(found)]
+
+
 def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
     """
     Initialize or migrate the database schema.
@@ -932,107 +984,37 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
         # Seed default settings
         _seed_default_settings(conn)
     else:
-        # Run migrations
-        if current < 2:
-            _migrate_v1_to_v2(conn)
-        if current < 3:
-            _migrate_v2_to_v3(conn)
-        if current < 4:
-            _migrate_v3_to_v4(conn)
-        if current < 5:
-            _migrate_v4_to_v5(conn)
-        if current < 6:
-            _migrate_v5_to_v6(conn)
-        if current < 7:
-            _migrate_v6_to_v7(conn)
-        if current < 8:
-            _migrate_v7_to_v8(conn)
-        if current < 9:
-            _migrate_v8_to_v9(conn)
-        if current < 10:
-            _migrate_v9_to_v10(conn)
-        if current < 11:
-            _migrate_v10_to_v11(conn)
-        if current < 12:
-            _migrate_v11_to_v12(conn)
-        if current < 13:
-            _migrate_v12_to_v13(conn)
-        if current < 14:
-            _migrate_v13_to_v14(conn)
-        if current < 15:
-            _migrate_v14_to_v15(conn)
-        if current < 16:
-            _migrate_v15_to_v16(conn)
-        if current < 17:
-            _migrate_v16_to_v17(conn)
-        if current < 18:
-            _migrate_v17_to_v18(conn)
-        if current < 19:
-            _migrate_v18_to_v19(conn)
-        if current < 20:
-            _migrate_v19_to_v20(conn)
-        if current < 21:
-            _migrate_v20_to_v21(conn)
-        if current < 22:
-            _migrate_v21_to_v22(conn)
-        if current < 23:
-            _migrate_v22_to_v23(conn)
-        if current < 24:
-            _migrate_v23_to_v24(conn)
-        if current < 25:
-            _migrate_v24_to_v25(conn)
-        if current < 26:
-            _migrate_v25_to_v26(conn)
-        if current < 27:
-            _migrate_v26_to_v27(conn)
-        if current < 28:
-            _migrate_v27_to_v28(conn)
-        if current < 29:
-            _migrate_v28_to_v29(conn)
-        if current < 30:
-            _migrate_v29_to_v30(conn)
-        if current < 31:
-            _migrate_v30_to_v31(conn)
-        if current < 32:
-            _migrate_v31_to_v32(conn)
-        if current < 33:
-            _migrate_v32_to_v33(conn)
-        if current < 34:
-            _migrate_v33_to_v34(conn)
-        if current < 35:
-            _migrate_v34_to_v35(conn)
-        if current < 36:
-            _migrate_v35_to_v36(conn)
-        if current < 37:
-            _migrate_v36_to_v37(conn)
-        if current < 38:
-            _migrate_v37_to_v38(conn)
-        if current < 39:
-            _migrate_v38_to_v39(conn)
-        if current < 40:
-            _migrate_v39_to_v40(conn)
-        if current < 41:
-            _migrate_v40_to_v41(conn)
-        if current < 42:
-            _migrate_v41_to_v42(conn)
-        if current < 43:
-            _migrate_v42_to_v43(conn)
-        if current < 44:
-            _migrate_v43_to_v44(conn)
-        if current < 45:
-            _migrate_v44_to_v45(conn)
-        if current < 46:
-            _migrate_v45_to_v46(conn)
-        if current < 47:
-            _migrate_v46_to_v47(conn)
-        if current < 48:
-            _migrate_v47_to_v48(conn)
-        if current < 49:
-            _migrate_v48_to_v49(conn)
-        if current < 50:
-            _migrate_v49_to_v50(conn)
-        if current < 51:
-            _migrate_v50_to_v51(conn)
+        # Run migrations.
+        #
+        # Under split-DB the connection carries temp views shadowing the shared
+        # reference tables, and SQLite resolves an unqualified name temp first.
+        # A migration's DDL therefore finds the *view* rather than the table it
+        # names: "views may not be indexed" for a CREATE INDEX, "Cannot add a
+        # column to a view" for an ALTER TABLE, and -- worse, because it is
+        # silent -- a `DROP VIEW IF EXISTS latest_sealed_prices` that takes the
+        # shadow down instead of the main-schema view it was written for.
+        #
+        # The shadow is a read-routing device and has no business being visible
+        # to DDL, which is the same rule the fresh-install branch above applies
+        # to SCHEMA_SQL.  It comes down for every migration, so the guard cannot
+        # be forgotten on the next one; the migrations that genuinely read
+        # through it name themselves in _SHADOW_TRANSPARENT_MIGRATIONS.
+        #
+        # Only reached when the recorded version is behind, so this is the
+        # in-place upgrade of an existing split instance -- deploy.sh rebuilds
+        # the image and the data volume persists.  A freshly split one is
+        # already current and never gets here.
+        from mtg_collector.db.connection import suspend_shared_shadow
+
+        for version, migrate in _migrations():
+            if current >= version:
+                continue
+            if migrate.__name__ in _SHADOW_TRANSPARENT_MIGRATIONS:
+                shadow = nullcontext()
+            else:
+                shadow = suspend_shared_shadow(conn)
+            with shadow:
+                migrate(conn)
 
     # Record schema version
     conn.execute(
@@ -3124,24 +3106,17 @@ def _migrate_v50_to_v51(conn: sqlite3.Connection):
     whichever the seek reached first, which is already what the old query
     lacked.  The re-import then makes it the front face.
     """
-    from mtg_collector.db.connection import suspend_shared_shadow
-
-    # Both statements name mtgjson_printings, which is a SHARED_TABLE: with the
-    # shadow up the name resolves to a temp view, and SQLite answers "cannot add
-    # a column to a view" / "views may not be indexed" rather than touching the
-    # table.  Same reason init_db suspends it around SCHEMA_SQL.
-    with suspend_shared_shadow(conn):
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(mtgjson_printings)")}
-        if "side" not in columns:
-            conn.execute("ALTER TABLE mtgjson_printings ADD COLUMN side TEXT")
-        # idx_mtgjson_printing widens to (printing_id, side, uuid) so the
-        # resolution's ORDER BY is read off the index.  A widening is a
-        # replacement, which CREATE INDEX IF NOT EXISTS would skip.
-        conn.execute("DROP INDEX IF EXISTS idx_mtgjson_printing")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_mtgjson_printing "
-            "ON mtgjson_printings(printing_id, side, uuid)"
-        )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(mtgjson_printings)")}
+    if "side" not in columns:
+        conn.execute("ALTER TABLE mtgjson_printings ADD COLUMN side TEXT")
+    # idx_mtgjson_printing widens to (printing_id, side, uuid) so the
+    # resolution's ORDER BY is read off the index.  A widening is a
+    # replacement, which CREATE INDEX IF NOT EXISTS would skip.
+    conn.execute("DROP INDEX IF EXISTS idx_mtgjson_printing")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mtgjson_printing "
+        "ON mtgjson_printings(printing_id, side, uuid)"
+    )
 
 
 def _migrate_v49_to_v50(conn: sqlite3.Connection):
