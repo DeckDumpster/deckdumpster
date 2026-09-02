@@ -55,6 +55,14 @@ exit 0
 """
 
 NOOP_STUB = "#!/usr/bin/env bash\nexit 0\n"
+# Records what a script asked systemd to do when $SYSTEMCTL_LOG names a file,
+# and is the NOOP_STUB otherwise — so every existing test is unaffected and a
+# test that cares about the sequence can ask for it.
+SYSTEMCTL_STUB = (
+    "#!/usr/bin/env bash\n"
+    '[ -n "${SYSTEMCTL_LOG:-}" ] && printf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\n'
+    "exit 0\n"
+)
 LINGER_STUB = "#!/usr/bin/env bash\necho 'Linger=yes'\nexit 0\n"
 
 
@@ -67,7 +75,7 @@ class Host:
         bin_dir.mkdir(exist_ok=True)
         for name, body in (
             ("podman", podman_stub),
-            ("systemctl", NOOP_STUB),
+            ("systemctl", SYSTEMCTL_STUB),
             ("loginctl", LINGER_STUB),
         ):
             stub = bin_dir / name
@@ -802,3 +810,26 @@ def test_a_deploy_with_its_own_store_does_not_wait(host):
         holder.kill()
         holder.wait()
     assert "no default-store build lock" not in result.stdout + result.stderr
+
+
+def test_a_redeploy_clears_a_start_limited_units_failed_state(host):
+    """The cost of the start limit the Quadlet now carries (de-z9xj): a unit that
+    hit it is `failed`, and systemd will not restart it out of that state on its
+    own — that is the point. A redeploy is the fix for whatever caused the loop,
+    so it is the one path that must not be blocked by it.
+
+    Asserted as an ORDER, because a reset after the restart is a reset that
+    changed nothing."""
+    host.setup("relimit", "8098")
+    log = host.tmp_path / "systemctl.log"
+
+    # Non-zero at the health check: podman is stubbed, so nothing is listening.
+    host.run(DEPLOY_SH, "relimit", check=False, env_extra={"SYSTEMCTL_LOG": str(log)})
+
+    calls = log.read_text().splitlines()
+    reset = [i for i, c in enumerate(calls) if "reset-failed" in c and "mtgc-relimit" in c]
+    restart = [i for i, c in enumerate(calls) if "restart mtgc-relimit" in c]
+
+    assert reset, calls
+    assert restart, calls
+    assert reset[0] < restart[0], calls

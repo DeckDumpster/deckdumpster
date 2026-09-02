@@ -2,6 +2,32 @@
 Description=MTG Card Collection Server ({{INSTANCE}})
 After=network-online.target
 Wants=network-online.target
+# A crash loop must end in a unit that says `failed`, not one that says
+# `activating` forever (de-z9xj). On 2026-08-30 a store-gate run removed the
+# image this unit names; systemd then asked podman for a name that resolved to
+# nothing and got a connection-refused against a registry called `localhost`,
+# 4195 times, ten seconds apart, for 15.5 hours. Nothing in that is louder than
+# the attempt before it.
+#
+# systemd's own default start limit — 5 starts in 10s — cannot fire here, and
+# not by accident: RestartSec=10 spaces the attempts further apart than the
+# window they are counted in, so the counter never fills. The interval has to be
+# wider than RestartSec x Burst or this directive is decoration. At 10 attempts
+# ten seconds apart the burst is spent in under two minutes, well inside 300s,
+# and the unit hard-fails.
+#
+# The boundary that leaves is deliberate: an instance that dies instantly, ten
+# times running, is a crash loop and stops. One that serves for half a minute
+# between deaths spaces its attempts past the window, keeps restarting, and is
+# left to the origin serving check — which asks whether the site answers rather
+# than whether the unit is up, and is the right instrument for a flap.
+#
+# StartLimitAction is left at its default (`none`): the unit fails and stays
+# failed. There is deliberately no OnFailure= alert beside it. The serving check
+# already alarms on this outcome, and a second path to the same page is a second
+# path to keep in sync.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Container]
 Image=localhost/mtgc:{{INSTANCE}}

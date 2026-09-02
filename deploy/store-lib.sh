@@ -636,3 +636,133 @@ mtgc_default_store_unlock() {
     # Bare, for the reason above: a redirection on `exec` is the shell's.
     exec 9>&-
 }
+
+# ── Removing an MTGC build image from Podman's DEFAULT store ────────────────
+#
+# The lock above bounds WHO may write to the default store while someone is
+# measuring it. This bounds WHAT the measurement is then allowed to delete, and
+# the two are deliberately independent: a lock only holds while every writer
+# takes it, and `podman build` typed into a shell takes nothing.
+#
+# WHY THERE IS A SECOND BOUND (de-z9xj). On 2026-08-30 at 02:12:33 a store-gate
+# run called `podman rmi -f` on an image it had attributed to itself. The image
+# was prod's — tagged mtgc:prod ninety seconds earlier by a deploy, with
+# systemd-mtgc-prod RUNNING on it. `-f` is not "try harder": podman documents it
+# as *remove all containers that are using the image before removing the image*,
+# so the gate's cleanup stopped prod. The event log records the container dying
+# and the tag going in the same second.
+#
+# What made that fatal rather than a restart is what happened next. Once
+# localhost/mtgc:prod named nothing, systemd's Restart=on-failure asked podman
+# for it, and podman read the missing local name as a REGISTRY reference:
+#
+#     Error: initializing source docker://localhost/mtgc:prod: pinging container
+#     registry localhost: Get "https://localhost/v2/": dial tcp 127.0.0.1:443:
+#     connection refused
+#
+# 4195 attempts, ten seconds apart, for 15.5 hours. No data was lost — the
+# failure was image-only — but the site was down for all of it.
+#
+# So an image is removable only when nothing is standing on it, checked against
+# the image rather than against whose turn it is:
+#
+#   * no container is on it, running or stopped. This is the one that matters:
+#     it is the exact hazard `-f` exists to steamroll, and `podman rmi` without
+#     `-f` already refuses it — the force flag WAS the bug.
+#   * it carries no mtgc: name belonging to another instance. mtgc:prod above
+#     all, and for a reason attribution cannot reach: podman layers are
+#     content-addressed, so a gate build and a prod build of the same
+#     Containerfile are not similar images but the SAME image, wearing both
+#     names at once.
+#
+# Anything refused is reported and left alone. ~1 GB on the disk is the lesser
+# bug, and it is the trade the gate already makes when it cannot take the lock.
+
+# mtgc_default_store_image_names <image-id> — every repository:tag on it,
+# untagged images excluded. Bare `podman`: the default store is the subject.
+mtgc_default_store_image_names() {
+    podman images --all --no-trunc --format '{{.ID}} {{.Repository}}:{{.Tag}}' 2>/dev/null |
+        sed -E 's/^sha256://' |
+        awk -v id="$1" '$1 == id && $2 != "<none>:<none>" { print $2 }'
+}
+
+# mtgc_default_store_image_containers <image-id> — names of containers built on
+# it, in any state. `--all`, because a stopped container is still something a
+# removal would take with it, and systemd would restart it into nothing.
+#
+# Compared on the first 12 characters: `podman ps` and `podman images` do not
+# agree on how much of an ID to print, and an equality test between a truncated
+# ID and a full one is a check that silently never fires.
+mtgc_default_store_image_containers() {
+    podman ps --all --format '{{.ImageID}} {{.Names}}' 2>/dev/null |
+        sed -E 's/^sha256://' |
+        awk -v id="$1" 'NF > 1 && substr($1, 1, 12) == substr(id, 1, 12) { print $2 }'
+}
+
+# mtgc_remove_default_store_build_image <image-id> <instance>
+#
+# Remove it from Podman's default store, or say why it was left. Three outcomes,
+# because two of them are not the same thing to a caller sweeping a parent chain:
+#
+#   0  gone.
+#   1  REFUSED — something is standing on it. Said so on stdout; do not ask again.
+#   2  still there, for a reason that may not survive the next pass: `podman rmi`
+#      declines an image another image is built on, and the listing order is not
+#      topological. Silent, and worth retrying once the children are gone.
+#
+# Never non-zero as an error the caller should abort on. Leaving bytes behind is
+# not worth failing a run over, which is the same trade the gate already makes
+# when it cannot take the default-store lock.
+mtgc_remove_default_store_build_image() {
+    local id="$1" instance="$2" users names foreign name
+
+    users="$(mtgc_default_store_image_containers "$id" | tr '\n' ' ')"
+    users="${users% }"
+    if [ -n "$users" ]; then
+        echo "    REFUSING to remove image ${id:0:12}: container(s) $users are on it."
+        echo "        Removing it would take them with it, and systemd would then"
+        echo "        restart into a name that resolves to nothing (de-z9xj)."
+        return 1
+    fi
+
+    names="$(mtgc_default_store_image_names "$id")"
+    foreign=""
+    while read -r name; do
+        [ -n "$name" ] || continue
+        case "$name" in
+            */mtgc:"$instance"|mtgc:"$instance"|*/mtgc:latest|mtgc:latest) continue ;;
+        esac
+        foreign="${foreign:+$foreign }$name"
+    done <<EOF
+$names
+EOF
+    if [ -n "$foreign" ]; then
+        echo "    REFUSING to remove image ${id:0:12}: it is also named $foreign."
+        echo "        That name is another instance's — prod's, most of the time —"
+        echo "        and this run does not get to decide it is a duplicate."
+        return 1
+    fi
+
+    # Untag first, then remove. `podman rmi` refuses an image that wears more
+    # than one name, and the flag that overrides that is the same `-f` that
+    # removes containers; taking the names off one at a time keeps the removal
+    # unforced. mtgc:latest is ours to take here only because the two checks
+    # above have already established that nothing is running on this image and
+    # that no instance's name is on it — the next deploy rewrites the tag.
+    while read -r name; do
+        [ -n "$name" ] || continue
+        podman untag "$id" "$name" >/dev/null 2>&1 || true
+    done <<EOF
+$names
+EOF
+
+    # NO `-f`, and that is the whole fix. A parent image another image is built
+    # on still refuses; the caller's next pass takes it once the child is gone,
+    # and an image that survives every pass is reported by the assertions rather
+    # than forced.
+    podman rmi "$id" >/dev/null 2>&1 || true
+    if podman image exists "$id" >/dev/null 2>&1; then
+        return 2
+    fi
+    return 0
+}
