@@ -234,6 +234,31 @@ one combined scan stays cheaper for them: 792 ms against 1,242 ms split, on
 sent on every window, because `deck-builder.js` pages its card picker until
 `offset >= total`.
 
+**Both bodies are built without the joins their SELECT list does not read.** The
+count selects the literal `1` and the totals select a qty and a price, so a join
+neither they nor the WHERE nor the conditional joins name is walked 110,018 times
+for nothing. Measured in-process on 110,018 printings / 15,045 owned copies /
+440,072 price rows: `is:unowned`'s first paint 1,602 ms → 183 ms, the owned
+page's 472 ms → 319 ms (de-5l08). Most of that is one plan change — reading
+`p.oracle_id` for the `cards` join is what stops the count's scan of
+`idx_printings_card_name` being a *covering* one.
+
+Three arguments, one per join, and each is the whole reason that join may go —
+do not extend the rule to a join without one. `orders` / `decks` / `binders` join
+on an INTEGER PRIMARY KEY and are LEFT, so they match exactly one row and cannot
+change a count whatever the data holds. `cards` / `sets` match at most one row
+the same way but are INNER, so they rest on there being **no printing whose
+oracle_id or set_code has no parent row** — which holds because
+`PrintingRepository.upsert` is the only `INSERT INTO printings` in this codebase,
+both columns are `NOT NULL REFERENCES`, and every path that reaches it opens the
+catalogue through `get_connection(get_shared_write_path(...))`, the branch that
+sets `PRAGMA foreign_keys = ON` in split-DB and monolithic mode alike. SQLite
+refuses the orphan at INSERT; the 110,018-printing production catalogue holds
+none in either direction, and `tests/test_collection_aggregate_joins.py` asserts
+the refusal rather than the absence. `deck_cards` is the one join that can fan a
+row out, so it is dropped only on a template that GROUPs — `expand=copies` pages
+those duplicates and keeps it.
+
 ### Set sizes
 
 `sets.base_set_size` and `sets.total_set_size` are stored, never derived, and populated at
