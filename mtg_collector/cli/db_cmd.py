@@ -139,6 +139,24 @@ def run_split(args):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = OFF")
 
+    # A source with no printings has nothing to split, and the overwhelmingly
+    # likely reason is that it has already been through `db split --prune` — the
+    # reference rows are in somebody else's shared.sqlite. Copying zero rows over
+    # --shared-out is never what a caller wanted, and it is silent: the instance
+    # built from it serves 200s over a catalogue with no cards in it (de-8eu).
+    # Refuse before the shared DB is created, so a re-split cannot empty one that
+    # already holds the catalogue.
+    printings = conn.execute("SELECT COUNT(*) FROM main.printings").fetchone()[0]
+    if not printings:
+        conn.close()
+        raise SystemExit(
+            f"ERROR: {source_path} has 0 rows in printings — nothing to split.\n"
+            "       A database that has already been split with --prune keeps no "
+            "reference data,\n"
+            "       so splitting it again would write an empty shared DB. Start "
+            "from an unpruned source."
+        )
+
     # Create the shared DB with full schema
     shared_conn = sqlite3.connect(shared_path)
     shared_conn.row_factory = sqlite3.Row
