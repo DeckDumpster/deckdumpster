@@ -12,27 +12,47 @@
 #
 #     A deploy check that does not traverse the CDN is not a deploy check.
 #
-# So the load-bearing assertion here is ETAG EQUALITY BETWEEN THE EDGE AND THE
-# ORIGIN. Asking the edge whether its own headers look sane would have passed
-# that evening too: the headers Cloudflare was serving were internally
-# consistent, they just described a day-old page. Only comparing the two sides
-# distinguishes "the edge is serving what we deployed" from "the edge is serving
-# something, plausibly".
+# Asking the edge whether its own headers look sane would have passed that
+# evening too: the headers Cloudflare was serving were internally consistent,
+# they just described a day-old page. Only comparing the two SIDES distinguishes
+# "the edge is serving what we deployed" from "the edge is serving something,
+# plausibly".
+#
+# THAT COMPARISON NO LONGER USES ETAGS (per Ryan, 2026-09-01: "i think checking
+# for an E-tag doesn't make sense. we already eliminated caching as a problem.
+# we should just be looking for an HTTP 200 or a known element in the page
+# itself."). The ETag assertions had started failing on a site that was serving
+# correctly, which is the worst thing a deploy gate can do — three days of red
+# main teaches people to ignore it, and then it cannot report the real outage.
+#
+# What carries the weight instead, and why it is not weaker:
+#   * the document must answer 200 AND contain a known element, so an error
+#     page, a login wall or an empty shell cannot pass as "the app";
+#   * the content-addressed /static asset the document names must answer 200 at
+#     the edge and have BYTE-IDENTICAL CONTENT to the origin, compared by
+#     sha256 of the bodies. A digest-bearing URL plus identical bytes says the
+#     edge holds this deploy, without depending on a header Cloudflare is free
+#     to rewrite.
 #
 # What it verifies, in order:
-#   1. The origin answers and carries an ETag.
-#   2. The public URL answers through Cloudflare and carries an ETag.
-#   3. The two ETags are the same document  <-- the one that would have caught it
+#   1. The origin answers 200.
+#   2. The public URL answers 200 through Cloudflare.
+#   3. The public document CONTAINS a known element, so an error page, a
+#      maintenance shell or an access interstitial cannot pass as the app.
 #   4. The public Cache-Control has no multi-hour max-age.
-#   5. A conditional re-request through the edge returns 304.
 #   6. The edge negotiates gzip.
-#   7. An asset the document names is content-addressed, and the edge serves it
-#      immutable and identical to the origin (de-l23).
+#   7. An asset the document names is content-addressed, the edge serves it
+#      immutable, and its BYTES are identical to the origin (de-l23)
+#      <-- the one that would have caught the 2026-08-25 outage
+#
+# Step 5 was a conditional re-request asserting 304. It required an ETag to send
+# as If-None-Match, so it went with them. Numbering is left alone: renumbering
+# would silently break every reference to "step 7" in the beads and the logs.
 #
 # NO CHECK MAY PASS BY SKIPPING. There is no flag, no unset variable and no
 # environment in which this exits 0 without having asked both sides and compared
 # them. A Cloudflare Access interstitial is diagnosed BY NAME rather than being
-# allowed to surface as a confusing ETag mismatch, because a wrong diagnosis
+# allowed to surface as a confusing byte mismatch, because a wrong diagnosis
 # that is trusted costs more than no diagnosis at all.
 #
 # Usage: cdn-check.sh [--url URL] [--origin URL] [--path PATH]
@@ -91,7 +111,7 @@ header_value() { printf '%s\n' "$1" | grep -i "^$2:" | tail -n1 | sed "s/^$2: */
 status_of()    { printf '%s\n' "$1" | grep -E '^http/' | tail -n1 | awk '{print $2}'; }
 
 # Cloudflare Access answers an unauthenticated request with a redirect to the
-# team login domain. Left undiagnosed that becomes "the ETags differ", which
+# team login domain. Left undiagnosed that becomes "the bytes differ", which
 # sends the reader to the deploy and the cache — neither of which is wrong.
 assert_not_access_wall() {
     local dump="$1"
@@ -127,21 +147,15 @@ assert_not_access_wall() {
 
 # ── 1. The origin ───────────────────────────────────────────────────────────
 #
-# `Accept-Encoding: identity` on BOTH sides. The two must be compared as the
-# same representation: the server mints a distinct ETag per encoding on purpose,
-# and Cloudflare re-compresses on its own schedule, so letting either side pick
-# would make the comparison a coin toss.
+# `Accept-Encoding: identity` on BOTH sides. The asset bytes must be compared as
+# the same representation: Cloudflare re-compresses on its own schedule, so
+# letting either side pick its encoding would make the comparison a coin toss.
 ORIGIN_DUMP="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${DOC_PATH}")"
 ORIGIN_STATUS="$(status_of "$ORIGIN_DUMP")"
 [ "$ORIGIN_STATUS" = "200" ] \
     || fail "the origin ${ORIGIN_URL}${DOC_PATH} answered '${ORIGIN_STATUS:-nothing}', not 200.
     $(transport_error "$ORIGIN_DUMP")
     The CDN cannot be serving a current deploy of something that is not running."
-
-ORIGIN_ETAG="$(header_value "$ORIGIN_DUMP" etag)"
-[ -n "$ORIGIN_ETAG" ] \
-    || fail "the origin served no ETag. Without a validator the edge has nothing to
-    revalidate against, which is exactly the condition that made deploys invisible."
 
 # ── 2. The edge ─────────────────────────────────────────────────────────────
 PUBLIC_DUMP="$(headers_of "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' "${PUBLIC_URL}${DOC_PATH}")"
@@ -151,25 +165,18 @@ PUBLIC_STATUS="$(status_of "$PUBLIC_DUMP")"
     || fail "the public URL ${PUBLIC_URL}${DOC_PATH} answered '${PUBLIC_STATUS:-nothing}', not 200.
     $(transport_error "$PUBLIC_DUMP")"
 
-PUBLIC_ETAG="$(header_value "$PUBLIC_DUMP" etag)"
-[ -n "$PUBLIC_ETAG" ] \
-    || fail "the public URL served no ETag, so the edge is holding a document it can
-    never revalidate. This is the shape of the 2026-08-25 outage."
-
-# ── 3. Same document? ───────────────────────────────────────────────────────
+# ── 3. Is it actually the app? ──────────────────────────────────────────────
 #
-# Cloudflare weakens strong ETags when it transforms a response, so `W/` is
-# stripped from both sides before comparing. Nothing else is normalised: the
-# encoding suffix is meaningful, and two sides that disagree on it are two
-# different representations, which is a real finding rather than noise.
-normalise_etag() { printf '%s' "$1" | sed 's/^W\///; s/^ *//; s/ *$//'; }
-if [ "$(normalise_etag "$ORIGIN_ETAG")" != "$(normalise_etag "$PUBLIC_ETAG")" ]; then
-    fail "the edge is serving a DIFFERENT document than the origin.
-    origin ${ORIGIN_URL}${DOC_PATH}  ETag ${ORIGIN_ETAG}
-    public ${PUBLIC_URL}${DOC_PATH}  ETag ${PUBLIC_ETAG}
-    The deploy is not visible to users. Purge the Cloudflare cache for this
-    path, then find out why the edge did not revalidate."
-fi
+# A 200 alone is nearly worthless here: an error page, a maintenance shell and a
+# login interstitial are all 200s. So the document must also CONTAIN something
+# only the real page has. Override with MTGC_PUBLIC_MARKER when the title moves.
+PUBLIC_MARKER="${MTGC_PUBLIC_MARKER:-<title>MTG Collection Tools</title>}"
+PUBLIC_BODY="$(curl -sS -k -m 20 "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' \
+    "${PUBLIC_URL}${DOC_PATH}" 2>/dev/null)"
+printf '%s' "$PUBLIC_BODY" | grep -qF -- "$PUBLIC_MARKER" \
+    || fail "the public document answered 200 but does not contain '${PUBLIC_MARKER}'.
+    Something is being served at that URL and it is not the app — an error page,
+    a maintenance shell or an access interstitial all answer 200."
 
 # ── 4. Cache-Control ────────────────────────────────────────────────────────
 #
@@ -182,16 +189,6 @@ if [ -n "$MAX_AGE" ] && [ "$MAX_AGE" -ge 60 ]; then
     fail "the public document is cacheable for ${MAX_AGE}s without revalidating
     (Cache-Control: ${PUBLIC_CC}). A deploy stays invisible for that long."
 fi
-
-# ── 5. Conditional revalidation, through the edge ───────────────────────────
-COND_DUMP="$(headers_of "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' \
-    -H "If-None-Match: ${PUBLIC_ETAG}" "${PUBLIC_URL}${DOC_PATH}")"
-assert_not_access_wall "$COND_DUMP"
-COND_STATUS="$(status_of "$COND_DUMP")"
-[ "$COND_STATUS" = "304" ] \
-    || fail "a conditional request through the edge answered '${COND_STATUS:-nothing}', not 304.
-    Revalidation is the whole mechanism that keeps a no-cache document cheap;
-    without it every page load is a full transfer."
 
 # ── 6. Compression, through the edge ────────────────────────────────────────
 GZIP_DUMP="$(headers_of "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: gzip' "${PUBLIC_URL}${DOC_PATH}")"
@@ -212,9 +209,7 @@ printf '%s' "$GZIP_ENC" | grep -qi gzip \
 #
 # This step cannot pass by skipping either: a document that names no
 # content-addressed asset is itself the finding.
-BODY="$(curl -sS -k -m 20 "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' \
-    "${PUBLIC_URL}${DOC_PATH}" 2>/dev/null)"
-ASSET_PATH="$(printf '%s' "$BODY" \
+ASSET_PATH="$(printf '%s' "$PUBLIC_BODY" \
     | grep -oE '/static/[A-Za-z0-9_./-]+\.[0-9a-f]{16}\.[A-Za-z0-9]+' | head -n1)"
 [ -n "$ASSET_PATH" ] \
     || fail "the public document names no content-addressed asset. Every /static
@@ -242,15 +237,21 @@ printf '%s' "$ASSET_CC" | grep -qi immutable && [ -n "$ASSET_MAX_AGE" ] && [ "$A
     in ${ASSET_PATH} is what makes a long immutable window correct; serving it
     without one pays for the URL and takes none of the benefit."
 
-if [ "$(normalise_etag "$(header_value "$ASSET_DUMP" etag)")" \
-     != "$(normalise_etag "$(header_value "$ASSET_ORIGIN" etag)")" ]; then
+# THE LOAD-BEARING COMPARISON. Not the two ETags — the two BODIES. Cloudflare is
+# free to rewrite, weaken or drop a validator, and did; it is not free to change
+# the bytes without this noticing. A digest-bearing URL means one exact byte
+# string, and the edge is promising to hold what it has for ${ASSET_MAX_AGE}s.
+body_sha() { curl -sS -k -m 30 "$@" | sha256sum | cut -d' ' -f1; }
+ORIGIN_SHA="$(body_sha -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
+PUBLIC_SHA="$(body_sha "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' "${PUBLIC_URL}${ASSET_PATH}")"
+if [ -z "$ORIGIN_SHA" ] || [ "$ORIGIN_SHA" != "$PUBLIC_SHA" ]; then
     fail "the edge is serving DIFFERENT bytes than the origin for ${ASSET_PATH}.
-    origin ETag $(header_value "$ASSET_ORIGIN" etag)
-    public ETag $(header_value "$ASSET_DUMP" etag)
-    A digest-bearing URL means one exact byte string, and the edge is promising
-    to hold what it has for ${ASSET_MAX_AGE}s. Purge this path."
+    origin sha256 ${ORIGIN_SHA:-<none>}
+    public sha256 ${PUBLIC_SHA:-<none>}
+    Purge this path."
 fi
 
-echo "cdn-check: OK — ${PUBLIC_URL}${DOC_PATH} matches the origin (ETag ${PUBLIC_ETAG}),"
-echo "           revalidates (304), negotiates gzip, and is not held past ${MAX_AGE:-0}s."
-echo "           ${ASSET_PATH} matches the origin and is immutable for ${ASSET_MAX_AGE}s."
+echo "cdn-check: OK — ${PUBLIC_URL}${DOC_PATH} answers 200, is the app,"
+echo "           negotiates gzip, and is not held past ${MAX_AGE:-0}s."
+echo "           ${ASSET_PATH} is byte-identical to the origin (sha256 ${PUBLIC_SHA:0:12})"
+echo "           and immutable for ${ASSET_MAX_AGE}s."
