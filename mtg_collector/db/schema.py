@@ -446,12 +446,12 @@ CREATE TABLE IF NOT EXISTS mtgjson_printings (
     -- -- so this is the only column that says which row is the card you see.
     -- Read it through mtg_collector/db/mtgjson_faces.py, never by hand.
     --
-    -- Last, and that is load-bearing: `mtg db split` copies each table with
-    -- `INSERT INTO shared.t SELECT * FROM main.t`, which pairs columns by
-    -- position.  ALTER TABLE ADD COLUMN appends, so a migrated database has
-    -- this column last; declaring it anywhere else here would shift `side` and
-    -- `imported_at` past each other on a deployed instance and fail the copy
-    -- on imported_at's NOT NULL.
+    -- Position here is free.  `mtg db split` names the columns it copies, so a
+    -- database that reached this version through migrations -- where ALTER
+    -- TABLE ADD COLUMN put this column last -- and one built fresh from this
+    -- file agree however either one declares them.  A `SELECT *` copy did not:
+    -- it paired columns by position, shifted `side` and `imported_at` past each
+    -- other, and was caught only by imported_at's NOT NULL.
     side            TEXT
 );
 -- Carries the whole of the front-face resolution in mtgjson_faces:

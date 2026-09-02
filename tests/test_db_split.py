@@ -295,35 +295,34 @@ def _synthetic_row(conn, table):
     A misaligned copy is only visible if no two columns hold the same value,
     so the value *is* the column name. Integer primary keys are the exception:
     a rowid alias rejects text outright, and rejecting is not the failure this
-    is looking for.
+    is looking for — they get a number past anything the fixture already used.
     """
     info = conn.execute(f"PRAGMA main.table_info([{table}])").fetchall()
     values = []
     for i, col in enumerate(info):
         rowid_alias = col["pk"] == 1 and (col["type"] or "").upper() == "INTEGER"
-        values.append(i + 1 if rowid_alias else f"{table}.{col['name']}")
+        values.append(1_000_001 + i if rowid_alias else f"{table}.{col['name']}")
     names = ", ".join(f"[{c['name']}]" for c in info)
     holes = ", ".join("?" * len(info))
     conn.execute(f"INSERT INTO main.[{table}] ({names}) VALUES ({holes})", values)
 
 
-def _reverse_column_order(conn, table):
-    """Rebuild `main.<table>` with its columns declared back to front.
+def _redeclare(conn, table, reorder):
+    """Rebuild `main.<table>`, its columns declared in `reorder(columns)` order.
 
     This is what a migration history does in miniature: ALTER TABLE ADD COLUMN
     appends, so a database that arrived at the current version through
-    migrations carries an order SCHEMA_SQL never declared. Reversing is the
-    largest such disagreement, and it is the source side that has it — the
-    shared DB is always built fresh from SCHEMA_SQL.
+    migrations carries an order SCHEMA_SQL never declared. It is the source
+    side that has it — the shared DB is always built fresh from SCHEMA_SQL.
 
     Constraints are deliberately dropped from the rebuilt table: they belong to
     the shared side, and leaving them here would let a NOT NULL catch a
-    misalignment that the two nullable columns of de-w49v would have let
-    through.
+    misalignment on the way out that the two nullable columns of de-w49v would
+    have let through.
     """
-    info = conn.execute(f"PRAGMA main.table_info([{table}])").fetchall()
-    names = ", ".join(f"[{c['name']}]" for c in info)
-    decls = ", ".join(f"[{c['name']}] {c['type']}" for c in reversed(info))
+    info = {c["name"]: c for c in conn.execute(f"PRAGMA main.table_info([{table}])")}
+    names = ", ".join(f"[{n}]" for n in info)
+    decls = ", ".join(f"[{n}] {info[n]['type']}" for n in reorder(list(info)))
     # Without this, RENAME tries to fix up every view that names the table and
     # errors on the ones it cannot resolve mid-rebuild.
     conn.execute("PRAGMA legacy_alter_table = ON")
@@ -340,7 +339,8 @@ def _reverse_column_order(conn, table):
 def _rows_by_name(conn, schema, table, columns):
     names = ", ".join(f"[{c}]" for c in columns)
     return sorted(
-        tuple(r) for r in conn.execute(f"SELECT {names} FROM {schema}.[{table}]")
+        (tuple(r) for r in conn.execute(f"SELECT {names} FROM {schema}.[{table}]")),
+        key=repr,
     )
 
 
@@ -373,7 +373,7 @@ def test_split_pairs_columns_by_name_not_position(monolithic_db):
     expected = {}
     for table in tables:
         _synthetic_row(conn, table)
-        _reverse_column_order(conn, table)
+        _redeclare(conn, table, lambda cols: cols[::-1])
         cols = [r[1] for r in conn.execute(f"PRAGMA main.table_info([{table}])")]
         expected[table] = (cols, _rows_by_name(conn, "main", table, cols))
     conn.commit()
@@ -456,3 +456,43 @@ def test_split_refuses_a_source_missing_a_shared_column(monolithic_db):
         run_split(FakeArgs())
 
     os.unlink(shared_path)
+
+
+def test_split_of_two_swapped_nullable_columns_is_caught(monolithic_db):
+    """The misalignment nothing else would notice.
+
+    cards.type_line and cards.mana_cost are adjacent, both nullable, both TEXT.
+    Transposed under `SELECT *` each lands in the other and every constraint is
+    satisfied — the copy succeeds and the shared catalogue ships with the mana
+    cost in the type line. de-xpu was only loud because the column it displaced
+    was NOT NULL.
+    """
+    from mtg_collector.cli.db_cmd import run_split
+
+    def swap(cols):
+        i, j = cols.index("type_line"), cols.index("mana_cost")
+        cols[i], cols[j] = cols[j], cols[i]
+        return cols
+
+    conn = sqlite3.connect(monolithic_db)
+    conn.row_factory = sqlite3.Row
+    _redeclare(conn, "cards", swap)
+    conn.commit()
+    conn.close()
+
+    shared_path = monolithic_db.replace(".sqlite", "-shared.sqlite")
+
+    class FakeArgs:
+        db_path = monolithic_db
+        shared_out = shared_path
+        prune = False
+
+    run_split(FakeArgs())
+
+    shared = sqlite3.connect(shared_path)
+    row = shared.execute(
+        "SELECT type_line, mana_cost FROM cards WHERE oracle_id = 'oracle-1'"
+    ).fetchone()
+    shared.close()
+    os.unlink(shared_path)
+    assert row == ("Creature", "{W}")
