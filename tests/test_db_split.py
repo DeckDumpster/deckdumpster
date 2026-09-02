@@ -284,3 +284,175 @@ def test_get_shared_write_path_returns_default_when_unset():
     with patch.dict(os.environ, {}, clear=True):
         os.environ.pop("MTGC_SHARED_DB", None)
         assert get_shared_write_path("/default.sqlite") == "/default.sqlite"
+
+
+# ── Column pairing: `db split` must not depend on column ORDER ──
+
+
+def _synthetic_row(conn, table):
+    """One row for `table` whose value in every column names that column.
+
+    A misaligned copy is only visible if no two columns hold the same value,
+    so the value *is* the column name. Integer primary keys are the exception:
+    a rowid alias rejects text outright, and rejecting is not the failure this
+    is looking for.
+    """
+    info = conn.execute(f"PRAGMA main.table_info([{table}])").fetchall()
+    values = []
+    for i, col in enumerate(info):
+        rowid_alias = col["pk"] == 1 and (col["type"] or "").upper() == "INTEGER"
+        values.append(i + 1 if rowid_alias else f"{table}.{col['name']}")
+    names = ", ".join(f"[{c['name']}]" for c in info)
+    holes = ", ".join("?" * len(info))
+    conn.execute(f"INSERT INTO main.[{table}] ({names}) VALUES ({holes})", values)
+
+
+def _reverse_column_order(conn, table):
+    """Rebuild `main.<table>` with its columns declared back to front.
+
+    This is what a migration history does in miniature: ALTER TABLE ADD COLUMN
+    appends, so a database that arrived at the current version through
+    migrations carries an order SCHEMA_SQL never declared. Reversing is the
+    largest such disagreement, and it is the source side that has it — the
+    shared DB is always built fresh from SCHEMA_SQL.
+
+    Constraints are deliberately dropped from the rebuilt table: they belong to
+    the shared side, and leaving them here would let a NOT NULL catch a
+    misalignment that the two nullable columns of de-w49v would have let
+    through.
+    """
+    info = conn.execute(f"PRAGMA main.table_info([{table}])").fetchall()
+    names = ", ".join(f"[{c['name']}]" for c in info)
+    decls = ", ".join(f"[{c['name']}] {c['type']}" for c in reversed(info))
+    # Without this, RENAME tries to fix up every view that names the table and
+    # errors on the ones it cannot resolve mid-rebuild.
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute(f"ALTER TABLE main.[{table}] RENAME TO [{table}__ordered]")
+    conn.execute(f"CREATE TABLE main.[{table}] ({decls})")
+    conn.execute(
+        f"INSERT INTO main.[{table}] ({names}) "
+        f"SELECT {names} FROM main.[{table}__ordered]"
+    )
+    conn.execute(f"DROP TABLE main.[{table}__ordered]")
+    conn.execute("PRAGMA legacy_alter_table = OFF")
+
+
+def _rows_by_name(conn, schema, table, columns):
+    names = ", ".join(f"[{c}]" for c in columns)
+    return sorted(
+        tuple(r) for r in conn.execute(f"SELECT {names} FROM {schema}.[{table}]")
+    )
+
+
+def test_split_pairs_columns_by_name_not_position(monolithic_db):
+    """Every shared table survives a source whose column order isn't SCHEMA_SQL's.
+
+    `shared` is created fresh from SCHEMA_SQL; a real source reached the same
+    version through migrations, and ALTER TABLE ADD COLUMN appends. The two
+    orders agree only where SCHEMA_SQL happens to declare each migration-added
+    column in that same trailing position — which nothing checks, and which
+    de-xpu broke by declaring mtgjson_printings.side beside the column it
+    belongs with. `SELECT *` pairs by position, so it wrote side into
+    imported_at; NOT NULL is the only reason that was loud rather than shipped.
+    """
+    from mtg_collector.cli.db_cmd import run_split
+
+    conn = sqlite3.connect(monolithic_db)
+    conn.row_factory = sqlite3.Row
+    # latest_prices is materialized, so it is copied the same way; the other
+    # entry in SHARED_VIEWS is a real view and the split skips it.
+    materialized = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM main.sqlite_master WHERE type = 'table'"
+        )
+    }
+    tables = [t for t in SHARED_TABLES + SHARED_VIEWS if t in materialized]
+    assert "latest_prices" in tables
+
+    expected = {}
+    for table in tables:
+        _synthetic_row(conn, table)
+        _reverse_column_order(conn, table)
+        cols = [r[1] for r in conn.execute(f"PRAGMA main.table_info([{table}])")]
+        expected[table] = (cols, _rows_by_name(conn, "main", table, cols))
+    conn.commit()
+    conn.close()
+
+    shared_path = monolithic_db.replace(".sqlite", "-shared.sqlite")
+
+    class FakeArgs:
+        db_path = monolithic_db
+        shared_out = shared_path
+        prune = False
+
+    run_split(FakeArgs())
+
+    shared = sqlite3.connect(shared_path)
+    shared.row_factory = sqlite3.Row
+    try:
+        for table in tables:
+            cols, rows = expected[table]
+            assert _rows_by_name(shared, "main", table, cols) == rows, (
+                f"{table} copied into the wrong columns"
+            )
+    finally:
+        shared.close()
+        os.unlink(shared_path)
+
+
+def test_split_refuses_a_source_column_the_shared_schema_lacks(monolithic_db):
+    """A column SCHEMA_SQL never declared is an error, not a silent shift.
+
+    This is the state a migration that adds a column without adding it to
+    SCHEMA_SQL leaves behind, and under `SELECT *` it is exactly the off-by-one
+    that de-xpu hit.
+    """
+    from mtg_collector.cli.db_cmd import run_split
+
+    conn = sqlite3.connect(monolithic_db)
+    conn.execute("ALTER TABLE printings ADD COLUMN undeclared_by_schema_sql TEXT")
+    conn.commit()
+    conn.close()
+
+    shared_path = monolithic_db.replace(".sqlite", "-shared.sqlite")
+
+    class FakeArgs:
+        db_path = monolithic_db
+        shared_out = shared_path
+        prune = False
+
+    with pytest.raises(ValueError, match="undeclared_by_schema_sql"):
+        run_split(FakeArgs())
+
+    os.unlink(shared_path)
+
+
+def test_split_refuses_a_source_missing_a_shared_column(monolithic_db):
+    """A source behind the shared schema is an error, not a column of defaults."""
+    from mtg_collector.cli.db_cmd import run_split
+
+    conn = sqlite3.connect(monolithic_db)
+    conn.row_factory = sqlite3.Row
+    info = conn.execute("PRAGMA main.table_info([sets])").fetchall()
+    kept = [c["name"] for c in info if c["name"] != "base_set_size"]
+    names = ", ".join(f"[{c}]" for c in kept)
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    conn.execute("ALTER TABLE sets RENAME TO sets__full")
+    conn.execute(f"CREATE TABLE sets ({', '.join(f'[{c}] TEXT' for c in kept)})")
+    conn.execute(f"INSERT INTO sets ({names}) SELECT {names} FROM sets__full")
+    conn.execute("DROP TABLE sets__full")
+    conn.commit()
+    conn.close()
+
+    shared_path = monolithic_db.replace(".sqlite", "-shared.sqlite")
+
+    class FakeArgs:
+        db_path = monolithic_db
+        shared_out = shared_path
+        prune = False
+
+    with pytest.raises(ValueError, match="base_set_size"):
+        run_split(FakeArgs())
+
+    os.unlink(shared_path)

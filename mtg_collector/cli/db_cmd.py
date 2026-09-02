@@ -119,6 +119,53 @@ def run_verify(args):
     print(f"All {len(SCHEMA_OBJECTS)} schema objects present.")
 
 
+def _copy_columns(conn, table):
+    """The column list to copy `table` by, checked against the source.
+
+    `shared` is built fresh from SCHEMA_SQL; `main` reached the same version
+    through migrations, and ALTER TABLE ADD COLUMN appends — so a migrated
+    table's columns run "the original ones, then every migration-added one in
+    the order the migrations ran", which matches SCHEMA_SQL only where
+    SCHEMA_SQL happens to declare each added column in that same trailing
+    position. `SELECT *` pairs columns by position, so declaring one anywhere
+    else copies each value into its neighbour: de-xpu declared
+    mtgjson_printings.side beside the column it belongs with and the split
+    wrote side (NULL) into imported_at, which only that column's NOT NULL made
+    loud — two nullable columns of the same affinity would have swapped in
+    silence. Naming the columns takes the ordering out of the copy, and
+    comparing the two sides makes a column one schema lacks an error rather
+    than a shift.
+    """
+    shared_cols = [r[1] for r in conn.execute(f"PRAGMA shared.table_info([{table}])")]
+    main_cols = [r[1] for r in conn.execute(f"PRAGMA main.table_info([{table}])")]
+    unknown = [c for c in main_cols if c not in shared_cols]
+    missing = [c for c in shared_cols if c not in main_cols]
+    if unknown or missing:
+        detail = []
+        if unknown:
+            detail.append(
+                f"the shared schema has no {', '.join(unknown)} — SCHEMA_SQL is "
+                "behind the migration that added it to the source"
+            )
+        if missing:
+            detail.append(
+                f"the source has no {', '.join(missing)} — run 'mtg db init' "
+                "against it first"
+            )
+        raise ValueError(f"Cannot split [{table}]: " + "; ".join(detail))
+    return shared_cols
+
+
+def _copy_table(conn, table):
+    """Replace shared.<table> with main.<table>, pairing columns by name."""
+    collist = ", ".join(f"[{c}]" for c in _copy_columns(conn, table))
+    conn.execute(f"DELETE FROM shared.[{table}]")
+    conn.execute(
+        f"INSERT INTO shared.[{table}] ({collist}) "
+        f"SELECT {collist} FROM main.[{table}]"
+    )
+
+
 def run_split(args):
     """Split a monolithic DB into shared reference + user DBs."""
     import sqlite3
@@ -156,8 +203,7 @@ def run_split(args):
         ).fetchone()
         if not exists:
             continue
-        conn.execute(f"DELETE FROM shared.[{table}]")
-        conn.execute(f"INSERT INTO shared.[{table}] SELECT * FROM main.[{table}]")
+        _copy_table(conn, table)
         count = conn.execute(f"SELECT COUNT(*) FROM shared.[{table}]").fetchone()[0]
         if count:
             print(f"  {table}: {count} rows")
@@ -174,8 +220,7 @@ def run_split(args):
         if exists:
             source_count = conn.execute(f"SELECT COUNT(*) FROM main.[{view}]").fetchone()[0]
             if source_count:
-                conn.execute(f"DELETE FROM shared.[{view}]")
-                conn.execute(f"INSERT INTO shared.[{view}] SELECT * FROM main.[{view}]")
+                _copy_table(conn, view)
                 count = conn.execute(f"SELECT COUNT(*) FROM shared.[{view}]").fetchone()[0]
                 print(f"  {view}: {count} rows")
                 total_rows += count
