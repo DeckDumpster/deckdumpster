@@ -368,6 +368,87 @@ raised until it stops meaning anything. A gate never observed failing is not
 known to work, and one never observed staying green under noise is not known to
 be usable.
 
+### What the gate's cleanup may delete
+
+Two separate bounds, and they are separate on purpose.
+
+The first is **who may be writing**: `mtgc_default_store_lock` (store-lib.sh) is
+held across the gate's whole measurement, and `deploy/deploy.sh` takes the same
+lock around a build into the default store, so an MTGC image that arrives during
+the window is the gate's own. That is the attribution, and there is no better
+one available — podman layers are content-addressed, so a gate build and a prod
+build of the same Containerfile produce the *same* image IDs (see "Deleting a
+store" below for what that cost once).
+
+The second is **what may be deleted at all**, and it holds when the first one is
+wrong. A lock is only as good as the writers who take it, and `podman build`
+typed into a shell takes nothing. So `mtgc_remove_default_store_build_image`
+refuses an image that
+
+* any container is built on, running or stopped, or
+* wears an `mtgc:` name belonging to an instance that is not this run's.
+
+and removes anything else by untagging its own names and calling `podman rmi`
+**without `-f`**. The force flag was the bug, not a detail of it: podman
+documents `-f` as *remove all containers that are using the image before
+removing the image*, and on 2026-08-30 at 02:12:33 that is precisely what the
+gate's cleanup did to prod (de-z9xj). The event log has `systemd-mtgc-prod`
+dying and `localhost/mtgc:prod` being untagged in the same second. After that
+the name resolved to nothing, so systemd's `Restart=on-failure` asked podman for
+it, podman read a missing local name as a *registry* reference, and prod spent
+15.5 hours on
+
+```
+Error: initializing source docker://localhost/mtgc:prod: pinging container
+registry localhost: Get "https://localhost/v2/": dial tcp 127.0.0.1:443:
+connection refused
+```
+
+No data was lost — `collection.sqlite` and the whole 20 GB volume were untouched
+— but the site was down for all of it.
+
+A refusal is printed, not swallowed, and it does **not** turn a red gate green:
+MTGC build bytes on the disk prod runs from is still the thing the gate is for.
+It only stops the gate proving the point by taking prod out. Up to a gigabyte
+left in the default store is the price, and it is the same price the gate
+already pays when it cannot take the lock.
+
+### A crash loop has to end
+
+`deploy/mtgc.container` carries `StartLimitIntervalSec=300` / `StartLimitBurst=10`
+in `[Unit]`, for every instance including prod. The 15.5-hour outage above was
+4195 restart attempts ten seconds apart, and the unit never left `activating` —
+there was no failed state for anything to alarm on and no line in the log louder
+than the one before it.
+
+systemd's own default limit (5 starts in 10s) cannot fire against `RestartSec=10`:
+the attempts are spaced further apart than the window they are counted in, so the
+counter empties before it fills. **The interval has to outlast `RestartSec` ×
+`StartLimitBurst` or the directive is decoration**, which is what
+`tests/test_deploy_quadlet.py` asserts rather than the numbers themselves. Ten
+attempts ten seconds apart are spent inside two minutes, and the unit hard-fails.
+
+The boundary that leaves is deliberate. An instance that dies instantly, ten
+times running, is a crash loop and stops. One that serves for half a minute
+between deaths spaces its attempts past the window and keeps restarting — that is
+a flap, not a loop, and the origin serving check is the instrument for it, because
+it asks whether the site answers rather than whether the unit is up. There is
+deliberately no `OnFailure=` beside the limit: that check already alarms on this
+outcome, and a second path to the same page is a second path to keep in sync.
+(`mtgc-serving-check-prod` is armed on the deployment box but is not yet in this
+repo, which is its own defect — de-u6a2.)
+
+`StartLimitAction` stays at its default, so the unit simply fails and stays
+failed. That is the cost, and `deploy/deploy.sh` pays it with a
+`systemctl --user reset-failed` before the restart: a redeploy is the fix for
+whatever caused the loop, so it is the one path that must not be blocked by it.
+By hand, the same:
+
+```bash
+systemctl --user reset-failed mtgc-prod
+systemctl --user start mtgc-prod
+```
+
 ### Deleting a store — never `podman system reset`
 
 Everything above teaches you to aim `--root`/`--runroot` at a second store.

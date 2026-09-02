@@ -21,6 +21,7 @@ which is how "was this call scoped to the right store" is asserted.
 """
 
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -55,6 +56,14 @@ exit 0
 """
 
 NOOP_STUB = "#!/usr/bin/env bash\nexit 0\n"
+# Records what a script asked systemd to do when $SYSTEMCTL_LOG names a file,
+# and is the NOOP_STUB otherwise — so every existing test is unaffected and a
+# test that cares about the sequence can ask for it.
+SYSTEMCTL_STUB = (
+    "#!/usr/bin/env bash\n"
+    '[ -n "${SYSTEMCTL_LOG:-}" ] && printf \'%s\\n\' "$*" >> "$SYSTEMCTL_LOG"\n'
+    "exit 0\n"
+)
 LINGER_STUB = "#!/usr/bin/env bash\necho 'Linger=yes'\nexit 0\n"
 
 
@@ -67,7 +76,7 @@ class Host:
         bin_dir.mkdir(exist_ok=True)
         for name, body in (
             ("podman", podman_stub),
-            ("systemctl", NOOP_STUB),
+            ("systemctl", SYSTEMCTL_STUB),
             ("loginctl", LINGER_STUB),
         ):
             stub = bin_dir / name
@@ -718,6 +727,38 @@ def test_no_script_runs_podman_system_reset():
     assert offenders == [], offenders
 
 
+def test_nothing_forces_an_image_removal_outside_a_scoped_store_teardown():
+    """`podman rmi -f` is not "try harder": podman documents it as *remove all
+    containers that are using the image before removing the image*. A gate run
+    aimed one at an image it had attributed to itself, took prod's running
+    container and its `mtgc:prod` tag with it in the same second, and left the
+    unit restarting into a name that resolved to nothing for 15.5 hours
+    (de-z9xj).
+
+    The one legitimate `-af` is inside `mtgc_store_teardown`, which is removing a
+    whole ALTERNATE store and refuses to run without `MTGC_STORE_ROOT` — nothing
+    of prod's is reachable from there. Everywhere else, a removal that something
+    is standing on must fail rather than win, and the guard for the case that has
+    to remove an unattributable image anyway is
+    `mtgc_remove_default_store_build_image`."""
+    forced = re.compile(r"podman\b[^|;&]*\brmi\b[^|;&]*(-f\b|--force\b|-[a-z]*f[a-z]*\b)")
+    offenders = []
+    scripts = sorted(DEPLOY.rglob("*.sh")) + sorted((REPO_ROOT / "tests").rglob("*.sh"))
+    for path in scripts:
+        in_store_teardown = False
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if line.startswith("mtgc_store_teardown()"):
+                in_store_teardown = True
+            elif line == "}":
+                in_store_teardown = False
+            stripped = line.strip()
+            if stripped.startswith("#") or in_store_teardown:
+                continue
+            if forced.search(stripped):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {stripped}")
+    assert offenders == [], offenders
+
+
 def test_store_lib_is_sourced_by_every_deploy_script_that_runs_podman():
     """Missing one is the silent failure this whole mechanism exists to avoid.
     mac-*.sh are excluded: on macOS the store lives inside the podman machine
@@ -802,3 +843,26 @@ def test_a_deploy_with_its_own_store_does_not_wait(host):
         holder.kill()
         holder.wait()
     assert "no default-store build lock" not in result.stdout + result.stderr
+
+
+def test_a_redeploy_clears_a_start_limited_units_failed_state(host):
+    """The cost of the start limit the Quadlet now carries (de-z9xj): a unit that
+    hit it is `failed`, and systemd will not restart it out of that state on its
+    own — that is the point. A redeploy is the fix for whatever caused the loop,
+    so it is the one path that must not be blocked by it.
+
+    Asserted as an ORDER, because a reset after the restart is a reset that
+    changed nothing."""
+    host.setup("relimit", "8098")
+    log = host.tmp_path / "systemctl.log"
+
+    # Non-zero at the health check: podman is stubbed, so nothing is listening.
+    host.run(DEPLOY_SH, "relimit", check=False, env_extra={"SYSTEMCTL_LOG": str(log)})
+
+    calls = log.read_text().splitlines()
+    reset = [i for i, c in enumerate(calls) if "reset-failed" in c and "mtgc-relimit" in c]
+    restart = [i for i, c in enumerate(calls) if "restart mtgc-relimit" in c]
+
+    assert reset, calls
+    assert restart, calls
+    assert reset[0] < restart[0], calls
