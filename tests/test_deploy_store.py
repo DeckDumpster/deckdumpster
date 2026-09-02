@@ -21,6 +21,7 @@ which is how "was this call scoped to the right store" is asserted.
 """
 
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -722,6 +723,38 @@ def test_no_script_runs_podman_system_reset():
             if stripped.startswith("#"):
                 continue  # store-lib.sh's header explains at length why not to
             if "system reset" in stripped:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {stripped}")
+    assert offenders == [], offenders
+
+
+def test_nothing_forces_an_image_removal_outside_a_scoped_store_teardown():
+    """`podman rmi -f` is not "try harder": podman documents it as *remove all
+    containers that are using the image before removing the image*. A gate run
+    aimed one at an image it had attributed to itself, took prod's running
+    container and its `mtgc:prod` tag with it in the same second, and left the
+    unit restarting into a name that resolved to nothing for 15.5 hours
+    (de-z9xj).
+
+    The one legitimate `-af` is inside `mtgc_store_teardown`, which is removing a
+    whole ALTERNATE store and refuses to run without `MTGC_STORE_ROOT` — nothing
+    of prod's is reachable from there. Everywhere else, a removal that something
+    is standing on must fail rather than win, and the guard for the case that has
+    to remove an unattributable image anyway is
+    `mtgc_remove_default_store_build_image`."""
+    forced = re.compile(r"podman\b[^|;&]*\brmi\b[^|;&]*(-f\b|--force\b|-[a-z]*f[a-z]*\b)")
+    offenders = []
+    scripts = sorted(DEPLOY.rglob("*.sh")) + sorted((REPO_ROOT / "tests").rglob("*.sh"))
+    for path in scripts:
+        in_store_teardown = False
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if line.startswith("mtgc_store_teardown()"):
+                in_store_teardown = True
+            elif line == "}":
+                in_store_teardown = False
+            stripped = line.strip()
+            if stripped.startswith("#") or in_store_teardown:
+                continue
+            if forced.search(stripped):
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{number}: {stripped}")
     assert offenders == [], offenders
 

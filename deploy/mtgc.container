@@ -20,7 +20,9 @@ Wants=network-online.target
 # times running, is a crash loop and stops. One that serves for half a minute
 # between deaths spaces its attempts past the window, keeps restarting, and is
 # left to the origin serving check — which asks whether the site answers rather
-# than whether the unit is up, and is the right instrument for a flap.
+# than whether the unit is up, and is the right instrument for a flap. (That
+# check is armed on the deployment box and is not yet a unit in this repo; see
+# de-u6a2.)
 #
 # StartLimitAction is left at its default (`none`): the unit fails and stays
 # failed. There is deliberately no OnFailure= alert beside it. The serving check

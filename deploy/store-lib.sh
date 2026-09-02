@@ -687,8 +687,10 @@ mtgc_default_store_image_names() {
 }
 
 # mtgc_default_store_image_containers <image-id> — names of containers built on
-# it, in any state. `--all`, because a stopped container is still something a
-# removal would take with it, and systemd would restart it into nothing.
+# it, in any state. Bare `podman`, like the function above: these two answer for
+# Podman's DEFAULT store, which is the only store this file's removal guard is
+# about. `--all`, because a stopped container is still something a removal would
+# take with it, and systemd would restart it into nothing.
 #
 # Compared on the first 12 characters: `podman ps` and `podman images` do not
 # agree on how much of an ID to print, and an equality test between a truncated
@@ -751,7 +753,7 @@ EOF
     # that no instance's name is on it — the next deploy rewrites the tag.
     while read -r name; do
         [ -n "$name" ] || continue
-        podman untag "$id" "$name" >/dev/null 2>&1 || true
+        podman untag "$id" "$name" </dev/null >/dev/null 2>&1 || true
     done <<EOF
 $names
 EOF
@@ -760,8 +762,11 @@ EOF
     # on still refuses; the caller's next pass takes it once the child is gone,
     # and an image that survives every pass is reported by the assertions rather
     # than forced.
-    podman rmi "$id" >/dev/null 2>&1 || true
-    if podman image exists "$id" >/dev/null 2>&1; then
+    # </dev/null throughout: this runs inside the caller's `while read` over a
+    # process substitution, and a podman that read stdin would eat the rest of
+    # the list.
+    podman rmi "$id" </dev/null >/dev/null 2>&1 || true
+    if podman image exists "$id" </dev/null >/dev/null 2>&1; then
         return 2
     fi
     return 0
