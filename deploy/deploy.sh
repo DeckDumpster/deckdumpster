@@ -120,6 +120,13 @@ else
     # Quadlet change — hence no second reload here.
     mtgc_install_units "$INSTANCE" "$REPO_DIR"
 
+    # A unit that hit its start limit is `failed`, and systemd will not restart
+    # it out of that state on its own — the point of the limit (de-z9xj). This
+    # redeploy is the fix for whatever caused it, so clear the counter first. A
+    # no-op on a healthy unit, and `|| true` because a unit that has never
+    # failed makes this an error on some systemd versions.
+    systemctl --user reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+
     echo "==> Restarting $SERVICE_NAME..."
     systemctl --user restart "$SERVICE_NAME"
 

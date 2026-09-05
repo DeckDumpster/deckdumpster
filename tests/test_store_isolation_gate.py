@@ -66,6 +66,8 @@ BUILT_ID = "b" * 64
 STAGE_ID = "5a9e" + "0" * 60
 BASE_ID = "ba5e" + "0" * 60
 NEIGHBOUR_ID = "17" * 32
+# prod's own image, sitting in the default store with systemd-mtgc-prod on it.
+PROD_ID = "9d0" + "0" * 61
 
 # Records every call, then acts out one of the worlds above. $STUB_MODE picks.
 #
@@ -163,22 +165,72 @@ case "${1:-}" in
             mtgc_neighbour)
                 printf 'image %s %s 1\n' '<none>:<none>' "$STUB_NEIGHBOUR_ID" >> "$STUB_STATE/default"
                 leak_into_default "stub-layer-$STUB_NEIGHBOUR_ID" ;;
+            # prod's image, arriving in the default store during our window with
+            # prod RUNNING on it. Attributable — nothing else holds the lock —
+            # and still not ours to delete.
+            running_prod)
+                printf 'image %s %s 1\n' mtgc:prod "$STUB_PROD_ID" >> "$STUB_STATE/default"
+                printf 'container %s %s 0\n' systemd-mtgc-prod "$STUB_PROD_ID" >> "$STUB_STATE/default"
+                leak_into_default "stub-layer-$STUB_PROD_ID" ;;
+            # The same image with nothing running on it: prod stopped, mid-deploy,
+            # rebooting. The tag alone is enough to make it someone else's.
+            prod_tag)
+                printf 'image %s %s 1\n' mtgc:prod "$STUB_PROD_ID" >> "$STUB_STATE/default"
+                leak_into_default "stub-layer-$STUB_PROD_ID" ;;
             spill)
                 leak_into_default spilled-blobs ;;
         esac
         ;;
     tag)    record image "$3" "$(id_of "$2")" "$(ours_of "$2")" ;;
+    # Real podman refuses TWO things without --force, and both refusals are
+    # load-bearing here: an image a container is built on, and an image wearing
+    # more than one name. `-f` overrides both, and the first of those overrides
+    # is documented as "remove all containers that are using the image" — which
+    # is how a gate run stopped prod (de-z9xj). A stub that always succeeds
+    # cannot tell a guarded removal from an unguarded one.
     rmi)
         shift
+        force=0
         while [ $# -gt 0 ]; do
-            case "$1" in -f|--force) shift ;; *) break ;; esac
+            case "$1" in -f|--force) force=1; shift ;; *) break ;; esac
         done
         rmi_id="$(id_of "$1")"
         [ -n "$rmi_id" ] || rmi_id="$1"
-        unrecord image "$1"
+        r="$(reg)"
+        users=""; ntags=0
+        if [ -f "$r" ]; then
+            users="$(awk -v n="$rmi_id" '$1=="container" && $3==n {print $2}' "$r")"
+            ntags="$(awk -v n="$rmi_id" '$1=="image" && $3==n && $2!="<none>:<none>" {c++} END{print c+0}' "$r")"
+        fi
+        if [ -n "$users" ] || [ "$ntags" -gt 1 ]; then
+            if [ "$force" != 1 ]; then
+                echo "Error: image is in use by a container or referred to in multiple tags" >&2
+                exit 2
+            fi
+            for u in $users; do unrecord container "$u"; done
+        fi
+        unrecord image "$rmi_id"
         rm -f "${GRAPH:-$DEFAULT_STORAGE}/stub-layer-$rmi_id"
         ;;
-    ps)     r="$(reg)"; [ -f "$r" ] && awk '$1=="container" {print "container " $2 " " $2}' "$r" ;;
+    # `podman untag <image> <name>` takes one name off. When the last one goes
+    # the image is still there, untagged — which is what makes untag-then-rmi a
+    # real sequence rather than a roundabout delete.
+    untag)
+        r="$(reg)"; [ -f "$r" ] || exit 0
+        uid="$(id_of "$2")"; [ -n "$uid" ] || uid="$2"
+        uours="$(ours_of "$2")"
+        awk -v n="$3" -v i="$uid" '!($1=="image" && $2==n && $3==i)' "$r" > "$r.new"; mv "$r.new" "$r"
+        if ! awk -v i="$uid" '$1=="image" && $3==i {f=1} END{exit !f}' "$r"; then
+            printf 'image %s %s %s\n' '<none>:<none>' "$uid" "${uours:-0}" >> "$r"
+        fi
+        ;;
+    ps)
+        r="$(reg)"; [ -f "$r" ] || exit 0
+        case "$*" in
+            *ImageID*) awk '$1=="container" {print $3 " " $2}' "$r" ;;
+            *)         awk '$1=="container" {print "container " $2 " " $2}' "$r" ;;
+        esac
+        ;;
     # --no-trunc renders an ID as sha256:<hex> here and bare hex from `inspect`
     # and `history`, which is a difference the gate has to reconcile and so has
     # to be reproduced.
@@ -191,8 +243,10 @@ case "${1:-}" in
         case "$*" in
             *label=cards.dumpster.mtgc.build=1*)
                 awk '$1=="image" && $4=="1" {print "sha256:" $3}' "$r" ;;
-            *)
+            *"image {{.ID}}"*)
                 awk '$1=="image" {print "image sha256:" $3 " " $2}' "$r" ;;
+            *)
+                awk '$1=="image" {print "sha256:" $3 " " $2}' "$r" ;;
         esac
         ;;
     container) [ "${2:-}" = "exists" ] && { has container "$3" || exit 1; } ;;
@@ -266,6 +320,7 @@ def run_gate(tmp_path, mode, extra_env=None):
         STUB_STAGE_ID=STAGE_ID,
         STUB_BASE_ID=BASE_ID,
         STUB_NEIGHBOUR_ID=NEIGHBOUR_ID,
+        STUB_PROD_ID=PROD_ID,
         MTGC_STORE_GATE_ROOT=str(tmp_path / "probe"),
         # Scaled to STUB_MB: half of one lump is over the tolerance and under
         # the floor, so a lump in the wrong place trips the negative and a
@@ -559,3 +614,83 @@ def test_a_failing_run_says_which_assertion_failed(ignored):
     red saying only that something was wrong."""
     result, _ = ignored
     assert "FAIL:" in result.stdout + result.stderr
+
+
+# ── The image prod is running on (de-z9xj) ──────────────────────────────────
+#
+# The lock above answers "whose build is this?". These answer the question that
+# survives a wrong answer: what may the cleanup delete at all?
+#
+# On 2026-08-30 at 02:12:33 this gate's cleanup ran `podman rmi -f` on an image
+# it had attributed to itself. The image was prod's — a deploy had tagged it
+# mtgc:prod ninety seconds earlier and systemd-mtgc-prod was running on it — and
+# `-f` is documented as "remove all containers that are using the image before
+# removing the image". Podman's event log has the container dying and the tag
+# going in the same second. From there localhost/mtgc:prod named nothing,
+# Restart=on-failure asked podman for it, podman read the missing local name as
+# a REGISTRY reference, and prod spent 15.5 hours answering
+#
+#     dial tcp 127.0.0.1:443: connection refused
+#
+# The gate is still right to go RED in both scenarios below: MTGC build bytes
+# really are in the default store. What it may not do is take prod out to prove
+# it.
+
+
+@pytest.fixture(scope="module")
+def prod_running(tmp_path_factory):
+    """prod's image lands in the default store during the window, with prod on
+    it. Nothing else holds the lock, so the gate attributes it to itself —
+    which is exactly the state that made the incident possible."""
+    tmp_path = tmp_path_factory.mktemp("running_prod")
+    return run_gate(tmp_path, "running_prod"), tmp_path
+
+
+def test_a_leak_with_a_container_on_it_still_fails_the_gate(prod_running):
+    """The fix is not 'stop noticing'. MTGC build bytes on the disk prod runs
+    from is the thing this gate exists to report."""
+    result, _ = prod_running
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_it_does_not_remove_an_image_a_container_is_running_on(prod_running):
+    """The incident, reproduced. On the unfixed gate `podman rmi -f` takes the
+    container with the image and prod does not come back."""
+    result, tmp_path = prod_running
+    store = tmp_path / "home/.local/share/containers/storage"
+
+    assert (store / f"stub-layer-{PROD_ID}").exists(), (
+        "the gate removed the image prod was running on: " + result.stdout + result.stderr
+    )
+
+
+def test_it_leaves_the_running_container_alone(prod_running):
+    """`rmi -f` removes the containers first, which is why the container died
+    in the same second as the untag rather than because of it."""
+    _, tmp_path = prod_running
+    registry = (tmp_path / "stub-state/default").read_text()
+
+    assert "systemd-mtgc-prod" in registry, registry
+
+
+def test_it_says_what_it_refused_and_why(prod_running):
+    """A refusal nobody can read is indistinguishable from a cleanup that quietly
+    did nothing, and ~1 GB left in the default store is a real cost to report."""
+    result, _ = prod_running
+    output = result.stdout + result.stderr
+
+    assert "REFUSING to remove image" in output, output
+    assert "systemd-mtgc-prod" in output, output
+
+
+def test_it_does_not_remove_an_image_wearing_another_instances_name(tmp_path):
+    """Rule two, with nothing running: prod stopped, or mid-deploy. Podman layers
+    are content-addressed, so a gate build and a prod build of one Containerfile
+    are not similar images but the same object wearing both names — and no
+    measurement taken afterwards can separate them. The name is what settles it."""
+    result = run_gate(tmp_path, "prod_tag")
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, output
+    assert (tmp_path / "home/.local/share/containers/storage" / f"stub-layer-{PROD_ID}").exists(), output
+    assert "mtgc:prod" in output, output

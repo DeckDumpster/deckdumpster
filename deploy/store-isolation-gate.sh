@@ -338,8 +338,16 @@ leaked_image_ids() {
 # listing order is not a topological one. Each pass strips the current leaves.
 # Bounded, so a genuinely unremovable image is reported by the assertions below
 # instead of spinning here.
+#
+# Each removal goes through mtgc_remove_default_store_build_image (store-lib.sh),
+# which is the OTHER bound on this cleanup and the one that does not depend on
+# the lock: an image with a container on it, or wearing another instance's name,
+# is left alone and reported. `podman rmi -f` here — where -f means "remove the
+# containers using this image first" — is what took prod down for 15.5 hours on
+# 2026-08-30 (de-z9xj). A refusal is remembered, because the image stays in
+# leaked_image_ids and would otherwise be re-refused on every pass.
 reap_leaked_build() {
-    local before after remaining=0 pass id
+    local before after remaining=0 pass id rc
     # Without the lock, an arrival cannot be shown to be ours, and `podman rmi
     # -f` on someone else's in-flight build is how a gate run took prod's deploy
     # down on 2026-08-30. Leaving ~1 GB on the disk is the lesser bug, and it is
@@ -353,12 +361,20 @@ reap_leaked_build() {
     fi
     before="$(size_kb "$DEFAULT_STORE")"
 
+    : > "$WORK/reap-refused"
     for pass in 1 2 3 4 5; do
         remaining=0
         while read -r id; do
             [ -n "$id" ] || continue
+            if grep -qxF "$id" "$WORK/reap-refused"; then
+                continue
+            fi
             remaining=$((remaining + 1))
-            podman rmi -f "$id" >/dev/null 2>&1 || true
+            rc=0
+            mtgc_remove_default_store_build_image "$id" "$INSTANCE" || rc=$?
+            if [ "$rc" -eq 1 ]; then
+                printf '%s\n' "$id" >> "$WORK/reap-refused"
+            fi
         done < <(leaked_image_ids)
         [ "$remaining" -gt 0 ] || break
     done

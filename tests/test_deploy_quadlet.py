@@ -272,3 +272,63 @@ def test_readme_states_the_san_misconception():
     assert "tailscale cert" in readme
     assert "DNS-01" in readme
     assert "MTGC_TLS_CERT" in readme and "MTGC_TLS_KEY" in readme
+
+
+# ── A crash loop has to end (de-z9xj) ───────────────────────────────────────
+
+
+def _unit_directives(unit, section):
+    """The directives of one section, in order, comments and blanks dropped."""
+    out, current = [], None
+    for line in unit.splitlines():
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            current = line
+        elif line and not line.startswith("#") and current == section:
+            out.append(line)
+    return out
+
+
+def _directive(unit, section, key):
+    for line in _unit_directives(unit, section):
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1]
+    return None
+
+
+@pytest.mark.parametrize("instance", ["prod", "myinst"])
+def test_every_instance_hard_fails_on_a_crash_loop(instance):
+    """Including prod, which is the one it was written for. prod restarted 4195
+    times over 15.5 hours against an image that had been removed out from under
+    it, and never reached a state anything could alarm on."""
+    unit = render(instance, ":8081", "")
+
+    assert _directive(unit, "[Unit]", "StartLimitBurst") is not None, unit
+    assert _directive(unit, "[Unit]", "StartLimitIntervalSec") is not None, unit
+
+
+def test_the_start_limit_is_in_the_unit_section():
+    """systemd reads StartLimit* from [Unit] only. In [Service] it parses, loads,
+    and does nothing — a limit that looks set and cannot fire."""
+    unit = render("myinst", ":8081", "")
+
+    assert _directive(unit, "[Service]", "StartLimitBurst") is None, unit
+    assert _directive(unit, "[Service]", "StartLimitIntervalSec") is None, unit
+
+
+def test_the_start_limit_window_outlasts_the_restarts_it_counts():
+    """The property, not the numbers. systemd's own default is 5 starts in 10s,
+    and RestartSec=10 spaces the attempts further apart than that window — so the
+    counter empties before it fills and the default limit can never fire. That is
+    the mechanism behind the 4195 attempts, and it comes back the moment the
+    interval stops outlasting RestartSec x Burst."""
+    unit = render("myinst", ":8081", "")
+
+    restart_sec = int(_directive(unit, "[Service]", "RestartSec"))
+    burst = int(_directive(unit, "[Unit]", "StartLimitBurst"))
+    interval = int(_directive(unit, "[Unit]", "StartLimitIntervalSec"))
+
+    assert interval > restart_sec * burst, (
+        f"{burst} attempts {restart_sec}s apart span {restart_sec * burst}s, "
+        f"which does not fit in a {interval}s window — the limit cannot fire."
+    )

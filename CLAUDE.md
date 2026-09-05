@@ -234,6 +234,31 @@ one combined scan stays cheaper for them: 792 ms against 1,242 ms split, on
 sent on every window, because `deck-builder.js` pages its card picker until
 `offset >= total`.
 
+**Both bodies are built without the joins their SELECT list does not read.** The
+count selects the literal `1` and the totals select a qty and a price, so a join
+neither they nor the WHERE nor the conditional joins name is walked 110,018 times
+for nothing. Measured in-process on 110,018 printings / 15,045 owned copies /
+440,072 price rows: `is:unowned`'s first paint 1,602 ms → 183 ms, the owned
+page's 472 ms → 319 ms (de-5l08). Most of that is one plan change — reading
+`p.oracle_id` for the `cards` join is what stops the count's scan of
+`idx_printings_card_name` being a *covering* one.
+
+Three arguments, one per join, and each is the whole reason that join may go —
+do not extend the rule to a join without one. `orders` / `decks` / `binders` join
+on an INTEGER PRIMARY KEY and are LEFT, so they match exactly one row and cannot
+change a count whatever the data holds. `cards` / `sets` match at most one row
+the same way but are INNER, so they rest on there being **no printing whose
+oracle_id or set_code has no parent row** — which holds because
+`PrintingRepository.upsert` is the only `INSERT INTO printings` in this codebase,
+both columns are `NOT NULL REFERENCES`, and every path that reaches it opens the
+catalogue through `get_connection(get_shared_write_path(...))`, the branch that
+sets `PRAGMA foreign_keys = ON` in split-DB and monolithic mode alike. SQLite
+refuses the orphan at INSERT; the 110,018-printing production catalogue holds
+none in either direction, and `tests/test_collection_aggregate_joins.py` asserts
+the refusal rather than the absence. `deck_cards` is the one join that can fan a
+row out, so it is dropped only on a template that GROUPs — `expand=copies` pages
+those duplicates and keeps it.
+
 ### Set sizes
 
 `sets.base_set_size` and `sets.total_set_size` are stored, never derived, and populated at
@@ -537,6 +562,38 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   run that fails leaves nothing behind — that path used to `exit 1` before its own
   leftover check and cost ~1 GB of prod's disk per failing run.
   See `deploy/README.md` → "Container storage" and `deploy/store-lib.sh`.
+- **That cleanup may not remove an image anything is standing on, and `-f` is what
+  made it able to** (de-z9xj). `podman rmi -f` is documented as *remove all containers
+  that are using the image before removing the image*, so on 2026-08-30 at 02:12:33 a
+  gate run's reap removed prod's image, its `mtgc:prod` tag and the running
+  `systemd-mtgc-prod` in one second. From there the name resolved to nothing, podman read
+  a missing **local** name as a *registry* reference, and `Restart=on-failure` retried
+  `dial tcp 127.0.0.1:443: connection refused` 4195 times over 15.5 hours. Image-only —
+  the 20 GB volume was untouched — and the site was down for all of it. Removal now goes
+  through `mtgc_remove_default_store_build_image`, which refuses an image that **any**
+  container is built on (running or stopped) or that wears an `mtgc:` name belonging to
+  another instance, and otherwise untags its own names and calls `podman rmi` **unforced**.
+  This is a second bound, not a replacement for `mtgc_default_store_lock`: the lock decides
+  *whose* build an arrival is, and it only holds while every writer takes it — a
+  `podman build` typed into a shell takes nothing. A refusal is printed and does **not**
+  turn a red gate green; up to a gigabyte left in the default store is the price, and it
+  is the price the gate already pays when it cannot take the lock.
+- **Every instance's Quadlet hard-fails a crash loop, prod included.**
+  `StartLimitIntervalSec=300` / `StartLimitBurst=10` in `[Unit]` — where systemd actually
+  reads them; in `[Service]` they parse, load and do nothing. **The interval must outlast
+  `RestartSec` × `StartLimitBurst` or the directive is decoration**, and that is the
+  property `tests/test_deploy_quadlet.py` asserts rather than the numbers: systemd's own
+  default (5 starts in 10s) cannot fire against `RestartSec=10`, because the attempts are
+  spaced further apart than the window counting them — which is the mechanism behind
+  those 4195 attempts and a unit that never left `activating` for anything to alarm on.
+  A unit that dies instantly ten times stops; one that serves half a minute between
+  deaths is a flap, not a loop, and belongs to the origin serving check (armed on the
+  deployment box, not yet a unit in this repo — de-u6a2). There is
+  deliberately no `OnFailure=` beside it — that check already alarms on this outcome, and
+  a second path to the same page is a second path to keep in sync. The cost is that
+  systemd will not restart out of `failed`, so `deploy.sh` runs `systemctl --user
+  reset-failed` **before** the restart: a redeploy is the fix for whatever caused the
+  loop, so it is the one path the limit must not block.
 - **`deploy.sh` installs the timer units on every redeploy, and that is the only
   path they have to an instance that already exists** (de-46k). `deploy.sh` falls
   back to `setup.sh` only when the Quadlet is *missing*, so for prod — whose

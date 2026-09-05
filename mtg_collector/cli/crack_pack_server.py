@@ -1044,6 +1044,81 @@ def _display_price(conn) -> tuple[str, str, list[str]]:
     return first_source, _TCG_PRICE_SQL, list(_TCG_PRICE_JOINS)
 
 
+#: The count body's whole SELECT list.  It reads no column, which is why the
+#: count can drop more joins than the totals can.
+_COUNT_SELECT = "1"
+
+
+def _keep_join(alias: str, join_sql: str) -> str:
+    """Every join, unconditionally -- what the page and the totals bodies take."""
+    return join_sql
+
+
+# `total`, `total_qty` and `total_value` are produced by aggregating over a
+# body whose SELECT list reads almost nothing -- the literal 1 for the count,
+# a qty expression and a price for the totals.  Every join that list does not
+# reach, and that the WHERE and the conditional joins do not reach either, is
+# one the body walks 110,018 times for columns nothing reads.  Measured
+# in-process on a 110,018-printing catalogue with 15,045 owned copies and
+# 440,072 price rows, no ANALYZE, changing only this code: `is:unowned`'s first
+# paint 1,602 ms -> 183 ms, the owned page's 472 ms -> 319 ms (de-5l08).
+#
+# Most of that is one plan change rather than the seeks themselves.  The count
+# body scans idx_printings_card_name, and reading `p.oracle_id` for the `cards`
+# join is what stops that scan being a *covering* one -- the count alone
+# measured 1,004 ms with cards/sets/orders and 65 ms without.
+#
+# Three separate arguments say a dropped join cannot change the answer, and
+# each join is dropped on the strength of exactly one of them:
+#
+#   `orders`, `decks`, `binders` -- joined on an INTEGER PRIMARY KEY, so each
+#   matches at most one row, and each is a LEFT JOIN, so each matches at least
+#   one.  Row count is unchanged whatever the data holds.
+#
+#   `cards`, `sets` -- joined on the other table's PRIMARY KEY, so at most one
+#   row again; INNER, so dropping them can only change the answer if a printing
+#   exists whose oracle_id or set_code has no parent row.  It cannot:
+#   `PrintingRepository.upsert` is the only INSERT INTO printings in this
+#   codebase, both columns are NOT NULL REFERENCES, and every path that writes
+#   printings opens its connection through
+#   `get_connection(get_shared_write_path(...))` -- which is the branch that
+#   sets `PRAGMA foreign_keys = ON`, in split-DB mode and monolithic mode
+#   alike, so SQLite rejects the orphan at INSERT.  The 110,018-printing
+#   production catalogue holds zero of them in either direction.
+#
+#   `deck_cards` -- the one join here that can fan a row out, so it is dropped
+#   only on a template that GROUPs, where the key names no dc column and the
+#   duplicates collapse back into the same groups.  `expand=copies` has no
+#   GROUP BY and pages those duplicates, so it passes `groups=False` and keeps
+#   the join.
+#
+# None of this applies to the page body, whose SELECT list renders columns from
+# all of them.
+def _aggregate_body_joins(*fragments: str, groups: bool):
+    """Return `keep(alias, join_sql)` for one aggregate body: the SQL, or "".
+
+    `fragments` is every piece of SQL that body will carry apart from the joins
+    themselves -- its SELECT list, its WHERE, and its conditional-join block.
+    An alias can be needed by any of the three: `is:wanted`'s wishlist join
+    reads `card.oracle_id`, and the totals' SELECT list reads whichever price
+    the `price_sources` setting picked.  Passing the real strings rather than
+    trusting a comment is what makes a later edit to any of them keep its join.
+    """
+    def reads(alias: str) -> bool:
+        # Anchored on the left so the `s.` in `printings.set_code` is not read
+        # as a reference to the `sets` alias.
+        pattern = re.compile(rf"(?<![\w.]){re.escape(alias)}\.")
+        return any(pattern.search(f) for f in fragments)
+
+    def keep(alias: str, join_sql: str) -> str:
+        if alias == "dc" and (not groups or reads("d")):
+            # `decks` is joined through `deck_cards`, so the two go together.
+            return join_sql
+        return join_sql if reads(alias) else ""
+
+    return keep
+
+
 # Page bounds for /api/collection. Measured on the real payload (108,630 rows
 # for is:unowned): a 250-row page is 212 KB raw / 28 KB gzipped and 434 round
 # trips to walk the catalog; 1000 is 855 KB / 103 KB and 108 trips. There is no
@@ -2565,20 +2640,28 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     c.purchase_price,
                     {_ENRICH_COLUMNS}
             """
-            def _body(joins: str, *, copies_only: bool = False) -> str:
+            def _body(joins: str, *, copies_only: bool = False, agg_select: str = "") -> str:
                 collection_join = "JOIN" if copies_only else "LEFT JOIN"
+                keep = _keep_join if not agg_select else _aggregate_body_joins(
+                    agg_select, where_sql, joins, groups=True
+                )
                 return f"""
                 FROM printings p
-                JOIN cards card ON p.oracle_id = card.oracle_id
-                JOIN sets s ON p.set_code = s.set_code
+                {keep('card', 'JOIN cards card ON p.oracle_id = card.oracle_id')}
+                {keep('s', 'JOIN sets s ON p.set_code = s.set_code')}
                 {collection_join} collection c ON p.printing_id = c.printing_id
-                LEFT JOIN orders o ON c.order_id = o.id
+                {keep('o', 'LEFT JOIN orders o ON c.order_id = o.id')}
                 {joins}
                 WHERE {where_sql}
                 {_group_by("p.card_name", "p.printing_id")}
             """
+            agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
+            agg_select_sql = f"{agg_qty_sql} as qty, {display_price_sql} as price"
             body_sql = _body(_build_extra_joins(has_deck_binder_joins=False))
-            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=False, enrich="none"))
+            count_body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=False, enrich="none"),
+                agg_select=_COUNT_SELECT,
+            )
             # The sums range over copies, and this is the one template whose
             # rows need not have one: a card you do not own is a row here with
             # qty 0, so it adds 0 to total_qty and 0 to total_value whatever it
@@ -2588,12 +2671,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             totals_body_sql = _body(
                 _build_extra_joins(has_deck_binder_joins=False, enrich="prices"),
                 copies_only=True,
+                agg_select=agg_select_sql,
             )
-            order_sql = _order_by("p.card_name", "p.printing_id")
-            agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
             # ...and so `total` cannot be counted off it: the rows it drops are
             # exactly the ones an is:unowned result is made of.
             totals_body_spans_result = False
+            order_sql = _order_by("p.card_name", "p.printing_id")
         elif expand_copies:
             # One row per collection entry (for deck builder picker)
             select_sql = f"""
@@ -2622,30 +2705,42 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     b.name as binder_name,
                     {_ENRICH_COLUMNS}
             """
-            def _body(joins: str, *, index_hint: str = "") -> str:
+            def _body(joins: str, *, index_hint: str = "", agg_select: str = "") -> str:
+                # groups=False: this template pages one row per deck_cards row,
+                # so an aggregate over it has to keep the join that makes them.
+                keep = _keep_join if not agg_select else _aggregate_body_joins(
+                    agg_select, where_sql, joins, groups=False
+                )
                 return f"""
                 FROM collection c{index_hint}
                 JOIN printings p ON c.printing_id = p.printing_id
-                JOIN cards card ON p.oracle_id = card.oracle_id
-                JOIN sets s ON p.set_code = s.set_code
-                LEFT JOIN orders o ON c.order_id = o.id
-                LEFT JOIN deck_cards dc ON dc.collection_id = c.id
-                LEFT JOIN decks d ON dc.deck_id = d.id
-                LEFT JOIN binders b ON c.binder_id = b.id
+                {keep('card', 'JOIN cards card ON p.oracle_id = card.oracle_id')}
+                {keep('s', 'JOIN sets s ON p.set_code = s.set_code')}
+                {keep('o', 'LEFT JOIN orders o ON c.order_id = o.id')}
+                {keep('dc', 'LEFT JOIN deck_cards dc ON dc.collection_id = c.id')}
+                {keep('d', 'LEFT JOIN decks d ON dc.deck_id = d.id')}
+                {keep('b', 'LEFT JOIN binders b ON c.binder_id = b.id')}
                 {joins}
                 WHERE {where_sql}
             """
+            agg_qty_sql = "1"
+            agg_select_sql = f"{agg_qty_sql} as qty, {display_price_sql} as price"
             body_sql = _body(
                 _build_extra_joins(has_deck_binder_joins=True),
                 index_hint=_collection_sort_index(),
             )
-            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="none"))
-            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="prices"))
+            count_body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=True, enrich="none"),
+                agg_select=_COUNT_SELECT,
+            )
+            totals_body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=True, enrich="prices"),
+                agg_select=agg_select_sql,
+            )
             # No GROUP BY on this template: one row per collection entry, so
             # c.id (plus dc.id, which the deck join can duplicate it by) is what
             # identifies a row.
             order_sql = _order_by("c.card_name", "c.printing_id", "c.id", "dc.id")
-            agg_qty_sql = "1"
             totals_body_spans_result = True
         else:
             # Default: aggregated, one row per (printing, finish, condition, status)
@@ -2678,16 +2773,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # they are the same values by the join, but only the collection copy
             # is what idx_collection_card_name indexes, and SQLite will not
             # cross the join to prove p.printing_id is c.printing_id.
-            def _body(joins: str, *, index_hint: str = "") -> str:
+            def _body(joins: str, *, index_hint: str = "", agg_select: str = "") -> str:
+                keep = _keep_join if not agg_select else _aggregate_body_joins(
+                    agg_select, where_sql, joins, groups=True
+                )
                 return f"""
                 FROM collection c{index_hint}
                 JOIN printings p ON c.printing_id = p.printing_id
-                JOIN cards card ON p.oracle_id = card.oracle_id
-                JOIN sets s ON p.set_code = s.set_code
-                LEFT JOIN orders o ON c.order_id = o.id
-                LEFT JOIN deck_cards dc ON dc.collection_id = c.id
-                LEFT JOIN decks d ON dc.deck_id = d.id
-                LEFT JOIN binders b ON c.binder_id = b.id
+                {keep('card', 'JOIN cards card ON p.oracle_id = card.oracle_id')}
+                {keep('s', 'JOIN sets s ON p.set_code = s.set_code')}
+                {keep('o', 'LEFT JOIN orders o ON c.order_id = o.id')}
+                {keep('dc', 'LEFT JOIN deck_cards dc ON dc.collection_id = c.id')}
+                {keep('d', 'LEFT JOIN decks d ON dc.deck_id = d.id')}
+                {keep('b', 'LEFT JOIN binders b ON c.binder_id = b.id')}
                 {joins}
                 WHERE {where_sql}
                 {_group_by("c.card_name", "c.printing_id", "c.finish", "c.condition", "c.status", "c.order_id")}
@@ -2695,16 +2793,23 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # The hint goes on the page query alone. The count and the totals
             # have no ORDER BY, so for them this index is just a scan of every
             # collection row in an order nothing asked for.
+            agg_qty_sql = "COUNT(DISTINCT c.id)"
+            agg_select_sql = f"{agg_qty_sql} as qty, {display_price_sql} as price"
             body_sql = _body(
                 _build_extra_joins(has_deck_binder_joins=True),
                 index_hint=_collection_sort_index(),
             )
-            count_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="none"))
-            totals_body_sql = _body(_build_extra_joins(has_deck_binder_joins=True, enrich="prices"))
+            count_body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=True, enrich="none"),
+                agg_select=_COUNT_SELECT,
+            )
+            totals_body_sql = _body(
+                _build_extra_joins(has_deck_binder_joins=True, enrich="prices"),
+                agg_select=agg_select_sql,
+            )
             order_sql = _order_by(
                 "c.card_name", "c.printing_id", "c.finish", "c.condition", "c.status", "c.order_id"
             )
-            agg_qty_sql = "COUNT(DISTINCT c.id)"
             totals_body_spans_result = True
 
         # order_sql stays per-template: the tiebreak is that template's row
@@ -2835,7 +2940,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # combined against 1,242 ms split, on 15,045 copies.
             agg = conn.execute(
                 f"SELECT COUNT(*), COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
-                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {totals_body_sql})",
+                f"SELECT {agg_select_sql} {totals_body_sql})",
                 sql_params,
             ).fetchone()
             total = agg[0]
@@ -2851,13 +2956,13 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # the pair, of which the sums are under a millisecond.
             agg = conn.execute(
                 f"SELECT COALESCE(SUM(qty), 0), COALESCE(SUM(qty * price), 0) FROM ("
-                f"SELECT {agg_qty_sql} as qty, {display_price_sql} as price {totals_body_sql})",
+                f"SELECT {agg_select_sql} {totals_body_sql})",
                 sql_params,
             ).fetchone()
             aggregates["total_qty"] = agg[0]
             aggregates["total_value"] = round(float(agg[1]), 2)
             total = conn.execute(
-                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
+                f"SELECT COUNT(*) FROM (SELECT {_COUNT_SELECT} {count_body_sql})", sql_params
             ).fetchone()[0]
         elif short_page:
             total = offset + len(rows)
@@ -2874,7 +2979,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # a COUNT has no columns to enrich, and each of them matches at most
             # one row, so they cannot change the count either.
             total = conn.execute(
-                f"SELECT COUNT(*) FROM (SELECT 1 {count_body_sql})", sql_params
+                f"SELECT COUNT(*) FROM (SELECT {_COUNT_SELECT} {count_body_sql})", sql_params
             ).fetchone()[0]
 
         conn.close()
