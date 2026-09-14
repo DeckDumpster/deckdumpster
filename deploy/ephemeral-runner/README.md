@@ -22,8 +22,8 @@ runner over SSH.
 5. Polls `qm guest cmd <VMID> ping` until the guest agent answers.
 6. Discovers the guest's IP from `qm guest cmd <VMID> network-get-interfaces`.
 7. SSHes to the guest and invokes `/usr/local/bin/register-runner <label>`,
-   passing the token and repo URL as environment variables rather than
-   command-line arguments so they never appear in Proxmox's task journal.
+   passing the token on stdin line 1 and the repo URL on stdin line 2 so
+   they never appear in Proxmox's task journal or in `ps aux` on the guest.
 
 The registration call uses `--ephemeral` and `--labels <runner-label>`.
 Without `--ephemeral` the runner stays registered after its job and the repo

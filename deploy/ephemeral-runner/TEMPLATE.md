@@ -134,6 +134,31 @@ it — so the service comes up on every clone without further configuration.**
 
 Confirm with `systemctl is-active qemu-guest-agent` → `active`.
 
+**This is the guest-side half.** The Proxmox VM config must also have the
+agent channel enabled on the template itself. Without it, the virtio-serial
+channel the agent communicates over is never exposed to the guest, and the
+running `qemu-guest-agent` service can never answer — so `provision.sh`'s
+readiness loop burns its full 120-second timeout and exits 1, after the VM
+has already been cloned and started.
+
+Set it on the template before sealing:
+
+```bash
+qm set <TEMPLATE_VMID> --agent 1
+```
+
+Clones inherit the VM config from the template, so every ephemeral runner
+gets the channel without additional `qm set` calls. Confirm from the
+Proxmox hypervisor against a **booted** clone (templates cannot boot):
+
+```bash
+qm guest cmd <CLONE_VMID> ping
+```
+
+A working channel returns `{"ping":"pong"}`. Any error means the channel is
+not open; re-check that `--agent 1` is in the template config and restart
+the clone.
+
 ### GitHub Actions runner — unpack, do not register
 
 Download the runner tarball and unpack it for the runner user. **Stop
@@ -151,8 +176,81 @@ tar xzf ./actions-runner-linux-x64-<VERSION>.tar.gz
 chown -R runner:runner /opt/actions-runner
 ```
 
-Registration (`./config.sh --url … --token …`) happens inside `provision.sh`
-at runtime, using a fresh token fetched for each ephemeral VM.
+Registration happens in the guest at runtime, via
+`/usr/local/bin/register-runner` (see the next build step). `provision.sh`
+SSHes to the guest and invokes that script, piping a fresh token and the repo
+URL over stdin so neither appears in any process argument list or system
+journal.
+
+### register-runner — the guest-side registration script
+
+`provision.sh` SSHes to the guest and calls `/usr/local/bin/register-runner`
+as its last provisioning step. **This script must be baked into the template
+before sealing.** A clone without it fails immediately when `provision.sh`
+tries to provision a CI run — the last line of the provisioning sequence dies
+with `register-runner: No such file or directory`, after the VM has already
+been cloned, started, and booted.
+
+The script reads the runner label as `$1` and the token and repo URL from
+stdin (token on line 1, repo URL on line 2) — never from argv or the
+environment. `provision.sh` explains the reason (lines 9–13): `qm guest exec`
+logs every argv word to the Proxmox task journal, and a registration token in
+that journal is effectively unrevocable for its ~1 h life. SSH stdin reaches
+neither the journal nor `ps aux` on the guest.
+
+```bash
+sudo tee /usr/local/bin/register-runner > /dev/null << 'SCRIPT'
+#!/usr/bin/env bash
+#
+# Register an ephemeral GitHub Actions runner and start it.
+# Called by provision.sh over SSH after the VM boots.
+#
+# Usage:  register-runner <label>
+#         (token on stdin line 1, repo URL on stdin line 2)
+#
+# The token is read from stdin — never from argv or the environment —
+# because qm guest exec logs every argv word to the Proxmox task journal,
+# and a token in that journal is effectively unrevocable for its ~1 h life.
+# SSH stdin is visible to neither the journal nor ps aux on the guest.
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+    echo "register-runner: usage: register-runner <label>" >&2
+    exit 1
+fi
+LABEL="$1"
+
+read -r TOKEN    || { echo "register-runner: expected token on stdin line 1" >&2; exit 1; }
+read -r REPO_URL || { echo "register-runner: expected repo URL on stdin line 2" >&2; exit 1; }
+
+if [ -z "$TOKEN" ] || [ -z "$REPO_URL" ]; then
+    echo "register-runner: token and repo URL must be non-empty" >&2
+    exit 1
+fi
+
+cd /opt/actions-runner
+
+# config.sh exits non-zero on failure; if it exits 0, registration succeeded.
+# --ephemeral is not optional: without it a completed run leaves a
+# permanently-offline runner entry in the repo, and subsequent jobs targeting
+# this runner's labels queue against a runner that no longer exists.
+./config.sh \
+    --unattended \
+    --ephemeral \
+    --labels "$LABEL" \
+    --url "$REPO_URL" \
+    --token "$TOKEN"
+
+# Start the runner in the background so provision.sh's SSH call returns as
+# soon as registration is confirmed. The runner handles its own job and exits;
+# teardown.sh destroys the VM afterwards.
+nohup ./run.sh >/tmp/runner.log 2>&1 &
+SCRIPT
+sudo chmod 755 /usr/local/bin/register-runner
+```
+
+Confirm with `ls -l /usr/local/bin/register-runner` — the file must exist and
+be executable (`-rwxr-xr-x`).
 
 ---
 
@@ -249,10 +347,33 @@ from inside the template before converting it.
 
 ## Verification checklist
 
-Run every step inside the template VM **as the `runner` user**, before
-converting it to a template. Each step proves the thing the next one depends
-on. The last step is the real workload — a template validated by "packages
-installed without error" is a template that fails on its first real CI run.
+The checklist has two parts. **Host-side checks** (H1–H2) run from the
+Proxmox hypervisor with the template VM booted; they verify the VM config
+before sealing. **Guest-side checks** (1–11) run inside the template VM as
+the `runner` user. Both parts must pass before you convert. Each step proves
+the thing the next one depends on. The last step is the real workload — a
+template validated by "packages installed without error" is a template that
+fails on its first real CI run.
+
+### From the Proxmox hypervisor (template VM must be booted)
+
+```bash
+# H1. QEMU guest agent channel is open — proves BOTH halves: agent: 1 in the
+#     VM config (host side) AND qemu-guest-agent running inside the guest.
+#     The guest-side check below (step 8) only proves the service is active;
+#     it cannot prove the virtio-serial channel exists. Replace 101 with your
+#     actual template VMID.
+qm guest cmd 101 ping \
+    && echo "PASS: guest agent channel open" \
+    || echo "FAIL: run 'qm set 101 --agent 1', then stop and start the VM"
+
+# H2. register-runner is in place and executable inside the guest.
+qm guest exec 101 -- test -x /usr/local/bin/register-runner \
+    && echo "PASS: register-runner present and executable" \
+    || echo "FAIL: bake /usr/local/bin/register-runner into the template (see build step above)"
+```
+
+### Inside the template VM (as the `runner` user)
 
 ```bash
 # 1. Linger is on
@@ -296,7 +417,8 @@ uv --version \
     && echo "PASS: uv" \
     || echo "FAIL: uv not found — install with the install script"
 
-# 8. qemu-guest-agent is running
+# 8. qemu-guest-agent service is running (guest-side half; H1 above proves
+#    the channel itself)
 systemctl is-active qemu-guest-agent \
     && echo "PASS: qemu-guest-agent" \
     || echo "FAIL: sudo systemctl enable --now qemu-guest-agent"
@@ -309,12 +431,18 @@ test ! -f /opt/actions-runner/.runner \
     && echo "PASS: runner not pre-registered" \
     || echo "FAIL: runner is registered — re-image from an unregistered copy"
 
-# 10. Outbound internet reaches the registry
+# 10. register-runner is in place and executable (also checked from the host
+#     as H2, but catching it here too costs nothing)
+test -x /usr/local/bin/register-runner \
+    && echo "PASS: register-runner present and executable" \
+    || echo "FAIL: bake /usr/local/bin/register-runner into the template (see build step above)"
+
+# 11. Outbound internet reaches the registry
 curl -sfo /dev/null https://ghcr.io/v2/ \
     && echo "PASS: outbound HTTPS to ghcr.io" \
     || echo "FAIL: no outbound internet — check NAT/bridge"
 
-# 11. The real workload — clone the repo and run deploy/ci.sh end to end.
+# 12. The real workload — clone the repo and run deploy/ci.sh end to end.
 #     This takes 15–25 minutes. It builds two container images, runs three
 #     test tiers (unit, integration, UI), and tears everything down.
 #     Use a name that will not collide with any real instance.
@@ -328,7 +456,7 @@ cd /tmp
 rm -rf repo-ci-tmpl
 ```
 
-All steps must pass before you convert the VM to a template. If step 11
+All steps must pass before you convert the VM to a template. If step 12
 fails, do not convert — the clones will fail on the same thing, and the error
 will look like a code failure rather than a missing prerequisite.
 
