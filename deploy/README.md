@@ -1164,6 +1164,15 @@ CI builds honour `~/.config/mtgc/store.env`, so on a box that opts in, nothing
 the test job builds lands on the disk prod runs from. `deploy.yml` — the workflow
 that deploys `prod` — deliberately does not read it.
 
+## Ephemeral runner template
+
+The self-hosted runner can run on an ephemeral Proxmox VM cloned from a
+pre-built template. `deploy/ephemeral-runner/TEMPLATE.md` is the build sheet:
+what to install, how to configure the non-root user with lingering, the
+minimum disk size (40 GB, with the arithmetic shown), what the container
+store needs — and an 11-step checklist ending in a real `bash deploy/ci.sh`
+run that validates the template before it is converted.
+
 ## Troubleshooting
 
 ```bash
