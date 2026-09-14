@@ -7,23 +7,25 @@ be exercised by hand and a red CI run can be reproduced locally.
 
 ## What each script does
 
-### `provision.sh <runner-label> <registration-token> <repo-url>`
+### `provision.sh <runner-label> <repo-url>`
 
 Runs on the Proxmox host. Clones a VM template into a new one-shot runner,
 starts it, waits for the QEMU guest agent to answer, then registers the
-runner over SSH.
+runner over SSH. The registration token is read from stdin (one line), not
+from the command line — a token on `argv` or in `$SSH_ORIGINAL_COMMAND` lands
+in sshd logs and in Proxmox's task journal for the lifetime of the token (~1 h).
 
-1. Picks a VMID with `qm nextid` and retries on collision.
-2. Clones the template with `qm clone ... --full 0`.
-3. Writes `<VMID> <label> <epoch>` to the ledger file immediately after the
+1. Reads the registration token from stdin.
+2. Picks a VMID with `qm nextid` and retries on collision.
+3. Clones the template with `qm clone ... --full 0`.
+4. Writes `<VMID> <label> <epoch>` to the ledger file immediately after the
    clone so `reap.sh` can find the VM even if this script is killed before it
    finishes.
-4. Prints the VMID on **stdout** and starts the VM.
-5. Polls `qm guest cmd <VMID> ping` until the guest agent answers.
-6. Discovers the guest's IP from `qm guest cmd <VMID> network-get-interfaces`.
-7. SSHes to the guest and invokes `/usr/local/bin/register-runner <label>`,
-   passing the token and repo URL as environment variables rather than
-   command-line arguments so they never appear in Proxmox's task journal.
+5. Prints the VMID on **stdout** and starts the VM.
+6. Polls `qm guest cmd <VMID> ping` until the guest agent answers.
+7. Discovers the guest's IP from `qm guest cmd <VMID> network-get-interfaces`.
+8. SSHes to the guest and invokes `/usr/local/bin/register-runner <label>`,
+   passing the token and repo URL via stdin rather than on the command line.
 
 The registration call uses `--ephemeral` and `--labels <runner-label>`.
 Without `--ephemeral` the runner stays registered after its job and the repo
@@ -63,12 +65,12 @@ whenever the ledger looks suspicious.
 
 ## Installation on the Proxmox host
 
-Copy the scripts to the host and make them executable:
+Copy all scripts to the host and make them executable:
 
 ```bash
 SCRIPTS_DIR=/usr/local/lib/gh-ephemeral-runner
 mkdir -p "$SCRIPTS_DIR"
-cp provision.sh teardown.sh reap.sh "$SCRIPTS_DIR/"
+cp provision.sh teardown.sh reap.sh forced-command.sh "$SCRIPTS_DIR/"
 chmod 755 "$SCRIPTS_DIR/"*.sh
 ```
 
@@ -80,25 +82,30 @@ mkdir -p /var/lib/gh-ephemeral-runner
 
 ### SSH keypair for the GitHub-hosted runner
 
-The GitHub Actions workflow SSHes to the Proxmox host to call these scripts.
+The GitHub Actions workflow SSHes to the Proxmox host as the `gh-runner`
+non-root user (see "Proxmox user permissions" below) to call these scripts.
 Generate a keypair:
 
 ```bash
 ssh-keygen -t ed25519 -f ~/.ssh/gh-runner-invoke -C "gh-actions-ephemeral-runner"
 ```
 
-Add the public key to `~/.ssh/authorized_keys` on the Proxmox host. Restrict
-it to the three scripts with a `command=` forced-command so the key cannot be
-used to run arbitrary commands:
+Add the public key to `~gh-runner/.ssh/authorized_keys` on the Proxmox host.
+Pin it to `forced-command.sh` with `restrict` plus an explicit `no-pty`:
 
 ```
-command="/usr/local/lib/gh-ephemeral-runner/forced-command.sh",no-port-forwarding,no-x11-forwarding,no-agent-forwarding ssh-ed25519 AAAA... gh-actions-ephemeral-runner
+command="/usr/local/lib/gh-ephemeral-runner/forced-command.sh",restrict,no-pty ssh-ed25519 AAAA... gh-actions-ephemeral-runner
 ```
 
-The forced-command script parses `$SSH_ORIGINAL_COMMAND` and dispatches to
-`provision.sh`, `teardown.sh`, or `reap.sh` — and to nothing else. That
-hardening is the companion bead's deliverable; the scripts here are designed
-so that collapse is possible.
+`restrict` implies no-port-forwarding, no-x11-forwarding, no-agent-forwarding
+and all future forwarding types added to OpenSSH. `no-pty` is stated
+explicitly to make the intent clear.
+
+`forced-command.sh` parses `$SSH_ORIGINAL_COMMAND` without eval, validates
+the verb and every argument against positive patterns, and dispatches to
+`provision.sh`, `teardown.sh`, or `reap.sh` — and to nothing else. The
+registration token is passed on stdin and forwarded through unchanged; it
+never appears in the SSH command string or in sshd logs.
 
 ### SSH keypair inside the runner guest
 
@@ -179,14 +186,23 @@ Adjust `TEMPLATE_VMID` if your template lives at a different id.
 
 ## Proxmox user permissions
 
-The OS user that runs these scripts needs permission to call `qm`. The minimal
-pveum role required:
+The OS user that runs these scripts needs permission to call `qm`. Create a
+non-root Proxmox user and a role with the privileges these scripts actually
+require:
 
 ```bash
-pveum role add GHRunner -privs "VM.Clone VM.Config.Disk VM.Config.Network VM.Config.CPU VM.Config.Memory VM.PowerMgmt VM.Audit VM.Monitor Datastore.AllocateSpace"
+pveum role add GHRunner -privs "VM.Allocate VM.Clone VM.Config.Disk VM.Config.Network VM.Config.CPU VM.Config.Memory VM.PowerMgmt VM.Audit VM.Monitor Datastore.AllocateSpace"
 pveum user add gh-runner@pam
 pveum aclmod / -user gh-runner@pam -role GHRunner
 ```
 
+`VM.Allocate` is required: `qm nextid` and `qm destroy` both need it to
+allocate and release VMIDs. `VM.Clone` covers `qm clone`; `VM.PowerMgmt`
+covers `qm start` and `qm stop`; `VM.Config.*` covers setting the VM name at
+clone time; `Datastore.AllocateSpace` covers the linked-clone disk allocation.
+
 Grant access only to the pool or resource group the template and clones live
-in rather than `/` if your Proxmox setup supports it.
+in rather than `/` if your Proxmox setup supports it. Run the three scripts
+end-to-end as this user against a real Proxmox node before relying on this
+list — a role that has never been exercised is a guess, and `qm` error
+messages name the missing privilege when a call is refused.
