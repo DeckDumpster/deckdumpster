@@ -126,8 +126,29 @@ for VMID in "${RUNNER_VMIDS[@]}"; do
 
     echo "reap.sh: destroying VM $VMID ($AGE_SOURCE, ${AGE_HOURS}h old)" >&2
 
-    # Stop first; ignore failure (VM may already be stopped or in error state).
+    # Stop and wait. || true discards whether the VM is still running, and qm
+    # destroy on a running VM is refused — so a guest that ignores ACPI shutdown
+    # produces a hard failure after a 30-second wait and the VM survives as an
+    # orphan. Poll instead, then escalate to a kill if still running.
     qm stop "$VMID" --timeout 30 >&2 || true
+    _reap_deadline=$(( $(date +%s) + 60 ))
+    while true; do
+        _reap_status="$(qm status "$VMID" 2>/dev/null | awk '{print $2}')"
+        [ "$_reap_status" = "stopped" ] && break
+        if [ "$(date +%s)" -ge "$_reap_deadline" ]; then
+            echo "reap.sh: VM $VMID still running after 60s — killing" >&2
+            qm stop "$VMID" --timeout 10 --forceStop 1 >&2 || true
+            sleep 3
+            _reap_status="$(qm status "$VMID" 2>/dev/null | awk '{print $2}')"
+            if [ "$_reap_status" != "stopped" ]; then
+                echo "reap.sh: VM $VMID is '$_reap_status' after force-stop — skipping destroy" >&2
+                (( skipped++ )) || true
+                continue 2
+            fi
+            break
+        fi
+        sleep 2
+    done
     qm destroy "$VMID" --purge >&2
 
     # Remove from ledger.
