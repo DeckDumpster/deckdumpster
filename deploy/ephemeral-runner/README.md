@@ -9,27 +9,32 @@ be exercised by hand and a red CI run can be reproduced locally.
 
 ### `provision.sh <runner-label> <repo-url>`
 
-Runs on the Proxmox host. Clones a VM template into a new one-shot runner,
-injects the registration token via cloud-init, and starts the VM. The
-registration token is read from stdin (one line), not from the command line —
-a token on `argv` or in `$SSH_ORIGINAL_COMMAND` lands in sshd logs and in
-Proxmox's task journal for the lifetime of the token (~1 h).
+Runs anywhere on the tailnet that can reach the Proxmox HTTP API. Clones a VM
+template into a new one-shot runner, starts it, waits for the qemu guest agent
+to become ready, and delivers the registration credentials by writing
+`/run/gh-runner-init` inside the guest via `POST .../agent/file-write`. No
+files are written to the hypervisor filesystem.
 
-1. Reads the registration token from stdin.
-2. Picks a VMID with `qm nextid` and retries on collision.
-3. Clones the template with `qm clone ... --full 0`.
-4. Writes `<VMID> <label> <epoch>` to the ledger file immediately after the
-   clone so `reap.sh` can find the VM even if this script is killed before it
-   finishes.
-5. Prints the VMID on **stdout**.
-6. Writes a cloud-init user-data snippet with the token, label, and repo URL
-   to Proxmox storage and attaches it to the cloned VM with `qm set --cicustom`.
-7. Starts the VM.
-8. Polls `qm guest cmd <VMID> ping` until the guest agent answers.
+The registration token is written to a temp file and passed via
+`--data-urlencode "content@FILE"` so it never appears in any curl process argv
+(visible to `ps aux` on the hypervisor). The temp file is deleted immediately
+after the call.
 
-The guest boots, reads the injected data from the cloud-init datasource, and
-self-registers via `/home/runner/start-runner.sh`. The registration uses
-`--ephemeral` and `--labels <runner-label>`.
+1. Picks a VMID from `/cluster/nextid` and retries on collision.
+2. Clones the template (`full=0`, pool `ephemeral-ci`).
+3. Writes `<VMID> <label> <epoch>` to the ledger file and prints the VMID on
+   **stdout** before any step that can fail post-clone.
+4. Starts the VM.
+5. Polls `POST .../agent/ping` until the guest agent answers.
+6. Writes `RUNNER_LABEL`, `RUNNER_TOKEN`, and `RUNNER_REPO_URL` to
+   `/run/gh-runner-init` inside the guest via `POST .../agent/file-write`.
+
+The file lands `root:root` in the guest; the path unit must `chown runner:runner
+/run/gh-runner-init` before starting `ephemeral-runner.service` (see `TEMPLATE.md`).
+
+The guest's path unit (`ephemeral-runner-init.path`) watches `/run/gh-runner-init`
+and triggers `ephemeral-runner.service`, which reads the file and self-registers.
+The registration uses `--ephemeral` and `--labels <runner-label>`.
 Without `--ephemeral` the runner stays registered after its job and the repo
 accumulates a permanently-offline runner entry per CI run, which still carries
 its labels and causes later jobs targeting those labels to queue against a
@@ -124,21 +129,16 @@ never appears in the SSH command string or in sshd logs.
 
 The template VM (default VMID set by `TEMPLATE_VMID`, see below) must have:
 
-- **A cloud-init drive** (`ide2` slot set to `<storage>:cloudinit`). Without it
-  there is nowhere for `provision.sh` to inject the registration token. The
-  cloud-init drive must be in the template so every clone inherits it
-  automatically.
 - **`agent: 1` in the Proxmox VM config** (set before sealing with
   `qm set <TEMPLATE_VMID> --agent 1`). This is the host-side half of the QEMU
   guest agent channel; the guest-side half is `qemu-guest-agent` installed and
   running inside the VM. Without this line the channel is never opened and
-  `provision.sh`'s readiness poll burns its full `TASK_TIMEOUT` and exits 1.
-- QEMU guest agent installed and enabled (`apt install qemu-guest-agent`)
-- A `runner` user
-- `/home/runner/start-runner.sh` — the guest-side self-registration script
-  that `start-runner.service` calls at boot. It reads the injected token and
-  label from the cloud-init datasource and calls `config.sh --ephemeral`. See
-  `TEMPLATE.md` for the full build step.
+  `provision.sh`'s agent wait burns its full `AGENT_TIMEOUT` and exits 1.
+- **QEMU guest agent installed and enabled** (`apt install qemu-guest-agent`).
+- **A `runner` user** that the path unit can chown the token file to.
+- **An `ephemeral-runner-init.path` unit** watching `/run/gh-runner-init` that
+  chowns the file to `runner:runner` and starts `ephemeral-runner.service`.
+  See `TEMPLATE.md` for the full build step.
 
 ## Environment variables
 
@@ -151,8 +151,8 @@ acted on — it is the thing being cloned.
 | Variable | Default | Purpose |
 |---|---|---|
 | `CLONE_RETRIES` | `5` | Attempts to find a free VMID before giving up |
-| `SNIPPETS_DIR` | `/var/lib/vz/snippets` | Where the cloud-init snippet is written. The storage must have the `snippets` content type enabled; the snippet is referenced as `local:snippets/gh-runner-<vmid>.yaml`. |
 | `TASK_TIMEOUT` | `120` | Seconds to wait for a Proxmox UPID task to complete |
+| `AGENT_TIMEOUT` | `120` | Seconds to wait for the guest agent to become ready |
 | `CRED_FILE` | `/etc/gh-ephemeral-runner/token` | File sourced for the API credentials |
 
 ### `teardown.sh`

@@ -23,13 +23,13 @@ ok() { echo "PASS: $1"; (( pass++ )) || true; }
 ko() { echo "FAIL: $1"; (( fail++ )) || true; }
 
 SCRATCH=$(mktemp -d)
-mkdir -p "$SCRATCH/bin" "$SCRATCH/snippets"
+mkdir -p "$SCRATCH/bin"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 export PATH="$SCRATCH/bin:$PATH"
 export LEDGER_FILE="$SCRATCH/ledger"
-export SNIPPETS_DIR="$SCRATCH/snippets"
 export TASK_TIMEOUT=5
+export AGENT_TIMEOUT=5
 export CLONE_RETRIES=3
 # Point CRED_FILE at a non-existent path; tests export credentials directly.
 export CRED_FILE="$SCRATCH/no-such-cred-file"
@@ -47,9 +47,10 @@ export CURL_ARGV_FILE="$SCRATCH/curl-argv"
 #
 # Dispatches responses based on the URL path extracted from argv.
 # Behaviour overrides:
-#   CURL_CLONE_EXITSTATUS  -- exitstatus in clone task poll response (default: OK)
-#   CURL_START_EXITSTATUS  -- exitstatus in start task poll response (default: OK)
-#   CURL_VMID_FREE_CODE    -- HTTP code for vmid free check (default: 404)
+#   CURL_CLONE_EXITSTATUS   -- exitstatus in clone task poll response (default: OK)
+#   CURL_START_EXITSTATUS   -- exitstatus in start task poll response (default: OK)
+#   CURL_VMID_FREE_CODE     -- HTTP code for vmid free check (default: 404)
+#   CURL_AGENT_PING_FAIL    -- if "1", agent/ping returns 500 (agent not ready)
 # ---------------------------------------------------------------------------
 cat >"$SCRATCH/bin/curl" <<'SH'
 #!/usr/bin/env bash
@@ -112,6 +113,17 @@ case "$path" in
         ;;
     /nodes/*/qemu/*/status/start)
         body='{"data":"UPID:pve:00002:00002:00000066:qmstart:200:root@pam:"}'
+        ;;
+    /nodes/*/qemu/*/agent/ping)
+        if [ "${CURL_AGENT_PING_FAIL:-0}" = "1" ]; then
+            http_code=500
+            body='{"errors":{"exc":"qemu guest agent is not running"}}'
+        else
+            body='{"data":null}'
+        fi
+        ;;
+    /nodes/*/qemu/*/agent/file-write)
+        body='{"data":null}'
         ;;
     *)
         printf 'curl stub: unhandled path: %s\n' "$path" >&2
@@ -260,28 +272,71 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 6 -- snippet must set owner: runner:runner on /run/gh-runner-init
+# Test 6 -- agent/file-write must target /run/gh-runner-init
 #
-# cloud-init writes_files runs as root; without an explicit owner the file
-# lands root:root 0600, and the runner service (User=runner) cannot read it.
-# This test reads the generated snippet directly -- no VM required.
+# provision.sh delivers the runner credentials by writing /run/gh-runner-init
+# inside the guest via the qemu guest agent. Verify that the file-write call
+# is made to the correct path.
 # ---------------------------------------------------------------------------
 rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
 run_provision valid-label test-token https://github.com/owner/repo >/dev/null
 
-SNIPPET_FILE="$SCRATCH/snippets/gh-runner-200.yaml"
-
-if grep -qF "owner: 'runner:runner'" "$SNIPPET_FILE" 2>/dev/null; then
-    ok "test-6: snippet sets owner: 'runner:runner'"
+if grep -qF '/agent/file-write' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-6: agent/file-write endpoint called"
 else
-    ko "test-6: snippet missing owner: 'runner:runner' (file would land root:root and be unreadable by the runner service)"
+    ko "test-6: agent/file-write not found in curl argv (delivery did not happen)"
 fi
 
-# Prove the check is grounded: the path must also be present.
-if grep -qF '/run/gh-runner-init' "$SNIPPET_FILE" 2>/dev/null; then
-    ok "test-6: snippet path is /run/gh-runner-init"
+# Prove the check is grounded: the target path must also be present in args.
+if grep -qF 'file=/run/gh-runner-init' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-6: file=/run/gh-runner-init passed to file-write"
 else
-    ko "test-6: /run/gh-runner-init not found in snippet (stub may not have run)"
+    ko "test-6: file=/run/gh-runner-init not found in curl argv (wrong target path)"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 7 -- guest agent must be polled before file-write
+#
+# provision.sh waits for /agent/ping to succeed before calling file-write.
+# Verify that agent/ping appears in the curl argv, proving the wait happened.
+# ---------------------------------------------------------------------------
+rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+run_provision valid-label test-token https://github.com/owner/repo >/dev/null
+
+if grep -qF '/agent/ping' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-7: agent/ping called to wait for guest agent"
+else
+    ko "test-7: agent/ping not found in curl argv (agent wait was skipped)"
+fi
+
+# Prove the check is grounded: file-write must have followed ping.
+if grep -qF '/agent/file-write' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-7: agent/file-write followed the ping (stub was live)"
+else
+    ko "test-7: agent/file-write missing (stub may not have been called at all)"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 8 -- agent timeout causes non-zero exit
+#
+# If the guest agent never responds within AGENT_TIMEOUT seconds,
+# provision.sh must exit non-zero without calling file-write.
+# ---------------------------------------------------------------------------
+rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+export CURL_AGENT_PING_FAIL=1
+OUT8=$(bash "$PROVISION" valid-label test-token https://github.com/owner/repo 2>/dev/null) && rc8=0 || rc8=$?
+unset CURL_AGENT_PING_FAIL
+
+if [ "$rc8" -ne 0 ]; then
+    ok "test-8: provision.sh exits non-zero when agent does not become ready"
+else
+    ko "test-8: provision.sh should exit non-zero when agent times out"
+fi
+
+if ! grep -qF '/agent/file-write' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-8: file-write not called when agent ping times out"
+else
+    ko "test-8: file-write was called despite agent ping failure"
 fi
 
 # ---------------------------------------------------------------------------

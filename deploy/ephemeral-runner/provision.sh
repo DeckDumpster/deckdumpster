@@ -6,7 +6,7 @@
 #   Exactly one line of the form  vmid=<n>  is written to stdout after the
 #   ledger entry and before any step that can fail post-clone. Callers MUST
 #   capture stdout and parse the vmid= line BEFORE checking the exit status,
-#   because a failure in a later step (config injection, start) still exits
+#   because a failure in a later step (agent delivery, start) still exits
 #   non-zero while the VMID has already been emitted. A caller written as
 #     VMID=$(ssh proxmox provision.sh ...)
 #   loses the VMID on any non-zero exit. Use instead:
@@ -17,13 +17,14 @@
 # Usage:
 #   provision.sh <runner-label> <registration-token> <repo-url>
 #
-# The registration token is injected as cloud-init data at clone time; the
-# guest registers itself from that data. provision.sh never opens an SSH
-# connection to the guest. The token must not appear in the VM's description,
-# its name, or anywhere GET .../config returns to a lower-privileged reader --
-# it lives only in the cloud-init snippet file at
-# $SNIPPETS_DIR/gh-runner-<vmid>.yaml. teardown.sh is responsible for
-# deleting that file.
+# The registration token is delivered by writing /run/gh-runner-init inside
+# the guest via the qemu guest agent (POST .../agent/file-write). provision.sh
+# never opens an SSH connection to the guest and writes no files to the
+# hypervisor filesystem. The token must not appear in any curl process argv --
+# visible to ps aux on the hypervisor -- so the content is written to a temp
+# file and passed as --data-urlencode "content@FILE" rather than inline.
+# The file lands root:root in the guest; the path unit must chown it before
+# starting the runner service (see db-wd43).
 #
 # Proxmox credentials (from $CRED_FILE, mode 0600, owned by gh-runner):
 #   PVE_TOKEN_ID     -- Proxmox API token id (user@realm!tokenname)
@@ -35,12 +36,12 @@
 # missing one at startup is the only way to distinguish them.
 #
 # Environment variables:
-#   TEMPLATE_VMID -- source VM template id (default: 101)
-#   LEDGER_FILE   -- active-runner ledger (default: /var/lib/gh-ephemeral-runner/active)
-#   CLONE_RETRIES -- attempts before giving up on VMID collision (default: 5)
-#   SNIPPETS_DIR  -- Proxmox local snippets storage (default: /var/lib/vz/snippets)
-#   TASK_TIMEOUT  -- seconds to wait for a UPID task to complete (default: 120)
-#   CRED_FILE     -- credential file to source (default: /etc/gh-ephemeral-runner/token)
+#   TEMPLATE_VMID  -- source VM template id (default: 101)
+#   LEDGER_FILE    -- active-runner ledger (default: /var/lib/gh-ephemeral-runner/active)
+#   CLONE_RETRIES  -- attempts before giving up on VMID collision (default: 5)
+#   TASK_TIMEOUT   -- seconds to wait for a UPID task to complete (default: 120)
+#   AGENT_TIMEOUT  -- seconds to wait for the guest agent to become ready (default: 120)
+#   CRED_FILE      -- credential file to source (default: /etc/gh-ephemeral-runner/token)
 #
 # API transport notes:
 #   -k: loopback only. The request never leaves the host, so anyone positioned
@@ -60,8 +61,8 @@ set -euo pipefail
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
 LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
 CLONE_RETRIES="${CLONE_RETRIES:-5}"
-SNIPPETS_DIR="${SNIPPETS_DIR:-/var/lib/vz/snippets}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-120}"
+AGENT_TIMEOUT="${AGENT_TIMEOUT:-120}"
 CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
 
 if [ $# -ne 3 ]; then
@@ -73,9 +74,8 @@ LABEL="$1"
 TOKEN="$2"
 REPO_URL="$3"
 
-# Validate label before any network step. The label flows into cloud-init
-# user-data; characters outside this set have no legitimate use in a runner
-# label.
+# Validate label before any network step. Characters outside this set have no
+# legitimate use in a runner label.
 if ! printf '%s' "$LABEL" | grep -qE '^[A-Za-z0-9._-]+$'; then
     printf 'provision.sh: label contains invalid characters (allowed: A-Za-z0-9._-)\n' >&2
     exit 1
@@ -225,42 +225,13 @@ if [ -z "$clone_upid" ]; then
 fi
 
 # Poll the clone task. A non-OK exitstatus means the clone failed on the
-# server; do not proceed to inject cloud-init or start the VM.
+# server; do not proceed to start the VM.
 poll_task "$clone_upid" || exit 1
 
 # Write the ledger entry and emit the VMID now -- before any step that can
 # fail -- so callers can tear down even if we die later. See output contract.
 printf '%s %s %s\n' "$VMID" "$LABEL" "$(date +%s)" >>"$LEDGER_FILE"
 printf 'vmid=%s\n' "$VMID"
-
-# --- Inject cloud-init user-data ---
-#
-# Write runner credentials to a snippet file and set cicustom on the VM
-# config. The token travels as cloud-init data and is never in the VM's
-# description, name, or any config field visible to a lower-privileged reader.
-# teardown.sh deletes $SNIPPETS_DIR/gh-runner-<vmid>.yaml on VM destruction.
-printf 'provision.sh: injecting cloud-init data for VM %s\n' "$VMID" >&2
-SNIPPET_PATH="${SNIPPETS_DIR}/gh-runner-${VMID}.yaml"
-mkdir -p "$SNIPPETS_DIR"
-cat >"$SNIPPET_PATH" <<USERDATA
-#cloud-config
-write_files:
-  - path: /run/gh-runner-init
-    permissions: '0600'
-    owner: 'runner:runner'
-    content: |
-      RUNNER_LABEL=${LABEL}
-      RUNNER_TOKEN=${TOKEN}
-      RUNNER_REPO_URL=${REPO_URL}
-USERDATA
-
-config_body="$(pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/config" \
-    --data-urlencode "cicustom=user=local:snippets/gh-runner-${VMID}.yaml")" || exit 1
-config_upid="$(printf '%s\n' "$config_body" | python3 -c \
-    'import json,sys; d=json.load(sys.stdin).get("data"); print(d if d else "")')"
-if [ -n "$config_upid" ]; then
-    poll_task "$config_upid" || exit 1
-fi
 
 # --- Start ---
 printf 'provision.sh: starting VM %s\n' "$VMID" >&2
@@ -273,4 +244,37 @@ if [ -z "$start_upid" ]; then
 fi
 poll_task "$start_upid" || exit 1
 
-printf 'provision.sh: VM %s started; runner will self-register via cloud-init\n' "$VMID" >&2
+# --- Wait for guest agent ---
+#
+# The guest agent needs time to start after the VM boots. Poll /agent/ping
+# until it responds before attempting file-write, which would fail immediately
+# if the agent is not yet running.
+printf 'provision.sh: waiting for guest agent on VM %s (timeout %ss)\n' "$VMID" "$AGENT_TIMEOUT" >&2
+agent_deadline=$(( $(date +%s) + AGENT_TIMEOUT ))
+while true; do
+    if pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/ping" >/dev/null 2>&1; then
+        break
+    fi
+    if [ "$(date +%s)" -ge "$agent_deadline" ]; then
+        printf 'provision.sh: timed out waiting for guest agent on VM %s (%ss)\n' \
+            "$VMID" "$AGENT_TIMEOUT" >&2
+        exit 1
+    fi
+    sleep 2
+done
+
+# --- Deliver token via guest agent file-write ---
+#
+# Write the content to a temp file so the token never appears in any curl
+# process argv (visible to ps aux on the hypervisor). The file lands root:root
+# in the guest; the path unit must chown it before starting the runner service.
+printf 'provision.sh: delivering token to VM %s via guest agent\n' "$VMID" >&2
+_token_file="$(mktemp)"
+printf 'RUNNER_LABEL=%s\nRUNNER_TOKEN=%s\nRUNNER_REPO_URL=%s\n' \
+    "$LABEL" "$TOKEN" "$REPO_URL" > "$_token_file"
+pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
+    --data-urlencode "file=/run/gh-runner-init" \
+    --data-urlencode "content@${_token_file}" || { rm -f "$_token_file"; exit 1; }
+rm -f "$_token_file"
+
+printf 'provision.sh: VM %s started; runner credentials delivered via guest agent\n' "$VMID" >&2
