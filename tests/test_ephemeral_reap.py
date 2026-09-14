@@ -45,11 +45,19 @@ import sys, os, re, json
 
 url = None
 method = "GET"
+output_file = None
+write_out = None
 i = 1
 while i < len(sys.argv):
     arg = sys.argv[i]
     if arg in ("-X", "--request") and i + 1 < len(sys.argv):
         method = sys.argv[i + 1].upper()
+        i += 2
+    elif arg in ("-o", "--output") and i + 1 < len(sys.argv):
+        output_file = sys.argv[i + 1]
+        i += 2
+    elif arg in ("-w", "--write-out") and i + 1 < len(sys.argv):
+        write_out = sys.argv[i + 1]
         i += 2
     elif re.match(r"https?://", arg):
         url = arg
@@ -66,7 +74,15 @@ if fail_pat and re.search(fail_pat, url):
     sys.exit(6)
 
 def respond(data, status=0):
-    print(data)
+    # pvapi.sh calls curl with -o tmpfile -w '%{http_code}': body to file,
+    # status code to stdout. Without -o, write body to stdout (old behaviour).
+    if output_file:
+        with open(output_file, "w") as f:
+            f.write(data)
+        if write_out == "%{http_code}":
+            print("200", end="")
+    else:
+        print(data)
     sys.exit(status)
 
 # GitHub runners API
