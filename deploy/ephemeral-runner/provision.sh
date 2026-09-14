@@ -4,13 +4,18 @@
 # Prints the VMID on stdout; everything else goes to stderr.
 #
 # Usage:
-#   provision.sh <runner-label> <registration-token> <repo-url>
+#   provision.sh <runner-label> <repo-url>
+#   (registration token is read from stdin, one line)
 #
-# Registration is done over SSH rather than `qm guest exec`, with the token
-# piped via stdin rather than placed on the command line. `qm guest exec` logs
-# every argv word to the Proxmox task journal; a token on stdin is visible to
-# neither — and a registration token in a system journal is effectively
-# unrevocable for its lifetime (~1 h).
+# The token is read from stdin rather than accepted as an argument so that it
+# never appears in the SSH command string. The forced-command dispatcher
+# (forced-command.sh) passes stdin through unchanged; sshd does the same.
+# A token on the command line lands in sshd logs and in the Proxmox task
+# journal for any `qm guest exec` call made with it — effectively unrevocable
+# for the token's lifetime (~1 h).
+#
+# Registration is done over SSH into the guest rather than `qm guest exec`
+# for the same reason: qm logs every argv word to the Proxmox task journal.
 #
 # Environment variables:
 #   TEMPLATE_VMID   — source VM template id (default: 101)
@@ -29,14 +34,18 @@ RUNNER_SSH_USER="${RUNNER_SSH_USER:-runner}"
 LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
 CLONE_RETRIES="${CLONE_RETRIES:-5}"
 
-if [ $# -ne 3 ]; then
-    echo "Usage: provision.sh <runner-label> <registration-token> <repo-url>" >&2
+if [ $# -ne 2 ]; then
+    echo "Usage: provision.sh <runner-label> <repo-url>  (token on stdin)" >&2
     exit 1
 fi
 
 LABEL="$1"
-TOKEN="$2"
-REPO_URL="$3"
+REPO_URL="$2"
+
+# Read the registration token from stdin before any work so a broken pipe is
+# caught here, not halfway through a clone. A token is one line; anything
+# after the first newline is discarded.
+read -r TOKEN
 
 # Ensure the ledger directory exists before we try to write to it.
 mkdir -p "$(dirname "$LEDGER_FILE")"
