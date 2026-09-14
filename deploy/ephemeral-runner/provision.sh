@@ -247,6 +247,7 @@ cat >"$SNIPPET_PATH" <<USERDATA
 write_files:
   - path: /run/gh-runner-init
     permissions: '0600'
+    owner: 'runner:runner'
     content: |
       RUNNER_LABEL=${LABEL}
       RUNNER_TOKEN=${TOKEN}

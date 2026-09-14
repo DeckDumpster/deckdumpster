@@ -290,7 +290,7 @@ sudo tee /home/runner/start-runner.sh > /dev/null << 'SCRIPT'
 #
 # Ephemeral GitHub Actions runner — self-registration and startup.
 # Called by start-runner.service at boot after cloud-init has written
-# /etc/runner-init.env via write_files.
+# /run/gh-runner-init via write_files (owner runner:runner, mode 0600).
 #
 # The registration token is short-lived (~1 h) and repo-scoped; it is
 # injected at clone time by provision.sh so it is never baked into the
@@ -299,7 +299,7 @@ sudo tee /home/runner/start-runner.sh > /dev/null << 'SCRIPT'
 set -euo pipefail
 
 RUNNER_DIR=/home/runner/actions-runner
-INIT_ENV=/etc/runner-init.env
+INIT_ENV=/run/gh-runner-init
 
 if [ ! -f "$INIT_ENV" ]; then
     echo "start-runner: $INIT_ENV not found — cloud-init did not inject runner config" >&2
@@ -313,9 +313,9 @@ fi
 source "$INIT_ENV"
 rm -f "$INIT_ENV"
 
-: "${RUNNER_TOKEN:?start-runner: RUNNER_TOKEN not set in runner-init.env}"
-: "${RUNNER_LABEL:?start-runner: RUNNER_LABEL not set in runner-init.env}"
-: "${RUNNER_REPO:?start-runner: RUNNER_REPO not set in runner-init.env}"
+: "${RUNNER_TOKEN:?start-runner: RUNNER_TOKEN not set in gh-runner-init}"
+: "${RUNNER_LABEL:?start-runner: RUNNER_LABEL not set in gh-runner-init}"
+: "${RUNNER_REPO_URL:?start-runner: RUNNER_REPO_URL not set in gh-runner-init}"
 
 cd "$RUNNER_DIR"
 
@@ -328,7 +328,7 @@ if ! ./config.sh \
         --unattended \
         --ephemeral \
         --labels "$RUNNER_LABEL" \
-        --url "$RUNNER_REPO" \
+        --url "$RUNNER_REPO_URL" \
         --token "$RUNNER_TOKEN"; then
     echo "start-runner: config.sh failed — staying up for reaper collection" >&2
     # Do NOT power off — that destroys the evidence.
