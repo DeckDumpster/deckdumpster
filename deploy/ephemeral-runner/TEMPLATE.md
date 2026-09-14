@@ -38,6 +38,99 @@ before it reaches the image-build step.
 
 ---
 
+## Proxmox VM configuration — run from the hypervisor
+
+These steps configure the template's Proxmox config and must be done from the
+hypervisor, not inside the guest. Run them before sealing. Clones inherit the
+VM config from the template, so every runner gets these settings without
+additional `qm set` calls.
+
+### Cloud-init drive — required for token injection
+
+`provision.sh` injects the registration token at clone time by writing a
+cloud-init user-data snippet and attaching it to the cloned VM. This only
+works if the **template** has a cloud-init drive in its config; without one
+there is nowhere for Proxmox to attach the injected data, and the cloned VM
+boots with no token, `start-runner.sh` exits 1, and the runner never
+registers.
+
+The existing `ide2: none,media=cdrom` placeholder is not a cloud-init drive.
+Replace it on the template before sealing:
+
+```bash
+# Replace 'local-lvm' with the storage pool your template disk uses
+# (check with: qm config <TEMPLATE_VMID>).
+qm set <TEMPLATE_VMID> --ide2 local-lvm:cloudinit
+```
+
+Clones inherit the drive slot from the template. `provision.sh` then calls
+`qm set <CLONE_VMID> --cicustom "user=local:snippets/gh-runner-<VMID>.yaml"`
+after the clone to attach the per-run user-data.
+
+Confirm:
+
+```bash
+qm config <TEMPLATE_VMID> | grep -q '^ide2:.*cloudinit' \
+    && echo "PASS: cloud-init drive present" \
+    || echo "FAIL: run 'qm set <TEMPLATE_VMID> --ide2 <storage>:cloudinit'"
+```
+
+### Serial console — required for headless diagnosis
+
+Without a serial console, `qm terminal <VMID>` returns
+`unable to find a serial interface`. When a runner VM fails to register or
+hangs at boot, the serial console is the only way to read the boot log without
+pulling the VGA framebuffer through the QEMU monitor.
+
+Add the serial device to the template:
+
+```bash
+qm set <TEMPLATE_VMID> --serial0 socket
+```
+
+And enable `ttyS0` in the guest kernel command line (run inside the guest
+before sealing):
+
+```bash
+sudo sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet console=ttyS0"/' /etc/default/grub
+sudo update-grub
+```
+
+Confirm from the hypervisor:
+
+```bash
+qm config <TEMPLATE_VMID> | grep -q '^serial0: socket' \
+    && echo "PASS: serial console present" \
+    || echo "FAIL: run 'qm set <TEMPLATE_VMID> --serial0 socket'"
+```
+
+To verify it works, run `qm terminal <CLONE_VMID>` against a booted clone —
+it should open a shell, not print `unable to find a serial interface`.
+
+### QEMU guest agent channel — agent: 1
+
+```bash
+qm set <TEMPLATE_VMID> --agent 1
+```
+
+This is the **host-side half** of the QEMU guest agent channel. It exposes
+the virtio-serial device the guest-side `qemu-guest-agent` service talks over.
+Without it the agent can be installed and running inside the guest and still
+never answer, because the channel does not exist. `provision.sh`'s readiness
+loop blocks on `qm guest cmd ping`; without the channel it burns its full
+`AGENT_TIMEOUT` (default 120 s) and exits 1 after the VM has already been
+cloned and started.
+
+Confirm:
+
+```bash
+qm config <TEMPLATE_VMID> | grep -q '^agent: 1' \
+    && echo "PASS: agent: 1 set" \
+    || echo "FAIL: run 'qm set <TEMPLATE_VMID> --agent 1'"
+```
+
+---
+
 ## Packages and tooling
 
 Install all of these before converting to a template. The rationale for each
@@ -119,20 +212,24 @@ sudo apt install -y git curl jq
 `git` is required by the GitHub Actions runner and for `uv` operations that
 inspect the repo.
 
-### qemu-guest-agent — enable and start it
+### qemu-guest-agent — enable and start it (guest-side half)
 
 ```bash
 sudo apt install -y qemu-guest-agent
 sudo systemctl enable --now qemu-guest-agent
 ```
 
-The Proxmox `provision.sh` script that clones a template into an ephemeral
-VM and prepares it for a run waits for the guest agent to respond before
-proceeding. A template without the agent enabled makes every provisioning
-call time out. **Enable and start it inside the template — not just install
-it — so the service comes up on every clone without further configuration.**
+The Proxmox `provision.sh` script waits for the guest agent to answer before
+returning. A template without the agent enabled makes every provisioning call
+time out. **Enable and start it inside the template — not just install it —
+so the service comes up on every clone without further configuration.**
 
 Confirm with `systemctl is-active qemu-guest-agent` → `active`.
+
+The host-side half — `agent: 1` in the Proxmox VM config — is set in the
+"Proxmox VM configuration" section above. Both halves must be present: the
+package makes the agent run inside the guest; the VM config exposes the
+virtio-serial channel the agent communicates over.
 
 ### GitHub Actions runner — unpack, do not register
 
@@ -143,16 +240,147 @@ runners all presenting the same identity, and GitHub refuses all but the
 first.
 
 ```bash
-mkdir -p /opt/actions-runner
-cd /opt/actions-runner
+sudo -u runner mkdir -p /home/runner/actions-runner
+cd /home/runner/actions-runner
 # Replace <VERSION> with the latest from github.com/actions/runner/releases
-curl -LO https://github.com/actions/runner/releases/download/v<VERSION>/actions-runner-linux-x64-<VERSION>.tar.gz
-tar xzf ./actions-runner-linux-x64-<VERSION>.tar.gz
-chown -R runner:runner /opt/actions-runner
+sudo -u runner curl -LO https://github.com/actions/runner/releases/download/v<VERSION>/actions-runner-linux-x64-<VERSION>.tar.gz
+sudo -u runner tar xzf ./actions-runner-linux-x64-<VERSION>.tar.gz
+sudo -u runner rm ./actions-runner-linux-x64-<VERSION>.tar.gz
 ```
 
-Registration (`./config.sh --url … --token …`) happens inside `provision.sh`
-at runtime, using a fresh token fetched for each ephemeral VM.
+Confirm:
+
+```bash
+test -s /home/runner/actions-runner/run.sh \
+    && echo "PASS: runner tarball unpacked" \
+    || echo "FAIL: run.sh not found — unpack the tarball"
+test ! -f /home/runner/actions-runner/.runner \
+    && echo "PASS: runner not pre-registered" \
+    || echo "FAIL: runner is registered — re-image from an unregistered copy"
+```
+
+Registration happens at boot on each clone, via `/home/runner/start-runner.sh`
+(see the next build step). The token is injected at clone time by
+`provision.sh` via the cloud-init drive; by the time any job code runs, the
+token is spent.
+
+### /home/runner/start-runner.sh — the guest-side self-registration script
+
+**This script must be baked into the template before sealing.** A clone
+without it fails to register and the cloned VM boots to a stuck state,
+eventually reaped by `reap.sh`.
+
+It replaces any earlier version of this file. The template's prior version
+hard-coded a long-lived org-scoped PAT:
+
+```
+PAT="github_pat_YOUR_TOKEN_HERE"     # long-lived, org-scoped, baked into the image
+```
+
+**The runner executes the code it is testing.** Any CI job can read that
+file. The fix keeps the shape — a script that runs at boot, registers
+ephemerally, and starts the runner — but removes the credential: the
+hypervisor mints a short-lived registration token and injects it at clone
+time via cloud-init. By the time any job code runs, the token is spent and
+the file it arrived in has been deleted.
+
+```bash
+sudo tee /home/runner/start-runner.sh > /dev/null << 'SCRIPT'
+#!/usr/bin/env bash
+#
+# Ephemeral GitHub Actions runner — self-registration and startup.
+# Called by start-runner.service at boot after cloud-init has written
+# /etc/runner-init.env via write_files.
+#
+# The registration token is short-lived (~1 h) and repo-scoped; it is
+# injected at clone time by provision.sh so it is never baked into the
+# image. The file is deleted immediately after sourcing — before config.sh
+# runs — so no job code can read it.
+set -euo pipefail
+
+RUNNER_DIR=/home/runner/actions-runner
+INIT_ENV=/etc/runner-init.env
+
+if [ ! -f "$INIT_ENV" ]; then
+    echo "start-runner: $INIT_ENV not found — cloud-init did not inject runner config" >&2
+    # Stay up so the reaper's age window can collect this VM.
+    # Do NOT power off — that destroys the evidence.
+    exit 1
+fi
+
+# Source before deleting so the values are in memory, not on disk.
+# shellcheck source=/dev/null
+source "$INIT_ENV"
+rm -f "$INIT_ENV"
+
+: "${RUNNER_TOKEN:?start-runner: RUNNER_TOKEN not set in runner-init.env}"
+: "${RUNNER_LABEL:?start-runner: RUNNER_LABEL not set in runner-init.env}"
+: "${RUNNER_REPO:?start-runner: RUNNER_REPO not set in runner-init.env}"
+
+cd "$RUNNER_DIR"
+
+# --ephemeral is not optional: without it a completed run leaves a
+# permanently-offline runner entry in the repo, and subsequent jobs targeting
+# this runner's labels queue against a runner that no longer exists.
+# --url scopes the runner to the repository, not the organisation; an
+# org-scoped runner is eligible for jobs from every repository in the org.
+if ! ./config.sh \
+        --unattended \
+        --ephemeral \
+        --labels "$RUNNER_LABEL" \
+        --url "$RUNNER_REPO" \
+        --token "$RUNNER_TOKEN"; then
+    echo "start-runner: config.sh failed — staying up for reaper collection" >&2
+    # Do NOT power off — that destroys the evidence.
+    exit 1
+fi
+
+# Run the job, then let the service exit. teardown.sh destroys the VM after
+# the workflow step completes.
+exec ./run.sh
+SCRIPT
+sudo chown runner:runner /home/runner/start-runner.sh
+sudo chmod 755 /home/runner/start-runner.sh
+```
+
+Enable the service that calls it at boot (create
+`/etc/systemd/system/start-runner.service` if it does not already exist):
+
+```bash
+sudo tee /etc/systemd/system/start-runner.service > /dev/null << 'UNIT'
+[Unit]
+Description=GitHub Actions ephemeral runner
+After=network-online.target cloud-init.service
+Requires=network-online.target
+
+[Service]
+User=runner
+WorkingDirectory=/home/runner/actions-runner
+ExecStart=/home/runner/start-runner.sh
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+sudo systemctl daemon-reload
+sudo systemctl enable start-runner.service
+```
+
+Confirm:
+
+```bash
+test -s /home/runner/start-runner.sh \
+    && echo "PASS: start-runner.sh present" \
+    || echo "FAIL: write /home/runner/start-runner.sh (see build step above)"
+test -x /home/runner/start-runner.sh \
+    && echo "PASS: start-runner.sh executable" \
+    || echo "FAIL: sudo chmod 755 /home/runner/start-runner.sh"
+systemctl is-enabled start-runner.service \
+    && echo "PASS: start-runner.service enabled" \
+    || echo "FAIL: sudo systemctl enable start-runner.service"
+```
 
 ---
 
@@ -249,10 +477,59 @@ from inside the template before converting it.
 
 ## Verification checklist
 
-Run every step inside the template VM **as the `runner` user**, before
-converting it to a template. Each step proves the thing the next one depends
-on. The last step is the real workload — a template validated by "packages
-installed without error" is a template that fails on its first real CI run.
+The checklist has two parts. **Host-side checks** (H1–H5) run from the
+Proxmox hypervisor; H1–H3 run against the template config (VM does not
+need to be booted); H4–H5 require a **booted clone** (templates cannot boot).
+**Guest-side checks** (1–12) run inside the template VM as the `runner` user.
+Both parts must pass before you convert. Each step proves the thing the next
+one depends on. The last step is the real workload — a template validated by
+"packages installed without error" is a template that fails on its first real
+CI run.
+
+Run all host-side checks **against a VM built only from this document** — not
+one that was patched by hand while debugging. Both gaps that prompted this
+document (missing `agent: 1`, missing `actions-runner/run.sh`) were build
+steps absent from an earlier version of this document; no checklist run on a
+patched machine could have found them.
+
+### From the Proxmox hypervisor
+
+```bash
+# H1. Cloud-init drive is present (required for token injection at clone time).
+#     Replace 101 with your actual template VMID.
+qm config 101 | grep -q '^ide2:.*cloudinit' \
+    && echo "PASS: cloud-init drive present" \
+    || echo "FAIL: run 'qm set 101 --ide2 <storage>:cloudinit'"
+
+# H2. agent: 1 is set (host-side half of the QEMU guest agent channel).
+#     Without this, the virtio-serial channel is never exposed to the guest and
+#     provision.sh's readiness poll burns its full timeout and exits 1.
+qm config 101 | grep -q '^agent: 1' \
+    && echo "PASS: agent: 1 set" \
+    || echo "FAIL: run 'qm set 101 --agent 1'"
+
+# H3. Serial console is present (required for qm terminal to work).
+qm config 101 | grep -q '^serial0: socket' \
+    && echo "PASS: serial console present" \
+    || echo "FAIL: run 'qm set 101 --serial0 socket' and add console=ttyS0 to guest kernel cmdline"
+
+# H4–H5 require a booted clone. Clone the template, start it, wait ~60s for
+# boot, then run:
+#
+# H4. QEMU guest agent channel is open — proves BOTH halves: agent: 1 in the
+#     VM config (host side) AND qemu-guest-agent running inside the guest.
+#     Step 8 below only proves the service is active; it cannot prove the
+#     virtio-serial channel exists.
+qm guest cmd <CLONE_VMID> ping \
+    && echo "PASS: guest agent channel open" \
+    || echo "FAIL: re-check 'qm set 101 --agent 1' and that qemu-guest-agent is running"
+
+# H5. Serial console opens (proves console=ttyS0 is on the kernel cmdline).
+#     This opens an interactive session; press Ctrl+O to exit.
+qm terminal <CLONE_VMID>
+```
+
+### Inside the template VM (as the `runner` user)
 
 ```bash
 # 1. Linger is on
@@ -296,30 +573,44 @@ uv --version \
     && echo "PASS: uv" \
     || echo "FAIL: uv not found — install with the install script"
 
-# 8. qemu-guest-agent is running
+# 8. qemu-guest-agent service is running (guest-side half; H4 above proves
+#    the channel itself)
 systemctl is-active qemu-guest-agent \
     && echo "PASS: qemu-guest-agent" \
     || echo "FAIL: sudo systemctl enable --now qemu-guest-agent"
 
-# 9. GitHub runner is unpacked (not registered)
-ls /opt/actions-runner/run.sh \
-    && echo "PASS: runner tarball present" \
-    || echo "FAIL: unpack the runner tarball to /opt/actions-runner"
-test ! -f /opt/actions-runner/.runner \
+# 9. GitHub runner is unpacked at the correct path (not registered).
+#    start-runner.sh hardcodes RUNNER_DIR=/home/runner/actions-runner.
+#    The file whose absence powered the VM off 18 seconds into every boot:
+test -s /home/runner/actions-runner/run.sh \
+    && echo "PASS: runner tarball unpacked" \
+    || echo "FAIL: unpack the tarball to /home/runner/actions-runner (see build step above)"
+test ! -f /home/runner/actions-runner/.runner \
     && echo "PASS: runner not pre-registered" \
     || echo "FAIL: runner is registered — re-image from an unregistered copy"
 
-# 10. Outbound internet reaches the registry
+# 10. start-runner.sh is in place, executable, and the service is enabled.
+test -s /home/runner/start-runner.sh \
+    && echo "PASS: start-runner.sh present" \
+    || echo "FAIL: write /home/runner/start-runner.sh (see build step above)"
+test -x /home/runner/start-runner.sh \
+    && echo "PASS: start-runner.sh executable" \
+    || echo "FAIL: sudo chmod 755 /home/runner/start-runner.sh"
+systemctl is-enabled start-runner.service \
+    && echo "PASS: start-runner.service enabled" \
+    || echo "FAIL: sudo systemctl enable start-runner.service"
+
+# 11. Outbound internet reaches the registry
 curl -sfo /dev/null https://ghcr.io/v2/ \
     && echo "PASS: outbound HTTPS to ghcr.io" \
     || echo "FAIL: no outbound internet — check NAT/bridge"
 
-# 11. The real workload — clone the repo and run deploy/ci.sh end to end.
+# 12. The real workload — clone the repo and run deploy/ci.sh end to end.
 #     This takes 15–25 minutes. It builds two container images, runs three
 #     test tiers (unit, integration, UI), and tears everything down.
 #     Use a name that will not collide with any real instance.
 cd /tmp
-git clone https://github.com/DeckDumpster/mtg-collector repo-ci-tmpl
+git clone https://github.com/DeckDumpster/deckdumpster repo-ci-tmpl
 cd repo-ci-tmpl
 INSTANCE=ci-tmpl bash deploy/ci.sh \
     && echo "PASS: full CI run" \
@@ -328,7 +619,7 @@ cd /tmp
 rm -rf repo-ci-tmpl
 ```
 
-All steps must pass before you convert the VM to a template. If step 11
+All steps must pass before you convert the VM to a template. If step 12
 fails, do not convert — the clones will fail on the same thing, and the error
 will look like a code failure rather than a missing prerequisite.
 
@@ -342,5 +633,6 @@ After all verification steps pass, in the Proxmox console:
 2. Right-click the VM → **Convert to template**.
 
 Clones created with **Linked Clone** (`--full 0`) share the template's base
-disk and are created in seconds. Each clone boots as a fresh VM and
-`provision.sh` handles per-run registration before the runner agent starts.
+disk and are created in seconds. Each clone boots as a fresh VM, reads the
+token `provision.sh` injected via cloud-init, and self-registers via
+`start-runner.sh` before the runner agent picks up its job.
