@@ -10,10 +10,10 @@ be exercised by hand and a red CI run can be reproduced locally.
 ### `provision.sh <runner-label> <repo-url>`
 
 Runs on the Proxmox host. Clones a VM template into a new one-shot runner,
-starts it, waits for the QEMU guest agent to answer, then registers the
-runner over SSH. The registration token is read from stdin (one line), not
-from the command line — a token on `argv` or in `$SSH_ORIGINAL_COMMAND` lands
-in sshd logs and in Proxmox's task journal for the lifetime of the token (~1 h).
+injects the registration token via cloud-init, and starts the VM. The
+registration token is read from stdin (one line), not from the command line —
+a token on `argv` or in `$SSH_ORIGINAL_COMMAND` lands in sshd logs and in
+Proxmox's task journal for the lifetime of the token (~1 h).
 
 1. Reads the registration token from stdin.
 2. Picks a VMID with `qm nextid` and retries on collision.
@@ -21,13 +21,15 @@ in sshd logs and in Proxmox's task journal for the lifetime of the token (~1 h).
 4. Writes `<VMID> <label> <epoch>` to the ledger file immediately after the
    clone so `reap.sh` can find the VM even if this script is killed before it
    finishes.
-5. Prints the VMID on **stdout** and starts the VM.
-6. Polls `qm guest cmd <VMID> ping` until the guest agent answers.
-7. Discovers the guest's IP from `qm guest cmd <VMID> network-get-interfaces`.
-8. SSHes to the guest and invokes `/usr/local/bin/register-runner <label>`,
-   passing the token and repo URL via stdin rather than on the command line.
+5. Prints the VMID on **stdout**.
+6. Writes a cloud-init user-data snippet with the token, label, and repo URL
+   to Proxmox storage and attaches it to the cloned VM with `qm set --cicustom`.
+7. Starts the VM.
+8. Polls `qm guest cmd <VMID> ping` until the guest agent answers.
 
-The registration call uses `--ephemeral` and `--labels <runner-label>`.
+The guest boots, reads the injected data from the cloud-init datasource, and
+self-registers via `/home/runner/start-runner.sh`. The registration uses
+`--ephemeral` and `--labels <runner-label>`.
 Without `--ephemeral` the runner stays registered after its job and the repo
 accumulates a permanently-offline runner entry per CI run, which still carries
 its labels and causes later jobs targeting those labels to queue against a
@@ -118,79 +120,87 @@ the verb and every argument against positive patterns, and dispatches to
 registration token is passed on stdin and forwarded through unchanged; it
 never appears in the SSH command string or in sshd logs.
 
-### SSH keypair inside the runner guest
-
-The guest VM template must have an SSH server and a `runner` user whose
-`~/.ssh/authorized_keys` contains the public half of `RUNNER_SSH_KEY`
-(default `~/.ssh/gh-runner` on the Proxmox host). `provision.sh` connects
-to this key to register the runner.
-
-Generate the keypair on the Proxmox host:
-
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/gh-runner -C "gh-ephemeral-runner-guest"
-```
-
-Bake the public key into the template's `~runner/.ssh/authorized_keys` before
-sealing it. Do **not** bake a registration token into the template — tokens are
-short-lived (~1 h) and a token baked into an image has no expiry or revocation
-story.
-
 ### VM template requirements
 
 The template VM (default VMID set by `TEMPLATE_VMID`, see below) must have:
 
+- **A cloud-init drive** (`ide2` slot set to `<storage>:cloudinit`). Without it
+  there is nowhere for `provision.sh` to inject the registration token. The
+  cloud-init drive must be in the template so every clone inherits it
+  automatically.
+- **`agent: 1` in the Proxmox VM config** (set before sealing with
+  `qm set <TEMPLATE_VMID> --agent 1`). This is the host-side half of the QEMU
+  guest agent channel; the guest-side half is `qemu-guest-agent` installed and
+  running inside the VM. Without this line the channel is never opened and
+  `provision.sh`'s readiness poll burns its full `TASK_TIMEOUT` and exits 1.
 - QEMU guest agent installed and enabled (`apt install qemu-guest-agent`)
-- SSH server running (`openssh-server`)
-- A `runner` user (or whatever `RUNNER_SSH_USER` names)
-- `/usr/local/bin/register-runner` executable, which reads the runner label
-  from its first positional argument, and the registration token and repo URL
-  from stdin (token on the first line, repo URL on the second). It calls the
-  GitHub Actions runner's `config.sh --ephemeral --labels <label>
-  --unattended --url <repo> --token <token>` and starts the runner service.
-  Reading from stdin keeps the token off every process's argument list.
+- A `runner` user
+- `/home/runner/start-runner.sh` — the guest-side self-registration script
+  that `start-runner.service` calls at boot. It reads the injected token and
+  label from the cloud-init datasource and calls `config.sh --ephemeral`. See
+  `TEMPLATE.md` for the full build step.
 
 ## Environment variables
 
+All three scripts read `TEMPLATE_VMID` (default `101`) and `LEDGER_FILE`
+(default `/var/lib/gh-ephemeral-runner/active`). The template VMID is never
+acted on — it is the thing being cloned.
+
+### `provision.sh`
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `TEMPLATE_VMID` | `101` | Source VM template VMID |
-| `RUNNER_SSH_KEY` | `~/.ssh/gh-runner` | SSH private key for the runner guest |
-| `RUNNER_SSH_USER` | `runner` | SSH user inside the runner guest |
-| `LEDGER_FILE` | `/var/lib/gh-ephemeral-runner/active` | Active-runner ledger |
 | `CLONE_RETRIES` | `5` | Attempts to find a free VMID before giving up |
-| `AGENT_TIMEOUT` | `120` | Seconds to wait for the guest agent to answer |
-| `PVE_HOST` | (required) | Proxmox hostname or IP for `teardown.sh` |
-| `PVE_NODE` | (required) | Proxmox node name, e.g. `pve` |
-| `PVE_API_TOKEN_ID` | (required) | Proxmox API token id, e.g. `gh-runner@pve!teardown` |
-| `PVE_API_TOKEN_SECRET` | (required) | Proxmox API token secret UUID |
+| `SNIPPETS_DIR` | `/var/lib/vz/snippets` | Where the cloud-init snippet is written. The storage must have the `snippets` content type enabled; the snippet is referenced as `local:snippets/gh-runner-<vmid>.yaml`. |
+| `TASK_TIMEOUT` | `120` | Seconds to wait for a Proxmox UPID task to complete |
+| `CRED_FILE` | `/etc/gh-ephemeral-runner/token` | File sourced for the API credentials |
+
+### `teardown.sh`
+
+| Variable | Default | Purpose |
+|---|---|---|
 | `STOP_TIMEOUT` | `60` | Seconds to wait for orderly stop before force-stopping |
 | `STOP_POLL_INTERVAL` | `2` | Seconds between stop-task polls |
 | `FORCE_STOP_WAIT` | `5` | Seconds to wait after a force-stop |
 
-Set these in the environment the scripts run in. On a Proxmox host running
-the scripts directly, export them in the shell or in a file the calling
-service sources. In the GitHub Actions workflow that SSHes to the host, pass
-them through the SSH command's environment or as arguments; the exact
-mechanism is the companion workflow bead's concern.
+### `reap.sh`
 
-### Proxmox API token
+| Variable | Default | Purpose |
+|---|---|---|
+| `GITHUB_TOKEN` | *(required for the busy check)* | GitHub API token |
+| `GH_REPO` | *(required for the busy check)* | Repository in `owner/repo` form |
+| `PVE_API_HOST` | `localhost` | Proxmox API host |
+| `PVE_API_PORT` | `8006` | Proxmox API port |
 
-`teardown.sh` uses the Proxmox HTTP API with an API token rather than the
-`qm` CLI. Create a token with the minimum privilege set:
+Without `GITHUB_TOKEN` and `GH_REPO`, `reap.sh` runs in a degraded mode: the
+busy check is skipped and VM age is the only guard. It says so on stderr.
 
-```bash
-pveum role add GHRunnerTeardown -privs "VM.PowerMgmt VM.Audit"
-pveum user add gh-runner@pve
-pveum token add gh-runner@pve teardown --privsep 0
-pveum aclmod /pool/ephemeral-ci -user gh-runner@pve -role GHRunnerTeardown
-```
+### Credentials — the three scripts do not agree on the names
 
-The token ID is `gh-runner@pve!teardown`; the secret is printed by
-`pveum token add` once and not retrievable afterwards. Export both as
-`PVE_API_TOKEN_ID` and `PVE_API_TOKEN_SECRET` in the environment the SSH
-command sees. The permission is scoped to `/pool/ephemeral-ci` so the token
-cannot touch VMs outside that pool even if every guard in the script fails.
+This is a defect, recorded here rather than papered over, because a reader who
+exports one set and not the other gets a failure that looks exactly like a dead
+API. The three scripts landed from separate beads and each named the same
+Proxmox API credential differently. Until that is reconciled, **export all of
+them**:
+
+| Variable | Read by |
+|---|---|
+| `PVE_NODE` | `provision.sh`, `teardown.sh`, `reap.sh` |
+| `PVE_TOKEN_ID` / `PVE_TOKEN_SECRET` | `provision.sh`, `reap.sh` |
+| `PVE_API_TOKEN_ID` / `PVE_API_TOKEN_SECRET` | `teardown.sh` — the same token, different name |
+| `PVE_HOST` | `teardown.sh` |
+| `PVE_API_HOST` / `PVE_API_PORT` | `reap.sh` |
+
+`provision.sh` sources `$CRED_FILE` before checking; `teardown.sh` and
+`reap.sh` read the ambient environment only. A credential file written for one
+will leave the others unset, and `curl` reports an unset credential and a dead
+API identically.
+
+Set these in the environment the scripts run in. On a Proxmox host running the
+scripts directly, export them in the shell or in a file the calling service
+sources. In the GitHub Actions workflow that reaches the host, pass them
+through the dispatcher's environment; the exact mechanism is the companion
+workflow bead's concern.
 
 ## Ledger file
 
@@ -222,23 +232,63 @@ Adjust `TEMPLATE_VMID` if your template lives at a different id.
 
 ## Proxmox user permissions
 
-The OS user that runs these scripts needs permission to call `qm`. Create a
-non-root Proxmox user and a role with the privileges these scripts actually
-require:
+All three scripts use the Proxmox HTTP API with an API token. None of them
+shell out to `qm`: `qm` talks to pmxcfs over `/run/pve-cluster/cfs.sock`,
+which is gated against non-root users, so a non-root caller gets
+`ipcc_send_rec failed` and `Unable to load access control list` on every
+command. An API token needs no OS privileges and keeps the `pveum` ACL as a
+real enforcement layer — a hole in the dispatcher still cannot reach a VM
+outside the pool.
+
+Create the role, pool, user and token on the Proxmox host as root. This
+privilege list was verified against `pveum role list` on a PVE 9 host; do not
+copy an older list, several entries below are load-bearing:
 
 ```bash
-pveum role add GHRunner -privs "VM.Allocate VM.Clone VM.Config.Disk VM.Config.Network VM.Config.CPU VM.Config.Memory VM.PowerMgmt VM.Audit VM.Monitor Datastore.AllocateSpace"
+pveum role add GHRunner --privs \
+    "VM.Allocate,VM.Audit,VM.Clone,VM.Config.CPU,VM.Config.Disk,\
+VM.Config.Memory,VM.Config.Network,VM.Config.Options,\
+VM.GuestAgent.Audit,VM.PowerMgmt,\
+Datastore.AllocateSpace,Datastore.Audit,\
+Pool.Audit,Pool.Allocate"
+
+pveum pool add ephemeral-ci
 pveum user add gh-runner@pam
-pveum aclmod / -user gh-runner@pam -role GHRunner
+pveum user token add gh-runner@pam ephemeral --privsep 1
+
+# Grant the user AND the token. With --privsep 1 a token carries only the
+# privileges granted to the token itself, so both sets of grants are required.
+for who in "--user gh-runner@pam" "--tokens gh-runner@pam!ephemeral"; do
+    pveum acl modify /pool/ephemeral-ci             $who --role GHRunner
+    pveum acl modify /storage/local-lvm             $who --role GHRunner
+    pveum acl modify /sdn/zones/localnetwork/vmbr0  $who --role PVESDNUser
+done
+
+pveum pool modify ephemeral-ci --vms 101   # the template must be in the pool
 ```
 
-`VM.Allocate` is required: `qm nextid` and `qm destroy` both need it to
-allocate and release VMIDs. `VM.Clone` covers `qm clone`; `VM.PowerMgmt`
-covers `qm start` and `qm stop`; `VM.Config.*` covers setting the VM name at
-clone time; `Datastore.AllocateSpace` covers the linked-clone disk allocation.
+The token secret is printed once by `pveum user token add` and is not
+retrievable afterwards.
 
-Grant access only to the pool or resource group the template and clones live
-in rather than `/` if your Proxmox setup supports it. Run the three scripts
-end-to-end as this user against a real Proxmox node before relying on this
-list — a role that has never been exercised is a guess, and `qm` error
-messages name the missing privilege when a call is refused.
+Four notes on that privilege list:
+
+- `VM.Allocate` creates and destroys a VMID. Without it the clone fails.
+- `VM.GuestAgent.Audit` covers the `ping` and `network-get-interfaces` agent
+  calls. It does not grant guest command execution, which is correct — nothing
+  here needs it.
+- `Pool.Allocate` is required because cloning with `--pool` changes pool
+  membership. Granted at `/pool/ephemeral-ci` it reaches that pool and no other.
+- There is deliberately no `VM.Monitor`. It gates the QEMU monitor, which none
+  of these scripts touch, and it is not a valid privilege on current PVE —
+  `pveum role add` rejects the entire command with
+  `invalid format - invalid privilege 'VM.Monitor'`.
+
+The bridge grant on `/sdn/zones/localnetwork/vmbr0` is **required, not
+optional**. PVE 8.2+ gates bridge attachment; without it the clone fails with
+HTTP 403 and `Permission check failed (/sdn/zones/localnetwork/vmbr0,
+SDN.Use)`. Replace `local-lvm` with whatever storage the template's disk
+actually lives on — check with
+`qm config 101 | grep -E '^(scsi|virtio|sata)0:'`.
+
+Scoping to `/pool/ephemeral-ci` means the token can only see the template and
+live clones; other VMs on the host are unreachable even if the token leaks.
