@@ -252,9 +252,16 @@ poll_task "$start_upid" || exit 1
 printf 'provision.sh: waiting for guest agent on VM %s (timeout %ss)\n' "$VMID" "$AGENT_TIMEOUT" >&2
 agent_deadline=$(( $(date +%s) + AGENT_TIMEOUT ))
 while true; do
+    # The inline pvapi() returns non-0 on non-2xx. If pvapi.sh is ever
+    # sourced here instead, pvapi() returns 0 even on 500 but sets
+    # PVAPI_STATUS. The PVAPI_STATUS:-200 default makes both work: the
+    # inline version leaves PVAPI_STATUS unset, so it defaults to 200 on
+    # any successful return (which the inline version only does on 2xx).
+    _ping_ok=0
     if pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/ping" >/dev/null 2>&1; then
-        break
+        case "${PVAPI_STATUS:-200}" in 2??) _ping_ok=1 ;; esac
     fi
+    [ "$_ping_ok" -eq 1 ] && break
     if [ "$(date +%s)" -ge "$agent_deadline" ]; then
         printf 'provision.sh: timed out waiting for guest agent on VM %s (%ss)\n' \
             "$VMID" "$AGENT_TIMEOUT" >&2
