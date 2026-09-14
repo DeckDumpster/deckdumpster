@@ -89,7 +89,7 @@ Copy all scripts to the host and make them executable:
 ```bash
 SCRIPTS_DIR=/usr/local/lib/gh-ephemeral-runner
 mkdir -p "$SCRIPTS_DIR"
-cp provision.sh teardown.sh reap.sh "$SCRIPTS_DIR/"
+cp provision.sh teardown.sh reap.sh pvapi.sh "$SCRIPTS_DIR/"
 chmod 755 "$SCRIPTS_DIR/"*.sh
 ```
 
@@ -152,6 +152,37 @@ All three scripts read `TEMPLATE_VMID` (default `101`) and `LEDGER_FILE`
 (default `/var/lib/gh-ephemeral-runner/active`). The template VMID is never
 acted on — it is the thing being cloned.
 
+### Credentials (all three scripts)
+
+All three scripts share the same credential contract and all source `$CRED_FILE`
+before making any API call. An unset variable and a dead API look identical at
+the curl layer; sourcing from a file and checking at startup is what names the
+missing one before curl is ever called.
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `CRED_FILE` | no | `/etc/gh-ephemeral-runner/token` | File sourced for the API credentials |
+| `PVE_NODE` | **yes** | — | Proxmox node name |
+| `PVE_TOKEN_ID` | **yes** | — | API token id, e.g. `gh-runner@pve!ephemeral` |
+| `PVE_TOKEN_SECRET` | **yes** | — | API token secret UUID |
+| `PVE_API_HOST` | no | `localhost` | Proxmox API hostname or IP |
+| `PVE_API_PORT` | no | `8006` | Proxmox API port |
+
+A minimal credential file at `/etc/gh-ephemeral-runner/token` (mode `0600`,
+owned by `gh-runner`):
+
+```
+PVE_NODE=pve
+PVE_TOKEN_ID=gh-runner@pve!ephemeral
+PVE_TOKEN_SECRET=<uuid from pveum user token add>
+```
+
+Set these in the environment the scripts run in. On a Proxmox host running the
+scripts directly, export them in the shell or write them to the credential file.
+In the GitHub Actions workflow that reaches the host, pass them through the
+dispatcher's environment; the exact mechanism is the companion workflow bead's
+concern.
+
 ### `provision.sh`
 
 | Variable | Default | Purpose |
@@ -175,38 +206,9 @@ acted on — it is the thing being cloned.
 |---|---|---|
 | `GITHUB_TOKEN` | *(required for the busy check)* | GitHub API token |
 | `GH_REPO` | *(required for the busy check)* | Repository in `owner/repo` form |
-| `PVE_API_HOST` | `localhost` | Proxmox API host |
-| `PVE_API_PORT` | `8006` | Proxmox API port |
 
 Without `GITHUB_TOKEN` and `GH_REPO`, `reap.sh` runs in a degraded mode: the
 busy check is skipped and VM age is the only guard. It says so on stderr.
-
-### Credentials — the three scripts do not agree on the names
-
-This is a defect, recorded here rather than papered over, because a reader who
-exports one set and not the other gets a failure that looks exactly like a dead
-API. The three scripts landed from separate beads and each named the same
-Proxmox API credential differently. Until that is reconciled, **export all of
-them**:
-
-| Variable | Read by |
-|---|---|
-| `PVE_NODE` | `provision.sh`, `teardown.sh`, `reap.sh` |
-| `PVE_TOKEN_ID` / `PVE_TOKEN_SECRET` | `provision.sh`, `reap.sh` |
-| `PVE_API_TOKEN_ID` / `PVE_API_TOKEN_SECRET` | `teardown.sh` — the same token, different name |
-| `PVE_HOST` | `teardown.sh` |
-| `PVE_API_HOST` / `PVE_API_PORT` | `reap.sh` |
-
-`provision.sh` sources `$CRED_FILE` before checking; `teardown.sh` and
-`reap.sh` read the ambient environment only. A credential file written for one
-will leave the others unset, and `curl` reports an unset credential and a dead
-API identically.
-
-Set these in the environment the scripts run in. On a Proxmox host running the
-scripts directly, export them in the shell or in a file the calling service
-sources. In the GitHub Actions workflow that reaches the host, pass them
-through the dispatcher's environment; the exact mechanism is the companion
-workflow bead's concern.
 
 ## Ledger file
 
