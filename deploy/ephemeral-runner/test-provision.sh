@@ -260,6 +260,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 6 -- snippet must set owner: runner:runner on /run/gh-runner-init
+#
+# cloud-init writes_files runs as root; without an explicit owner the file
+# lands root:root 0600, and the runner service (User=runner) cannot read it.
+# This test reads the generated snippet directly -- no VM required.
+# ---------------------------------------------------------------------------
+rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+run_provision valid-label test-token https://github.com/owner/repo >/dev/null
+
+SNIPPET_FILE="$SCRATCH/snippets/gh-runner-200.yaml"
+
+if grep -qF "owner: 'runner:runner'" "$SNIPPET_FILE" 2>/dev/null; then
+    ok "test-6: snippet sets owner: 'runner:runner'"
+else
+    ko "test-6: snippet missing owner: 'runner:runner' (file would land root:root and be unreadable by the runner service)"
+fi
+
+# Prove the check is grounded: the path must also be present.
+if grep -qF '/run/gh-runner-init' "$SNIPPET_FILE" 2>/dev/null; then
+    ok "test-6: snippet path is /run/gh-runner-init"
+else
+    ko "test-6: /run/gh-runner-init not found in snippet (stub may not have run)"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 total=$(( pass + fail ))
