@@ -52,6 +52,7 @@ set -euo pipefail
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
 LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
+SNIPPETS_DIR="${SNIPPETS_DIR:-/var/lib/vz/snippets}"
 PVE_NODE="${PVE_NODE:-}"
 PVE_API_HOST="${PVE_API_HOST:-localhost}"
 PVE_API_PORT="${PVE_API_PORT:-8006}"
@@ -324,6 +325,12 @@ EOF
     if pvapi DELETE "/nodes/${PVE_NODE}/qemu/${VMID}?purge=1" >/dev/null; then
         if [ -f "$LEDGER_FILE" ]; then
             sed -i "/^${VMID} /d" "$LEDGER_FILE"
+        fi
+        # Remove the cloud-init snippet that holds the registration token.
+        # An orphan by definition never had a teardown, so nothing removed it.
+        _REAP_SNIPPET="${SNIPPETS_DIR}/gh-runner-${VMID}.yaml"
+        if [ -f "$_REAP_SNIPPET" ]; then
+            shred -u "$_REAP_SNIPPET" 2>/dev/null || rm -f "$_REAP_SNIPPET"
         fi
         echo "reap.sh: VM $VMID destroyed" >&2
         (( reaped++ )) || true
