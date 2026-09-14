@@ -46,6 +46,7 @@ set -euo pipefail
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
 LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
+SNIPPETS_DIR="${SNIPPETS_DIR:-/var/lib/vz/snippets}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-60}"
 STOP_POLL_INTERVAL="${STOP_POLL_INTERVAL:-2}"
 FORCE_STOP_WAIT="${FORCE_STOP_WAIT:-5}"
@@ -84,6 +85,15 @@ if [ "$VMID" -eq "$TEMPLATE_VMID" ]; then
     exit 1
 fi
 
+# Remove the cloud-init snippet written by provision.sh for this VMID.
+# shred overwrites before unlinking; fall back to rm if shred is unavailable.
+# Idempotent: absent file is not an error.
+_snippet_remove() {
+    local snippet_path="${SNIPPETS_DIR}/gh-runner-${VMID}.yaml"
+    [ -f "$snippet_path" ] || return 0
+    shred -u "$snippet_path" 2>/dev/null || rm -f "$snippet_path"
+}
+
 # One pattern, two uses — grep and sed both key on this so they cannot drift.
 _LEDGER_PATTERN="^${VMID} "
 
@@ -119,6 +129,7 @@ pvapi GET "/nodes/${PVE_NODE}/qemu/${VMID}/config" || {
 if [ "$PVAPI_STATUS" = "404" ]; then
     echo "teardown.sh: VM $VMID not found via API — already gone" >&2
     _ledger_remove
+    _snippet_remove
     exit 0
 fi
 
@@ -209,4 +220,5 @@ if [ "$PVAPI_STATUS" != "200" ]; then
 fi
 
 _ledger_remove
+_snippet_remove
 echo "teardown.sh: VM $VMID destroyed and removed from ledger" >&2

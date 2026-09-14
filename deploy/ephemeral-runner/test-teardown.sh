@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test suite for teardown.sh.
+# covers: deploy/ephemeral-runner/teardown.sh
 #
 # Stubs the Proxmox API via PVAPI_SH so no hypervisor is required.
 # Each test writes per-call responses into a directory; the mock pvapi()
@@ -27,12 +27,15 @@ _setup() {
     # Create a fresh test directory. Sets:
     #   TDIR          — per-test temp directory
     #   LEDGER_FILE   — ledger path for this test
+    #   SNIPPETS_DIR  — cloud-init snippets directory for this test
     #   PVAPI_LOG     — file recording every pvapi call (method:path:body)
     #   PVAPI_CALL_FILE — file holding the current call count
     #   PVAPI_RESPONSES — directory; file N holds status\nbody for call N
     #   PVAPI_SH      — path to the mock pvapi.sh for this test
     TDIR=$(mktemp -d -p "$TMPDIR_ROOT")
     LEDGER_FILE="$TDIR/ledger"
+    SNIPPETS_DIR="$TDIR/snippets"
+    mkdir -p "$SNIPPETS_DIR"
     PVAPI_LOG="$TDIR/pvapi.log"
     PVAPI_CALL_FILE="$TDIR/call_count"
     PVAPI_RESPONSES="$TDIR/responses"
@@ -104,6 +107,7 @@ _run_teardown() {
     PVAPI_CALL_FILE="$PVAPI_CALL_FILE" \
     PVAPI_RESPONSES="$PVAPI_RESPONSES" \
     LEDGER_FILE="$LEDGER_FILE" \
+    SNIPPETS_DIR="$SNIPPETS_DIR" \
     TEMPLATE_VMID="${TEMPLATE_VMID:-101}" \
     PVE_HOST=pve-test \
     PVE_NODE=pve \
@@ -148,6 +152,14 @@ _assert_ledger_has() {
         echo "  FAIL: ledger does not contain VMID $vmid" >&2
         return 1
     }
+}
+_assert_snippet_gone() {
+    local vmid="$1"
+    local snippet_path="${SNIPPETS_DIR}/gh-runner-${vmid}.yaml"
+    if [ -f "$snippet_path" ]; then
+        echo "  FAIL: cloud-init snippet still exists: $snippet_path" >&2
+        return 1
+    fi
 }
 
 # ============================================================
@@ -336,6 +348,60 @@ echo "--- Test 8: non-numeric VMID → rc≠0"
     [ "$rc" -ne 0 ] || { echo "  FAIL: expected non-zero for non-numeric VMID" >&2; exit 1; }
     _assert_eq "call count" "$(_call_count)" "0"
 ) && _pass "Test 8" || _fail "Test 8"
+
+# ============================================================
+# TEST 9: cloud-init snippet is removed after VM destruction
+#
+# provision.sh writes $SNIPPETS_DIR/gh-runner-<vmid>.yaml containing the
+# registration token. teardown.sh must delete it after the VM is gone.
+# ============================================================
+echo "--- Test 9: cloud-init snippet removed after successful teardown"
+(
+    _setup
+    VMID=500
+    _ledger_add $VMID
+    # Plant the snippet file that provision.sh would have written.
+    printf '#cloud-config\nwrite_files:\n  - path: /run/gh-runner-init\n    content: |\n      RUNNER_TOKEN=secret-registration-token\n' \
+        > "${SNIPPETS_DIR}/gh-runner-${VMID}.yaml"
+
+    _resp 1 200 '{"data":{"name":"gh-runner-500","cores":2}}'
+    _resp 2 200 '{"data":"UPID:pve:00001234:abcdef01:67890abc:stopvm:500:root@pam:"}'
+    _resp 3 200 '{"data":{"status":"stopped","exitstatus":"OK"}}'
+    _resp 4 200 '{"data":{"status":"stopped"}}'
+    _resp 5 200 '{"data":"UPID:pve:00001235:abcdef02:67890abd:qmdestroy:500:root@pam:"}'
+
+    rc=0
+    _run_teardown $VMID >/dev/null 2>&1 || rc=$?
+
+    _assert_rc "exit code" "$rc" 0 \
+    && _assert_ledger_empty $VMID \
+    && _assert_snippet_gone $VMID
+) && _pass "Test 9" || _fail "Test 9"
+
+# ============================================================
+# TEST 10: snippet removed even when VM is already gone (idempotency)
+#
+# A first teardown may have destroyed the VM but crashed before shredding
+# the snippet. The second call sees 404, cleans the ledger, and must also
+# remove any surviving snippet file.
+# ============================================================
+echo "--- Test 10: cloud-init snippet removed when VM already gone (idempotency)"
+(
+    _setup
+    VMID=500
+    # Ledger is empty — first teardown already removed the VM.
+    # Snippet file survived because first teardown crashed after destroy.
+    printf '#cloud-config\nRUNNER_TOKEN=secret-registration-token\n' \
+        > "${SNIPPETS_DIR}/gh-runner-${VMID}.yaml"
+
+    _resp 1 404 '{"errors":{"vmid":"not found"}}'
+
+    rc=0
+    _run_teardown $VMID >/dev/null 2>&1 || rc=$?
+
+    _assert_rc "exit code" "$rc" 0 \
+    && _assert_snippet_gone $VMID
+) && _pass "Test 10" || _fail "Test 10"
 
 # ============================================================
 # Summary
