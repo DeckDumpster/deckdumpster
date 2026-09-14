@@ -30,6 +30,17 @@ set -euo pipefail
 
 SCRIPTS_DIR="${SCRIPTS_DIR:-/usr/local/lib/gh-ephemeral-runner}"
 LOG_FILE="${LOG_FILE:-/var/log/gh-ephemeral-runner-cmd.log}"
+CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
+
+# Source the credential file before dispatching so every script this invokes
+# inherits TEMPLATE_VMID (and credentials) from the same place provision.sh
+# reads them. Without this, TEMPLATE_VMID defaults to 101 in the dispatched
+# scripts even when the real template has a different id.
+if [ -f "$CRED_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$CRED_FILE"
+    export TEMPLATE_VMID
+fi
 
 _log() {
     printf '%s forced-command: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" \
