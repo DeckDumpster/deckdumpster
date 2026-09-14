@@ -35,17 +35,28 @@ runner that no longer exists.
 
 ### `teardown.sh <vmid>`
 
-Runs on the Proxmox host. Destroys one runner VM and removes its ledger line.
-Designed to run under `if: always()` — exits zero if the VM is already gone
-so a cancelled run does not report a spurious failure.
+Runs on the Proxmox host. Destroys one runner VM via the Proxmox HTTP API
+and removes its ledger line. Designed to run under `if: always()` — exits
+zero if the VM is already gone so a cancelled run does not report a spurious
+failure.
 
-Four guards prevent destroying the wrong thing:
+Five guards prevent destroying the wrong thing, applied in order:
 
-- Empty or non-numeric argument → exit non-zero, `qm` is never called.
+- Empty or non-numeric argument → exit non-zero, API is never called.
 - VMID equals `TEMPLATE_VMID` → exit non-zero.
+- VM does not exist (API returns 404) → clean up stale ledger line and
+  exit 0. This runs **before** the ledger guard so a second teardown call
+  (after the first removed the ledger line) exits 0 rather than 1. A
+  connection error or auth failure is not treated as "already gone" — those
+  propagate as failures so a broken API cannot silently claim success.
 - VMID not in the ledger → exit non-zero.
-- VM name does not match `gh-runner-<vmid>` (checked with `qm config`, not
-  by parsing `qm list` output) → exit non-zero.
+- VM name does not match `gh-runner-<vmid>` (read from the API config JSON,
+  not from `qm` output) → exit non-zero.
+
+After stopping, teardown polls the stop task's status and confirms the VM
+is stopped before issuing DELETE. A guest that ignores ACPI shutdown is
+force-stopped rather than passed straight to a destroy that would be
+refused.
 
 ### `reap.sh [--max-age-hours N] [--dry-run]`
 
@@ -149,12 +160,37 @@ The template VM (default VMID set by `TEMPLATE_VMID`, see below) must have:
 | `LEDGER_FILE` | `/var/lib/gh-ephemeral-runner/active` | Active-runner ledger |
 | `CLONE_RETRIES` | `5` | Attempts to find a free VMID before giving up |
 | `AGENT_TIMEOUT` | `120` | Seconds to wait for the guest agent to answer |
+| `PVE_HOST` | (required) | Proxmox hostname or IP for `teardown.sh` |
+| `PVE_NODE` | (required) | Proxmox node name, e.g. `pve` |
+| `PVE_API_TOKEN_ID` | (required) | Proxmox API token id, e.g. `gh-runner@pve!teardown` |
+| `PVE_API_TOKEN_SECRET` | (required) | Proxmox API token secret UUID |
+| `STOP_TIMEOUT` | `60` | Seconds to wait for orderly stop before force-stopping |
+| `STOP_POLL_INTERVAL` | `2` | Seconds between stop-task polls |
+| `FORCE_STOP_WAIT` | `5` | Seconds to wait after a force-stop |
 
 Set these in the environment the scripts run in. On a Proxmox host running
 the scripts directly, export them in the shell or in a file the calling
 service sources. In the GitHub Actions workflow that SSHes to the host, pass
 them through the SSH command's environment or as arguments; the exact
 mechanism is the companion workflow bead's concern.
+
+### Proxmox API token
+
+`teardown.sh` uses the Proxmox HTTP API with an API token rather than the
+`qm` CLI. Create a token with the minimum privilege set:
+
+```bash
+pveum role add GHRunnerTeardown -privs "VM.PowerMgmt VM.Audit"
+pveum user add gh-runner@pve
+pveum token add gh-runner@pve teardown --privsep 0
+pveum aclmod /pool/ephemeral-ci -user gh-runner@pve -role GHRunnerTeardown
+```
+
+The token ID is `gh-runner@pve!teardown`; the secret is printed by
+`pveum token add` once and not retrievable afterwards. Export both as
+`PVE_API_TOKEN_ID` and `PVE_API_TOKEN_SECRET` in the environment the SSH
+command sees. The permission is scoped to `/pool/ephemeral-ci` so the token
+cannot touch VMs outside that pool even if every guard in the script fails.
 
 ## Ledger file
 
