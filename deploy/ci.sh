@@ -103,6 +103,21 @@ uv run shot-scraper install
 echo "==> Build and start test container"
 bash deploy/setup.sh "$INSTANCE" --test
 
+# 127.0.0.1, NEVER localhost. `podman port` reports `0.0.0.0:<port>` -- an IPv4
+# wildcard bind, with nothing published on ::1. On a host where `localhost`
+# resolves to both families curl tries ::1 first, something accepts the
+# connection there and immediately resets it, and the result is not a connection
+# error but a TLS one:
+#
+#     * Trying [::1]:35573...
+#     * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+#     * Send failure: Broken pipe
+#     curl: (35) Send failure: Broken pipe
+#
+# which reads as a broken certificate and is a wrong address (de-323). The
+# address is right there in the `podman port` output both this function and the
+# two conftests parse; all three used to keep the port and discard it.
+#
 # THIS FUNCTION MUST EXPLAIN ITSELF WHEN IT GIVES UP.
 #
 # It used to print exactly `Server failed to start` and return 1 -- no port, no
@@ -126,7 +141,8 @@ wait_for_server() {
         port="$(printf '%s' "$port_err" | head -1 | cut -d: -f2)"
         case "$port" in ''|*[!0-9]*) port="" ;; esac
         if [ -n "$port" ]; then
-            curl -skf "https://localhost:${port}/" >/dev/null 2>&1 && return 0
+            # 127.0.0.1, NEVER localhost -- see the note above wait_for_server.
+            curl -skf "https://127.0.0.1:${port}/" >/dev/null 2>&1 && return 0
             curl_rc=$?
         fi
         sleep "$WAIT_SLEEP"
@@ -142,10 +158,10 @@ wait_for_server() {
             # the TLS handshake did not. The exit code alone cannot separate a
             # protocol/cipher refusal from a reset, so ask for the handshake
             # itself. -k is already in use, so this is never about trust.
-            printf -- '\n--- curl -kv https://localhost:%s/ ---\n' "$port"
-            curl -kv --max-time 10 "https://localhost:${port}/" 2>&1 | tail -30
-            printf -- '\n--- openssl s_client -connect localhost:%s ---\n' "$port"
-            openssl s_client -connect "localhost:${port}" </dev/null 2>&1 | head -30
+            printf -- '\n--- curl -kv https://127.0.0.1:%s/ ---\n' "$port"
+            curl -kv --max-time 10 "https://127.0.0.1:${port}/" 2>&1 | tail -30
+            printf -- '\n--- openssl s_client -connect 127.0.0.1:%s ---\n' "$port"
+            openssl s_client -connect "127.0.0.1:${port}" </dev/null 2>&1 | head -30
             printf -- '\n--- local openssl ---\n'
             openssl version 2>&1
             printf -- '\n--- plain TCP reachable? ---\n'
