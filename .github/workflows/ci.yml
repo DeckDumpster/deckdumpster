@@ -131,6 +131,22 @@ jobs:
           echo "::error::runner $LABEL never registered within 240s"
           exit 1
 
+      # Runs only when something above failed, and before teardown destroys the
+      # VM. A registration failure is otherwise completely blind: the guest is
+      # on an internal bridge with no inbound SSH and the machine is gone
+      # seconds later. Never fails the job itself — the job is already failing
+      # and this must not mask the original error.
+      - name: Dump guest state on failure
+        if: failure() && steps.provision.outputs.vmid != ''
+        continue-on-error: true
+        env:
+          PVE_API_HOST: ${{ vars.PVE_API_HOST }}
+          PVE_NODE: ${{ vars.PVE_NODE }}
+          PVE_TOKEN_ID: ${{ secrets.PVE_TOKEN_ID }}
+          PVE_TOKEN_SECRET: ${{ secrets.PVE_TOKEN_SECRET }}
+          CRED_FILE: /dev/null
+        run: bash deploy/ephemeral-runner/guest-diag.sh "${{ steps.provision.outputs.vmid }}"
+
   build:
     needs: provision
     runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
