@@ -12,10 +12,10 @@
 #      A provision job that dies before emitting its output leaves the caller's
 #      vmid variable empty; without this guard teardown runs with no id.
 #   2. VMID equals TEMPLATE_VMID → exit non-zero, unconditionally.
-#   3. VM does not exist (API returns 404) → clean up any stale ledger line
-#      and exit 0. This guard runs before the ledger guard so a second teardown
-#      call (after the first already removed the ledger line) exits 0 rather
-#      than 1. A connection error or auth failure is NOT treated as 404; those
+#   3. VM does not exist (API returns 404) → exit 0. This guard runs before the
+#      ownership guards so a second teardown call, after the first destroyed the
+#      VM, exits 0 rather than 1 — teardown.sh must be safe to call twice
+#      (db-1c4). A connection error or auth failure is NOT treated as 404; those
 #      propagate as failures so a broken API does not silently claim everything
 #      is already gone.
 #   3b. VM config carries template:1 → exit non-zero, unconditionally. The id
@@ -23,17 +23,22 @@
 #       template was 9100 while the default was 101). The Proxmox template flag
 #       is a fact about the VM written by the hypervisor itself and cannot be
 #       falsified by a misconfigured environment variable.
-#   4. VMID not in the ledger → exit non-zero. A VMID that provision.sh never
-#      recorded does not belong to this runner pool.
-#   5. VM name does not match gh-runner-<vmid> → exit non-zero. A clone that
+#   4. VM name does not match gh-runner-<vmid> → exit non-zero. A clone that
 #      failed and left the id pointing at an unrelated VM must not be purged.
 #      Name is read from the API config JSON fetched in guard 3, not by parsing
-#      qm output.
+#      qm output, and needs no extra API call — so it runs before guard 5.
+#   5. VM is not a member of PVE_POOL → exit non-zero. Read from the hypervisor
+#      via GET /pools/<pool>. This replaced a ledger file on the local
+#      filesystem, which could not work once provision and teardown became
+#      separate jobs on separate ephemeral runners: the file provision wrote
+#      never existed here, so every teardown refused. Pool membership cannot go
+#      stale, cannot vanish with a runner, and cannot be forged by anything
+#      this workflow controls.
 #
 # Environment variables:
 #   TEMPLATE_VMID          — source VM template id (default: 101)
-#   LEDGER_FILE            — active-runner ledger path
-#                            (default: /var/lib/gh-ephemeral-runner/active)
+#   PVE_POOL               — pool every runner VM must belong to
+#                            (default: ephemeral-ci)
 #   CRED_FILE              — credential file to source
 #                            (default: /etc/gh-ephemeral-runner/token)
 #   PVE_NODE               — Proxmox node name (required)
@@ -63,7 +68,7 @@ if [ -f "$CRED_FILE" ]; then
 fi
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
-LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
+PVE_POOL="${PVE_POOL:-ephemeral-ci}"
 CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-60}"
 STOP_POLL_INTERVAL="${STOP_POLL_INTERVAL:-2}"
@@ -110,12 +115,6 @@ if [ "$VMID" -eq "$TEMPLATE_VMID" ]; then
     exit 1
 fi
 
-# One pattern, two uses — grep and sed both key on this so they cannot drift.
-_LEDGER_PATTERN="^${VMID} "
-
-_ledger_has()    { [ -f "$LEDGER_FILE" ] && grep -q "$_LEDGER_PATTERN" "$LEDGER_FILE"; }
-_ledger_remove() { [ -f "$LEDGER_FILE" ] && sed -i "/${_LEDGER_PATTERN}/d" "$LEDGER_FILE" || true; }
-
 # Extract a field from PVAPI_BODY (.data.<field>).
 _body_field() {
     local field="$1"
@@ -134,7 +133,7 @@ print(d if isinstance(d, str) else '')
 " 2>/dev/null || true
 }
 
-# Guard 3: check host state before the ledger guard.
+# Guard 3: check host state before the ownership guards.
 # A 404 means the VM is already gone — idempotent exit.
 # A connection error or non-404 HTTP error is not "already gone"; it propagates.
 pvapi GET "/nodes/${PVE_NODE}/qemu/${VMID}/config" || {
@@ -144,7 +143,6 @@ pvapi GET "/nodes/${PVE_NODE}/qemu/${VMID}/config" || {
 
 if [ "$PVAPI_STATUS" = "404" ]; then
     echo "teardown.sh: VM $VMID not found via API — already gone" >&2
-    _ledger_remove
     exit 0
 fi
 
@@ -167,13 +165,8 @@ if [ "${IS_TEMPLATE:-0}" = "1" ]; then
     exit 1
 fi
 
-# Guard 4: ledger membership (after the already-gone check, so idempotency works).
-if ! _ledger_has; then
-    echo "teardown.sh: VMID $VMID not found in ledger $LEDGER_FILE — refusing" >&2
-    exit 1
-fi
-
-# Guard 5: VM name must match what provision.sh set.
+# Guard 4: VM name must match what provision.sh set. Read from the config
+# already fetched above -- no extra API call, so it runs before the pool check.
 EXPECTED_NAME="gh-runner-${VMID}"
 ACTUAL_NAME=$(printf '%s' "$CONFIG_BODY" | python3 -c "
 import json, sys
@@ -181,6 +174,37 @@ print(json.load(sys.stdin).get('data', {}).get('name', ''))
 " 2>/dev/null || true)
 if [ "$ACTUAL_NAME" != "$EXPECTED_NAME" ]; then
     echo "teardown.sh: VM $VMID name is '$ACTUAL_NAME', expected '$EXPECTED_NAME' — refusing" >&2
+    exit 1
+fi
+
+# Guard 5: pool membership, read from the hypervisor.
+#
+# This replaced a ledger file on the local filesystem. That worked while all
+# three scripts ran on the hypervisor and shared it; it cannot work now that
+# provision and teardown are separate jobs on separate ephemeral runners, so
+# the file provision wrote no longer exists here and every teardown refused.
+#
+# Pool membership is strictly stronger than the ledger was: it cannot go stale,
+# cannot vanish with a runner, and cannot be forged by anything this workflow
+# controls. The API token's ACL is already scoped to this pool, so a VM outside
+# it is unreachable regardless -- this turns that into an explicit refusal with
+# a readable message rather than a 403 from whatever call happens to run first.
+pvapi GET "/pools/${PVE_POOL}" || {
+    echo "teardown.sh: API connection failed reading pool $PVE_POOL" >&2
+    exit 1
+}
+if [ "$PVAPI_STATUS" != "200" ]; then
+    echo "teardown.sh: GET /pools/$PVE_POOL returned HTTP $PVAPI_STATUS — refusing" >&2
+    exit 1
+fi
+IN_POOL=$(printf '%s' "$PVAPI_BODY" | VMID="$VMID" python3 -c "
+import json, os, sys
+want = int(os.environ['VMID'])
+members = json.load(sys.stdin).get('data', {}).get('members', []) or []
+print('yes' if any(m.get('vmid') == want for m in members) else 'no')
+" 2>/dev/null || echo no)
+if [ "$IN_POOL" != "yes" ]; then
+    echo "teardown.sh: VM $VMID is not a member of pool $PVE_POOL — refusing" >&2
     exit 1
 fi
 
@@ -246,5 +270,4 @@ if [ "$PVAPI_STATUS" != "200" ]; then
     exit 1
 fi
 
-_ledger_remove
-echo "teardown.sh: VM $VMID destroyed and removed from ledger" >&2
+echo "teardown.sh: VM $VMID destroyed" >&2

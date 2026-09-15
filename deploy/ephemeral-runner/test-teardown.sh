@@ -26,13 +26,11 @@ trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 _setup() {
     # Create a fresh test directory. Sets:
     #   TDIR          — per-test temp directory
-    #   LEDGER_FILE   — ledger path for this test
     #   PVAPI_LOG     — file recording every pvapi call (method:path:body)
     #   PVAPI_CALL_FILE — file holding the current call count
     #   PVAPI_RESPONSES — directory; file N holds status\nbody for call N
     #   PVAPI_SH      — path to the mock pvapi.sh for this test
     TDIR=$(mktemp -d -p "$TMPDIR_ROOT")
-    LEDGER_FILE="$TDIR/ledger"
     PVAPI_LOG="$TDIR/pvapi.log"
     PVAPI_CALL_FILE="$TDIR/call_count"
     PVAPI_RESPONSES="$TDIR/responses"
@@ -72,10 +70,11 @@ _resp() {
     printf '%s\n%s\n' "$status" "$body" > "${PVAPI_RESPONSES}/${n}"
 }
 
-_ledger_add() {
-    local vmid="$1"
-    printf '%s some-label 1725000000\n' "$vmid" >> "$LEDGER_FILE"
-}
+# Pool membership response bodies. Guard 5 reads GET /pools/<pool> and looks
+# for the vmid among .data.members[].
+_pool_with()    { printf '{"data":{"members":[{"vmid":%s,"type":"qemu"}]}}' "$1"; }
+_pool_without() { printf '{"data":{"members":[{"vmid":999,"type":"qemu"}]}}'; }
+
 
 _call_count() {
     cat "$PVAPI_CALL_FILE"
@@ -103,7 +102,7 @@ _run_teardown() {
     PVAPI_LOG="$PVAPI_LOG" \
     PVAPI_CALL_FILE="$PVAPI_CALL_FILE" \
     PVAPI_RESPONSES="$PVAPI_RESPONSES" \
-    LEDGER_FILE="$LEDGER_FILE" \
+    PVE_POOL="${PVE_POOL:-ephemeral-ci}" \
     TEMPLATE_VMID="${TEMPLATE_VMID:-101}" \
     PVE_API_HOST=pve-test \
     PVE_NODE=pve \
@@ -135,61 +134,47 @@ _assert_rc() { local label="$1" rc="$2" expected="$3"; _assert_eq "$label" "$rc"
 
 _assert_log_has()    { _log_has "$1" || { echo "  FAIL: expected API call matching '$1' not found" >&2; return 1; }; }
 _assert_log_not_has() { ! _log_has "$1" || { echo "  FAIL: unexpected API call matching '$1' found in log" >&2; return 1; }; }
-_assert_ledger_empty() {
-    local vmid="$1"
-    if grep -q "^${vmid} " "$LEDGER_FILE" 2>/dev/null; then
-        echo "  FAIL: ledger still contains VMID $vmid" >&2
-        return 1
-    fi
-}
-_assert_ledger_has() {
-    local vmid="$1"
-    grep -q "^${vmid} " "$LEDGER_FILE" 2>/dev/null || {
-        echo "  FAIL: ledger does not contain VMID $vmid" >&2
-        return 1
-    }
-}
 # ============================================================
-# TEST 1: normal teardown of a live, ledger-backed VM
+# TEST 1: normal teardown of a live, pool-resident VM
 # ============================================================
 # Plant a real destroy call first so tests 3/4 can rely on its absence
 # as a meaningful signal (not just "nothing happened yet").
-echo "--- Test 1: live VM, ledger-backed → rc=0, VM destroyed, ledger cleared"
+echo "--- Test 1: live VM in pool → rc=0, VM destroyed"
 (
     _setup
     VMID=500
-    _ledger_add $VMID
     # Call 1: GET /config → 200, VM exists with correct name
     _resp 1 200 '{"data":{"name":"gh-runner-500","cores":2}}'
-    # Call 2: POST /status/stop → 200, UPID
-    _resp 2 200 '{"data":"UPID:pve:00001234:abcdef01:67890abc:stopvm:500:root@pam:"}'
-    # Call 3: GET /tasks/.../status → stopped/OK
-    _resp 3 200 '{"data":{"status":"stopped","exitstatus":"OK"}}'
-    # Call 4: GET /status/current → stopped
-    _resp 4 200 '{"data":{"status":"stopped"}}'
-    # Call 5: DELETE → 200
-    _resp 5 200 '{"data":"UPID:pve:00001235:abcdef02:67890abd:qmdestroy:500:root@pam:"}'
+    # Call 2: GET /pools/<pool> → 200, VMID is a member
+    _resp 2 200 "$(_pool_with $VMID)"
+    # Call 3: POST /status/stop → 200, UPID
+    _resp 3 200 '{"data":"UPID:pve:00001234:abcdef01:67890abc:stopvm:500:root@pam:"}'
+    # Call 4: GET /tasks/.../status → stopped/OK
+    _resp 4 200 '{"data":{"status":"stopped","exitstatus":"OK"}}'
+    # Call 5: GET /status/current → stopped
+    _resp 5 200 '{"data":{"status":"stopped"}}'
+    # Call 6: DELETE → 200
+    _resp 6 200 '{"data":"UPID:pve:00001235:abcdef02:67890abd:qmdestroy:500:root@pam:"}'
 
     rc=0
     _run_teardown $VMID >/dev/null 2>&1 || rc=$?
 
     _assert_rc "exit code" "$rc" 0 \
     && _assert_log_has "PVAPI:DELETE:" \
-    && _assert_ledger_empty $VMID
+    && _assert_log_has "PVAPI:GET:/pools/"
 ) && _pass "Test 1" || _fail "Test 1"
 
 # ============================================================
 # TEST 2: same VMID torn down a second time → rc=0 (idempotency)
 #
-# The first teardown removed the ledger line. The VM is now gone (API 404).
-# The old bug: guard 2 (ledger) ran before the already-gone check, so the
-# second call hit "VMID not found in ledger — refusing" and exited 1.
+# The VM is now gone (API 404). Guard 3 must run before the ownership guards,
+# so the second call exits 0 rather than refusing. The original bug had the
+# ownership guard first, which made a second teardown exit 1.
 # ============================================================
 echo "--- Test 2: second teardown of same VMID → rc=0 (idempotency)"
 (
     _setup
     VMID=500
-    # Ledger is empty — first teardown already removed the line.
     # Call 1: GET /config → 404 (VM is gone)
     _resp 1 404 '{"errors":{"vmid":"not found"}}'
 
@@ -201,21 +186,32 @@ echo "--- Test 2: second teardown of same VMID → rc=0 (idempotency)"
 ) && _pass "Test 2" || _fail "Test 2"
 
 # ============================================================
-# TEST 3: VMID present on host but absent from ledger → rc≠0, no destroy
+# TEST 3: VM present on host but not a member of the pool → rc≠0, no destroy
+#
+# This is the guard that replaced the ledger. A VM the API can see, correctly
+# named, but outside ephemeral-ci is not ours and must not be destroyed.
 # ============================================================
-echo "--- Test 3: VM exists but not in ledger → rc≠0, no destroy"
+echo "--- Test 3: VM exists but is not in the pool → rc≠0, no destroy"
 (
     _setup
     VMID=500
-    # Ledger does not contain this VMID.
-    # Call 1: GET /config → 200 (VM exists)
+    # Call 1: GET /config → 200 (VM exists, correct name)
     _resp 1 200 '{"data":{"name":"gh-runner-500","cores":2}}'
+    # Call 2: GET /pools/<pool> → 200, but this VMID is not a member
+    _resp 2 200 "$(_pool_without)"
 
     rc=0
     _run_teardown $VMID >/dev/null 2>&1 || rc=$?
 
     [ "$rc" -ne 0 ] || { echo "  FAIL: expected non-zero exit code, got 0" >&2; exit 1; }
-    _assert_log_not_has "PVAPI:DELETE:"
+    # Refusal must happen AT the pool guard, not incidentally downstream.
+    # Asserting "no DELETE" alone is not enough: with the guard removed the
+    # script still fails later once the mock runs out of planted responses,
+    # so the test passed while proving nothing. No POST at all is the signal
+    # that nothing past the guard ever ran.
+    _assert_log_has "PVAPI:GET:/pools/" \
+    && _assert_log_not_has "PVAPI:POST:" \
+    && _assert_log_not_has "PVAPI:DELETE:"
 ) && _pass "Test 3" || _fail "Test 3"
 
 # ============================================================
@@ -228,18 +224,19 @@ echo "--- Test 4: stop leaves VM running → no destroy, reports it"
 (
     _setup
     VMID=500
-    _ledger_add $VMID
     # Call 1: GET /config → 200
     _resp 1 200 '{"data":{"name":"gh-runner-500","cores":2}}'
-    # Call 2: POST /status/stop → 200
-    _resp 2 200 '{"data":"UPID:pve:00001234:abcdef01:67890abc:stopvm:500:root@pam:"}'
-    # Call 3: GET /tasks/.../status → still running (triggers timeout immediately
+    # Call 2: GET /pools/<pool> → 200, VMID is a member
+    _resp 2 200 "$(_pool_with $VMID)"
+    # Call 3: POST /status/stop → 200
+    _resp 3 200 '{"data":"UPID:pve:00001234:abcdef01:67890abc:stopvm:500:root@pam:"}'
+    # Call 4: GET /tasks/.../status → still running (triggers timeout immediately
     # since STOP_TIMEOUT=1 and STOP_POLL_INTERVAL=0)
-    _resp 3 200 '{"data":{"status":"running"}}'
-    # Call 4: force-stop POST → 200
-    _resp 4 200 '{"data":"UPID:pve:00001234:abcdef01:67890abc:stopvm:500:root@pam:"}'
-    # Call 5: GET /status/current after force-stop → still running
-    _resp 5 200 '{"data":{"status":"running"}}'
+    _resp 4 200 '{"data":{"status":"running"}}'
+    # Call 5: force-stop POST → 200
+    _resp 5 200 '{"data":"UPID:pve:00001234:abcdef01:67890abc:stopvm:500:root@pam:"}'
+    # Call 6: GET /status/current after force-stop → still running
+    _resp 6 200 '{"data":{"status":"running"}}'
 
     rc=0
     _run_teardown $VMID >/dev/null 2>&1 || rc=$?
@@ -272,7 +269,7 @@ echo "--- Test 6a: VM named 'Agent-Swarm' → rc≠0, no destroy"
 (
     _setup
     VMID=500
-    _ledger_add $VMID
+    # Guard 4 (name) runs before the pool call, so no pool response is needed.
     _resp 1 200 '{"data":{"name":"Agent-Swarm","cores":8}}'
 
     rc=0
@@ -286,7 +283,6 @@ echo "--- Test 6b: VM named 'Prod-Services' → rc≠0, no destroy"
 (
     _setup
     VMID=500
-    _ledger_add $VMID
     _resp 1 200 '{"data":{"name":"Prod-Services","cores":8}}'
 
     rc=0
@@ -303,7 +299,6 @@ echo "--- Test 7: connection error (curl failure) → rc≠0"
 (
     _setup
     VMID=500
-    _ledger_add $VMID
     # Override pvapi.sh to simulate curl exit 7 (connection refused).
     cat > "$PVAPI_SH" <<'MOCK'
 PVAPI_STATUS=""

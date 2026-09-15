@@ -12,10 +12,10 @@
 #
 # --dry-run prints what it would destroy and touches nothing. This is the
 # behaviour a human gets when they run it wrong, so it must be the first
-# thing to type when the ledger looks suspicious.
+# thing to type when the candidate list looks suspicious.
 #
 # Destruction requires two confirmations:
-#   1. The VM must be old enough (ledger epoch or Proxmox config ctime).
+#   1. The VM must be old enough (ctime from the Proxmox config API).
 #   2. The GitHub busy check must show the runner is not live.
 # A VM that fails either check is SKIPPED. An unknown age is a refusal, not
 # a licence: VM_EPOCH=0 resolves to 1970, making every VM past the cutoff
@@ -26,8 +26,9 @@
 # template and live clones, not any other VMs on the host. GET /nodes/qemu
 # returns an HTTP status, so a failure is never misread as an empty list.
 #
-# Age source preference: ledger epoch (authoritative). Falls back to the
-# ctime field in the Proxmox config API for a VM whose ledger line was lost.
+# Age source: the ctime field in the Proxmox config API, written by the
+# hypervisor when the VM was cloned. A VM whose ctime cannot be read is
+# skipped, never destroyed.
 # The real Proxmox meta string (host-verified 2026-09-14):
 #   meta: creation-qemu=11.0.0,ctime=1789270996
 # ctime= is the epoch. creation-qemu= is the QEMU version string, not a
@@ -45,8 +46,6 @@
 #   PVE_API_HOST  — Proxmox API host (default: localhost)
 #   PVE_API_PORT  — Proxmox API port (default: 8006)
 #   TEMPLATE_VMID — source VM template id (default: 101); never reaped
-#   LEDGER_FILE   — active-runner ledger path
-#                   (default: /var/lib/gh-ephemeral-runner/active)
 #   CRED_FILE     — credential file to source (default:
 #                   /etc/gh-ephemeral-runner/token); sourced before the
 #                   defaults below so TEMPLATE_VMID set there overrides the
@@ -61,7 +60,6 @@ if [ -f "$CRED_FILE" ]; then
 fi
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
-LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
 SNIPPETS_DIR="${SNIPPETS_DIR:-/var/lib/vz/snippets}"
 PVE_NODE="${PVE_NODE:-}"
 PVE_API_HOST="${PVE_API_HOST:-localhost}"
@@ -269,55 +267,51 @@ EOF
 )"
 
     # --- Age determination ---
-    # Prefer the ledger's recorded epoch (written by provision.sh at clone time).
-    LEDGER_EPOCH=""
-    if [ -f "$LEDGER_FILE" ]; then
-        LEDGER_EPOCH="$(awk -v id="$VMID" '$1 == id {print $3; exit}' "$LEDGER_FILE")"
-    fi
-
+    # The ctime field in the Proxmox config API is the only age source.
+    #
+    # It used to prefer an epoch recorded in a local ledger file, falling back
+    # to this. The ledger is gone: it lived on the filesystem of whichever
+    # machine ran the script, and this now runs on an ephemeral GitHub runner
+    # where it is always absent. Removing it costs nothing, because ctime is
+    # written by the hypervisor at clone time and is authoritative in a way a
+    # file this script writes about itself never was.
     VM_EPOCH=""
     AGE_SOURCE=""
 
-    if [ -n "$LEDGER_EPOCH" ] && [[ "$LEDGER_EPOCH" =~ ^[0-9]+$ ]]; then
-        VM_EPOCH="$LEDGER_EPOCH"
-        AGE_SOURCE="ledger"
-    else
-        # Fall back to the ctime field in the Proxmox config API.
-        # The Proxmox meta string looks like:
-        #   creation-qemu=11.0.0,ctime=1789270996
-        # The epoch is ctime=; creation-qemu= is the QEMU version (not a
-        # timestamp). Reading from the API JSON avoids the original awk
-        # field-separator bug where awk -F'creation=' never matched.
-        VM_CONFIG=""
-        if ! VM_CONFIG="$(pvapi GET "/nodes/${PVE_NODE}/qemu/${VMID}/config")"; then
-            echo "reap.sh: VM $VMID ($VM_NAME): failed to read config; skipping" >&2
-            (( skipped++ )) || true
-            (( unknown_age++ )) || true
-            continue
-        fi
-        META_EPOCH="$(python3 - "$VM_CONFIG" <<'EOF'
+    # The Proxmox meta string looks like:
+    #   creation-qemu=11.0.0,ctime=1789270996
+    # The epoch is ctime=; creation-qemu= is the QEMU version (not a
+    # timestamp). Reading from the API JSON avoids the original awk
+    # field-separator bug where awk -F'creation=' never matched.
+    VM_CONFIG=""
+    if ! VM_CONFIG="$(pvapi GET "/nodes/${PVE_NODE}/qemu/${VMID}/config")"; then
+        echo "reap.sh: VM $VMID ($VM_NAME): failed to read config; skipping" >&2
+        (( skipped++ )) || true
+        (( unknown_age++ )) || true
+        continue
+    fi
+    META_EPOCH="$(python3 - "$VM_CONFIG" <<'EOF'
 import json, sys, re
 meta = json.loads(sys.argv[1]).get("data", {}).get("meta", "")
 m = re.search(r"ctime=(\d+)", meta)
 print(m.group(1) if m else "")
 EOF
 )"
-        if [ -n "$META_EPOCH" ] && [[ "$META_EPOCH" =~ ^[0-9]+$ ]]; then
-            VM_EPOCH="$META_EPOCH"
-            AGE_SOURCE="qm-config"
-        else
-            # Neither the ledger nor the Proxmox config can give us an age.
-            # Skipping is the only safe choice. VM_EPOCH=0 would resolve to
-            # 1970, making this VM older than any cutoff and authorising
-            # destruction with no evidence — which is exactly the defect this
-            # replaces. An orphan that survives another hour costs disk; a
-            # running build destroyed as an orphan costs a red CI run and an
-            # hour of someone's confidence.
-            echo "reap.sh: VM $VMID ($VM_NAME): no age record (ledger miss + no ctime in config); skipping" >&2
-            (( skipped++ )) || true
-            (( unknown_age++ )) || true
-            continue
-        fi
+    if [ -n "$META_EPOCH" ] && [[ "$META_EPOCH" =~ ^[0-9]+$ ]]; then
+        VM_EPOCH="$META_EPOCH"
+        AGE_SOURCE="qm-config"
+    else
+        # The Proxmox config cannot give us an age.
+        # Skipping is the only safe choice. VM_EPOCH=0 would resolve to
+        # 1970, making this VM older than any cutoff and authorising
+        # destruction with no evidence — which is exactly the defect this
+        # replaces. An orphan that survives another hour costs disk; a
+        # running build destroyed as an orphan costs a red CI run and an
+        # hour of someone's confidence.
+        echo "reap.sh: VM $VMID ($VM_NAME): no ctime in config, age unknown; skipping" >&2
+        (( skipped++ )) || true
+        (( unknown_age++ )) || true
+        continue
     fi
 
     AGE_SECONDS=$(( NOW - VM_EPOCH ))
@@ -353,9 +347,6 @@ EOF
 
     # Destroy. purge=1 removes disks and snapshots registered to this VM.
     if pvapi DELETE "/nodes/${PVE_NODE}/qemu/${VMID}?purge=1" >/dev/null; then
-        if [ -f "$LEDGER_FILE" ]; then
-            sed -i "/^${VMID} /d" "$LEDGER_FILE"
-        fi
         # Remove the cloud-init snippet that holds the registration token.
         # An orphan by definition never had a teardown, so nothing removed it.
         _REAP_SNIPPET="${SNIPPETS_DIR}/gh-runner-${VMID}.yaml"

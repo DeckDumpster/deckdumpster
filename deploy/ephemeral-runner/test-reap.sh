@@ -35,7 +35,6 @@ _fail() { (( FAIL++ )) || true; echo "  FAIL: $1"; }
 
 _td_setup() {
     TD_DIR=$(mktemp -d -p "$TMPDIR_ROOT")
-    LEDGER_FILE="$TD_DIR/ledger"
     SNIPPETS_DIR="$TD_DIR/snippets"
     mkdir -p "$SNIPPETS_DIR"
     PVAPI_LOG="$TD_DIR/pvapi.log"
@@ -74,10 +73,6 @@ _td_resp() {
     printf '%s\n%s\n' "$status" "$body" > "${PVAPI_RESPONSES}/${n}"
 }
 
-_td_ledger_add() {
-    printf '%s some-label 1725000000\n' "$1" >> "$LEDGER_FILE"
-}
-
 _td_log_has() {
     grep -q "$1" "$PVAPI_LOG" 2>/dev/null
 }
@@ -92,7 +87,6 @@ _run_teardown() {
     PVAPI_LOG="$PVAPI_LOG" \
     PVAPI_CALL_FILE="$PVAPI_CALL_FILE" \
     PVAPI_RESPONSES="$PVAPI_RESPONSES" \
-    LEDGER_FILE="$LEDGER_FILE" \
     SNIPPETS_DIR="$SNIPPETS_DIR" \
     TEMPLATE_VMID="${TEMPLATE_VMID:-101}" \
     PVE_HOST=pve-test \
@@ -115,7 +109,6 @@ _run_teardown() {
 
 _reap_setup() {
     RD=$(mktemp -d -p "$TMPDIR_ROOT")
-    REAP_LEDGER="$RD/ledger"
     REAP_SNIPPETS="$RD/snippets"
     mkdir -p "$REAP_SNIPPETS"
     BIN="$RD/bin"
@@ -161,7 +154,6 @@ _run_reap() {
         shift
     done
     PATH="$BIN:$PATH" \
-    LEDGER_FILE="$REAP_LEDGER" \
     SNIPPETS_DIR="$REAP_SNIPPETS" \
     TEMPLATE_VMID="${TEMPLATE_VMID:-101}" \
     PVE_NODE=pve \
@@ -209,7 +201,7 @@ echo "--- Test 1: reap.sh skips VM with template:1 (VMID != TEMPLATE_VMID)"
 # TEST 2: teardown.sh refuses a VM whose config carries template:1,
 #         even when its VMID differs from TEMPLATE_VMID.
 #
-# All other guards are satisfied (VM in ledger, name matches, stop succeeds)
+# All other guards are satisfied (name matches, stop succeeds)
 # so the only thing preventing destruction should be template:1.
 # The test must red with the current code (no template-flag guard) and
 # green after the fix.
@@ -219,8 +211,6 @@ echo "--- Test 2: teardown.sh refuses VM with template:1 (VMID != TEMPLATE_VMID)
     _td_setup
     VMID=9100
     TEMPLATE_VMID=101
-
-    _td_ledger_add $VMID
 
     # Call 1: GET /config → 200, correct name, but template:1.
     _td_resp 1 200 '{"data":{"name":"gh-runner-9100","template":1}}'
@@ -264,8 +254,7 @@ echo "--- Test 3: TEMPLATE_VMID from CRED_FILE reaches reap.sh"
     # Do NOT set TEMPLATE_VMID — it must come from CRED_FILE only.
     output=$(
         PATH="$BIN:$PATH" \
-        LEDGER_FILE="$REAP_LEDGER" \
-        SNIPPETS_DIR="$REAP_SNIPPETS" \
+            SNIPPETS_DIR="$REAP_SNIPPETS" \
         CRED_FILE="$CRED_FILE" \
         PVE_NODE=pve \
         PVE_TOKEN_ID=test@pve!tok \
@@ -301,8 +290,6 @@ echo "--- Test 4: TEMPLATE_VMID from CRED_FILE reaches teardown.sh"
     CRED_FILE="$TD_DIR/token"
     printf 'TEMPLATE_VMID=9100\n' > "$CRED_FILE"
 
-    _td_ledger_add $VMID
-
     # Responses for the full stop/destroy path — reached only without guard 2.
     _td_resp 1 200 '{"data":{"name":"gh-runner-9100"}}'
     _td_resp 2 200 '{"data":"UPID:pve:00001234:abcdef01:67890abc:stopvm:9100:root@pam:"}'
@@ -316,7 +303,6 @@ echo "--- Test 4: TEMPLATE_VMID from CRED_FILE reaches teardown.sh"
     PVAPI_LOG="$PVAPI_LOG" \
     PVAPI_CALL_FILE="$PVAPI_CALL_FILE" \
     PVAPI_RESPONSES="$PVAPI_RESPONSES" \
-    LEDGER_FILE="$LEDGER_FILE" \
     SNIPPETS_DIR="$SNIPPETS_DIR" \
     CRED_FILE="$CRED_FILE" \
     PVE_HOST=pve-test \
