@@ -33,7 +33,7 @@ after the call.
 The file lands `root:root` in the guest; the path unit must `chown runner:runner
 /run/gh-runner-init` before starting `ephemeral-runner.service` (see `TEMPLATE.md`).
 
-The guest's path unit (`ephemeral-runner-init.path`) watches `/run/gh-runner-init`
+The guest's path unit (`ephemeral-runner.path`) watches `/run/gh-runner-init`
 and triggers `ephemeral-runner.service`, which reads the file and self-registers.
 The registration uses `--ephemeral` and `--labels <runner-label>`.
 Without `--ephemeral` the runner stays registered after its job and the repo
@@ -82,22 +82,22 @@ skipping is the correct tradeoff.
 `--dry-run` prints what it would destroy and touches nothing. Run it first
 whenever the ledger looks suspicious.
 
-## Installation on the Proxmox host
+## Where these scripts run
 
-Copy all scripts to the host and make them executable:
+**Not on the Proxmox host.** They run in GitHub-hosted jobs that join the
+tailnet and call the Proxmox HTTP API at `$PVE_API_HOST`. Nothing is installed
+on the hypervisor, and nothing there needs updating when these files change —
+which is the point: a copy on the host is a second source of truth that drifts
+from `main`.
 
-```bash
-SCRIPTS_DIR=/usr/local/lib/gh-ephemeral-runner
-mkdir -p "$SCRIPTS_DIR"
-cp provision.sh teardown.sh reap.sh pvapi.sh "$SCRIPTS_DIR/"
-chmod 755 "$SCRIPTS_DIR/"*.sh
-```
+The hypervisor holds exactly two things: the VM template, and the `pveum` role,
+pool, user and API token that scope what the workflow can reach.
 
-Create the ledger directory:
-
-```bash
-mkdir -p /var/lib/gh-ephemeral-runner
-```
+Earlier revisions of this document described copying the scripts into
+`/usr/local/lib/gh-ephemeral-runner` and pinning an SSH key to a
+forced-command dispatcher. That design is retired. If you followed it, the
+files there are inert — remove them, along with any `authorized_keys` entry
+for the runner user.
 
 ### Repository secrets and ACL confinement
 
@@ -142,11 +142,17 @@ The template VM (default VMID set by `TEMPLATE_VMID`, see below) must have:
   `provision.sh`'s agent wait burns its full `AGENT_TIMEOUT` and exits 1.
 - **QEMU guest agent installed and enabled** (`apt install qemu-guest-agent`).
 - **A `runner` user** that the path unit can chown the token file to.
-- **An `ephemeral-runner-init.path` unit** watching `/run/gh-runner-init` that
+- **An `ephemeral-runner.path` unit** watching `/run/gh-runner-init` that
   chowns the file to `runner:runner` and starts `ephemeral-runner.service`.
   See `TEMPLATE.md` for the full build step.
 
 ## Environment variables
+
+The scripts' built-in default for `TEMPLATE_VMID` is `101`, which is **not**
+the live template — set it explicitly. In CI it comes from the organisation
+variable `TEMPLATE_VMID`. Leaving it at the default means cloning a stale
+image and, worse, leaving the real template unprotected by the id-based
+guard.
 
 All three scripts read `TEMPLATE_VMID` (default `101`) and `LEDGER_FILE`
 (default `/var/lib/gh-ephemeral-runner/active`). The template VMID is never
@@ -219,24 +225,38 @@ one record per live runner VM:
 <VMID> <runner-label> <unix-epoch>
 ```
 
-`provision.sh` appends a line immediately after `qm clone` succeeds.
-`teardown.sh` and `reap.sh` delete the line after `qm destroy` succeeds.
+`provision.sh` appends a line immediately after the clone succeeds.
+`teardown.sh` and `reap.sh` delete the line after the destroy succeeds.
+`teardown.sh` also refuses any VMID absent from the ledger, so a mistyped id
+or an injected argument cannot destroy an unrelated VM.
 
-The ledger is the link between a VMID and the CI run that provisioned it. It
-is also what `teardown.sh`'s guard checks — a VMID absent from the ledger is
-refused, so a mistyped id or an injected argument cannot destroy an unrelated
-VM.
+> **This does not survive the move off the hypervisor, and is being replaced.**
+> The ledger is a file on the local filesystem of whichever machine runs the
+> scripts. When all three ran on the host they shared it. In the workflow,
+> `provision` and `teardown` are separate jobs on separate ephemeral runners,
+> so the file `provision.sh` writes no longer exists when `teardown.sh` runs —
+> and `teardown.sh` refuses. Every run would leak its VM.
+>
+> The replacement establishes the same property from the hypervisor instead of
+> a local file: a VM may be destroyed only when its `config.name` matches
+> `gh-runner-<vmid>`, it is a member of pool `ephemeral-ci`, and its
+> `config.template` is not `1`. That is stronger than the ledger — it cannot
+> go stale, cannot vanish with a runner, and cannot be forged by anything the
+> workflow controls.
 
 ## Scheduled reaper
 
-Install a cron job on the Proxmox host to run `reap.sh` every hour:
+A scheduled GitHub workflow, not a host cron job — it joins the tailnet the
+same way the provision job does and runs `reap.sh` directly.
 
-```
-# /etc/cron.d/gh-runner-reap  — destroy orphan ephemeral runner VMs
-0 * * * * root TEMPLATE_VMID=101 /usr/local/lib/gh-ephemeral-runner/reap.sh --max-age-hours 4
-```
+Reaping something is **not** a success. An orphan means a teardown failed for a
+run GitHub already reported green, so the workflow exits non-zero when it
+destroys anything, to make that visible.
 
-Adjust `TEMPLATE_VMID` if your template lives at a different id.
+Do not arm it until `reap.sh`'s template guard is confirmed present: it must
+refuse any VM whose config reports `template: 1`, independent of
+`TEMPLATE_VMID`. An id is configuration and can be wrong; the template flag is
+a fact about the VM.
 
 ## Proxmox user permissions
 
