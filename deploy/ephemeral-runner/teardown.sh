@@ -34,10 +34,13 @@
 #   TEMPLATE_VMID          — source VM template id (default: 101)
 #   LEDGER_FILE            — active-runner ledger path
 #                            (default: /var/lib/gh-ephemeral-runner/active)
-#   PVE_HOST               — Proxmox API hostname or IP (required)
+#   CRED_FILE              — credential file to source
+#                            (default: /etc/gh-ephemeral-runner/token)
 #   PVE_NODE               — Proxmox node name (required)
-#   PVE_API_TOKEN_ID       — API token id, e.g. gh-runner@pve!teardown (required)
-#   PVE_API_TOKEN_SECRET   — API token secret UUID (required)
+#   PVE_TOKEN_ID           — API token id, e.g. gh-runner@pve!teardown (required)
+#   PVE_TOKEN_SECRET       — API token secret UUID (required)
+#   PVE_API_HOST           — Proxmox API hostname or IP (default: localhost)
+#   PVE_API_PORT           — Proxmox API port (default: 8006)
 #   STOP_TIMEOUT           — seconds to wait for orderly stop before escalating
 #                            to a force-stop (default: 60)
 #   STOP_POLL_INTERVAL     — seconds between stop-task status polls (default: 2)
@@ -61,6 +64,7 @@ fi
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
 LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
+CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-60}"
 STOP_POLL_INTERVAL="${STOP_POLL_INTERVAL:-2}"
 FORCE_STOP_WAIT="${FORCE_STOP_WAIT:-5}"
@@ -69,6 +73,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=pvapi.sh
 . "${PVAPI_SH:-${SCRIPT_DIR}/pvapi.sh}"
 
+# Source credentials. Fail fast with a named cause before calling pvapi() --
+# an unset variable and a dead API look the same at the curl layer.
+if [ -f "$CRED_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$CRED_FILE"
+fi
+
 _require_env() {
     local var="$1"
     if [ -z "${!var:-}" ]; then
@@ -76,7 +87,7 @@ _require_env() {
         exit 1
     fi
 }
-for _v in PVE_HOST PVE_NODE PVE_API_TOKEN_ID PVE_API_TOKEN_SECRET; do
+for _v in PVE_NODE PVE_TOKEN_ID PVE_TOKEN_SECRET; do
     _require_env "$_v"
 done
 

@@ -1,13 +1,14 @@
 # Ephemeral CI Runner — Proxmox scripts
 
-Three scripts that a GitHub-hosted runner drives over SSH to clone a Proxmox
-VM template into a one-shot Actions runner and destroy it afterwards. They
-live here rather than inline in workflow YAML so that every `qm` call can
-be exercised by hand and a red CI run can be reproduced locally.
+Three scripts that a GitHub Actions workflow calls directly — reaching the
+Proxmox API over the tailnet — to clone a VM template into a one-shot runner
+and destroy it afterwards. They live here rather than inline in workflow YAML
+so that every API call can be exercised by hand and a red CI run can be
+reproduced locally.
 
 ## What each script does
 
-### `provision.sh <runner-label> <repo-url>`
+### `provision.sh <runner-label> <registration-token> <repo-url>`
 
 Runs anywhere on the tailnet that can reach the Proxmox HTTP API. Clones a VM
 template into a new one-shot runner, starts it, waits for the qemu guest agent
@@ -88,7 +89,7 @@ Copy all scripts to the host and make them executable:
 ```bash
 SCRIPTS_DIR=/usr/local/lib/gh-ephemeral-runner
 mkdir -p "$SCRIPTS_DIR"
-cp provision.sh teardown.sh reap.sh forced-command.sh "$SCRIPTS_DIR/"
+cp provision.sh teardown.sh reap.sh pvapi.sh "$SCRIPTS_DIR/"
 chmod 755 "$SCRIPTS_DIR/"*.sh
 ```
 
@@ -98,32 +99,37 @@ Create the ledger directory:
 mkdir -p /var/lib/gh-ephemeral-runner
 ```
 
-### SSH keypair for the GitHub-hosted runner
+### Repository secrets and ACL confinement
 
-The GitHub Actions workflow SSHes to the Proxmox host as the `gh-runner`
-non-root user (see "Proxmox user permissions" below) to call these scripts.
-Generate a keypair:
+The workflow holds two Proxmox API credentials as GitHub Actions repository
+secrets: `PVE_TOKEN_ID` and `PVE_TOKEN_SECRET`. This is the transport that
+replaced the SSH key; there is no longer an SSH keypair, no `authorized_keys`
+entry, and no forced-command dispatcher on the hypervisor.
 
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/gh-runner-invoke -C "gh-actions-ephemeral-runner"
+**deckdumpster is a public repository.** A same-repo pull request from any
+contributor runs the workflow file as edited in that PR with full access to
+repository secrets. Treat `PVE_TOKEN_ID` and `PVE_TOKEN_SECRET` as reachable
+by any PR author.
+
+**The containment is the pveum ACL, not the transport.** The token is granted
+the `GHRunner` role on exactly three paths:
+
+```
+/pool/ephemeral-ci
+/storage/local-lvm
+/sdn/zones/localnetwork/vmbr0
 ```
 
-Add the public key to `~gh-runner/.ssh/authorized_keys` on the Proxmox host.
-Pin it to `forced-command.sh` with `restrict` plus an explicit `no-pty`:
+Nothing else on the host is reachable, even if the token leaks. The ACL is
+the whole defence — keep that scope in mind when extending the `GHRunner`
+role or adding paths. See "Proxmox user permissions" below for the full role
+definition and the `pveum acl modify` commands that set this scope.
 
-```
-command="/usr/local/lib/gh-ephemeral-runner/forced-command.sh",restrict,no-pty ssh-ed25519 AAAA... gh-actions-ephemeral-runner
-```
-
-`restrict` implies no-port-forwarding, no-x11-forwarding, no-agent-forwarding
-and all future forwarding types added to OpenSSH. `no-pty` is stated
-explicitly to make the intent clear.
-
-`forced-command.sh` parses `$SSH_ORIGINAL_COMMAND` without eval, validates
-the verb and every argument against positive patterns, and dispatches to
-`provision.sh`, `teardown.sh`, or `reap.sh` — and to nothing else. The
-registration token is passed on stdin and forwarded through unchanged; it
-never appears in the SSH command string or in sshd logs.
+> **Pending (db-58r2):** once the guest file-write path is proven, drop
+> `VM.GuestAgent.Unrestricted` from the `GHRunner` role, leaving
+> `VM.GuestAgent.Audit` and `VM.GuestAgent.FileSystemMgmt`. Arbitrary guest
+> command execution is not needed to write one file, and this token is
+> reachable from a public repo's PR.
 
 ### VM template requirements
 
@@ -145,6 +151,37 @@ The template VM (default VMID set by `TEMPLATE_VMID`, see below) must have:
 All three scripts read `TEMPLATE_VMID` (default `101`) and `LEDGER_FILE`
 (default `/var/lib/gh-ephemeral-runner/active`). The template VMID is never
 acted on — it is the thing being cloned.
+
+### Credentials (all three scripts)
+
+All three scripts share the same credential contract and all source `$CRED_FILE`
+before making any API call. An unset variable and a dead API look identical at
+the curl layer; sourcing from a file and checking at startup is what names the
+missing one before curl is ever called.
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `CRED_FILE` | no | `/etc/gh-ephemeral-runner/token` | File sourced for the API credentials |
+| `PVE_NODE` | **yes** | — | Proxmox node name |
+| `PVE_TOKEN_ID` | **yes** | — | API token id, e.g. `gh-runner@pve!ephemeral` |
+| `PVE_TOKEN_SECRET` | **yes** | — | API token secret UUID |
+| `PVE_API_HOST` | no | `localhost` | Proxmox API hostname or IP |
+| `PVE_API_PORT` | no | `8006` | Proxmox API port |
+
+A minimal credential file at `/etc/gh-ephemeral-runner/token` (mode `0600`,
+owned by `gh-runner`):
+
+```
+PVE_NODE=pve
+PVE_TOKEN_ID=gh-runner@pve!ephemeral
+PVE_TOKEN_SECRET=<uuid from pveum user token add>
+```
+
+Set these in the environment the scripts run in. On a Proxmox host running the
+scripts directly, export them in the shell or write them to the credential file.
+In the GitHub Actions workflow that reaches the host, pass them through the
+dispatcher's environment; the exact mechanism is the companion workflow bead's
+concern.
 
 ### `provision.sh`
 
@@ -169,38 +206,9 @@ acted on — it is the thing being cloned.
 |---|---|---|
 | `GITHUB_TOKEN` | *(required for the busy check)* | GitHub API token |
 | `GH_REPO` | *(required for the busy check)* | Repository in `owner/repo` form |
-| `PVE_API_HOST` | `localhost` | Proxmox API host |
-| `PVE_API_PORT` | `8006` | Proxmox API port |
 
 Without `GITHUB_TOKEN` and `GH_REPO`, `reap.sh` runs in a degraded mode: the
 busy check is skipped and VM age is the only guard. It says so on stderr.
-
-### Credentials — the three scripts do not agree on the names
-
-This is a defect, recorded here rather than papered over, because a reader who
-exports one set and not the other gets a failure that looks exactly like a dead
-API. The three scripts landed from separate beads and each named the same
-Proxmox API credential differently. Until that is reconciled, **export all of
-them**:
-
-| Variable | Read by |
-|---|---|
-| `PVE_NODE` | `provision.sh`, `teardown.sh`, `reap.sh` |
-| `PVE_TOKEN_ID` / `PVE_TOKEN_SECRET` | `provision.sh`, `reap.sh` |
-| `PVE_API_TOKEN_ID` / `PVE_API_TOKEN_SECRET` | `teardown.sh` — the same token, different name |
-| `PVE_HOST` | `teardown.sh` |
-| `PVE_API_HOST` / `PVE_API_PORT` | `reap.sh` |
-
-`provision.sh` sources `$CRED_FILE` before checking; `teardown.sh` and
-`reap.sh` read the ambient environment only. A credential file written for one
-will leave the others unset, and `curl` reports an unset credential and a dead
-API identically.
-
-Set these in the environment the scripts run in. On a Proxmox host running the
-scripts directly, export them in the shell or in a file the calling service
-sources. In the GitHub Actions workflow that reaches the host, pass them
-through the dispatcher's environment; the exact mechanism is the companion
-workflow bead's concern.
 
 ## Ledger file
 
