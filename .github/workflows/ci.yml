@@ -25,14 +25,23 @@ on:
 #                     inside /pool/ephemeral-ci. Do not widen that ACL.
 #   TS_OAUTH_SECRET   bounded by the Tailscale ACL for tag:ci, which should
 #                     permit only the hypervisor on 8006.
-#   RUNNER_REG_PAT    repo-scoped, Administration: write. This is the widest
-#                     of the three and the one to review first if the
-#                     collaborator set ever changes.
+#   RUNNER_REG_PAT    organization "Self-hosted runners: write" and nothing
+#                     else. It cannot delete a repository, add collaborators
+#                     or alter branch protection.
 #
 # RUNNER_REG_PAT exists because GITHUB_TOKEN cannot mint runner registration
 # tokens: `administration` is not a valid key in the permissions block below,
-# and the endpoint requires repo administration rights. There is no workflow
-# permission that grants this.
+# and the endpoint requires runner-administration rights.
+#
+# WHY ORG-LEVEL REGISTRATION WITH A GROUP. Registering at the repository level
+# would need repo `Administration: write`, which also grants repository
+# deletion, collaborator management and branch-protection changes — far more
+# than a CI job should hold on a repo whose required status checks are the
+# thing stopping unreviewed work from landing. Registering at the org level
+# needs only the runner permission, but an org runner is visible to every
+# repository unless it is placed in a restricted group. So: org-level token,
+# and the runner joins `ephemeral-ci`, a group whose repository access is
+# limited to this repository alone. Narrow credential AND narrow runner.
 
 permissions:
   contents: read
@@ -70,7 +79,7 @@ jobs:
           GH_TOKEN: ${{ secrets.RUNNER_REG_PAT }}
         run: |
           TOKEN=$(gh api -X POST \
-            "repos/${{ github.repository }}/actions/runners/registration-token" \
+            "orgs/${{ github.repository_owner }}/actions/runners/registration-token" \
             --jq .token)
           echo "::add-mask::$TOKEN"
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
@@ -87,13 +96,14 @@ jobs:
           TEMPLATE_VMID: ${{ vars.TEMPLATE_VMID }}
           PVE_TOKEN_ID: ${{ secrets.PVE_TOKEN_ID }}
           PVE_TOKEN_SECRET: ${{ secrets.PVE_TOKEN_SECRET }}
+          RUNNER_GROUP: ephemeral-ci
           CRED_FILE: /dev/null
         run: |
           set +e
           OUT=$(bash deploy/ephemeral-runner/provision.sh \
                   "${{ steps.label.outputs.label }}" \
                   "${{ steps.regtoken.outputs.token }}" \
-                  "${{ github.server_url }}/${{ github.repository }}")
+                  "${{ github.server_url }}/${{ github.repository_owner }}")
           RC=$?
           set -e
           VMID=$(printf '%s\n' "$OUT" | sed -n 's/^vmid=\([0-9]\+\)$/\1/p' | head -1)
@@ -111,7 +121,7 @@ jobs:
           LABEL: ${{ steps.label.outputs.label }}
         run: |
           for _ in $(seq 1 40); do
-            if gh api "repos/${{ github.repository }}/actions/runners" \
+            if gh api "orgs/${{ github.repository_owner }}/actions/runners" \
                  --jq '.runners[].name' | grep -qx "$LABEL"; then
               echo "runner $LABEL registered"
               exit 0

@@ -27,7 +27,7 @@ after the call.
    **stdout** before any step that can fail post-clone.
 4. Starts the VM.
 5. Polls `POST .../agent/ping` until the guest agent answers.
-6. Writes `RUNNER_LABEL`, `RUNNER_TOKEN`, and `RUNNER_REPO_URL` to
+6. Writes `RUNNER_LABEL`, `RUNNER_TOKEN`, `RUNNER_URL` and `RUNNER_GROUP` to
    `/run/gh-runner-init` inside the guest via `POST .../agent/file-write`.
 
 The file lands `root:root` in the guest; the path unit must `chown runner:runner

@@ -15,7 +15,14 @@
 #   Everything else (progress, errors) goes to stderr.
 #
 # Usage:
-#   provision.sh <runner-label> <registration-token> <repo-url>
+#   provision.sh <runner-label> <registration-token> <registration-url>
+#
+# <registration-url> must match the scope the token was minted for. An
+# organization registration token requires the ORG url; passing the repository
+# url with an org token fails at config.sh with a 404 that reads like a bad
+# token. Registration is org-level so the PAT can hold only "Self-hosted
+# runners" rather than repository Administration; the runner is confined to one
+# repository by RUNNER_GROUP instead.
 #
 # The registration token is delivered by writing /run/gh-runner-init inside
 # the guest via the qemu guest agent (POST .../agent/file-write). provision.sh
@@ -43,6 +50,7 @@
 #   CRED_FILE      -- credential file to source (default: /etc/gh-ephemeral-runner/token)
 #   PVE_API_HOST   -- Proxmox API hostname or IP (default: localhost)
 #   PVE_API_PORT   -- Proxmox API port (default: 8006)
+#   RUNNER_GROUP   -- runner group the guest registers into (default: ephemeral-ci)
 #
 # API transport notes:
 #   -k: loopback only. The request never leaves the host, so anyone positioned
@@ -71,6 +79,11 @@ CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
 # at all (db-323).
 PVE_API_HOST="${PVE_API_HOST:-localhost}"
 PVE_API_PORT="${PVE_API_PORT:-8006}"
+# The runner group the guest registers into. Org-level registration puts a
+# runner in "Default" unless a group is named, and Default is visible to every
+# repository in the organisation.
+RUNNER_GROUP="${RUNNER_GROUP:-ephemeral-ci}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -ne 3 ]; then
     printf 'Usage: provision.sh <runner-label> <registration-token> <repo-url>\n' >&2
@@ -279,15 +292,40 @@ while true; do
     sleep 2
 done
 
-# --- Deliver token via guest agent file-write ---
+# --- Deliver the guest script, then the token ---
 #
-# Write the content to a temp file so the token never appears in any curl
-# process argv (visible to ps aux on the hypervisor). The file lands root:root
-# in the guest; the path unit must chown it before starting the runner service.
+# ORDER IS LOAD-BEARING. The guest's ephemeral-runner.path unit watches
+# /run/gh-runner-init and starts the service the moment that file appears, so
+# start-runner.sh must already be in place. Writing the script first and the
+# token second is what makes that safe.
+#
+# The script is shipped from this repository on every run rather than baked
+# into the VM template. That keeps it version-controlled and reviewable, and
+# means changing it never requires cloning, editing and resealing the template.
+printf 'provision.sh: delivering guest script to VM %s\n' "$VMID" >&2
+pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
+    --data-urlencode "file=/home/runner/start-runner.sh" \
+    --data-urlencode "content@${SCRIPT_DIR}/guest/start-runner.sh" || exit 1
+
+# file-write lands the file root:root and non-executable. The service runs as
+# User=runner and execs this path, so both have to be corrected before the
+# token arrives and the path unit fires.
+pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+    --data-urlencode "command=/bin/chown" \
+    --data-urlencode "command=runner:runner" \
+    --data-urlencode "command=/home/runner/start-runner.sh" || exit 1
+pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+    --data-urlencode "command=/bin/chmod" \
+    --data-urlencode "command=0755" \
+    --data-urlencode "command=/home/runner/start-runner.sh" || exit 1
+
+# Write the token content to a temp file so it never appears in any curl
+# process argv (visible to ps aux). The file lands root:root in the guest; the
+# path unit chowns it before starting the runner service.
 printf 'provision.sh: delivering token to VM %s via guest agent\n' "$VMID" >&2
 _token_file="$(mktemp)"
-printf 'RUNNER_LABEL=%s\nRUNNER_TOKEN=%s\nRUNNER_REPO_URL=%s\n' \
-    "$LABEL" "$TOKEN" "$REPO_URL" > "$_token_file"
+printf 'RUNNER_LABEL=%s\nRUNNER_TOKEN=%s\nRUNNER_URL=%s\nRUNNER_GROUP=%s\n' \
+    "$LABEL" "$TOKEN" "$REPO_URL" "$RUNNER_GROUP" > "$_token_file"
 pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
     --data-urlencode "file=/run/gh-runner-init" \
     --data-urlencode "content@${_token_file}" || { rm -f "$_token_file"; exit 1; }

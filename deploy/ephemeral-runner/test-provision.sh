@@ -124,6 +124,9 @@ case "$path" in
     /nodes/*/qemu/*/agent/file-write)
         body='{"data":null}'
         ;;
+    /nodes/*/qemu/*/agent/exec)
+        body='{"data":{"pid":1234}}'
+        ;;
     *)
         printf 'curl stub: unhandled path: %s\n' "$path" >&2
         exit 1
@@ -366,6 +369,48 @@ if grep -qF 'localhost:8006' "$CURL_ARGV_FILE" 2>/dev/null; then
     ko "test-9: loopback still hardcoded somewhere in the API path"
 else
     ok "test-9: no hardcoded loopback in the API path"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 10 -- the guest script is delivered, made runnable, and lands BEFORE
+#            the token
+#
+# start-runner.sh ships from this repository on every run rather than being
+# baked into the VM template, so changing it never requires resealing the
+# template. Ordering is load-bearing: the guest's ephemeral-runner.path unit
+# fires the moment /run/gh-runner-init appears, so the script must already be
+# in place and executable when it does.
+# ---------------------------------------------------------------------------
+rm -f "$CURL_ARGV_FILE"
+run_provision valid-label test-token https://github.com/owner/repo >/dev/null
+
+if grep -qF 'file=/home/runner/start-runner.sh' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-10: guest start-runner.sh delivered"
+else
+    ko "test-10: guest start-runner.sh was never written"
+fi
+
+if grep -qF 'command=/bin/chmod' "$CURL_ARGV_FILE" 2>/dev/null \
+   && grep -qF 'command=/bin/chown' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-10: guest script chowned and made executable"
+else
+    ko "test-10: guest script left root-owned or non-executable"
+fi
+
+# Ordering, by line number in the recorded argv.
+_script_at=$(grep -nF 'file=/home/runner/start-runner.sh' "$CURL_ARGV_FILE" | head -1 | cut -d: -f1)
+_token_at=$(grep -nF 'file=/run/gh-runner-init' "$CURL_ARGV_FILE" | head -1 | cut -d: -f1)
+if [ -n "$_script_at" ] && [ -n "$_token_at" ] && [ "$_script_at" -lt "$_token_at" ]; then
+    ok "test-10: script written before the token (path unit cannot fire early)"
+else
+    ko "test-10: token written before the script — the path unit can fire with no script present"
+fi
+
+if grep -qF 'RUNNER_GROUP' "$CURL_ARGV_FILE" 2>/dev/null \
+   || grep -q 'content@' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-10: token payload delivered via a file, not inline argv"
+else
+    ko "test-10: token payload not delivered through content@FILE"
 fi
 
 # ---------------------------------------------------------------------------
