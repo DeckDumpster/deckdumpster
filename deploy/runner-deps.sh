@@ -183,11 +183,46 @@ check_chromium_libs() {
     return 1
 }
 
+# OpenCV's shared libraries, needed on the HOST and not only in the image.
+#
+# The Containerfile installs `libgl1 libglib2.0-0` so the application can import
+# cv2 inside the container. The test suite imports cv2 too -- tests/test_ocr.py
+# pulls in rapidocr, which pulls in cv2 -- and pytest runs in the venv on the
+# host, where nothing had ever installed them. On the old runner they happened to
+# be present as a dependency of something else:
+#
+#   E   ImportError: libGL.so.1: cannot open shared object file
+#
+# raised during COLLECTION, so it aborts the whole unit tier rather than failing
+# one test (de-323).
+CV_LIBS=(libgl1 libglib2.0-0)
+
+# Checked by soname through the dynamic linker's cache rather than by package
+# name, because the thing that fails is a dlopen: what matters is whether the
+# loader can find the object, not whether some package that usually provides it
+# is marked installed. ldconfig is in /sbin, which is not on a non-root PATH.
+CV_SONAMES=(libGL.so.1 libglib-2.0.so.0)
+
+check_cv_libs() {
+    local ldc="" so missing=()
+    for ldc in /sbin/ldconfig /usr/sbin/ldconfig ldconfig; do
+        command -v "$ldc" >/dev/null 2>&1 && break
+        ldc=""
+    done
+    [ -n "$ldc" ] || { note "no ldconfig found -- cannot verify OpenCV libraries"; return 0; }
+    for so in "${CV_SONAMES[@]}"; do
+        "$ldc" -p 2>/dev/null | grep -q "	${so} " || missing+=("$so")
+    done
+    [ ${#missing[@]} -eq 0 ] && return 0
+    lack "OpenCV libraries (${missing[*]})" "tests/test_ocr.py imports cv2 via rapidocr on the host; a missing one aborts collection for the whole unit tier"
+    return 1
+}
+
 run_checks() {
     MISSING=()
     check_podman;        check_uv
     check_subid;         check_linger
-    check_chromium_libs
+    check_chromium_libs; check_cv_libs
 }
 
 if [ "$MODE" = check ]; then
@@ -206,6 +241,7 @@ note "installing dependencies for $(id -un) on $(hostname)"
 
 command -v podman >/dev/null 2>&1 || apt_install podman uidmap slirp4netns fuse-overlayfs
 apt_install "${CHROMIUM_LIBS[@]}"
+apt_install "${CV_LIBS[@]}"
 
 if ! command -v uv >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/uv" ]; then
     note "installing uv"
