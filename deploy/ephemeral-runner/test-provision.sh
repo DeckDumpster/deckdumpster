@@ -8,8 +8,8 @@
 #   1. clone POST carries pool=ephemeral-ci
 #   2. clone task with exitstatus != OK -> script fails before inject or start
 #   3. registration token never appears in any curl argv
-#   4. failure after ledger write -> non-zero exit AND vmid=<n> on stdout
-#      AND ledger line present
+#   4. failure after the clone -> non-zero exit AND vmid=<n> still on stdout,
+#      so the caller can tear the VM down
 #   5. PVE_TOKEN_SECRET unset -> fails before calling curl, naming the cause
 set -uo pipefail
 
@@ -27,7 +27,6 @@ mkdir -p "$SCRATCH/bin"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 export PATH="$SCRATCH/bin:$PATH"
-export LEDGER_FILE="$SCRATCH/ledger"
 export TASK_TIMEOUT=5
 export AGENT_TIMEOUT=5
 export CLONE_RETRIES=3
@@ -159,7 +158,7 @@ run_provision() {
 # ---------------------------------------------------------------------------
 # Test 1 -- clone POST must carry pool=ephemeral-ci
 # ---------------------------------------------------------------------------
-rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+rm -f "$CURL_ARGV_FILE"
 run_provision valid-label test-token https://github.com/owner/repo >/dev/null
 
 if grep -qxF 'pool=ephemeral-ci' "$CURL_ARGV_FILE" 2>/dev/null; then
@@ -178,7 +177,7 @@ fi
 # ---------------------------------------------------------------------------
 # Test 2 -- clone task exitstatus != OK -> fail, no inject, no start
 # ---------------------------------------------------------------------------
-rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+rm -f "$CURL_ARGV_FILE"
 export CURL_CLONE_EXITSTATUS=FAILED
 OUT=$(bash "$PROVISION" valid-label test-token https://github.com/owner/repo 2>/dev/null) && rc2=0 || rc2=$?
 unset CURL_CLONE_EXITSTATUS
@@ -207,7 +206,7 @@ fi
 # Test 3 -- registration token must not appear in any curl argv
 # ---------------------------------------------------------------------------
 SECRET_TOKEN="SUPERSECRETTOKEN99"
-rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+rm -f "$CURL_ARGV_FILE"
 run_provision valid-label "$SECRET_TOKEN" https://github.com/owner/repo >/dev/null
 
 if grep -qF "$SECRET_TOKEN" "$CURL_ARGV_FILE" 2>/dev/null; then
@@ -224,10 +223,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 4 -- failure after ledger write -> non-zero exit AND vmid= on stdout
-#           AND ledger line present
+# Test 4 -- failure after the clone -> non-zero exit AND vmid= on stdout
+#
+# The VMID must reach the caller even though provision.sh failed, because the
+# teardown job is the only thing that can destroy the VM that was created. That
+# is the whole point of the output contract at the top of provision.sh.
 # ---------------------------------------------------------------------------
-rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+rm -f "$CURL_ARGV_FILE"
 export CURL_START_EXITSTATUS=FAILED
 OUT4=$(bash "$PROVISION" valid-label test-token https://github.com/owner/repo 2>/dev/null) && rc4=0 || rc4=$?
 unset CURL_START_EXITSTATUS
@@ -244,16 +246,20 @@ else
     ko "test-4: vmid=<n> missing from stdout on start failure (got: '$OUT4')"
 fi
 
-if grep -qE '^200 ' "$LEDGER_FILE" 2>/dev/null; then
-    ok "test-4: ledger entry written despite start failure"
+# No ledger assertion: provision.sh deliberately writes no ledger file. A file
+# on this runner's disk cannot be read by the teardown job, which runs on a
+# different ephemeral runner (db-ulfv). Ownership is established from the
+# hypervisor instead — name, pool membership and the template flag.
+if grep -q '/clone' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-4: the VM really was created before the failure"
 else
-    ko "test-4: ledger entry missing after start failure"
+    ko "test-4: no clone call recorded — the failure happened too early to test"
 fi
 
 # ---------------------------------------------------------------------------
 # Test 5 -- PVE_TOKEN_SECRET unset -> fails before calling curl
 # ---------------------------------------------------------------------------
-rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+rm -f "$CURL_ARGV_FILE"
 (
     unset PVE_TOKEN_SECRET
     bash "$PROVISION" valid-label test-token https://github.com/owner/repo >/dev/null 2>/dev/null
@@ -278,7 +284,7 @@ fi
 # inside the guest via the qemu guest agent. Verify that the file-write call
 # is made to the correct path.
 # ---------------------------------------------------------------------------
-rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+rm -f "$CURL_ARGV_FILE"
 run_provision valid-label test-token https://github.com/owner/repo >/dev/null
 
 if grep -qF '/agent/file-write' "$CURL_ARGV_FILE" 2>/dev/null; then
@@ -300,7 +306,7 @@ fi
 # provision.sh waits for /agent/ping to succeed before calling file-write.
 # Verify that agent/ping appears in the curl argv, proving the wait happened.
 # ---------------------------------------------------------------------------
-rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+rm -f "$CURL_ARGV_FILE"
 run_provision valid-label test-token https://github.com/owner/repo >/dev/null
 
 if grep -qF '/agent/ping' "$CURL_ARGV_FILE" 2>/dev/null; then
@@ -322,7 +328,7 @@ fi
 # If the guest agent never responds within AGENT_TIMEOUT seconds,
 # provision.sh must exit non-zero without calling file-write.
 # ---------------------------------------------------------------------------
-rm -f "$CURL_ARGV_FILE" "$LEDGER_FILE"
+rm -f "$CURL_ARGV_FILE"
 export CURL_AGENT_PING_FAIL=1
 OUT8=$(bash "$PROVISION" valid-label test-token https://github.com/owner/repo 2>/dev/null) && rc8=0 || rc8=$?
 unset CURL_AGENT_PING_FAIL

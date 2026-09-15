@@ -3,8 +3,8 @@
 # Provision an ephemeral GitHub Actions runner on Proxmox via the HTTP API.
 #
 # Output contract (stdout):
-#   Exactly one line of the form  vmid=<n>  is written to stdout after the
-#   ledger entry and before any step that can fail post-clone. Callers MUST
+#   Exactly one line of the form  vmid=<n>  is written to stdout immediately
+#   after the clone and before any step that can fail post-clone. Callers MUST
 #   capture stdout and parse the vmid= line BEFORE checking the exit status,
 #   because a failure in a later step (agent delivery, start) still exits
 #   non-zero while the VMID has already been emitted. A caller written as
@@ -37,7 +37,6 @@
 #
 # Environment variables:
 #   TEMPLATE_VMID  -- source VM template id (default: 101)
-#   LEDGER_FILE    -- active-runner ledger (default: /var/lib/gh-ephemeral-runner/active)
 #   CLONE_RETRIES  -- attempts before giving up on VMID collision (default: 5)
 #   TASK_TIMEOUT   -- seconds to wait for a UPID task to complete (default: 120)
 #   AGENT_TIMEOUT  -- seconds to wait for the guest agent to become ready (default: 120)
@@ -59,7 +58,6 @@
 set -euo pipefail
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
-LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
 CLONE_RETRIES="${CLONE_RETRIES:-5}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-120}"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-120}"
@@ -90,8 +88,6 @@ fi
 : "${PVE_TOKEN_ID:?credential not set -- is $CRED_FILE sourced and readable?}"
 : "${PVE_TOKEN_SECRET:?credential not set -- is $CRED_FILE sourced and readable?}"
 : "${PVE_NODE:?credential not set -- is $CRED_FILE sourced and readable?}"
-
-mkdir -p "$(dirname "$LEDGER_FILE")"
 
 # ---------------------------------------------------------------------------
 # pvapi <METHOD> <path> [curl-args...]
@@ -228,9 +224,13 @@ fi
 # server; do not proceed to start the VM.
 poll_task "$clone_upid" || exit 1
 
-# Write the ledger entry and emit the VMID now -- before any step that can
-# fail -- so callers can tear down even if we die later. See output contract.
-printf '%s %s %s\n' "$VMID" "$LABEL" "$(date +%s)" >>"$LEDGER_FILE"
+# Emit the VMID now -- before any step that can fail -- so callers can tear
+# down even if we die later. See the output contract at the top.
+#
+# There is deliberately no ledger write here. A file on this machine's disk
+# cannot be read by teardown.sh, which runs in a different job on a different
+# ephemeral runner. Ownership is established from the hypervisor instead: the
+# VM's name, its pool membership, and its template flag.
 printf 'vmid=%s\n' "$VMID"
 
 # --- Start ---

@@ -8,7 +8,7 @@ A test that finds nothing must first prove it could have found something:
 Scenarios verified:
   1. Ledger line in the future → kept
   2. Ledger line past the cutoff → reaped
-  3. VM with no ledger line, no ctime in config → kept and reported, exit 1
+  3. VM with no ctime in config → kept and reported, exit 1
   4. Planted meta: line in the real Proxmox format → epoch parsed correctly
   5. Proxmox API enumeration fails → exit non-zero, not "no VMs found"
   6. GitHub busy check reports runner live → kept regardless of age
@@ -132,7 +132,7 @@ def _make_vm_list(*entries):
 
 @pytest.fixture
 def host(tmp_path):
-    """Return (env, ledger_path, destroyed_path).
+    """Return (env, destroyed_path).
 
     Puts a stub curl on PATH and configures minimal reap.sh env vars.
     """
@@ -142,7 +142,6 @@ def host(tmp_path):
     stub_curl.write_text(CURL_STUB)
     stub_curl.chmod(0o755)
 
-    ledger = tmp_path / "ledger"
     destroyed = tmp_path / "destroyed.txt"
 
     env = {
@@ -151,14 +150,26 @@ def host(tmp_path):
         "PVE_NODE": "pve",
         "PVE_TOKEN_ID": "test@pam!token",
         "PVE_TOKEN_SECRET": "secret123",
-        "LEDGER_FILE": str(ledger),
         "TEMPLATE_VMID": "101",
         "STUB_DESTROYED": str(destroyed),
         "GITHUB_TOKEN": "gh-test-token",
         "GH_REPO": "owner/repo",
         "STUB_RUNNERS": '{"runners": []}',
     }
-    return env, ledger, destroyed
+    return env, destroyed
+
+
+def _set_age(env, vmid, epoch):
+    """Plant a VM's creation time in the config the stub returns.
+
+    ctime is the only age source since the ledger was removed (db-ulfv): a
+    file written by provision.sh cannot be read by a teardown or reap running
+    in a different job on a different ephemeral runner. The format is the one
+    observed on the real hypervisor.
+    """
+    env[f"STUB_VM_{vmid}_CONFIG"] = json.dumps({
+        "data": {"name": f"gh-runner-{vmid}", "meta": f"creation-qemu=11.0.0,ctime={epoch}"}
+    })
 
 
 def _run(env, max_age_hours=4, extra_args=None):
@@ -175,26 +186,22 @@ def _reaped(destroyed_path):
 
 
 # ---------------------------------------------------------------------------
-# Scenario 1: ledger epoch in the future → kept
+# Scenario 1: ctime inside the cutoff → kept
 # ---------------------------------------------------------------------------
-def test_young_ledger_kept(host):
-    """A VM whose ledger epoch has not yet reached the cutoff is kept.
+def test_young_vm_kept(host):
+    """A VM whose ctime has not yet reached the cutoff is kept.
 
     A second VM — past the cutoff — is reaped in the same run, proving the
     reaper ran and reached the age-check rather than failing silently.
     """
-    env, ledger, destroyed = host
+    env, destroyed = host
     now = int(time.time())
 
     vmid_keep = 200
     vmid_reap = 201
-    future_epoch = now + 7200          # 2 h in the future
-    old_epoch = now - 5 * 3600        # 5 h ago, past the 4 h cutoff
+    _set_age(env, vmid_keep, now + 7200)        # 2 h in the future
+    _set_age(env, vmid_reap, now - 5 * 3600)    # 5 h ago, past the 4 h cutoff
 
-    ledger.write_text(
-        f"{vmid_keep} ci {future_epoch}\n"
-        f"{vmid_reap} ci {old_epoch}\n"
-    )
     env["STUB_VM_LIST"] = _make_vm_list((vmid_keep, f"gh-runner-{vmid_keep}"),
                                          (vmid_reap, f"gh-runner-{vmid_reap}"))
 
@@ -207,16 +214,15 @@ def test_young_ledger_kept(host):
 
 
 # ---------------------------------------------------------------------------
-# Scenario 2: ledger epoch past the cutoff → reaped
+# Scenario 2: ctime past the cutoff → reaped
 # ---------------------------------------------------------------------------
-def test_old_ledger_reaped(host):
-    """A VM whose ledger epoch exceeds the cutoff and is not busy is destroyed."""
-    env, ledger, destroyed = host
+def test_old_vm_reaped(host):
+    """A VM whose ctime exceeds the cutoff and is not busy is destroyed."""
+    env, destroyed = host
     now = int(time.time())
-    old_epoch = now - 5 * 3600
 
     vmid = 202
-    ledger.write_text(f"{vmid} ci {old_epoch}\n")
+    _set_age(env, vmid, now - 5 * 3600)
     env["STUB_VM_LIST"] = _make_vm_list((vmid, f"gh-runner-{vmid}"))
 
     result = _run(env)
@@ -226,19 +232,18 @@ def test_old_ledger_reaped(host):
 
 
 # ---------------------------------------------------------------------------
-# Scenario 3: no ledger line, no ctime in config → skipped, exit non-zero
+# Scenario 3: no ctime in config → skipped, exit non-zero
 # ---------------------------------------------------------------------------
 def test_no_age_record_skipped_exit_nonzero(host):
-    """A VM with no ledger entry and no parseable ctime is skipped.
+    """A VM with no parseable ctime is skipped.
 
     The exit code must be non-zero so the calling workflow surfaces the
     anomaly. VM_EPOCH=0 (the old behaviour) would reap this VM as a 1970
     orphan, potentially killing a live build with unknown age.
     """
-    env, ledger, destroyed = host
+    env, destroyed = host
 
     vmid = 203
-    ledger.write_text("")   # no entry for this VMID
     env["STUB_VM_LIST"] = _make_vm_list((vmid, f"gh-runner-{vmid}"))
     # Config has no ctime — empty meta string
     env[f"STUB_VM_{vmid}_CONFIG"] = json.dumps({
@@ -257,24 +262,23 @@ def test_no_age_record_skipped_exit_nonzero(host):
 # Scenario 4: ctime= in Proxmox config parsed correctly
 # ---------------------------------------------------------------------------
 def test_config_ctime_fallback_parsed(host):
-    """When the ledger has no entry, the ctime= field is extracted from config.
+    """The ctime= field is extracted from the Proxmox config.
 
     The real Proxmox meta string (host-verified 2026-09-14):
         creation-qemu=11.0.0,ctime=1789270996
 
     The old code used awk -F'creation=' which never matched — the character
     after 'creation' is '-', not '=', so $2 was always empty and every
-    ledger miss fell into the VM_EPOCH=0 branch (destroy immediately).
+    a missing age fell into the VM_EPOCH=0 branch (destroy immediately).
 
     This test plants the exact observed format and verifies the ctime is
     extracted and used to make the age decision.
     """
-    env, ledger, destroyed = host
+    env, destroyed = host
     now = int(time.time())
     old_ctime = now - 5 * 3600
 
     vmid = 204
-    ledger.write_text("")   # no ledger entry
     env["STUB_VM_LIST"] = _make_vm_list((vmid, f"gh-runner-{vmid}"))
     meta = f"creation-qemu=11.0.0,ctime={old_ctime}"
     env[f"STUB_VM_{vmid}_CONFIG"] = json.dumps({
@@ -301,7 +305,7 @@ def test_enumeration_failure_exits_nonzero(host):
     from an empty cluster, and a reaper that reports success while unable to
     enumerate is a reaper that will never report anything else.
     """
-    env, ledger, _ = host
+    env, _ = host
     # Anchor the pattern to match only the list endpoint, not config/stop/etc.
     env["STUB_FAIL_URL"] = r"/qemu$"
 
@@ -325,13 +329,13 @@ def test_busy_runner_kept(host):
     GitHub is required. The runner name in the busy check uses the VM name
     (gh-runner-{vmid}), which matches the name provision.sh sets on clone.
     """
-    env, ledger, destroyed = host
+    env, destroyed = host
     now = int(time.time())
     old_epoch = now - 5 * 3600
 
     vmid = 205
     vm_name = f"gh-runner-{vmid}"
-    ledger.write_text(f"{vmid} ci {old_epoch}\n")
+    _set_age(env, vmid, old_epoch)
     env["STUB_VM_LIST"] = _make_vm_list((vmid, vm_name))
     env["STUB_RUNNERS"] = json.dumps({
         "runners": [{"name": vm_name, "busy": True, "status": "online"}]
@@ -355,7 +359,7 @@ def test_non_runner_vms_never_selected(host):
     the destroyed list regardless of their age. Only the actual runner VM
     may be reaped.
     """
-    env, ledger, destroyed = host
+    env, destroyed = host
     now = int(time.time())
     old_epoch = now - 5 * 3600
 
@@ -365,7 +369,7 @@ def test_non_runner_vms_never_selected(host):
         {"vmid": 102, "name": "Prod-Services",  "status": "running"},
         {"vmid": runner_vmid, "name": f"gh-runner-{runner_vmid}", "status": "running"},
     ]})
-    ledger.write_text(f"{runner_vmid} ci {old_epoch}\n")
+    _set_age(env, runner_vmid, old_epoch)
 
     result = _run(env)
 
@@ -385,7 +389,7 @@ def test_template_never_reaped(host):
     TEMPLATE_VMID=101 is the default. A template appearing in the pool with
     a runner-style name must be skipped unconditionally.
     """
-    env, ledger, destroyed = host
+    env, destroyed = host
     now = int(time.time())
     old_epoch = now - 5 * 3600
     template_vmid = 101
@@ -393,7 +397,7 @@ def test_template_never_reaped(host):
     env["STUB_VM_LIST"] = json.dumps({"data": [
         {"vmid": template_vmid, "name": "gh-runner-101", "status": "stopped"},
     ]})
-    ledger.write_text(f"{template_vmid} ci {old_epoch}\n")
+    _set_age(env, template_vmid, old_epoch)
     env["TEMPLATE_VMID"] = str(template_vmid)
 
     result = _run(env)

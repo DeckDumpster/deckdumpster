@@ -154,9 +154,10 @@ variable `TEMPLATE_VMID`. Leaving it at the default means cloning a stale
 image and, worse, leaving the real template unprotected by the id-based
 guard.
 
-All three scripts read `TEMPLATE_VMID` (default `101`) and `LEDGER_FILE`
-(default `/var/lib/gh-ephemeral-runner/active`). The template VMID is never
-acted on — it is the thing being cloned.
+All three scripts read `TEMPLATE_VMID` (default `101`). The template VMID is
+never acted on — it is the thing being cloned. `teardown.sh` and `reap.sh` also
+read `PVE_POOL` (default `ephemeral-ci`); see "How a VM is proved to be ours"
+below.
 
 ### Credentials (all three scripts)
 
@@ -216,33 +217,35 @@ concern.
 Without `GITHUB_TOKEN` and `GH_REPO`, `reap.sh` runs in a degraded mode: the
 busy check is skipped and VM age is the only guard. It says so on stderr.
 
-## Ledger file
+## How a VM is proved to be ours
 
-`/var/lib/gh-ephemeral-runner/active` (overridable via `LEDGER_FILE`) holds
-one record per live runner VM:
+There is no ledger. `teardown.sh` and `reap.sh` establish ownership from the
+hypervisor, not from a file either of them wrote:
 
-```
-<VMID> <runner-label> <unix-epoch>
-```
+| Check | Source | Refuses when |
+|---|---|---|
+| name | `GET .../qemu/<vmid>/config` → `.data.name` | not `gh-runner-<vmid>` |
+| pool | `GET /pools/<PVE_POOL>` → `.data.members[].vmid` | vmid is not a member |
+| template flag | same config → `.data.template` | it is `1`, whatever `TEMPLATE_VMID` says |
+| age (`reap.sh` only) | same config → `ctime=` in `.data.meta` | unreadable — the VM is skipped, never destroyed |
 
-`provision.sh` appends a line immediately after the clone succeeds.
-`teardown.sh` and `reap.sh` delete the line after the destroy succeeds.
-`teardown.sh` also refuses any VMID absent from the ledger, so a mistyped id
-or an injected argument cannot destroy an unrelated VM.
+`PVE_POOL` defaults to `ephemeral-ci`.
 
-> **This does not survive the move off the hypervisor, and is being replaced.**
-> The ledger is a file on the local filesystem of whichever machine runs the
-> scripts. When all three ran on the host they shared it. In the workflow,
-> `provision` and `teardown` are separate jobs on separate ephemeral runners,
-> so the file `provision.sh` writes no longer exists when `teardown.sh` runs —
-> and `teardown.sh` refuses. Every run would leak its VM.
->
-> The replacement establishes the same property from the hypervisor instead of
-> a local file: a VM may be destroyed only when its `config.name` matches
-> `gh-runner-<vmid>`, it is a member of pool `ephemeral-ci`, and its
-> `config.template` is not `1`. That is stronger than the ledger — it cannot
-> go stale, cannot vanish with a runner, and cannot be forged by anything the
-> workflow controls.
+This replaced a ledger file at `/var/lib/gh-ephemeral-runner/active`, which
+worked while all three scripts ran on the hypervisor and shared it. It cannot
+work now: `provision` and `teardown` are separate jobs on separate ephemeral
+runners, so the file `provision.sh` wrote never exists when `teardown.sh`
+runs — and `teardown.sh` refused every VM. Every run would have leaked its VM.
+
+Reading the hypervisor is strictly stronger than the ledger was. It cannot go
+stale, cannot vanish with a runner, and cannot be forged by anything the
+workflow controls. The API token's ACL is already scoped to `ephemeral-ci`, so
+the pool check turns an unreachable VM into an explicit refusal with a readable
+message rather than a 403 from whichever call happens to run first.
+
+Order matters: name and template are read from the config already fetched, so
+they cost nothing and run first. The pool check is the one extra API call and
+runs last.
 
 ## Scheduled reaper
 
