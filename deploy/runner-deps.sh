@@ -127,7 +127,7 @@ check_podman() {
              "found $v; Quadlet .container files are ignored below ${PODMAN_MIN_MAJOR}.${PODMAN_MIN_MINOR} and CI fails far downstream with an empty port"
         return 1
     fi
-    note "podman $v"
+    note "container engine $v"
 }
 
 check_uv() {

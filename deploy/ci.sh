@@ -31,6 +31,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_DIR"
 
+# TMPDIR MUST NOT BE A RAM DISK.
+#
+# On a systemd distribution /tmp is a tmpfs sized at half of RAM. This suite
+# writes gigabytes through it: pytest puts every tmp_path there, and setup.sh
+# runs its disk floor against whatever directory it was handed, so six
+# tests/test_container_store.py cases failed with
+#
+#     ERROR: only 3G free on /tmp (floor 10G)
+#     tmpfs  3.7G  302M  3.4G  9% /tmp
+#
+# which is not a disk problem with the box -- / had 79G free at the time. The
+# store-isolation gate learned this separately and refuses a tmpfs probe store;
+# setting TMPDIR here fixes it once for everything downstream, podman's build
+# staging included (de-323).
+case "$(stat -f -c %T "${TMPDIR:-/tmp}" 2>/dev/null)" in
+    tmpfs|ramfs)
+        TMPDIR="${HOME}/.cache/mtgc-tmp"
+        mkdir -p "$TMPDIR"
+        export TMPDIR
+        echo "==> TMPDIR moved to $TMPDIR (/tmp is a RAM disk)"
+        ;;
+esac
+
 export INSTANCE="${INSTANCE:-ci-test}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
