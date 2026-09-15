@@ -49,6 +49,7 @@ export CURL_ARGV_FILE="$SCRATCH/curl-argv"
 #   CURL_CLONE_EXITSTATUS   -- exitstatus in clone task poll response (default: OK)
 #   CURL_START_EXITSTATUS   -- exitstatus in start task poll response (default: OK)
 #   CURL_VMID_FREE_CODE     -- HTTP code for vmid free check (default: 404)
+#   CURL_VMID_403_UNTIL     -- vmid probes for ids <= this return 403 (pool ACL)
 #   CURL_AGENT_PING_FAIL    -- if "1", agent/ping returns 500 (agent not ready)
 # ---------------------------------------------------------------------------
 cat >"$SCRATCH/bin/curl" <<'SH'
@@ -88,8 +89,18 @@ case "$path" in
     /nodes/*/qemu/*/config)
         case "$method" in
             GET)
-                http_code="${CURL_VMID_FREE_CODE:-404}"
-                body='{"errors":{"vmid":"VM 200 not found"}}'
+                # A pool-scoped token gets 403, not 404, for a VM outside its
+                # pool. CURL_VMID_403_UNTIL models a host where the low ids are
+                # occupied by VMs this token cannot see.
+                _probe_vmid="${path#/nodes/}"; _probe_vmid="${_probe_vmid#*/qemu/}"; _probe_vmid="${_probe_vmid%%/*}"
+                if [ -n "${CURL_VMID_403_UNTIL:-}" ] \
+                   && [ "$_probe_vmid" -le "${CURL_VMID_403_UNTIL}" ] 2>/dev/null; then
+                    http_code=403
+                    body='{"errors":{"vmid":"Permission check failed"}}'
+                else
+                    http_code="${CURL_VMID_FREE_CODE:-404}"
+                    body='{"errors":{"vmid":"VM not found"}}'
+                fi
                 ;;
             POST|PUT)
                 body='{"data":null}'
@@ -411,6 +422,34 @@ if grep -qF 'RUNNER_GROUP' "$CURL_ARGV_FILE" 2>/dev/null \
     ok "test-10: token payload delivered via a file, not inline argv"
 else
     ko "test-10: token payload not delivered through content@FILE"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 11 -- a pool-scoped token sees 403, not 404, for VMs outside its pool
+#
+# The API token's ACL is scoped to /pool/ephemeral-ci, so Proxmox refuses to
+# say whether a VM outside that pool exists: it answers 403. /cluster/nextid
+# is not ACL-filtered, so it happily returns an id belonging to one of those
+# VMs — and treating 403 as an error made provisioning impossible.
+#
+# Two things are asserted: 403 does not abort, and the candidate id ADVANCES.
+# Re-asking /cluster/nextid would return the same id forever, turning one
+# collision into CLONE_RETRIES identical attempts and then a failure.
+# ---------------------------------------------------------------------------
+rm -f "$CURL_ARGV_FILE"
+CURL_VMID_403_UNTIL=201 run_provision valid-label test-token https://github.com/DeckDumpster >/dev/null 2>&1 || true
+
+if grep -qF '/qemu/202/config' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-11: candidate advanced past the 403 ids"
+else
+    ko "test-11: candidate did not advance past a 403 (would spin on one id)"
+fi
+
+if grep -qF '/qemu/200/config' "$CURL_ARGV_FILE" 2>/dev/null \
+   && grep -qF '/qemu/201/config' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-11: each 403 id was probed once, in order"
+else
+    ko "test-11: 403 ids were not probed in sequence"
 fi
 
 # ---------------------------------------------------------------------------

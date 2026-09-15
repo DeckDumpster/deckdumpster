@@ -180,20 +180,25 @@ poll_task() {
 # ---------------------------------------------------------------------------
 # pick_vmid
 #
-# GET /cluster/nextid, then verify the returned id is unclaimed (GET config
-# returns 404). Retry on collision -- nextid races against concurrent provisions.
-# 404 from GET .../config is the success case; 2xx means in use.
+# Ask /cluster/nextid once for a starting point, then verify each candidate is
+# unclaimed (GET config returns 404), advancing by one on collision.
+#
+# THE CANDIDATE MUST ADVANCE. Calling /cluster/nextid inside the retry loop
+# returns the same id every time -- it is the lowest free id, not a generator --
+# so any collision became CLONE_RETRIES identical attempts and then a failure.
+# That is invisible until an id actually collides, which on this host means any
+# id belonging to a VM outside the token's pool.
 # ---------------------------------------------------------------------------
 pick_vmid() {
     local i vmid body config_code
+    body="$(pvapi GET "/cluster/nextid")" || return 1
+    vmid="$(printf '%s\n' "$body" | python3 -c \
+        'import json,sys; print(json.load(sys.stdin).get("data",""))')"
+    if [ -z "$vmid" ]; then
+        printf 'provision.sh: /cluster/nextid returned empty data\n' >&2
+        return 1
+    fi
     for i in $(seq 1 "$CLONE_RETRIES"); do
-        body="$(pvapi GET "/cluster/nextid")" || return 1
-        vmid="$(printf '%s\n' "$body" | python3 -c \
-            'import json,sys; print(json.load(sys.stdin).get("data",""))')"
-        if [ -z "$vmid" ]; then
-            printf 'provision.sh: /cluster/nextid returned empty data\n' >&2
-            return 1
-        fi
         config_code="$(curl -sS -k -o /dev/null -w '%{http_code}' -X GET \
             -H "Authorization: PVEAPIToken=${PVE_TOKEN_ID}=${PVE_TOKEN_SECRET}" \
             "https://${PVE_API_HOST}:${PVE_API_PORT}/api2/json/nodes/${PVE_NODE}/qemu/${vmid}/config")" || {
@@ -202,13 +207,32 @@ pick_vmid() {
         }
         case "$config_code" in
             404)
+                # Genuinely free: the API says no such VM, and it would have
+                # said 403 if one existed that we were not allowed to see.
                 printf '%s' "$vmid"
                 return 0
                 ;;
             2??)
-                printf 'provision.sh: VMID %s in use, retrying (%s/%s)\n' \
-                    "$vmid" "$i" "$CLONE_RETRIES" >&2
-                sleep 1
+                printf 'provision.sh: VMID %s in use, trying %s (%s/%s)\n' \
+                    "$vmid" "$(( vmid + 1 ))" "$i" "$CLONE_RETRIES" >&2
+                vmid=$(( vmid + 1 ))
+                ;;
+            403)
+                # NOT AN ERROR, AND NOT FREE. The API token is scoped by ACL to
+                # /pool/ephemeral-ci, so Proxmox refuses to say whether a VM
+                # outside that pool exists -- it answers 403 rather than 404.
+                # Treating that as a failure made provisioning impossible the
+                # moment /cluster/nextid returned an id belonging to any VM the
+                # token cannot see, which on a host with unrelated VMs is most
+                # of them.
+                #
+                # 403 means "exists, or might, and is not ours" -- emphatically
+                # not free. Take the next candidate. Never clone into an id the
+                # token cannot inspect: that is how an unrelated VM gets
+                # overwritten.
+                printf 'provision.sh: VMID %s not visible to this token (403) — not ours, trying %s (%s/%s)\n' \
+                    "$vmid" "$(( vmid + 1 ))" "$i" "$CLONE_RETRIES" >&2
+                vmid=$(( vmid + 1 ))
                 ;;
             *)
                 printf 'provision.sh: unexpected HTTP %s checking VMID %s\n' \
