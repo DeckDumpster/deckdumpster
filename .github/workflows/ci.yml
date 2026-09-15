@@ -5,10 +5,26 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# The test job runs on a Proxmox VM created for this run and destroyed after
-# it. Three jobs rather than one, because a runner has to exist before a job
-# can be scheduled onto it and has to be destroyed after that job ends —
-# neither of which the job itself can do.
+# The smoke job runs on a Proxmox VM created for this run and destroyed after
+# it. Separate provision and teardown jobs rather than one, because a runner
+# has to exist before a job can be scheduled onto it and has to be destroyed
+# after that job ends — neither of which the job itself can do.
+#
+# THE RUNNER GROUP MUST ALLOW PUBLIC REPOSITORIES. This repository is public,
+# and GitHub silently refuses to schedule a public repository's job onto a
+# self-hosted runner whose group has allows_public_repositories=false. There is
+# no error and no annotation: the job sits queued forever beside an idle,
+# correctly-labelled, online runner, which looks exactly like a label mismatch
+# and is not one. Set it with:
+#
+#   gh api -X PATCH /orgs/<org>/actions/runner-groups/<id> \
+#     -f name=<group> -F allows_public_repositories=true
+#
+# It is safe here only because the runner is per-run: `provision` needs repo
+# secrets, a fork pull request does not receive them, so a fork can never cause
+# a runner to exist. Its `smoke` job would queue against a unique label that is
+# never registered and time out. Do not reuse this flag on a group holding a
+# long-lived runner.
 #
 # provision and teardown reach the hypervisor over the tailnet and talk to the
 # Proxmox HTTP API. Nothing is installed on the hypervisor and no SSH key
@@ -147,9 +163,48 @@ jobs:
           CRED_FILE: /dev/null
         run: bash deploy/ephemeral-runner/guest-diag.sh "${{ steps.provision.outputs.vmid }}"
 
-  build:
+  # Runs on the VM provisioned above, and is the only thing that proves the
+  # ephemeral path still works. It is deliberately NOT `deploy/ci.sh`: the
+  # template carries the runner and nothing else, while ci.sh needs rootless
+  # podman and uv. Until the template carries those, running the real suite
+  # here would report a missing toolchain as a failing build.
+  #
+  # Keep this job. An ephemeral runner that nothing schedules onto is an
+  # untested code path that will be broken the day it is needed.
+  smoke:
     needs: provision
     runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prove the job ran on the ephemeral VM
+        run: |
+          set -eux
+          test "$RUNNER_NAME" = "${{ needs.provision.outputs.label }}"
+          uname -a
+          id
+          test -f deploy/ci.sh
+
+      # Reports what the template is missing without failing on it, so the
+      # gap between "the VM runs jobs" and "the VM can run our suite" is
+      # visible in every run rather than discovered when the swap is made.
+      - name: Report the toolchain gap
+        continue-on-error: true
+        run: |
+          for t in podman uv; do
+            if command -v "$t" >/dev/null 2>&1; then
+              echo "$t: $("$t" --version 2>&1 | head -1)"
+            else
+              echo "::warning::$t is not installed on the template (de-323 follow-up)"
+            fi
+          done
+
+  # Still on the long-lived `rgantt` runner, which has the toolchain. Moving
+  # this to the ephemeral VM is the follow-up to this change, not part of it:
+  # swapping it before the template carries podman and uv would trade a CI that
+  # runs for a CI that cannot.
+  build:
+    runs-on: [self-hosted, rgantt]
     steps:
       - uses: actions/checkout@v4
 
@@ -165,7 +220,7 @@ jobs:
   # the VM running, and the hourly reaper becomes the only thing that cleans
   # up — which is a backstop, not a plan.
   teardown:
-    needs: [provision, build]
+    needs: [provision, smoke]
     if: always() && needs.provision.outputs.vmid != ''
     runs-on: ubuntu-latest
     steps:
