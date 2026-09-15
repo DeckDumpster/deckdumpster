@@ -610,8 +610,14 @@ mtgc_store_stamp_service() {
 #
 # Scope is deliberately narrow: only writers to the DEFAULT store take it. A
 # non-prod deploy builds into its own store and contends with nobody. CI's own
-# jobs are already serialised by having one `rgantt` runner, so in practice this
-# arbitrates exactly two contenders — the gate and a prod deploy.
+# jobs no longer contend with each other at all: each PR run gets its own
+# ephemeral VM, so each has its own $HOME, its own default store and its own
+# lock file. (Until de-323 the same conclusion was reached a different way —
+# there was one long-lived `rgantt` runner and jobs queued behind each other.
+# Worth stating explicitly, because that runner is gone and a reader could
+# reasonably wonder whether its removal widened the race. It did not; it removed
+# the contenders rather than the arbitration.) In practice this now arbitrates
+# exactly two: the gate and a prod deploy, on the deployment box.
 MTGC_DEFAULT_STORE_LOCK_FILE="${MTGC_DEFAULT_STORE_LOCK_FILE:-${HOME}/.local/share/mtgc/default-store.lock}"
 
 mtgc_default_store_lock() {
@@ -770,4 +776,22 @@ EOF
         return 2
     fi
     return 0
+}
+
+# mtgc_uv_cache_mount -- print the podman -v argument for the uv build cache,
+# having first made sure the host directory exists.
+#
+# The Containerfile bind-mounts ~/.cache/uv, and podman REFUSES to start a build
+# whose source directory is absent:
+#
+#   Error: validating volumes: faccessat /home/<u>/.cache/uv: no such file or directory
+#
+# which exits 125 before the first layer. On any machine where uv has already
+# run the directory exists and nothing is noticed; on a fresh one it does not,
+# and three separate call sites (setup.sh, seed.sh, deploy.sh) each wrote the
+# same -v argument and none of them created it. One function now owns both
+# halves, so a fourth caller cannot reintroduce the gap (de-323).
+mtgc_uv_cache_mount() {
+    mkdir -p "${HOME}/.cache/uv"
+    printf -- '-v\n%s/.cache/uv:/root/.cache/uv:z\n' "${HOME}"
 }

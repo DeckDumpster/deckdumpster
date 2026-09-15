@@ -15,7 +15,14 @@
 #   Everything else (progress, errors) goes to stderr.
 #
 # Usage:
-#   provision.sh <runner-label> <registration-token> <repo-url>
+#   provision.sh <runner-label> <registration-token> <registration-url>
+#
+# <registration-url> must match the scope the token was minted for. An
+# organization registration token requires the ORG url; passing the repository
+# url with an org token fails at config.sh with a 404 that reads like a bad
+# token. Registration is org-level so the PAT can hold only "Self-hosted
+# runners" rather than repository Administration; the runner is confined to one
+# repository by RUNNER_GROUP instead.
 #
 # The registration token is delivered by writing /run/gh-runner-init inside
 # the guest via the qemu guest agent (POST .../agent/file-write). provision.sh
@@ -41,6 +48,9 @@
 #   TASK_TIMEOUT   -- seconds to wait for a UPID task to complete (default: 120)
 #   AGENT_TIMEOUT  -- seconds to wait for the guest agent to become ready (default: 120)
 #   CRED_FILE      -- credential file to source (default: /etc/gh-ephemeral-runner/token)
+#   PVE_API_HOST   -- Proxmox API hostname or IP (default: localhost)
+#   PVE_API_PORT   -- Proxmox API port (default: 8006)
+#   RUNNER_GROUP   -- runner group the guest registers into (default: ephemeral-ci)
 #
 # API transport notes:
 #   -k: loopback only. The request never leaves the host, so anyone positioned
@@ -62,6 +72,18 @@ CLONE_RETRIES="${CLONE_RETRIES:-5}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-120}"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-120}"
 CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
+# Where the Proxmox API lives. These default to loopback because that is right
+# when the script runs on the hypervisor, but it no longer does: provision runs
+# on a GitHub-hosted runner that reaches the host over the tailnet, and a
+# hardcoded localhost made this script unable to provision anything from there
+# at all (db-323).
+PVE_API_HOST="${PVE_API_HOST:-localhost}"
+PVE_API_PORT="${PVE_API_PORT:-8006}"
+# The runner group the guest registers into. Org-level registration puts a
+# runner in "Default" unless a group is named, and Default is visible to every
+# repository in the organisation.
+RUNNER_GROUP="${RUNNER_GROUP:-ephemeral-ci}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ $# -ne 3 ]; then
     printf 'Usage: provision.sh <runner-label> <registration-token> <repo-url>\n' >&2
@@ -102,19 +124,50 @@ fi
 # ---------------------------------------------------------------------------
 pvapi() {
     local method="$1" path="$2"; shift 2
-    local body_file code
+    local body_file code _pvapi_body
     body_file="$(mktemp)"
     code="$(curl -sS -k -o "$body_file" -w '%{http_code}' -X "$method" \
         -H "Authorization: PVEAPIToken=${PVE_TOKEN_ID}=${PVE_TOKEN_SECRET}" \
-        "https://localhost:8006/api2/json${path}" "$@")" || {
+        "https://${PVE_API_HOST}:${PVE_API_PORT}/api2/json${path}" "$@")" || {
         rm -f "$body_file"
         printf 'provision.sh: curl transport error (%s %s)\n' "$method" "$path" >&2
         return 1
     }
-    cat "$body_file"
+    _pvapi_body="$(cat "$body_file")"
+    printf '%s' "$_pvapi_body"
     rm -f "$body_file"
     case "$code" in 2??) return 0 ;; esac
+    # The API puts its reason in the body. Printing only the status is how an
+    # intermittent agent failure became unreadable: "HTTP 500" and nothing else.
     printf 'provision.sh: pvapi %s %s -> HTTP %s\n' "$method" "$path" "$code" >&2
+    printf 'provision.sh: response: %s\n' "$_pvapi_body" >&2
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# agent_retry <attempts> <METHOD> <path> [curl-args...]
+#
+# Guest-agent calls are intermittently unavailable for the first seconds after
+# the agent starts answering ping: the channel is up before every command is
+# serviceable, and the API surfaces that as HTTP 500 rather than a retryable
+# status. One such 500 on a file-write failed a whole provision, and the same
+# call had succeeded on the previous run -- so it is flaky, not wrong.
+#
+# Retries with a short backoff and reports every attempt, so a persistent
+# failure is still visible rather than smoothed away.
+# ---------------------------------------------------------------------------
+agent_retry() {
+    local attempts="$1"; shift
+    local i
+    for i in $(seq 1 "$attempts"); do
+        if pvapi "$@"; then
+            return 0
+        fi
+        printf 'provision.sh: guest agent call failed (attempt %s/%s), retrying\n' \
+            "$i" "$attempts" >&2
+        sleep 3
+    done
+    printf 'provision.sh: guest agent call failed after %s attempts\n' "$attempts" >&2
     return 1
 }
 
@@ -158,45 +211,32 @@ poll_task() {
 # ---------------------------------------------------------------------------
 # pick_vmid
 #
-# GET /cluster/nextid, then verify the returned id is unclaimed (GET config
-# returns 404). Retry on collision -- nextid races against concurrent provisions.
-# 404 from GET .../config is the success case; 2xx means in use.
+# Returns the id from /cluster/nextid. That value is authoritative: nextid is
+# existence-aware and will not hand back an id that is in use.
+#
+# THERE IS DELIBERATELY NO "IS IT FREE?" PROBE. The obvious check --
+# GET /nodes/<node>/qemu/<id>/config and treat 404 as free -- cannot work with
+# a pool-scoped API token. Proxmox evaluates path permission BEFORE existence,
+# so a token holding rights only on /pool/ephemeral-ci receives 403 for every
+# id outside that pool, including ids where no VM exists at all. Free and
+# occupied are indistinguishable to this caller, and the probe rejected every
+# candidate in turn until it ran out of retries.
+#
+# The race the probe was guarding against is real but is better caught by the
+# clone itself: Proxmox refuses to clone onto an existing VMID, which is an
+# authoritative answer requiring no extra permission. See the clone retry loop.
+
 # ---------------------------------------------------------------------------
 pick_vmid() {
-    local i vmid body config_code
-    for i in $(seq 1 "$CLONE_RETRIES"); do
-        body="$(pvapi GET "/cluster/nextid")" || return 1
-        vmid="$(printf '%s\n' "$body" | python3 -c \
-            'import json,sys; print(json.load(sys.stdin).get("data",""))')"
-        if [ -z "$vmid" ]; then
-            printf 'provision.sh: /cluster/nextid returned empty data\n' >&2
-            return 1
-        fi
-        config_code="$(curl -sS -k -o /dev/null -w '%{http_code}' -X GET \
-            -H "Authorization: PVEAPIToken=${PVE_TOKEN_ID}=${PVE_TOKEN_SECRET}" \
-            "https://localhost:8006/api2/json/nodes/${PVE_NODE}/qemu/${vmid}/config")" || {
-            printf 'provision.sh: curl transport error checking VMID %s\n' "$vmid" >&2
-            return 1
-        }
-        case "$config_code" in
-            404)
-                printf '%s' "$vmid"
-                return 0
-                ;;
-            2??)
-                printf 'provision.sh: VMID %s in use, retrying (%s/%s)\n' \
-                    "$vmid" "$i" "$CLONE_RETRIES" >&2
-                sleep 1
-                ;;
-            *)
-                printf 'provision.sh: unexpected HTTP %s checking VMID %s\n' \
-                    "$config_code" "$vmid" >&2
-                return 1
-                ;;
-        esac
-    done
-    printf 'provision.sh: could not obtain a free VMID after %s attempts\n' "$CLONE_RETRIES" >&2
-    return 1
+    local body vmid
+    body="$(pvapi GET "/cluster/nextid")" || return 1
+    vmid="$(printf '%s\n' "$body" | python3 -c \
+        'import json,sys; print(json.load(sys.stdin).get("data",""))')"
+    if [ -z "$vmid" ]; then
+        printf 'provision.sh: /cluster/nextid returned empty data\n' >&2
+        return 1
+    fi
+    printf '%s' "$vmid"
 }
 
 # --- Pick a VMID ---
@@ -207,16 +247,32 @@ VMID="$(pick_vmid)" || exit 1
 # pool=ephemeral-ci is required. A pool-scoped grant cannot allocate outside
 # its pool, so omitting it causes the clone to fail with a permissions error
 # even if the token has VM.Clone on the template.
-printf 'provision.sh: cloning template %s -> VMID %s\n' "$TEMPLATE_VMID" "$VMID" >&2
-clone_body="$(pvapi POST "/nodes/${PVE_NODE}/qemu/${TEMPLATE_VMID}/clone" \
-    --data-urlencode "newid=${VMID}" \
-    --data-urlencode "name=gh-runner-${VMID}" \
-    --data-urlencode "full=0" \
-    --data-urlencode "pool=ephemeral-ci")" || exit 1
-clone_upid="$(printf '%s\n' "$clone_body" | python3 -c \
-    'import json,sys; print(json.load(sys.stdin).get("data",""))')"
+# THE CLONE IS THE COLLISION CHECK. Proxmox refuses to clone onto an existing
+# VMID, and that refusal is authoritative and needs no permission the token
+# lacks -- unlike probing the id first, which a pool-scoped token cannot do
+# (see pick_vmid). On refusal, ask nextid again: if the id was taken by a
+# concurrent provision, nextid has moved past it.
+clone_upid=""
+for _clone_try in $(seq 1 "$CLONE_RETRIES"); do
+    printf 'provision.sh: cloning template %s -> VMID %s (attempt %s/%s)\n' \
+        "$TEMPLATE_VMID" "$VMID" "$_clone_try" "$CLONE_RETRIES" >&2
+    if clone_body="$(pvapi POST "/nodes/${PVE_NODE}/qemu/${TEMPLATE_VMID}/clone" \
+        --data-urlencode "newid=${VMID}" \
+        --data-urlencode "name=gh-runner-${VMID}" \
+        --data-urlencode "full=0" \
+        --data-urlencode "pool=ephemeral-ci")"; then
+        clone_upid="$(printf '%s\n' "$clone_body" | python3 -c \
+            'import json,sys; print(json.load(sys.stdin).get("data",""))')"
+        [ -n "$clone_upid" ] && break
+        printf 'provision.sh: clone POST returned no UPID\n' >&2
+        exit 1
+    fi
+    printf 'provision.sh: clone onto VMID %s refused; asking for a new id\n' "$VMID" >&2
+    VMID="$(pick_vmid)" || exit 1
+    sleep 1
+done
 if [ -z "$clone_upid" ]; then
-    printf 'provision.sh: clone POST returned no UPID\n' >&2
+    printf 'provision.sh: could not clone after %s attempts\n' "$CLONE_RETRIES" >&2
     exit 1
 fi
 
@@ -270,18 +326,69 @@ while true; do
     sleep 2
 done
 
-# --- Deliver token via guest agent file-write ---
+# --- Deliver the guest script, then the token ---
 #
-# Write the content to a temp file so the token never appears in any curl
-# process argv (visible to ps aux on the hypervisor). The file lands root:root
-# in the guest; the path unit must chown it before starting the runner service.
+# ORDER IS LOAD-BEARING. The guest's ephemeral-runner.path unit watches
+# /run/gh-runner-init and starts the service the moment that file appears, so
+# start-runner.sh must already be in place. Writing the script first and the
+# token second is what makes that safe.
+#
+# The script is shipped from this repository on every run rather than baked
+# into the VM template. That keeps it version-controlled and reviewable, and
+# means changing it never requires cloning, editing and resealing the template.
+# REFUSE NON-ASCII BEFORE SENDING. Proxmox's agent/file-write dies on any byte
+# above 0x7F with "Wide character in subroutine entry at .../Qemu/Agent.pm" and
+# returns HTTP 500 with no mention of encoding. A single em dash in a comment
+# broke every provision, and the failure named the hypervisor's Perl rather
+# than the file that caused it. Checking here puts the message where the fix is.
+if LC_ALL=C grep -qP '[^\x00-\x7F]' "${SCRIPT_DIR}/guest/start-runner.sh" 2>/dev/null; then
+    printf 'provision.sh: guest/start-runner.sh contains non-ASCII bytes; agent/file-write cannot carry them\n' >&2
+    LC_ALL=C grep -nP '[^\x00-\x7F]' "${SCRIPT_DIR}/guest/start-runner.sh" >&2
+    exit 1
+fi
+
+printf 'provision.sh: delivering guest script to VM %s\n' "$VMID" >&2
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
+    --data-urlencode "file=/home/runner/start-runner.sh" \
+    --data-urlencode "content@${SCRIPT_DIR}/guest/start-runner.sh" >/dev/null || exit 1
+
+# file-write lands the file root:root and non-executable. The service runs as
+# User=runner and execs this path, so both have to be corrected before the
+# token arrives and the path unit fires.
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+    --data-urlencode "command=/bin/chown" \
+    --data-urlencode "command=runner:runner" \
+    --data-urlencode "command=/home/runner/start-runner.sh" >/dev/null || exit 1
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+    --data-urlencode "command=/bin/chmod" \
+    --data-urlencode "command=0755" \
+    --data-urlencode "command=/home/runner/start-runner.sh" >/dev/null || exit 1
+
+# Write the token content to a temp file so it never appears in any curl
+# process argv (visible to ps aux). The file lands root:root in the guest; the
+# path unit chowns it before starting the runner service.
+# THE FINAL FILE MUST APPEAR ATOMICALLY. The guest's ephemeral-runner.path unit
+# triggers on PathExists, which fires the instant the path comes into being --
+# not when writing to it finishes. Writing straight to /run/gh-runner-init let
+# the service start and source a partially written file, so RUNNER_LABEL was
+# unset, the script exited, the path unit retriggered, and systemd rate-limited
+# it five failures later. The file was complete by the time anyone looked,
+# which made it read like a delivery failure rather than a race.
+#
+# Write to a temp path the path unit is not watching, then rename. rename(2) is
+# atomic within a filesystem, so the watched path only ever appears complete.
 printf 'provision.sh: delivering token to VM %s via guest agent\n' "$VMID" >&2
 _token_file="$(mktemp)"
-printf 'RUNNER_LABEL=%s\nRUNNER_TOKEN=%s\nRUNNER_REPO_URL=%s\n' \
-    "$LABEL" "$TOKEN" "$REPO_URL" > "$_token_file"
-pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
-    --data-urlencode "file=/run/gh-runner-init" \
-    --data-urlencode "content@${_token_file}" || { rm -f "$_token_file"; exit 1; }
+printf 'RUNNER_LABEL=%s\nRUNNER_TOKEN=%s\nRUNNER_URL=%s\nRUNNER_GROUP=%s\n' \
+    "$LABEL" "$TOKEN" "$REPO_URL" "$RUNNER_GROUP" > "$_token_file"
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
+    --data-urlencode "file=/run/gh-runner-init.partial" \
+    --data-urlencode "content@${_token_file}" >/dev/null || { rm -f "$_token_file"; exit 1; }
 rm -f "$_token_file"
+
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+    --data-urlencode "command=/bin/mv" \
+    --data-urlencode "command=/run/gh-runner-init.partial" \
+    --data-urlencode "command=/run/gh-runner-init" >/dev/null || exit 1
 
 printf 'provision.sh: VM %s started; runner credentials delivered via guest agent\n' "$VMID" >&2

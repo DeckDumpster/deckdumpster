@@ -767,9 +767,29 @@ def test_store_lib_is_sourced_by_every_deploy_script_that_runs_podman():
         text = script.read_text()
         if script.name.startswith("mac-") or script.name == "store-lib.sh":
             continue
+        # Matched in COMMAND POSITION, not by mentioning the word. The
+        # substring test this replaces flagged `apt_install podman ...` (a
+        # package name), `lack podman "..."` (an argument) and three sentences
+        # of English prose that happen to say "podman" -- while a real
+        # invocation inside `$( )` only matched by luck. Command position is
+        # both stricter and narrower: it catches `podman build`, `$(podman
+        # port ...)`, `| podman ...` and a sudo-prefixed one, and it does not
+        # care how often the word appears in a message.
+        #
+        # A capability probe is then excluded on top of that. `command -v
+        # podman` and `podman --version` answer "is the binary here"; they
+        # never read or write a store, and requiring store-lib.sh for them
+        # would mean sourcing it into scripts that have no store to respect.
+        # Everything else still counts, including any subcommand added later --
+        # this deliberately does not enumerate the ones that touch a store,
+        # because such a list is what would miss the next one.
+        probe = re.compile(r"command -v podman\b|\bpodman\s+(?:--version|-v)\b")
+        invocation = re.compile(
+            r"(?:^|[|&;(`]|\$\()\s*(?:sudo\s+|env\s+\S+=\S+\s+)*podman\s"
+        )
         runs_podman = any(
-            line.strip().startswith("podman ") or " podman " in line
-            for line in text.splitlines()
+            invocation.search(line)
+            for line in (probe.sub("", raw) for raw in text.splitlines())
             if not line.strip().startswith("#")
         )
         if not runs_podman:

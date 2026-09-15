@@ -5,21 +5,226 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# After merging, enable branch protection on `main` in GitHub repo settings:
-#   - Require PR before merging
-#   - Require the `test` status check to pass
-#   - (Optional) Require up-to-date branch before merging
+# The smoke job runs on a Proxmox VM created for this run and destroyed after
+# it. Separate provision and teardown jobs rather than one, because a runner
+# has to exist before a job can be scheduled onto it and has to be destroyed
+# after that job ends — neither of which the job itself can do.
+#
+# THE RUNNER GROUP MUST ALLOW PUBLIC REPOSITORIES. This repository is public,
+# and GitHub silently refuses to schedule a public repository's job onto a
+# self-hosted runner whose group has allows_public_repositories=false. There is
+# no error and no annotation: the job sits queued forever beside an idle,
+# correctly-labelled, online runner, which looks exactly like a label mismatch
+# and is not one. Set it with:
+#
+#   gh api -X PATCH /orgs/<org>/actions/runner-groups/<id> \
+#     -f name=<group> -F allows_public_repositories=true
+#
+# It is safe here only because the runner is per-run: `provision` needs repo
+# secrets, a fork pull request does not receive them, so a fork can never cause
+# a runner to exist. Its `smoke` job would queue against a unique label that is
+# never registered and time out. Do not reuse this flag on a group holding a
+# long-lived runner.
+#
+# provision and teardown reach the hypervisor over the tailnet and talk to the
+# Proxmox HTTP API. Nothing is installed on the hypervisor and no SSH key
+# exists; the containment is the pveum ACL, which scopes the API token to
+# /pool/ephemeral-ci and nothing else on the host.
+#
+# SECURITY NOTE, because this repository is PUBLIC. A same-repo pull request
+# runs this file as edited in that PR with full access to repository secrets.
+# Pull requests from FORKS do not receive secrets, so the exposure is to people
+# who already have write access — not to the public. Even so, treat every
+# secret here as readable by any collaborator:
+#
+#   PVE_TOKEN_SECRET  bounded by the pveum ACL to cloning and destroying VMs
+#                     inside /pool/ephemeral-ci. Do not widen that ACL.
+#   TS_OAUTH_SECRET   bounded by the Tailscale ACL for tag:ci, which should
+#                     permit only the hypervisor on 8006.
+#   RUNNER_REG_PAT    organization "Self-hosted runners: write" and nothing
+#                     else. It cannot delete a repository, add collaborators
+#                     or alter branch protection.
+#
+# RUNNER_REG_PAT exists because GITHUB_TOKEN cannot mint runner registration
+# tokens: `administration` is not a valid key in the permissions block below,
+# and the endpoint requires runner-administration rights.
+#
+# WHY ORG-LEVEL REGISTRATION WITH A GROUP. Registering at the repository level
+# would need repo `Administration: write`, which also grants repository
+# deletion, collaborator management and branch-protection changes — far more
+# than a CI job should hold on a repo whose required status checks are the
+# thing stopping unreviewed work from landing. Registering at the org level
+# needs only the runner permission, but an org runner is visible to every
+# repository unless it is placed in a restricted group. So: org-level token,
+# and the runner joins `ephemeral-ci`, a group whose repository access is
+# limited to this repository alone. Narrow credential AND narrow runner.
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    runs-on: [self-hosted, rgantt]
+  provision:
+    runs-on: ubuntu-latest
+    outputs:
+      vmid: ${{ steps.provision.outputs.vmid }}
+      label: ${{ steps.label.outputs.label }}
     steps:
       - uses: actions/checkout@v4
 
-      # Every step of the run lives in deploy/ci.sh, so what CI does is a thing
-      # you can read and run by hand, and a new gate is wired in one place
-      # rather than here as well (de-xz8).
+      # A label unique to this run and attempt. Never $(hostname): every clone
+      # of the template is named ci-runners, GitHub rejects a duplicate runner
+      # name, and `build` below targets exactly this label — without uniqueness
+      # two concurrent runs can land on each other's VMs and one teardown kills
+      # the other's job.
+      - name: Compute runner label
+        id: label
+        run: echo "label=ci-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      # Repo-scoped, not org-scoped. An org-level runner is eligible for jobs
+      # from every repository in the organisation.
+      - name: Mint a registration token
+        id: regtoken
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_REG_PAT }}
+        run: |
+          TOKEN=$(gh api -X POST \
+            "orgs/${{ github.repository_owner }}/actions/runners/registration-token" \
+            --jq .token)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      # provision.sh emits vmid= on stdout BEFORE any step that can fail, so
+      # the VMID is captured and published even when the script exits non-zero.
+      # Without this, a failure after the clone leaks a VM that teardown can
+      # never name. See the output contract at the top of provision.sh.
+      - name: Provision the runner VM
+        id: provision
+        env:
+          PVE_API_HOST: ${{ vars.PVE_API_HOST }}
+          PVE_NODE: ${{ vars.PVE_NODE }}
+          TEMPLATE_VMID: ${{ vars.TEMPLATE_VMID }}
+          PVE_TOKEN_ID: ${{ secrets.PVE_TOKEN_ID }}
+          PVE_TOKEN_SECRET: ${{ secrets.PVE_TOKEN_SECRET }}
+          RUNNER_GROUP: ephemeral-ci
+          CRED_FILE: /dev/null
+        run: |
+          set +e
+          OUT=$(bash deploy/ephemeral-runner/provision.sh \
+                  "${{ steps.label.outputs.label }}" \
+                  "${{ steps.regtoken.outputs.token }}" \
+                  "${{ github.server_url }}/${{ github.repository_owner }}")
+          RC=$?
+          set -e
+          VMID=$(printf '%s\n' "$OUT" | sed -n 's/^vmid=\([0-9]\+\)$/\1/p' | head -1)
+          [ -n "$VMID" ] && echo "vmid=$VMID" >> "$GITHUB_OUTPUT"
+          exit "$RC"
+
+      # Writing the file is not proof of registration. agent/file-write returns
+      # success once the bytes land; if the token is bad the guest's service
+      # fails, its path unit retriggers until systemd rate-limits it, and the
+      # runner never appears — while this job would otherwise report success
+      # and `build` would queue against a label that will never exist.
+      - name: Wait for the runner to register
+        env:
+          GH_TOKEN: ${{ secrets.RUNNER_REG_PAT }}
+          LABEL: ${{ steps.label.outputs.label }}
+        run: |
+          for _ in $(seq 1 40); do
+            if gh api "orgs/${{ github.repository_owner }}/actions/runners" \
+                 --jq '.runners[].name' | grep -qx "$LABEL"; then
+              echo "runner $LABEL registered"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::runner $LABEL never registered within 240s"
+          exit 1
+
+      # Runs only when something above failed, and before teardown destroys the
+      # VM. A registration failure is otherwise completely blind: the guest is
+      # on an internal bridge with no inbound SSH and the machine is gone
+      # seconds later. Never fails the job itself — the job is already failing
+      # and this must not mask the original error.
+      - name: Dump guest state on failure
+        if: failure() && steps.provision.outputs.vmid != ''
+        continue-on-error: true
+        env:
+          PVE_API_HOST: ${{ vars.PVE_API_HOST }}
+          PVE_NODE: ${{ vars.PVE_NODE }}
+          PVE_TOKEN_ID: ${{ secrets.PVE_TOKEN_ID }}
+          PVE_TOKEN_SECRET: ${{ secrets.PVE_TOKEN_SECRET }}
+          CRED_FILE: /dev/null
+        run: bash deploy/ephemeral-runner/guest-diag.sh "${{ steps.provision.outputs.vmid }}"
+
+  # The real suite, on the VM provisioned above.
+  #
+  # NAMED `test` BECAUSE THAT NAME IS A CONTRACT. The `pr-required` ruleset on
+  # main requires a status check called `test`. A required check that never
+  # reports does not fail the pull request -- it blocks the merge indefinitely
+  # with "the base branch policy prohibits the merge", and nothing in the run
+  # itself looks wrong: every job is green. Renaming this job is therefore a
+  # change to the branch policy, and has to be made in both places or neither
+  # (de-323).
+  #
+  # It installs its own system dependencies first. deploy/ci.sh calls podman
+  # and uv and installs neither; that went unnoticed for as long as CI only
+  # ever ran on one box where somebody had installed them by hand. The list now
+  # lives in deploy/runner-deps.sh, ci.sh refuses to start until it is
+  # satisfied, and this is where a fresh machine satisfies it.
+  #
+  # Installing here rather than baking it into the Proxmox template is
+  # deliberate: baked, the dependency goes back to being invisible and every
+  # change to it needs a manual hypervisor pass. Declared here it is reviewed
+  # in a pull request like anything else. Bake it later as a cache if the
+  # install time justifies it -- the script is idempotent, so a template that
+  # already has everything makes this step a few `command -v` calls.
+  test:
+    needs: provision
+    runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm the job landed on the ephemeral VM
+        run: test "$RUNNER_NAME" = "${{ needs.provision.outputs.label }}"
+
+      - name: Install runner dependencies
+        run: bash deploy/runner-deps.sh
+
       - name: Run CI
         run: bash deploy/ci.sh
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # if: always() is load-bearing. A cancelled or failed build otherwise leaves
+  # the VM running, and the hourly reaper becomes the only thing that cleans
+  # up — which is a backstop, not a plan.
+  teardown:
+    needs: [provision, test]
+    if: always() && needs.provision.outputs.vmid != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Destroy the runner VM
+        env:
+          PVE_API_HOST: ${{ vars.PVE_API_HOST }}
+          PVE_NODE: ${{ vars.PVE_NODE }}
+          TEMPLATE_VMID: ${{ vars.TEMPLATE_VMID }}
+          PVE_TOKEN_ID: ${{ secrets.PVE_TOKEN_ID }}
+          PVE_TOKEN_SECRET: ${{ secrets.PVE_TOKEN_SECRET }}
+          CRED_FILE: /dev/null
+        run: bash deploy/ephemeral-runner/teardown.sh "${{ needs.provision.outputs.vmid }}"

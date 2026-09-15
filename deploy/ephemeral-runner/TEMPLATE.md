@@ -259,16 +259,26 @@ test ! -f /home/runner/actions-runner/.runner \
     || echo "FAIL: runner is registered — re-image from an unregistered copy"
 ```
 
-Registration happens at boot on each clone, via `/home/runner/start-runner.sh`
-(see the next build step). The token is injected at clone time by
-`provision.sh` via the cloud-init drive; by the time any job code runs, the
-token is spent.
+Registration happens at boot on each clone, via `/home/runner/start-runner.sh`.
+`provision.sh` delivers both that script and the token into the booted guest
+through the qemu guest agent; by the time any job code runs, the token is spent.
 
-### /home/runner/start-runner.sh — the guest-side self-registration script
+### /home/runner/start-runner.sh — delivered, not baked
 
-**This script must be baked into the template before sealing.** A clone
-without it fails to register and the cloned VM boots to a stuck state,
-eventually reaped by `reap.sh`.
+**Do not bake this script into the template.** It lives in the repository at
+`deploy/ephemeral-runner/guest/start-runner.sh` and `provision.sh` writes it
+into the guest on every run, immediately before writing
+`/run/gh-runner-init` — the path unit fires on that second write, so the
+script is always in place first.
+
+That is deliberate. Baking it in means every change to the registration logic
+costs a clone, an edit and a reseal of the template; shipping it from the
+repository makes the script version-controlled, reviewable in a PR, and free
+to change. The template carries only what genuinely cannot be delivered at
+run time: the unpacked runner, `qemu-guest-agent`, and the path unit.
+
+The snippet below is retained as a reference for what the guest ends up
+running. The authoritative copy is the file in the repository.
 
 It replaces any earlier version of this file. The template's prior version
 hard-coded a long-lived org-scoped PAT:
@@ -315,7 +325,7 @@ rm -f "$INIT_ENV"
 
 : "${RUNNER_TOKEN:?start-runner: RUNNER_TOKEN not set in gh-runner-init}"
 : "${RUNNER_LABEL:?start-runner: RUNNER_LABEL not set in gh-runner-init}"
-: "${RUNNER_REPO_URL:?start-runner: RUNNER_REPO_URL not set in gh-runner-init}"
+: "${RUNNER_URL:?start-runner: RUNNER_URL not set in gh-runner-init}"
 
 cd "$RUNNER_DIR"
 
@@ -328,7 +338,7 @@ if ! ./config.sh \
         --unattended \
         --ephemeral \
         --labels "$RUNNER_LABEL" \
-        --url "$RUNNER_REPO_URL" \
+        --url "$RUNNER_URL" \
         --token "$RUNNER_TOKEN"; then
     echo "start-runner: config.sh failed — staying up for reaper collection" >&2
     # Do NOT power off — that destroys the evidence.

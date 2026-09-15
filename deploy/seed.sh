@@ -54,8 +54,9 @@ fi
 bash "$SCRIPT_DIR/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
 
 echo "==> Building container image (mtgc:latest)..."
+mapfile -t _uv_mount < <(mtgc_uv_cache_mount)
 podman build -t mtgc:latest -f Containerfile \
-    -v "${HOME}/.cache/uv:/root/.cache/uv:z" .
+    "${_uv_mount[@]}" .
 
 echo "==> Creating seed volume ($SEED_VOLUME)..."
 echo "    This runs 'mtg setup --demo' and downloads ~600 MB of data."

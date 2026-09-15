@@ -7,6 +7,21 @@ name = "mtg-collector"
 version = "2.0.0"
 description = "CLI tool for managing Magic: The Gathering card collections"
 readme = "README.md"
+# The floor, not the version anything actually runs on. `.python-version` pins
+# that to 3.12, matching the Containerfile's python:3.12-slim, so the venv the
+# tests run in and the image they test against agree.
+#
+# Without the pin uv picks the newest interpreter on the box. On a machine whose
+# system python is 3.14 that resolves to a set onnxruntime has no wheel for:
+#
+#   error: Distribution `onnxruntime==1.23.0` can't be installed because it
+#   doesn't have a source distribution or wheel for the current platform
+#   hint: You're using CPython 3.14 (`cp314`), but `onnxruntime` (v1.23.0) only
+#   has wheels with the following Python ABI tags: cp310, cp311, cp312, cp313
+#
+# The container build never saw this because its interpreter is pinned in the
+# Containerfile; only the host venv drifted, and only on a machine new enough to
+# ship 3.14 (de-323).
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
@@ -80,5 +95,18 @@ dev = [
     "ruff>=0.15.1",
     "pytest>=7.0.0",
     "shot-scraper>=1.9.1",
+    # Constrained directly even though it arrives via shot-scraper, because the
+    # floor is a property of the machines CI runs on, not of shot-scraper.
+    # Playwright ships prebuilt browsers per distro and refuses outright on one
+    # it has no build for:
+    #
+    #   ERROR: Playwright does not support chromium on ubuntu26.04-x64
+    #
+    # The runner VMs are Ubuntu 26.04 LTS. 1.58 (what the lock resolved to via
+    # shot-scraper) has no chromium for it; 1.62 does -- verified by running
+    # `playwright install chromium` under each on a 26.04 box, which is the only
+    # way to know, since support is a property of Playwright's download host
+    # rather than of anything in the package metadata (de-323).
+    "playwright>=1.62",
     "pyyaml>=6.0",
 ]

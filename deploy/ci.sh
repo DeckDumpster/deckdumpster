@@ -31,6 +31,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_DIR"
 
+# TMPDIR MUST NOT BE A RAM DISK.
+#
+# On a systemd distribution /tmp is a tmpfs sized at half of RAM. This suite
+# writes gigabytes through it: pytest puts every tmp_path there, and setup.sh
+# runs its disk floor against whatever directory it was handed, so six
+# tests/test_container_store.py cases failed with
+#
+#     ERROR: only 3G free on /tmp (floor 10G)
+#     tmpfs  3.7G  302M  3.4G  9% /tmp
+#
+# which is not a disk problem with the box -- / had 79G free at the time. The
+# store-isolation gate learned this separately and refuses a tmpfs probe store;
+# setting TMPDIR here fixes it once for everything downstream, podman's build
+# staging included (de-323).
+case "$(stat -f -c %T "${TMPDIR:-/tmp}" 2>/dev/null)" in
+    tmpfs|ramfs)
+        TMPDIR="${HOME}/.cache/mtgc-tmp"
+        mkdir -p "$TMPDIR"
+        export TMPDIR
+        echo "==> TMPDIR moved to $TMPDIR (/tmp is a RAM disk)"
+        ;;
+esac
+
 export INSTANCE="${INSTANCE:-ci-test}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-.uv-cache}"
@@ -54,6 +77,20 @@ mtgc_store_activate
 # that failed anywhere still cleaned up. A trap is that, and it also covers a
 # hand-run interrupted partway.
 trap 'bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true' EXIT
+
+# Before anything else: are the tools this script calls actually here?
+#
+# podman and uv are called below and installed by neither this script nor the
+# repository. That held for as long as CI only ever ran on one hand-built box.
+# The first runner built by another route died at `exit code 127` -- a number,
+# with no name attached, three steps in, on a VM that no longer existed by the
+# time anyone read the log. deploy/runner-deps.sh is now the list, and this
+# names what is missing before any of it runs (de-323).
+#
+# It checks; it does not install. Installing needs sudo, and a test script that
+# quietly apt-installs on someone's laptop is worse than the gap it closes.
+echo "==> Runner dependencies"
+bash deploy/runner-deps.sh --check
 
 # Before the job writes several gigabytes: is there room? A run that fills the
 # disk does not fail as a disk error -- at 697M free a cargo link reported
@@ -89,16 +126,81 @@ uv run shot-scraper install
 echo "==> Build and start test container"
 bash deploy/setup.sh "$INSTANCE" --test
 
+# 127.0.0.1, NEVER localhost. `podman port` reports `0.0.0.0:<port>` -- an IPv4
+# wildcard bind, with nothing published on ::1. On a host where `localhost`
+# resolves to both families curl tries ::1 first, something accepts the
+# connection there and immediately resets it, and the result is not a connection
+# error but a TLS one:
+#
+#     * Trying [::1]:35573...
+#     * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+#     * Send failure: Broken pipe
+#     curl: (35) Send failure: Broken pipe
+#
+# which reads as a broken certificate and is a wrong address (de-323). The
+# address is right there in the `podman port` output both this function and the
+# two conftests parse; all three used to keep the port and discard it.
+#
+# THIS FUNCTION MUST EXPLAIN ITSELF WHEN IT GIVES UP.
+#
+# It used to print exactly `Server failed to start` and return 1 -- no port, no
+# curl exit code, no container state, no logs. On the long-lived runner that was
+# merely annoying, because the box was still there to poke at afterwards. On an
+# ephemeral runner the VM is destroyed seconds later, so that one line was the
+# entire record of the failure and there was no way to tell a container that had
+# not been created from one that was crash-looping from one that was simply slow.
+#
+# So the last attempt records WHY it failed, and the give-up path dumps the state
+# a person would have gone looking for. The timeout is deliberately unchanged:
+# raising it would be guessing at "slow" before knowing that slow is the problem
+# at all (de-323).
+WAIT_TRIES="${MTGC_WAIT_TRIES:-20}"
+WAIT_SLEEP="${MTGC_WAIT_SLEEP:-3}"
+
 wait_for_server() {
-    local i port
-    for i in $(seq 1 20); do
-        port="$(podman port "systemd-mtgc-${INSTANCE}" 8081/tcp | cut -d: -f2)" || port=""
-        if [ -n "$port" ] && curl -skf "https://localhost:${port}/" >/dev/null; then
-            return 0
+    local i port curl_rc=0 port_err=""
+    for i in $(seq 1 "$WAIT_TRIES"); do
+        port_err="$(podman port "systemd-mtgc-${INSTANCE}" 8081/tcp 2>&1)" || port_err="${port_err}"
+        port="$(printf '%s' "$port_err" | head -1 | cut -d: -f2)"
+        case "$port" in ''|*[!0-9]*) port="" ;; esac
+        if [ -n "$port" ]; then
+            # 127.0.0.1, NEVER localhost -- see the note above wait_for_server.
+            curl -skf "https://127.0.0.1:${port}/" >/dev/null 2>&1 && return 0
+            curl_rc=$?
         fi
-        sleep 3
+        sleep "$WAIT_SLEEP"
     done
-    echo "Server failed to start" >&2
+
+    {
+        printf '\nServer failed to start after %ss.\n\n' "$(( WAIT_TRIES * WAIT_SLEEP ))"
+        printf -- '--- podman port systemd-mtgc-%s 8081/tcp ---\n%s\n' "$INSTANCE" "${port_err:-<no output>}"
+        printf -- '--- resolved port: %s ---\n' "${port:-<none>}"
+        if [ -n "$port" ]; then
+            printf -- '--- last curl exit: %s ---\n' "$curl_rc"
+            # curl 35 is an SSL CONNECT error: the TCP connection succeeded and
+            # the TLS handshake did not. The exit code alone cannot separate a
+            # protocol/cipher refusal from a reset, so ask for the handshake
+            # itself. -k is already in use, so this is never about trust.
+            printf -- '\n--- curl -kv https://127.0.0.1:%s/ ---\n' "$port"
+            curl -kv --max-time 10 "https://127.0.0.1:${port}/" 2>&1 | tail -30
+            printf -- '\n--- openssl s_client -connect 127.0.0.1:%s ---\n' "$port"
+            openssl s_client -connect "127.0.0.1:${port}" </dev/null 2>&1 | head -30
+            printf -- '\n--- local openssl ---\n'
+            openssl version 2>&1
+            printf -- '\n--- plain TCP reachable? ---\n'
+            timeout 5 bash -c "</dev/tcp/127.0.0.1/${port}" 2>&1 \
+                && echo "TCP connect to 127.0.0.1:${port} OK" \
+                || echo "TCP connect to 127.0.0.1:${port} FAILED"
+        fi
+        printf -- '\n--- podman ps -a ---\n'
+        podman ps -a 2>&1 | head -20
+        printf -- '\n--- systemctl --user status mtgc-%s ---\n' "$INSTANCE"
+        systemctl --user status "mtgc-${INSTANCE}" --no-pager 2>&1 | head -25
+        printf -- '\n--- journalctl --user -u mtgc-%s (last 60) ---\n' "$INSTANCE"
+        journalctl --user -u "mtgc-${INSTANCE}" -n 60 --no-pager 2>&1 | tail -60
+        printf -- '\n--- container logs (last 60) ---\n'
+        podman logs --tail 60 "systemd-mtgc-${INSTANCE}" 2>&1 | tail -60
+    } >&2
     return 1
 }
 

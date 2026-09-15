@@ -88,7 +88,12 @@ def base_url(request, instance_name):
 
     # Parse "0.0.0.0:36305" -> 36305
     port = port_line.split(":")[-1]
-    url = f"https://localhost:{port}"
+    # 127.0.0.1, not localhost: the line parsed just above is `0.0.0.0:<port>`,
+    # an IPv4 wildcard bind with nothing on ::1. Where `localhost` resolves to
+    # both families the IPv6 attempt is made first and fails as a TLS error
+    # rather than a connection error, which reads as a broken certificate
+    # (de-323).
+    url = f"https://127.0.0.1:{port}"
 
     # Verify the instance is actually responding
     ctx = ssl.create_default_context()
