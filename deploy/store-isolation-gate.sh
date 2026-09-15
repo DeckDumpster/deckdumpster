@@ -97,7 +97,19 @@
 #                             meaningless and the teardown would delete real
 #                             instances' images.
 #   $TMPDIR/mtgc-store-gate-$$   last resort, with a warning if it turns out to
-#                             share a filesystem with $HOME
+#                             share a filesystem with $HOME -- and NOT if that
+#                             is a tmpfs, because a RAM-backed probe store is
+#                             not a disk (see below)
+#   $HOME/.cache/mtgc-store-gate-$$   when $TMPDIR is tmpfs
+#
+# WHY TMPFS IS EXCLUDED. On a systemd distribution /tmp is a tmpfs sized at
+# half of RAM by default, so on a machine with 8 GB the gate gets a 3.7 GB
+# probe store and its own 10 GB floor fails before the first image is built.
+# The long-lived runner never hit this because it has a configured store, so
+# the last-resort branch was never taken there; the first machine to take it
+# died at "only 3G free on /tmp (floor 10G)". The image alone is over a
+# gigabyte, so tmpfs is never a correct answer here regardless of size -- it
+# is RAM, and the whole point of the probe is to watch bytes land on a disk.
 #
 # It is never Podman's default store, and refuses to run if it resolves inside
 # one — that is the store under test.
@@ -147,10 +159,27 @@ CONFIGURED_STORE="${MTGC_STORE_ROOT:-}"
 # under test, and CI may have activated another one for the whole job.
 mtgc_store_deactivate
 
+# is_tmpfs <dir> -- true when the directory lives on a RAM-backed filesystem.
+# Checked with statfs rather than by parsing mount output, so it is right for a
+# bind mount and for a $TMPDIR pointed somewhere unexpected.
+is_tmpfs() {
+    case "$(stat -f -c %T "$1" 2>/dev/null)" in
+        tmpfs|ramfs) return 0 ;;
+        *)           return 1 ;;
+    esac
+}
+
 if [ -n "${MTGC_STORE_GATE_ROOT:-}" ]; then
     PROBE="${MTGC_STORE_GATE_ROOT%/}"
 elif [ -n "$CONFIGURED_STORE" ]; then
     PROBE="${CONFIGURED_STORE%/}.gate"
+elif is_tmpfs "${TMPDIR:-/tmp}"; then
+    # Not a disk. Fall back to real storage under $HOME; the probe then shares
+    # a filesystem with the default store, which the check below reports as a
+    # warning and which is the lesser problem by a wide margin.
+    mkdir -p "${HOME}/.cache"
+    PROBE="${HOME}/.cache/mtgc-store-gate-$$"
+    echo "    NOTE: ${TMPDIR:-/tmp} is tmpfs (RAM); probing on disk under \$HOME instead"
 else
     PROBE="${TMPDIR:-/tmp}/mtgc-store-gate-$$"
 fi
