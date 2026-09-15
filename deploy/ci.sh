@@ -103,16 +103,49 @@ uv run shot-scraper install
 echo "==> Build and start test container"
 bash deploy/setup.sh "$INSTANCE" --test
 
+# THIS FUNCTION MUST EXPLAIN ITSELF WHEN IT GIVES UP.
+#
+# It used to print exactly `Server failed to start` and return 1 -- no port, no
+# curl exit code, no container state, no logs. On the long-lived runner that was
+# merely annoying, because the box was still there to poke at afterwards. On an
+# ephemeral runner the VM is destroyed seconds later, so that one line was the
+# entire record of the failure and there was no way to tell a container that had
+# not been created from one that was crash-looping from one that was simply slow.
+#
+# So the last attempt records WHY it failed, and the give-up path dumps the state
+# a person would have gone looking for. The timeout is deliberately unchanged:
+# raising it would be guessing at "slow" before knowing that slow is the problem
+# at all (de-323).
+WAIT_TRIES="${MTGC_WAIT_TRIES:-20}"
+WAIT_SLEEP="${MTGC_WAIT_SLEEP:-3}"
+
 wait_for_server() {
-    local i port
-    for i in $(seq 1 20); do
-        port="$(podman port "systemd-mtgc-${INSTANCE}" 8081/tcp | cut -d: -f2)" || port=""
-        if [ -n "$port" ] && curl -skf "https://localhost:${port}/" >/dev/null; then
-            return 0
+    local i port curl_rc=0 port_err=""
+    for i in $(seq 1 "$WAIT_TRIES"); do
+        port_err="$(podman port "systemd-mtgc-${INSTANCE}" 8081/tcp 2>&1)" || port_err="${port_err}"
+        port="$(printf '%s' "$port_err" | head -1 | cut -d: -f2)"
+        case "$port" in ''|*[!0-9]*) port="" ;; esac
+        if [ -n "$port" ]; then
+            curl -skf "https://localhost:${port}/" >/dev/null 2>&1 && return 0
+            curl_rc=$?
         fi
-        sleep 3
+        sleep "$WAIT_SLEEP"
     done
-    echo "Server failed to start" >&2
+
+    {
+        printf '\nServer failed to start after %ss.\n\n' "$(( WAIT_TRIES * WAIT_SLEEP ))"
+        printf -- '--- podman port systemd-mtgc-%s 8081/tcp ---\n%s\n' "$INSTANCE" "${port_err:-<no output>}"
+        printf -- '--- resolved port: %s ---\n' "${port:-<none>}"
+        [ -n "$port" ] && printf -- '--- last curl exit: %s ---\n' "$curl_rc"
+        printf -- '\n--- podman ps -a ---\n'
+        podman ps -a 2>&1 | head -20
+        printf -- '\n--- systemctl --user status mtgc-%s ---\n' "$INSTANCE"
+        systemctl --user status "mtgc-${INSTANCE}" --no-pager 2>&1 | head -25
+        printf -- '\n--- journalctl --user -u mtgc-%s (last 60) ---\n' "$INSTANCE"
+        journalctl --user -u "mtgc-${INSTANCE}" -n 60 --no-pager 2>&1 | tail -60
+        printf -- '\n--- container logs (last 60) ---\n'
+        podman logs --tail 60 "systemd-mtgc-${INSTANCE}" 2>&1 | tail -60
+    } >&2
     return 1
 }
 
