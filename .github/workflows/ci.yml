@@ -16,15 +16,26 @@ on:
 # /pool/ephemeral-ci and nothing else on the host.
 #
 # SECURITY NOTE, because this repository is PUBLIC. A same-repo pull request
-# runs this file as edited in that PR with full access to repository secrets,
-# so PVE_TOKEN_SECRET and TS_OAUTH_SECRET must be assumed readable by anyone
-# who can open a PR. That is accepted deliberately: the ACL bounds the damage
-# to cloning and destroying VMs inside ephemeral-ci. Do not widen that ACL to
-# make a change here easier.
+# runs this file as edited in that PR with full access to repository secrets.
+# Pull requests from FORKS do not receive secrets, so the exposure is to people
+# who already have write access — not to the public. Even so, treat every
+# secret here as readable by any collaborator:
+#
+#   PVE_TOKEN_SECRET  bounded by the pveum ACL to cloning and destroying VMs
+#                     inside /pool/ephemeral-ci. Do not widen that ACL.
+#   TS_OAUTH_SECRET   bounded by the Tailscale ACL for tag:ci, which should
+#                     permit only the hypervisor on 8006.
+#   RUNNER_REG_PAT    repo-scoped, Administration: write. This is the widest
+#                     of the three and the one to review first if the
+#                     collaborator set ever changes.
+#
+# RUNNER_REG_PAT exists because GITHUB_TOKEN cannot mint runner registration
+# tokens: `administration` is not a valid key in the permissions block below,
+# and the endpoint requires repo administration rights. There is no workflow
+# permission that grants this.
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   provision:
@@ -56,7 +67,7 @@ jobs:
       - name: Mint a registration token
         id: regtoken
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RUNNER_REG_PAT }}
         run: |
           TOKEN=$(gh api -X POST \
             "repos/${{ github.repository }}/actions/runners/registration-token" \
@@ -96,7 +107,7 @@ jobs:
       # and `build` would queue against a label that will never exist.
       - name: Wait for the runner to register
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RUNNER_REG_PAT }}
           LABEL: ${{ steps.label.outputs.label }}
         run: |
           for _ in $(seq 1 40); do
