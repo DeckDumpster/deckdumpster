@@ -47,8 +47,18 @@
 #   TEMPLATE_VMID — source VM template id (default: 101); never reaped
 #   LEDGER_FILE   — active-runner ledger path
 #                   (default: /var/lib/gh-ephemeral-runner/active)
+#   CRED_FILE     — credential file to source (default:
+#                   /etc/gh-ephemeral-runner/token); sourced before the
+#                   defaults below so TEMPLATE_VMID set there overrides the
+#                   compiled-in default of 101.
 #
 set -euo pipefail
+
+CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
+if [ -f "$CRED_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$CRED_FILE"
+fi
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
 LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
@@ -224,6 +234,26 @@ for VMID in "${RUNNER_VMIDS[@]}"; do
     # Never touch the template, even if it were somehow named gh-runner-*.
     if [ "$VMID" -eq "$TEMPLATE_VMID" ]; then
         echo "reap.sh: skipping template VMID $TEMPLATE_VMID" >&2
+        (( skipped++ )) || true
+        continue
+    fi
+
+    # Refuse any VM whose list entry carries template:1, regardless of
+    # TEMPLATE_VMID. The id is configuration and can be wrong; the template
+    # flag is a fact written by Proxmox when the VM was converted and cannot
+    # be falsified by a misconfigured default.
+    VM_IS_TEMPLATE="$(python3 - "$QEMU_LIST" "$VMID" <<'EOF'
+import json, sys
+for vm in json.loads(sys.argv[1]).get("data", []):
+    if str(vm.get("vmid", "")) == sys.argv[2]:
+        print(1 if vm.get("template") else 0)
+        break
+else:
+    print(0)
+EOF
+)"
+    if [ "${VM_IS_TEMPLATE:-0}" = "1" ]; then
+        echo "reap.sh: skipping template VMID $VMID (template:1 in config)" >&2
         (( skipped++ )) || true
         continue
     fi

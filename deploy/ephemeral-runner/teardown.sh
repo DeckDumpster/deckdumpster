@@ -18,6 +18,11 @@
 #      than 1. A connection error or auth failure is NOT treated as 404; those
 #      propagate as failures so a broken API does not silently claim everything
 #      is already gone.
+#   3b. VM config carries template:1 → exit non-zero, unconditionally. The id
+#       in TEMPLATE_VMID is configuration and can be wrong (db-69kx: the real
+#       template was 9100 while the default was 101). The Proxmox template flag
+#       is a fact about the VM written by the hypervisor itself and cannot be
+#       falsified by a misconfigured environment variable.
 #   4. VMID not in the ledger → exit non-zero. A VMID that provision.sh never
 #      recorded does not belong to this runner pool.
 #   5. VM name does not match gh-runner-<vmid> → exit non-zero. A clone that
@@ -41,8 +46,18 @@
 #   PVAPI_SH               — path to pvapi.sh; defaults to the directory
 #                            containing this script (used by tests to inject a
 #                            mock without touching the real API)
+#   CRED_FILE              — credential file to source (default:
+#                            /etc/gh-ephemeral-runner/token); sourced before
+#                            the defaults below so TEMPLATE_VMID set there
+#                            overrides the compiled-in default of 101.
 
 set -euo pipefail
+
+CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
+if [ -f "$CRED_FILE" ]; then
+    # shellcheck source=/dev/null
+    . "$CRED_FILE"
+fi
 
 TEMPLATE_VMID="${TEMPLATE_VMID:-101}"
 LEDGER_FILE="${LEDGER_FILE:-/var/lib/gh-ephemeral-runner/active}"
@@ -128,6 +143,18 @@ if [ "$PVAPI_STATUS" != "200" ]; then
 fi
 
 CONFIG_BODY="$PVAPI_BODY"
+
+# Guard 3b: refuse any VM whose config reports template:1, regardless of
+# TEMPLATE_VMID. The id is configuration and can be wrong; the template flag
+# is a fact about the VM written by Proxmox itself when the VM was converted.
+IS_TEMPLATE=$(printf '%s' "$CONFIG_BODY" | python3 -c "
+import json, sys
+print(json.load(sys.stdin).get('data', {}).get('template', 0))
+" 2>/dev/null || echo 0)
+if [ "${IS_TEMPLATE:-0}" = "1" ]; then
+    echo "teardown.sh: VM $VMID has template:1 in its config — refusing unconditionally" >&2
+    exit 1
+fi
 
 # Guard 4: ledger membership (after the already-gone check, so idempotency works).
 if ! _ledger_has; then
