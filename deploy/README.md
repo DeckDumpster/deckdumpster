@@ -304,7 +304,11 @@ So the gate no longer assumes exclusivity, it takes it: `mtgc_default_store_lock
 (`store-lib.sh`) is held across the whole measurement, and `deploy.sh` takes the
 same lock around a build that writes to the default store. Only default-store
 writers contend — an instance with a store of its own queues behind nobody — and
-CI's jobs are already serialised by having one `rgantt` runner, so in practice
+CI's jobs each run on their own ephemeral VM, so they cannot contend with one
+another at all — separate machines, separate stores, separate lock files. (This
+used to hold for a different reason: one long-lived `rgantt` runner serialised
+them. That runner is gone as of de-323, and its removal took away contenders,
+not arbitration.) In practice
 this arbitrates the gate against a prod deploy and nothing else.
 
 If the gate cannot get the lock it does **not** go red: it still runs every

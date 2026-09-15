@@ -610,8 +610,14 @@ mtgc_store_stamp_service() {
 #
 # Scope is deliberately narrow: only writers to the DEFAULT store take it. A
 # non-prod deploy builds into its own store and contends with nobody. CI's own
-# jobs are already serialised by having one `rgantt` runner, so in practice this
-# arbitrates exactly two contenders — the gate and a prod deploy.
+# jobs no longer contend with each other at all: each PR run gets its own
+# ephemeral VM, so each has its own $HOME, its own default store and its own
+# lock file. (Until de-323 the same conclusion was reached a different way —
+# there was one long-lived `rgantt` runner and jobs queued behind each other.
+# Worth stating explicitly, because that runner is gone and a reader could
+# reasonably wonder whether its removal widened the race. It did not; it removed
+# the contenders rather than the arbitration.) In practice this now arbitrates
+# exactly two: the gate and a prod deploy, on the deployment box.
 MTGC_DEFAULT_STORE_LOCK_FILE="${MTGC_DEFAULT_STORE_LOCK_FILE:-${HOME}/.local/share/mtgc/default-store.lock}"
 
 mtgc_default_store_lock() {

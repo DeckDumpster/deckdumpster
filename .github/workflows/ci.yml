@@ -194,23 +194,6 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
-  # The same suite on the long-lived `rgantt` runner, kept only while the
-  # ephemeral path is being proven. Delete this job -- and retire that runner --
-  # once `ci` above has been green across a few runs. Two jobs running the same
-  # script is a transitional state, not a design.
-  build:
-    runs-on: [self-hosted, rgantt]
-    steps:
-      - uses: actions/checkout@v4
-
-      # Every step of the run lives in deploy/ci.sh, so what CI does is a thing
-      # you can read and run by hand, and a new gate is wired in one place
-      # rather than here as well (de-xz8).
-      - name: Run CI
-        run: bash deploy/ci.sh
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
   # if: always() is load-bearing. A cancelled or failed build otherwise leaves
   # the VM running, and the hourly reaper becomes the only thing that cleans
   # up — which is a backstop, not a plan.
