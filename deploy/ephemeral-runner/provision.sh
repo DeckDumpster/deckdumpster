@@ -180,17 +180,24 @@ poll_task() {
 # ---------------------------------------------------------------------------
 # pick_vmid
 #
-# Ask /cluster/nextid once for a starting point, then verify each candidate is
-# unclaimed (GET config returns 404), advancing by one on collision.
+# Returns the id from /cluster/nextid. That value is authoritative: nextid is
+# existence-aware and will not hand back an id that is in use.
 #
-# THE CANDIDATE MUST ADVANCE. Calling /cluster/nextid inside the retry loop
-# returns the same id every time -- it is the lowest free id, not a generator --
-# so any collision became CLONE_RETRIES identical attempts and then a failure.
-# That is invisible until an id actually collides, which on this host means any
-# id belonging to a VM outside the token's pool.
+# THERE IS DELIBERATELY NO "IS IT FREE?" PROBE. The obvious check --
+# GET /nodes/<node>/qemu/<id>/config and treat 404 as free -- cannot work with
+# a pool-scoped API token. Proxmox evaluates path permission BEFORE existence,
+# so a token holding rights only on /pool/ephemeral-ci receives 403 for every
+# id outside that pool, including ids where no VM exists at all. Free and
+# occupied are indistinguishable to this caller, and the probe rejected every
+# candidate in turn until it ran out of retries.
+#
+# The race the probe was guarding against is real but is better caught by the
+# clone itself: Proxmox refuses to clone onto an existing VMID, which is an
+# authoritative answer requiring no extra permission. See the clone retry loop.
+
 # ---------------------------------------------------------------------------
 pick_vmid() {
-    local i vmid body config_code
+    local body vmid
     body="$(pvapi GET "/cluster/nextid")" || return 1
     vmid="$(printf '%s\n' "$body" | python3 -c \
         'import json,sys; print(json.load(sys.stdin).get("data",""))')"
@@ -198,51 +205,7 @@ pick_vmid() {
         printf 'provision.sh: /cluster/nextid returned empty data\n' >&2
         return 1
     fi
-    for i in $(seq 1 "$CLONE_RETRIES"); do
-        config_code="$(curl -sS -k -o /dev/null -w '%{http_code}' -X GET \
-            -H "Authorization: PVEAPIToken=${PVE_TOKEN_ID}=${PVE_TOKEN_SECRET}" \
-            "https://${PVE_API_HOST}:${PVE_API_PORT}/api2/json/nodes/${PVE_NODE}/qemu/${vmid}/config")" || {
-            printf 'provision.sh: curl transport error checking VMID %s\n' "$vmid" >&2
-            return 1
-        }
-        case "$config_code" in
-            404)
-                # Genuinely free: the API says no such VM, and it would have
-                # said 403 if one existed that we were not allowed to see.
-                printf '%s' "$vmid"
-                return 0
-                ;;
-            2??)
-                printf 'provision.sh: VMID %s in use, trying %s (%s/%s)\n' \
-                    "$vmid" "$(( vmid + 1 ))" "$i" "$CLONE_RETRIES" >&2
-                vmid=$(( vmid + 1 ))
-                ;;
-            403)
-                # NOT AN ERROR, AND NOT FREE. The API token is scoped by ACL to
-                # /pool/ephemeral-ci, so Proxmox refuses to say whether a VM
-                # outside that pool exists -- it answers 403 rather than 404.
-                # Treating that as a failure made provisioning impossible the
-                # moment /cluster/nextid returned an id belonging to any VM the
-                # token cannot see, which on a host with unrelated VMs is most
-                # of them.
-                #
-                # 403 means "exists, or might, and is not ours" -- emphatically
-                # not free. Take the next candidate. Never clone into an id the
-                # token cannot inspect: that is how an unrelated VM gets
-                # overwritten.
-                printf 'provision.sh: VMID %s not visible to this token (403) — not ours, trying %s (%s/%s)\n' \
-                    "$vmid" "$(( vmid + 1 ))" "$i" "$CLONE_RETRIES" >&2
-                vmid=$(( vmid + 1 ))
-                ;;
-            *)
-                printf 'provision.sh: unexpected HTTP %s checking VMID %s\n' \
-                    "$config_code" "$vmid" >&2
-                return 1
-                ;;
-        esac
-    done
-    printf 'provision.sh: could not obtain a free VMID after %s attempts\n' "$CLONE_RETRIES" >&2
-    return 1
+    printf '%s' "$vmid"
 }
 
 # --- Pick a VMID ---
@@ -253,16 +216,32 @@ VMID="$(pick_vmid)" || exit 1
 # pool=ephemeral-ci is required. A pool-scoped grant cannot allocate outside
 # its pool, so omitting it causes the clone to fail with a permissions error
 # even if the token has VM.Clone on the template.
-printf 'provision.sh: cloning template %s -> VMID %s\n' "$TEMPLATE_VMID" "$VMID" >&2
-clone_body="$(pvapi POST "/nodes/${PVE_NODE}/qemu/${TEMPLATE_VMID}/clone" \
-    --data-urlencode "newid=${VMID}" \
-    --data-urlencode "name=gh-runner-${VMID}" \
-    --data-urlencode "full=0" \
-    --data-urlencode "pool=ephemeral-ci")" || exit 1
-clone_upid="$(printf '%s\n' "$clone_body" | python3 -c \
-    'import json,sys; print(json.load(sys.stdin).get("data",""))')"
+# THE CLONE IS THE COLLISION CHECK. Proxmox refuses to clone onto an existing
+# VMID, and that refusal is authoritative and needs no permission the token
+# lacks -- unlike probing the id first, which a pool-scoped token cannot do
+# (see pick_vmid). On refusal, ask nextid again: if the id was taken by a
+# concurrent provision, nextid has moved past it.
+clone_upid=""
+for _clone_try in $(seq 1 "$CLONE_RETRIES"); do
+    printf 'provision.sh: cloning template %s -> VMID %s (attempt %s/%s)\n' \
+        "$TEMPLATE_VMID" "$VMID" "$_clone_try" "$CLONE_RETRIES" >&2
+    if clone_body="$(pvapi POST "/nodes/${PVE_NODE}/qemu/${TEMPLATE_VMID}/clone" \
+        --data-urlencode "newid=${VMID}" \
+        --data-urlencode "name=gh-runner-${VMID}" \
+        --data-urlencode "full=0" \
+        --data-urlencode "pool=ephemeral-ci")"; then
+        clone_upid="$(printf '%s\n' "$clone_body" | python3 -c \
+            'import json,sys; print(json.load(sys.stdin).get("data",""))')"
+        [ -n "$clone_upid" ] && break
+        printf 'provision.sh: clone POST returned no UPID\n' >&2
+        exit 1
+    fi
+    printf 'provision.sh: clone onto VMID %s refused; asking for a new id\n' "$VMID" >&2
+    VMID="$(pick_vmid)" || exit 1
+    sleep 1
+done
 if [ -z "$clone_upid" ]; then
-    printf 'provision.sh: clone POST returned no UPID\n' >&2
+    printf 'provision.sh: could not clone after %s attempts\n' "$CLONE_RETRIES" >&2
     exit 1
 fi
 

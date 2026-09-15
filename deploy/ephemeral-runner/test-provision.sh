@@ -425,31 +425,36 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Test 11 -- a pool-scoped token sees 403, not 404, for VMs outside its pool
+# Test 11 -- a pool-scoped token cannot probe an id, so provisioning must not
+#            depend on being able to
 #
-# The API token's ACL is scoped to /pool/ephemeral-ci, so Proxmox refuses to
-# say whether a VM outside that pool exists: it answers 403. /cluster/nextid
-# is not ACL-filtered, so it happily returns an id belonging to one of those
-# VMs — and treating 403 as an error made provisioning impossible.
-#
-# Two things are asserted: 403 does not abort, and the candidate id ADVANCES.
-# Re-asking /cluster/nextid would return the same id forever, turning one
-# collision into CLONE_RETRIES identical attempts and then a failure.
+# Proxmox evaluates path permission BEFORE existence, so a token scoped to
+# /pool/ephemeral-ci receives 403 for every id outside that pool — including
+# ids where no VM exists. Free and occupied are indistinguishable, which is why
+# there is no pre-clone probe: it rejected every candidate in turn and then
+# gave up. /cluster/nextid is authoritative instead, and the clone itself is
+# the collision check.
 # ---------------------------------------------------------------------------
 rm -f "$CURL_ARGV_FILE"
-CURL_VMID_403_UNTIL=201 run_provision valid-label test-token https://github.com/DeckDumpster >/dev/null 2>&1 || true
+CURL_VMID_403_UNTIL=99999 run_provision valid-label test-token https://github.com/DeckDumpster >/dev/null 2>&1 || true
 
-if grep -qF '/qemu/202/config' "$CURL_ARGV_FILE" 2>/dev/null; then
-    ok "test-11: candidate advanced past the 403 ids"
+if grep -qF '/clone' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-11: provisioning proceeds when every id probe would 403"
 else
-    ko "test-11: candidate did not advance past a 403 (would spin on one id)"
+    ko "test-11: never reached the clone — provisioning still depends on probing an id"
 fi
 
-if grep -qF '/qemu/200/config' "$CURL_ARGV_FILE" 2>/dev/null \
-   && grep -qF '/qemu/201/config' "$CURL_ARGV_FILE" 2>/dev/null; then
-    ok "test-11: each 403 id was probed once, in order"
+if grep -qF '/cluster/nextid' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-11: the id came from /cluster/nextid"
 else
-    ko "test-11: 403 ids were not probed in sequence"
+    ko "test-11: /cluster/nextid was not consulted"
+fi
+
+_probe_count=$(grep -cF '/config' "$CURL_ARGV_FILE" 2>/dev/null || true)
+if [ "${_probe_count:-0}" -eq 0 ]; then
+    ok "test-11: no pre-clone config probe is attempted"
+else
+    ko "test-11: still probing /config before cloning ($_probe_count call(s))"
 fi
 
 # ---------------------------------------------------------------------------
