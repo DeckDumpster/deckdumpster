@@ -165,6 +165,14 @@ jobs:
 
   # The real suite, on the VM provisioned above.
   #
+  # NAMED `test` BECAUSE THAT NAME IS A CONTRACT. The `pr-required` ruleset on
+  # main requires a status check called `test`. A required check that never
+  # reports does not fail the pull request -- it blocks the merge indefinitely
+  # with "the base branch policy prohibits the merge", and nothing in the run
+  # itself looks wrong: every job is green. Renaming this job is therefore a
+  # change to the branch policy, and has to be made in both places or neither
+  # (de-323).
+  #
   # It installs its own system dependencies first. deploy/ci.sh calls podman
   # and uv and installs neither; that went unnoticed for as long as CI only
   # ever ran on one box where somebody had installed them by hand. The list now
@@ -177,7 +185,7 @@ jobs:
   # in a pull request like anything else. Bake it later as a cache if the
   # install time justifies it -- the script is idempotent, so a template that
   # already has everything makes this step a few `command -v` calls.
-  ci:
+  test:
     needs: provision
     runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
     steps:
@@ -198,7 +206,7 @@ jobs:
   # the VM running, and the hourly reaper becomes the only thing that cleans
   # up — which is a backstop, not a plan.
   teardown:
-    needs: [provision, ci]
+    needs: [provision, test]
     if: always() && needs.provision.outputs.vmid != ''
     runs-on: ubuntu-latest
     steps:
