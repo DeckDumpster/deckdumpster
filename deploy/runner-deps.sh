@@ -9,7 +9,7 @@
 # WHY THIS EXISTS. deploy/ci.sh calls podman and uv and has never installed
 # either. It passed for a year because the one runner it ever ran on had them
 # installed by hand, so the dependency was real but unmodelled -- it lived in
-# a build sheet (deploy/ephemeral-runner/TEMPLATE.md) that nothing executes and
+# a build sheet (DeckDumpster/ephemeral-ci docs/TEMPLATE.md) that nothing executes and
 # nothing checks. The first runner built from that sheet by a different route
 # failed with `exit code 127` and no name: not "podman is missing", just a
 # number, three steps into a job, on a VM that was destroyed forty seconds

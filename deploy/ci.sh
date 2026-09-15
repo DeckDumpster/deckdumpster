@@ -114,9 +114,6 @@ podman image prune -f 2>/dev/null || true
 echo "==> Container-store isolation gate"
 bash deploy/store-isolation-gate.sh
 
-echo "==> Ephemeral runner script tests"
-bash deploy/ephemeral-runner/test-teardown.sh
-
 echo "==> Install dependencies"
 uv sync
 
