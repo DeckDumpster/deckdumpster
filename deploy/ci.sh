@@ -55,6 +55,20 @@ mtgc_store_activate
 # hand-run interrupted partway.
 trap 'bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true' EXIT
 
+# Before anything else: are the tools this script calls actually here?
+#
+# podman and uv are called below and installed by neither this script nor the
+# repository. That held for as long as CI only ever ran on one hand-built box.
+# The first runner built by another route died at `exit code 127` -- a number,
+# with no name attached, three steps in, on a VM that no longer existed by the
+# time anyone read the log. deploy/runner-deps.sh is now the list, and this
+# names what is missing before any of it runs (de-323).
+#
+# It checks; it does not install. Installing needs sudo, and a test script that
+# quietly apt-installs on someone's laptop is worse than the gap it closes.
+echo "==> Runner dependencies"
+bash deploy/runner-deps.sh --check
+
 # Before the job writes several gigabytes: is there room? A run that fills the
 # disk does not fail as a disk error -- at 697M free a cargo link reported
 # `ld terminated with signal 7 [Bus error]`, which reads as a broken

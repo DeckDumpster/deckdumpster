@@ -163,46 +163,41 @@ jobs:
           CRED_FILE: /dev/null
         run: bash deploy/ephemeral-runner/guest-diag.sh "${{ steps.provision.outputs.vmid }}"
 
-  # Runs on the VM provisioned above, and is the only thing that proves the
-  # ephemeral path still works. It is deliberately NOT `deploy/ci.sh`: the
-  # template carries the runner and nothing else, while ci.sh needs rootless
-  # podman and uv. Until the template carries those, running the real suite
-  # here would report a missing toolchain as a failing build.
+  # The real suite, on the VM provisioned above.
   #
-  # Keep this job. An ephemeral runner that nothing schedules onto is an
-  # untested code path that will be broken the day it is needed.
-  smoke:
+  # It installs its own system dependencies first. deploy/ci.sh calls podman
+  # and uv and installs neither; that went unnoticed for as long as CI only
+  # ever ran on one box where somebody had installed them by hand. The list now
+  # lives in deploy/runner-deps.sh, ci.sh refuses to start until it is
+  # satisfied, and this is where a fresh machine satisfies it.
+  #
+  # Installing here rather than baking it into the Proxmox template is
+  # deliberate: baked, the dependency goes back to being invisible and every
+  # change to it needs a manual hypervisor pass. Declared here it is reviewed
+  # in a pull request like anything else. Bake it later as a cache if the
+  # install time justifies it -- the script is idempotent, so a template that
+  # already has everything makes this step a few `command -v` calls.
+  ci:
     needs: provision
     runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prove the job ran on the ephemeral VM
-        run: |
-          set -eux
-          test "$RUNNER_NAME" = "${{ needs.provision.outputs.label }}"
-          uname -a
-          id
-          test -f deploy/ci.sh
+      - name: Confirm the job landed on the ephemeral VM
+        run: test "$RUNNER_NAME" = "${{ needs.provision.outputs.label }}"
 
-      # Reports what the template is missing without failing on it, so the
-      # gap between "the VM runs jobs" and "the VM can run our suite" is
-      # visible in every run rather than discovered when the swap is made.
-      - name: Report the toolchain gap
-        continue-on-error: true
-        run: |
-          for t in podman uv; do
-            if command -v "$t" >/dev/null 2>&1; then
-              echo "$t: $("$t" --version 2>&1 | head -1)"
-            else
-              echo "::warning::$t is not installed on the template (de-323 follow-up)"
-            fi
-          done
+      - name: Install runner dependencies
+        run: bash deploy/runner-deps.sh
 
-  # Still on the long-lived `rgantt` runner, which has the toolchain. Moving
-  # this to the ephemeral VM is the follow-up to this change, not part of it:
-  # swapping it before the template carries podman and uv would trade a CI that
-  # runs for a CI that cannot.
+      - name: Run CI
+        run: bash deploy/ci.sh
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # The same suite on the long-lived `rgantt` runner, kept only while the
+  # ephemeral path is being proven. Delete this job -- and retire that runner --
+  # once `ci` above has been green across a few runs. Two jobs running the same
+  # script is a transitional state, not a design.
   build:
     runs-on: [self-hosted, rgantt]
     steps:
@@ -220,7 +215,7 @@ jobs:
   # the VM running, and the hourly reaper becomes the only thing that cleans
   # up — which is a backstop, not a plan.
   teardown:
-    needs: [provision, smoke]
+    needs: [provision, ci]
     if: always() && needs.provision.outputs.vmid != ''
     runs-on: ubuntu-latest
     steps:
