@@ -526,6 +526,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 14 -- the delivered guest script must be pure ASCII
+#
+# Proxmox's agent/file-write dies on any byte above 0x7F:
+#   Wide character in subroutine entry at /usr/share/perl5/PVE/API2/Qemu/Agent.pm
+# returned as HTTP 500 with no mention of encoding. A single em dash in a
+# comment broke every provision, and the message named the hypervisor's Perl
+# rather than the file responsible.
+# ---------------------------------------------------------------------------
+if LC_ALL=C grep -qP '[^\x00-\x7F]' "$SCRIPT_DIR/guest/start-runner.sh" 2>/dev/null; then
+    ko "test-14: guest/start-runner.sh contains non-ASCII bytes"
+    LC_ALL=C grep -nP '[^\x00-\x7F]' "$SCRIPT_DIR/guest/start-runner.sh" >&2
+else
+    ok "test-14: guest/start-runner.sh is pure ASCII"
+fi
+
+# And provision.sh must refuse rather than let the hypervisor report it.
+_ascii_probe="$SCRATCH/ascii-probe.sh"
+cp "$SCRIPT_DIR/guest/start-runner.sh" "$_ascii_probe"
+printf '# em dash \xe2\x80\x94 here\n' >> "$_ascii_probe"
+if LC_ALL=C grep -qP '[^\x00-\x7F]' "$_ascii_probe"; then
+    ok "test-14: the probe itself is detectable (positive control)"
+else
+    ko "test-14: probe file has no non-ASCII — the check proves nothing"
+fi
+rm -f "$_ascii_probe"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 total=$(( pass + fail ))

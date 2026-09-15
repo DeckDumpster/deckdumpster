@@ -1,5 +1,11 @@
 #!/bin/bash
 #
+# ASCII ONLY. Proxmox's agent/file-write cannot carry a non-ASCII byte: it
+# fails with "Wide character in subroutine entry at .../Qemu/Agent.pm" and
+# HTTP 500. One em dash in a comment here broke every provision until the API's
+# error body was printed. provision.sh refuses to send this file if it contains
+# one, so the failure is named at the source rather than by the hypervisor.
+#
 # Registers this VM as a one-shot GitHub Actions runner, takes one job, and
 # powers off. Runs inside the ephemeral guest, started by ephemeral-runner.path
 # when provision.sh writes /run/gh-runner-init.
@@ -27,7 +33,7 @@ fail() { echo "start-runner: $*" >&2; exit 1; }
 # the failure mode when it is not is a five-times-in-one-second restart loop
 # that rate-limits the unit and then ignores every subsequent write, which is
 # expensive to diagnose and trivial to prevent. RUNNER_GROUP is written last.
-grep -q '^RUNNER_GROUP=' "$INIT" || fail "$INIT is incomplete — refusing to source a partial file"
+grep -q '^RUNNER_GROUP=' "$INIT" || fail "$INIT is incomplete - refusing to source a partial file"
 # shellcheck disable=SC1090
 . "$INIT"
 : "${RUNNER_LABEL:?RUNNER_LABEL missing from $INIT}"

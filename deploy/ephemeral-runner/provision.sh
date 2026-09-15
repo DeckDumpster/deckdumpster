@@ -336,6 +336,17 @@ done
 # The script is shipped from this repository on every run rather than baked
 # into the VM template. That keeps it version-controlled and reviewable, and
 # means changing it never requires cloning, editing and resealing the template.
+# REFUSE NON-ASCII BEFORE SENDING. Proxmox's agent/file-write dies on any byte
+# above 0x7F with "Wide character in subroutine entry at .../Qemu/Agent.pm" and
+# returns HTTP 500 with no mention of encoding. A single em dash in a comment
+# broke every provision, and the failure named the hypervisor's Perl rather
+# than the file that caused it. Checking here puts the message where the fix is.
+if LC_ALL=C grep -qP '[^\x00-\x7F]' "${SCRIPT_DIR}/guest/start-runner.sh" 2>/dev/null; then
+    printf 'provision.sh: guest/start-runner.sh contains non-ASCII bytes; agent/file-write cannot carry them\n' >&2
+    LC_ALL=C grep -nP '[^\x00-\x7F]' "${SCRIPT_DIR}/guest/start-runner.sh" >&2
+    exit 1
+fi
+
 printf 'provision.sh: delivering guest script to VM %s\n' "$VMID" >&2
 agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
     --data-urlencode "file=/home/runner/start-runner.sh" \
