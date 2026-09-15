@@ -47,23 +47,36 @@ if [ "$(id -u)" -ne 0 ]; then
     fi
 fi
 
-# apt_install <pkg>... -- installs only the packages not already installed.
-# Ubuntu 24.04 renamed several library packages with a `t64` suffix (the 64-bit
-# time_t transition), so a name that exists on 22.04 is absent on 24.04 and
-# vice versa. Resolve each name against the actual package cache and skip one
-# that this release does not have, rather than failing the whole transaction on
-# a single renamed library.
+# installable <pkg> -- true when apt can actually install this name.
+#
+# `apt-cache show` is NOT this test and using it cost a CI run. Ubuntu 24.04's
+# 64-bit time_t transition renamed a dozen library packages with a `t64`
+# suffix, and it left the OLD name behind in the cache as a record with no
+# installation candidate. So `apt-cache show libasound2` succeeds on 24.04
+# while `apt-get install libasound2` fails with "has no installation
+# candidate" -- and because apt installs a list as one transaction, that single
+# unusable name aborted the other ten packages alongside it. Ask apt for the
+# candidate version instead, which is the question actually being asked.
+installable() {
+    local cand
+    cand="$(apt-cache policy "$1" 2>/dev/null | sed -n 's/^  Candidate: //p')"
+    [ -n "$cand" ] && [ "$cand" != "(none)" ]
+}
+
+# apt_install <pkg>... -- installs only the packages not already installed,
+# mapping each name to the one this release actually carries.
 APT_UPDATED=0
 apt_install() {
     local want=() p
     for p in "$@"; do
         dpkg -s "$p" >/dev/null 2>&1 && continue
-        if apt-cache show "$p" >/dev/null 2>&1; then
+        dpkg -s "${p}t64" >/dev/null 2>&1 && continue
+        if installable "$p"; then
             want+=("$p")
-        elif apt-cache show "${p}t64" >/dev/null 2>&1; then
+        elif installable "${p}t64"; then
             want+=("${p}t64")
         else
-            note "no package named $p or ${p}t64 on this release -- skipping"
+            note "no installable package named $p or ${p}t64 on this release -- skipping"
         fi
     done
     [ ${#want[@]} -gt 0 ] || return 0
@@ -73,7 +86,17 @@ apt_install() {
         APT_UPDATED=1
     fi
     note "installing ${want[*]}"
-    DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "${want[@]}"
+    if DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "${want[@]}"; then
+        return 0
+    fi
+    # One unusable name must not take the rest of the list with it. apt installs
+    # a list atomically, so retry singly and let the caller's re-check decide
+    # whether what remains is fatal.
+    note "batch install failed -- retrying individually"
+    for p in "${want[@]}"; do
+        DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "$p" \
+            || note "could not install $p"
+    done
 }
 
 # ---------------------------------------------------------------------------
