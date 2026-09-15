@@ -346,6 +346,29 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 9 -- PVE_API_HOST is honoured
+#
+# provision.sh no longer runs on the hypervisor. It runs in a GitHub-hosted job
+# that reaches the host over the tailnet, so a hardcoded https://localhost:8006
+# meant it could not provision anything at all from where it now runs. This
+# asserts the configured host reaches curl, and that loopback does not.
+# ---------------------------------------------------------------------------
+rm -f "$CURL_ARGV_FILE"
+PVE_API_HOST=hv.example.test PVE_API_PORT=9999     bash "$PROVISION" valid-label test-token https://github.com/owner/repo     >/dev/null 2>&1 || true
+
+if grep -qF 'hv.example.test:9999' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-9: PVE_API_HOST/PVE_API_PORT reach the API URL"
+else
+    ko "test-9: configured API host absent from curl argv"
+fi
+
+if grep -qF 'localhost:8006' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ko "test-9: loopback still hardcoded somewhere in the API path"
+else
+    ok "test-9: no hardcoded loopback in the API path"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 total=$(( pass + fail ))

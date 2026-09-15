@@ -41,6 +41,8 @@
 #   TASK_TIMEOUT   -- seconds to wait for a UPID task to complete (default: 120)
 #   AGENT_TIMEOUT  -- seconds to wait for the guest agent to become ready (default: 120)
 #   CRED_FILE      -- credential file to source (default: /etc/gh-ephemeral-runner/token)
+#   PVE_API_HOST   -- Proxmox API hostname or IP (default: localhost)
+#   PVE_API_PORT   -- Proxmox API port (default: 8006)
 #
 # API transport notes:
 #   -k: loopback only. The request never leaves the host, so anyone positioned
@@ -62,6 +64,13 @@ CLONE_RETRIES="${CLONE_RETRIES:-5}"
 TASK_TIMEOUT="${TASK_TIMEOUT:-120}"
 AGENT_TIMEOUT="${AGENT_TIMEOUT:-120}"
 CRED_FILE="${CRED_FILE:-/etc/gh-ephemeral-runner/token}"
+# Where the Proxmox API lives. These default to loopback because that is right
+# when the script runs on the hypervisor, but it no longer does: provision runs
+# on a GitHub-hosted runner that reaches the host over the tailnet, and a
+# hardcoded localhost made this script unable to provision anything from there
+# at all (db-323).
+PVE_API_HOST="${PVE_API_HOST:-localhost}"
+PVE_API_PORT="${PVE_API_PORT:-8006}"
 
 if [ $# -ne 3 ]; then
     printf 'Usage: provision.sh <runner-label> <registration-token> <repo-url>\n' >&2
@@ -106,7 +115,7 @@ pvapi() {
     body_file="$(mktemp)"
     code="$(curl -sS -k -o "$body_file" -w '%{http_code}' -X "$method" \
         -H "Authorization: PVEAPIToken=${PVE_TOKEN_ID}=${PVE_TOKEN_SECRET}" \
-        "https://localhost:8006/api2/json${path}" "$@")" || {
+        "https://${PVE_API_HOST}:${PVE_API_PORT}/api2/json${path}" "$@")" || {
         rm -f "$body_file"
         printf 'provision.sh: curl transport error (%s %s)\n' "$method" "$path" >&2
         return 1
@@ -174,7 +183,7 @@ pick_vmid() {
         fi
         config_code="$(curl -sS -k -o /dev/null -w '%{http_code}' -X GET \
             -H "Authorization: PVEAPIToken=${PVE_TOKEN_ID}=${PVE_TOKEN_SECRET}" \
-            "https://localhost:8006/api2/json/nodes/${PVE_NODE}/qemu/${vmid}/config")" || {
+            "https://${PVE_API_HOST}:${PVE_API_PORT}/api2/json/nodes/${PVE_NODE}/qemu/${vmid}/config")" || {
             printf 'provision.sh: curl transport error checking VMID %s\n' "$vmid" >&2
             return 1
         }

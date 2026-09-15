@@ -5,14 +5,114 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# After merging, enable branch protection on `main` in GitHub repo settings:
-#   - Require PR before merging
-#   - Require the `test` status check to pass
-#   - (Optional) Require up-to-date branch before merging
+# The test job runs on a Proxmox VM created for this run and destroyed after
+# it. Three jobs rather than one, because a runner has to exist before a job
+# can be scheduled onto it and has to be destroyed after that job ends —
+# neither of which the job itself can do.
+#
+# provision and teardown reach the hypervisor over the tailnet and talk to the
+# Proxmox HTTP API. Nothing is installed on the hypervisor and no SSH key
+# exists; the containment is the pveum ACL, which scopes the API token to
+# /pool/ephemeral-ci and nothing else on the host.
+#
+# SECURITY NOTE, because this repository is PUBLIC. A same-repo pull request
+# runs this file as edited in that PR with full access to repository secrets,
+# so PVE_TOKEN_SECRET and TS_OAUTH_SECRET must be assumed readable by anyone
+# who can open a PR. That is accepted deliberately: the ACL bounds the damage
+# to cloning and destroying VMs inside ephemeral-ci. Do not widen that ACL to
+# make a change here easier.
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
-  test:
-    runs-on: [self-hosted, rgantt]
+  provision:
+    runs-on: ubuntu-latest
+    outputs:
+      vmid: ${{ steps.provision.outputs.vmid }}
+      label: ${{ steps.label.outputs.label }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # A label unique to this run and attempt. Never $(hostname): every clone
+      # of the template is named ci-runners, GitHub rejects a duplicate runner
+      # name, and `build` below targets exactly this label — without uniqueness
+      # two concurrent runs can land on each other's VMs and one teardown kills
+      # the other's job.
+      - name: Compute runner label
+        id: label
+        run: echo "label=ci-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      # Repo-scoped, not org-scoped. An org-level runner is eligible for jobs
+      # from every repository in the organisation.
+      - name: Mint a registration token
+        id: regtoken
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TOKEN=$(gh api -X POST \
+            "repos/${{ github.repository }}/actions/runners/registration-token" \
+            --jq .token)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      # provision.sh emits vmid= on stdout BEFORE any step that can fail, so
+      # the VMID is captured and published even when the script exits non-zero.
+      # Without this, a failure after the clone leaks a VM that teardown can
+      # never name. See the output contract at the top of provision.sh.
+      - name: Provision the runner VM
+        id: provision
+        env:
+          PVE_API_HOST: ${{ vars.PVE_API_HOST }}
+          PVE_NODE: ${{ vars.PVE_NODE }}
+          TEMPLATE_VMID: ${{ vars.TEMPLATE_VMID }}
+          PVE_TOKEN_ID: ${{ secrets.PVE_TOKEN_ID }}
+          PVE_TOKEN_SECRET: ${{ secrets.PVE_TOKEN_SECRET }}
+          CRED_FILE: /dev/null
+        run: |
+          set +e
+          OUT=$(bash deploy/ephemeral-runner/provision.sh \
+                  "${{ steps.label.outputs.label }}" \
+                  "${{ steps.regtoken.outputs.token }}" \
+                  "${{ github.server_url }}/${{ github.repository }}")
+          RC=$?
+          set -e
+          VMID=$(printf '%s\n' "$OUT" | sed -n 's/^vmid=\([0-9]\+\)$/\1/p' | head -1)
+          [ -n "$VMID" ] && echo "vmid=$VMID" >> "$GITHUB_OUTPUT"
+          exit "$RC"
+
+      # Writing the file is not proof of registration. agent/file-write returns
+      # success once the bytes land; if the token is bad the guest's service
+      # fails, its path unit retriggers until systemd rate-limits it, and the
+      # runner never appears — while this job would otherwise report success
+      # and `build` would queue against a label that will never exist.
+      - name: Wait for the runner to register
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LABEL: ${{ steps.label.outputs.label }}
+        run: |
+          for _ in $(seq 1 40); do
+            if gh api "repos/${{ github.repository }}/actions/runners" \
+                 --jq '.runners[].name' | grep -qx "$LABEL"; then
+              echo "runner $LABEL registered"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::runner $LABEL never registered within 240s"
+          exit 1
+
+  build:
+    needs: provision
+    runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
     steps:
       - uses: actions/checkout@v4
 
@@ -23,3 +123,30 @@ jobs:
         run: bash deploy/ci.sh
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  # if: always() is load-bearing. A cancelled or failed build otherwise leaves
+  # the VM running, and the hourly reaper becomes the only thing that cleans
+  # up — which is a backstop, not a plan.
+  teardown:
+    needs: [provision, build]
+    if: always() && needs.provision.outputs.vmid != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Destroy the runner VM
+        env:
+          PVE_API_HOST: ${{ vars.PVE_API_HOST }}
+          PVE_NODE: ${{ vars.PVE_NODE }}
+          TEMPLATE_VMID: ${{ vars.TEMPLATE_VMID }}
+          PVE_TOKEN_ID: ${{ secrets.PVE_TOKEN_ID }}
+          PVE_TOKEN_SECRET: ${{ secrets.PVE_TOKEN_SECRET }}
+          CRED_FILE: /dev/null
+        run: bash deploy/ephemeral-runner/teardown.sh "${{ needs.provision.outputs.vmid }}"
