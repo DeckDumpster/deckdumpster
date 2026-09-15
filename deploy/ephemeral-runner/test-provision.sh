@@ -50,6 +50,7 @@ export CURL_ARGV_FILE="$SCRATCH/curl-argv"
 #   CURL_START_EXITSTATUS   -- exitstatus in start task poll response (default: OK)
 #   CURL_VMID_FREE_CODE     -- HTTP code for vmid free check (default: 404)
 #   CURL_VMID_403_UNTIL     -- vmid probes for ids <= this return 403 (pool ACL)
+#   CURL_FILEWRITE_FAIL_N   -- first N agent/file-write calls return HTTP 500
 #   CURL_AGENT_PING_FAIL    -- if "1", agent/ping returns 500 (agent not ready)
 # ---------------------------------------------------------------------------
 cat >"$SCRATCH/bin/curl" <<'SH'
@@ -133,7 +134,22 @@ case "$path" in
         fi
         ;;
     /nodes/*/qemu/*/agent/file-write)
-        body='{"data":null}'
+        # Guest-agent calls intermittently 500 for the first seconds after the
+        # agent starts answering ping. CURL_FILEWRITE_FAIL_N models that.
+        if [ -n "${CURL_FILEWRITE_FAIL_N:-}" ]; then
+            _fw_state="${TMPDIR:-/tmp}/fw-count"
+            _fw_n=$(cat "$_fw_state" 2>/dev/null || echo 0)
+            _fw_n=$(( _fw_n + 1 ))
+            printf '%s' "$_fw_n" > "$_fw_state"
+            if [ "$_fw_n" -le "${CURL_FILEWRITE_FAIL_N}" ]; then
+                http_code=500
+                body='{"errors":{"exc":"QEMU guest agent is not available"}}'
+            else
+                body='{"data":null}'
+            fi
+        else
+            body='{"data":null}'
+        fi
         ;;
     /nodes/*/qemu/*/agent/exec)
         body='{"data":{"pid":1234}}'
@@ -482,6 +498,31 @@ if [ -n "$_part_at" ] && [ -n "$_mv_at" ] && [ "$_part_at" -lt "$_mv_at" ]; then
     ok "test-12: renamed into place after the write completed"
 else
     ko "test-12: rename did not follow the write"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 13 -- a transient guest-agent 500 is retried, not fatal
+#
+# agent/file-write returned HTTP 500 on one run and succeeded on the next with
+# identical inputs: the agent channel answers ping before every command is
+# serviceable, and the API surfaces that as 500 rather than anything retryable.
+# One such response failed an entire provision.
+# ---------------------------------------------------------------------------
+rm -f "$CURL_ARGV_FILE" "${TMPDIR:-/tmp}/fw-count"
+CURL_FILEWRITE_FAIL_N=2 run_provision valid-label test-token https://github.com/DeckDumpster >/dev/null 2>&1
+_rc13=$?
+rm -f "${TMPDIR:-/tmp}/fw-count"
+
+if [ "$_rc13" -eq 0 ]; then
+    ok "test-13: provision survives transient agent 500s"
+else
+    ko "test-13: a transient agent 500 still fails the provision (rc=$_rc13)"
+fi
+
+if grep -qF 'file=/run/gh-runner-init.partial' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-13: reached the token delivery after the retries"
+else
+    ko "test-13: never reached token delivery"
 fi
 
 # ---------------------------------------------------------------------------

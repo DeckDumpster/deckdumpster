@@ -124,7 +124,7 @@ fi
 # ---------------------------------------------------------------------------
 pvapi() {
     local method="$1" path="$2"; shift 2
-    local body_file code
+    local body_file code _pvapi_body
     body_file="$(mktemp)"
     code="$(curl -sS -k -o "$body_file" -w '%{http_code}' -X "$method" \
         -H "Authorization: PVEAPIToken=${PVE_TOKEN_ID}=${PVE_TOKEN_SECRET}" \
@@ -133,10 +133,41 @@ pvapi() {
         printf 'provision.sh: curl transport error (%s %s)\n' "$method" "$path" >&2
         return 1
     }
-    cat "$body_file"
+    _pvapi_body="$(cat "$body_file")"
+    printf '%s' "$_pvapi_body"
     rm -f "$body_file"
     case "$code" in 2??) return 0 ;; esac
+    # The API puts its reason in the body. Printing only the status is how an
+    # intermittent agent failure became unreadable: "HTTP 500" and nothing else.
     printf 'provision.sh: pvapi %s %s -> HTTP %s\n' "$method" "$path" "$code" >&2
+    printf 'provision.sh: response: %s\n' "$_pvapi_body" >&2
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# agent_retry <attempts> <METHOD> <path> [curl-args...]
+#
+# Guest-agent calls are intermittently unavailable for the first seconds after
+# the agent starts answering ping: the channel is up before every command is
+# serviceable, and the API surfaces that as HTTP 500 rather than a retryable
+# status. One such 500 on a file-write failed a whole provision, and the same
+# call had succeeded on the previous run -- so it is flaky, not wrong.
+#
+# Retries with a short backoff and reports every attempt, so a persistent
+# failure is still visible rather than smoothed away.
+# ---------------------------------------------------------------------------
+agent_retry() {
+    local attempts="$1"; shift
+    local i
+    for i in $(seq 1 "$attempts"); do
+        if pvapi "$@"; then
+            return 0
+        fi
+        printf 'provision.sh: guest agent call failed (attempt %s/%s), retrying\n' \
+            "$i" "$attempts" >&2
+        sleep 3
+    done
+    printf 'provision.sh: guest agent call failed after %s attempts\n' "$attempts" >&2
     return 1
 }
 
@@ -306,21 +337,21 @@ done
 # into the VM template. That keeps it version-controlled and reviewable, and
 # means changing it never requires cloning, editing and resealing the template.
 printf 'provision.sh: delivering guest script to VM %s\n' "$VMID" >&2
-pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
     --data-urlencode "file=/home/runner/start-runner.sh" \
-    --data-urlencode "content@${SCRIPT_DIR}/guest/start-runner.sh" || exit 1
+    --data-urlencode "content@${SCRIPT_DIR}/guest/start-runner.sh" >/dev/null || exit 1
 
 # file-write lands the file root:root and non-executable. The service runs as
 # User=runner and execs this path, so both have to be corrected before the
 # token arrives and the path unit fires.
-pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
     --data-urlencode "command=/bin/chown" \
     --data-urlencode "command=runner:runner" \
-    --data-urlencode "command=/home/runner/start-runner.sh" || exit 1
-pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+    --data-urlencode "command=/home/runner/start-runner.sh" >/dev/null || exit 1
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
     --data-urlencode "command=/bin/chmod" \
     --data-urlencode "command=0755" \
-    --data-urlencode "command=/home/runner/start-runner.sh" || exit 1
+    --data-urlencode "command=/home/runner/start-runner.sh" >/dev/null || exit 1
 
 # Write the token content to a temp file so it never appears in any curl
 # process argv (visible to ps aux). The file lands root:root in the guest; the
@@ -339,14 +370,14 @@ printf 'provision.sh: delivering token to VM %s via guest agent\n' "$VMID" >&2
 _token_file="$(mktemp)"
 printf 'RUNNER_LABEL=%s\nRUNNER_TOKEN=%s\nRUNNER_URL=%s\nRUNNER_GROUP=%s\n' \
     "$LABEL" "$TOKEN" "$REPO_URL" "$RUNNER_GROUP" > "$_token_file"
-pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
     --data-urlencode "file=/run/gh-runner-init.partial" \
-    --data-urlencode "content@${_token_file}" || { rm -f "$_token_file"; exit 1; }
+    --data-urlencode "content@${_token_file}" >/dev/null || { rm -f "$_token_file"; exit 1; }
 rm -f "$_token_file"
 
-pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+agent_retry 5 POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
     --data-urlencode "command=/bin/mv" \
     --data-urlencode "command=/run/gh-runner-init.partial" \
-    --data-urlencode "command=/run/gh-runner-init" || exit 1
+    --data-urlencode "command=/run/gh-runner-init" >/dev/null || exit 1
 
 printf 'provision.sh: VM %s started; runner credentials delivered via guest agent\n' "$VMID" >&2
