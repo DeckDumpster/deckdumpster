@@ -136,7 +136,23 @@ wait_for_server() {
         printf '\nServer failed to start after %ss.\n\n' "$(( WAIT_TRIES * WAIT_SLEEP ))"
         printf -- '--- podman port systemd-mtgc-%s 8081/tcp ---\n%s\n' "$INSTANCE" "${port_err:-<no output>}"
         printf -- '--- resolved port: %s ---\n' "${port:-<none>}"
-        [ -n "$port" ] && printf -- '--- last curl exit: %s ---\n' "$curl_rc"
+        if [ -n "$port" ]; then
+            printf -- '--- last curl exit: %s ---\n' "$curl_rc"
+            # curl 35 is an SSL CONNECT error: the TCP connection succeeded and
+            # the TLS handshake did not. The exit code alone cannot separate a
+            # protocol/cipher refusal from a reset, so ask for the handshake
+            # itself. -k is already in use, so this is never about trust.
+            printf -- '\n--- curl -kv https://localhost:%s/ ---\n' "$port"
+            curl -kv --max-time 10 "https://localhost:${port}/" 2>&1 | tail -30
+            printf -- '\n--- openssl s_client -connect localhost:%s ---\n' "$port"
+            openssl s_client -connect "localhost:${port}" </dev/null 2>&1 | head -30
+            printf -- '\n--- local openssl ---\n'
+            openssl version 2>&1
+            printf -- '\n--- plain TCP reachable? ---\n'
+            timeout 5 bash -c "</dev/tcp/127.0.0.1/${port}" 2>&1 \
+                && echo "TCP connect to 127.0.0.1:${port} OK" \
+                || echo "TCP connect to 127.0.0.1:${port} FAILED"
+        fi
         printf -- '\n--- podman ps -a ---\n'
         podman ps -a 2>&1 | head -20
         printf -- '\n--- systemctl --user status mtgc-%s ---\n' "$INSTANCE"
