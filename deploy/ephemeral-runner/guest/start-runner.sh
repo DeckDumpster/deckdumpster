@@ -21,6 +21,13 @@ RUNNER_DIR=/home/runner/actions-runner
 fail() { echo "start-runner: $*" >&2; exit 1; }
 
 [ -r "$INIT" ] || fail "no injected data at $INIT"
+
+# Belt and braces against a partially written file. provision.sh writes to a
+# temp path and renames, so this path should only ever appear complete -- but
+# the failure mode when it is not is a five-times-in-one-second restart loop
+# that rate-limits the unit and then ignores every subsequent write, which is
+# expensive to diagnose and trivial to prevent. RUNNER_GROUP is written last.
+grep -q '^RUNNER_GROUP=' "$INIT" || fail "$INIT is incomplete — refusing to source a partial file"
 # shellcheck disable=SC1090
 . "$INIT"
 : "${RUNNER_LABEL:?RUNNER_LABEL missing from $INIT}"

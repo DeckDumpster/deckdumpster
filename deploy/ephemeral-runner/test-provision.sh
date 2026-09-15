@@ -458,6 +458,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test 12 -- the token file appears atomically
+#
+# ephemeral-runner.path triggers on PathExists, which fires when the path comes
+# into being rather than when writing to it finishes. Writing straight to the
+# watched path let the guest source a partial file: RUNNER_LABEL was unset, the
+# service failed, the path unit retriggered, and systemd rate-limited it after
+# five failures in one second. So the payload goes to a path nothing watches
+# and is renamed into place.
+# ---------------------------------------------------------------------------
+rm -f "$CURL_ARGV_FILE"
+run_provision valid-label test-token https://github.com/DeckDumpster >/dev/null
+
+if grep -qF 'file=/run/gh-runner-init.partial' "$CURL_ARGV_FILE" 2>/dev/null; then
+    ok "test-12: payload written to an unwatched path"
+else
+    ko "test-12: payload written straight to the watched path (race)"
+fi
+
+_part_at=$(grep -nF 'file=/run/gh-runner-init.partial' "$CURL_ARGV_FILE" | head -1 | cut -d: -f1)
+_mv_at=$(grep -nF 'command=/bin/mv' "$CURL_ARGV_FILE" | head -1 | cut -d: -f1)
+if [ -n "$_part_at" ] && [ -n "$_mv_at" ] && [ "$_part_at" -lt "$_mv_at" ]; then
+    ok "test-12: renamed into place after the write completed"
+else
+    ko "test-12: rename did not follow the write"
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 total=$(( pass + fail ))

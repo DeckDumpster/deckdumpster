@@ -325,13 +325,28 @@ pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
 # Write the token content to a temp file so it never appears in any curl
 # process argv (visible to ps aux). The file lands root:root in the guest; the
 # path unit chowns it before starting the runner service.
+# THE FINAL FILE MUST APPEAR ATOMICALLY. The guest's ephemeral-runner.path unit
+# triggers on PathExists, which fires the instant the path comes into being --
+# not when writing to it finishes. Writing straight to /run/gh-runner-init let
+# the service start and source a partially written file, so RUNNER_LABEL was
+# unset, the script exited, the path unit retriggered, and systemd rate-limited
+# it five failures later. The file was complete by the time anyone looked,
+# which made it read like a delivery failure rather than a race.
+#
+# Write to a temp path the path unit is not watching, then rename. rename(2) is
+# atomic within a filesystem, so the watched path only ever appears complete.
 printf 'provision.sh: delivering token to VM %s via guest agent\n' "$VMID" >&2
 _token_file="$(mktemp)"
 printf 'RUNNER_LABEL=%s\nRUNNER_TOKEN=%s\nRUNNER_URL=%s\nRUNNER_GROUP=%s\n' \
     "$LABEL" "$TOKEN" "$REPO_URL" "$RUNNER_GROUP" > "$_token_file"
 pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/file-write" \
-    --data-urlencode "file=/run/gh-runner-init" \
+    --data-urlencode "file=/run/gh-runner-init.partial" \
     --data-urlencode "content@${_token_file}" || { rm -f "$_token_file"; exit 1; }
 rm -f "$_token_file"
+
+pvapi POST "/nodes/${PVE_NODE}/qemu/${VMID}/agent/exec" \
+    --data-urlencode "command=/bin/mv" \
+    --data-urlencode "command=/run/gh-runner-init.partial" \
+    --data-urlencode "command=/run/gh-runner-init" || exit 1
 
 printf 'provision.sh: VM %s started; runner credentials delivered via guest agent\n' "$VMID" >&2
