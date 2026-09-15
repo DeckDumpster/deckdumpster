@@ -221,6 +221,20 @@ VM.
 
 ## Scheduled reaper
 
+Two paths run the reaper, and both are required.
+
+**.github/workflows/reap-runners.yml** runs hourly on a GitHub-hosted runner,
+connects to the hypervisor over Tailscale + SSH, and **exits non-zero when it
+destroys anything** — making a failed teardown visible as a red workflow run.
+Use `workflow_dispatch` (dry_run defaults to true) to inspect the ledger without
+touching anything.
+
+**A host cron** is the belt-and-braces path for when GitHub Actions itself is
+unavailable. That is precisely the condition most likely to drop a run
+mid-provision: if the Actions platform goes down between `provision.sh` finishing
+and `teardown.sh` running, no `workflow_dispatch` fires, no `if: always()` step
+runs, and the VM sits until the cron clears it.
+
 Install a cron job on the Proxmox host to run `reap.sh` every hour:
 
 ```
@@ -229,6 +243,10 @@ Install a cron job on the Proxmox host to run `reap.sh` every hour:
 ```
 
 Adjust `TEMPLATE_VMID` if your template lives at a different id.
+
+The cron cleans up silently; the workflow makes the finding visible. Both paths
+call the same `reap.sh` with the same `--max-age-hours 4` argument so neither
+races a live build.
 
 ## Proxmox user permissions
 

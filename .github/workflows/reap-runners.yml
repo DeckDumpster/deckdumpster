@@ -1,0 +1,87 @@
+name: Reap orphan runner VMs
+
+# Destroy every gh-runner-* VM older than 4 hours that is not actively running
+# a job. Scheduled to run every hour because that is precisely the window
+# between a provision and a teardown.
+#
+# Reaping something is NOT a success: an orphan means the teardown path
+# failed for a run GitHub already reported green. This workflow surfaces that
+# finding by exiting non-zero so the red run is visible. A clean reap exits 0.
+#
+# The host cron in deploy/ephemeral-runner/README.md is the belt-and-braces
+# path for when GitHub Actions itself is unavailable — the exact condition most
+# likely to drop a run mid-provision and produce an orphan.
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print what would be destroyed without acting'
+        type: boolean
+        default: true
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:ci
+
+      - name: Install SSH key
+        run: |
+          install -m 0700 -d ~/.ssh
+          printf '%s\n' "$RUNNER_SSH_KEY" > ~/.ssh/gh-runner-invoke
+          chmod 0600 ~/.ssh/gh-runner-invoke
+        env:
+          RUNNER_SSH_KEY: ${{ secrets.RUNNER_SSH_KEY }}
+
+      - name: Run reaper
+        env:
+          HYPERVISOR_HOST: ${{ vars.HYPERVISOR_HOST }}
+          # Manual dispatches default to dry-run so a human cannot destroy
+          # anything by accident. The scheduled path omits --dry-run.
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          REAP_CMD="reap.sh --max-age-hours 4"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN" = "true" ]; then
+            REAP_CMD="$REAP_CMD --dry-run"
+          fi
+
+          set +e
+          OUTPUT=$(ssh \
+            -i ~/.ssh/gh-runner-invoke \
+            -o StrictHostKeyChecking=accept-new \
+            -o BatchMode=yes \
+            "gh-runner@${HYPERVISOR_HOST}" \
+            "$REAP_CMD" 2>&1)
+          SSH_EXIT=$?
+          set -e
+
+          echo "$OUTPUT"
+
+          # Count from the summary line that reap.sh prints on completion:
+          #   "destroyed N VM(s)" (live run) or "would destroy N VM(s)" (dry-run)
+          COUNT=$(printf '%s\n' "$OUTPUT" | \
+            grep -oP '(?:destroyed|would destroy) \K[0-9]+(?= VM)' | tail -1 || true)
+          COUNT="${COUNT:-0}"
+
+          if [ "$COUNT" -gt 0 ]; then
+            {
+              echo "## Orphan VMs reaped: $COUNT"
+              echo ""
+              echo '```'
+              printf '%s\n' "$OUTPUT"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::reap.sh found $COUNT orphaned VM(s) — a prior teardown path failed for a run GitHub already reported green"
+            exit 1
+          fi
+
+          exit "$SSH_EXIT"
