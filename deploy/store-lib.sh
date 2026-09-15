@@ -771,3 +771,21 @@ EOF
     fi
     return 0
 }
+
+# mtgc_uv_cache_mount -- print the podman -v argument for the uv build cache,
+# having first made sure the host directory exists.
+#
+# The Containerfile bind-mounts ~/.cache/uv, and podman REFUSES to start a build
+# whose source directory is absent:
+#
+#   Error: validating volumes: faccessat /home/<u>/.cache/uv: no such file or directory
+#
+# which exits 125 before the first layer. On any machine where uv has already
+# run the directory exists and nothing is noticed; on a fresh one it does not,
+# and three separate call sites (setup.sh, seed.sh, deploy.sh) each wrote the
+# same -v argument and none of them created it. One function now owns both
+# halves, so a fourth caller cannot reintroduce the gap (de-323).
+mtgc_uv_cache_mount() {
+    mkdir -p "${HOME}/.cache/uv"
+    printf -- '-v\n%s/.cache/uv:/root/.cache/uv:z\n' "${HOME}"
+}
