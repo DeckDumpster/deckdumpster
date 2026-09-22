@@ -1741,6 +1741,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_expected_set(int(did), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/acquire"):
+            did = path[len("/api/decks/"):-len("/acquire")]
+            if did.isdigit():
+                self._api_deck_acquire(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/materialize"):
             did = path[len("/api/decks/"):-len("/materialize")]
             if did.isdigit():
@@ -6495,6 +6501,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         result = repo.get_deck_completeness(deck_id)
         conn.close()
+        self._send_json(result)
+
+    def _api_deck_acquire(self, deck_id: int):
+        """POST /api/decks/:id/acquire — add expected cards to the collection."""
+        conn = self._get_conn()
+        try:
+            from mtg_collector.db.models import DeckRepository
+            repo = DeckRepository(conn)
+            deck = repo.get(deck_id)
+            if not deck:
+                self._send_json({"error": "Deck not found"}, 404)
+                return
+            if not repo.get_expected_cards(deck_id):
+                self._send_json({"error": "Deck has no expected cards"}, 400)
+                return
+            result = repo.acquire_expected_cards(deck_id)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json(result)
 
     def _api_deck_materialize(self, deck_id: int):
