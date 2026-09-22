@@ -182,6 +182,7 @@
               <button class="edit-btn" id="btn-share-deck">Share</button>
               <button class="edit-btn" id="btn-import-expected">Import Expected</button>
               ${deck.state !== 'constructed' ? '<button class="add-btn" id="btn-materialize">Materialize</button>' : ''}
+              <button class="add-btn" id="btn-acquire" style="display:none">Add to Collection</button>
               <button class="delete-btn" id="delete-deck-btn">Delete</button>
             </div>
           </div>
@@ -519,6 +520,53 @@
         }
       });
     }
+
+    // Add to Collection button
+    const acquireBtn = document.getElementById('btn-acquire');
+    acquireBtn.addEventListener('click', async () => {
+      acquireBtn.disabled = true;
+      try {
+        const expRes = await fetch('/api/decks/' + deck.id + '/expected');
+        const expected = await expRes.json();
+        const count = expected.reduce((s, c) => s + (c.quantity || 1), 0);
+
+        const prevRes = await fetch('/api/decks/' + deck.id + '/acquire');
+        const preview = prevRes.ok ? await prevRes.json() : { previous: [] };
+        const previous = preview.previous || [];
+
+        let msg = '';
+        if (previous.length > 0) {
+          const last = previous[0];
+          const lastDate = last.created_at ? last.created_at.substring(0, 10) : '(unknown)';
+          msg += `You already added this deck's cards on ${lastDate} (${last.card_count} cards).\nAdd another ${count}?\n\n`;
+        }
+        msg += `Add ${count} cards from "${deck.name}" to your collection?\nThey will be added as owned, Near Mint, in a batch you can undo.`;
+
+        if (!confirm(msg)) {
+          acquireBtn.disabled = false;
+          return;
+        }
+
+        acquireBtn.textContent = 'Adding...';
+        const res = await fetch('/api/decks/' + deck.id + '/acquire', { method: 'POST' });
+        const result = await res.json();
+        if (result.error) {
+          alert('Error: ' + result.error);
+          acquireBtn.disabled = false;
+          acquireBtn.textContent = 'Add to Collection';
+          return;
+        }
+        alert(
+          'Added ' + result.cards_added + ' card(s) to your collection.\n' +
+          'Press Materialize to assign them to this deck.'
+        );
+        window.location.reload();
+      } catch (err) {
+        alert('Add to Collection failed: ' + err.message);
+        acquireBtn.disabled = false;
+        acquireBtn.textContent = 'Add to Collection';
+      }
+    });
 
     // Modal buttons
     document.getElementById('btn-save-deck').addEventListener('click', () => saveDeck(deck.id));
@@ -944,6 +992,8 @@
 
     const expRes = await fetch('/api/decks/' + deck.id + '/expected');
     const expected = await expRes.json();
+    const acquireBtn = document.getElementById('btn-acquire');
+    if (acquireBtn) acquireBtn.style.display = expected.length ? '' : 'none';
     if (!expected.length && !deck.is_precon) {
       section.style.display = 'none';
       return;

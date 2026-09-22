@@ -1,0 +1,10 @@
+# Scenario: Deck acquire batch shows "Deck" label in the batch list
+#
+# Related:
+#   issues: [db-rg5n]
+
+description: >
+  After I create a Jumpstart deck and click "Add to Collection", I navigate to
+  /batches. The acquisition appears as a batch entry with the label "Deck" (not
+  the raw string "deck_acquire"). This verifies the TYPE_LABELS entry for the
+  new batch type.

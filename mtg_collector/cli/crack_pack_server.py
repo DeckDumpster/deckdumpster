@@ -1463,6 +1463,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_expected_get(int(did))
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/acquire"):
+            did = path[len("/api/decks/"):-len("/acquire")]
+            if did.isdigit():
+                self._api_deck_acquire_preview(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/completeness"):
             did = path[len("/api/decks/"):-len("/completeness")]
             if did.isdigit():
@@ -1741,6 +1747,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_expected_set(int(did), data)
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/acquire"):
+            did = path[len("/api/decks/"):-len("/acquire")]
+            if did.isdigit():
+                self._api_deck_acquire(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/materialize"):
             did = path[len("/api/decks/"):-len("/materialize")]
             if did.isdigit():
@@ -2003,6 +2015,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             vid = path[len("/api/views/"):]
             if vid.isdigit():
                 self._api_view_delete(int(vid))
+            else:
+                self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/batches/"):
+            bid = path[len("/api/batches/"):]
+            if bid.isdigit():
+                self._api_batch_delete(int(bid))
             else:
                 self._send_json({"error": "Not found"}, 404)
         else:
@@ -5365,6 +5383,40 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         conn.close()
         self._send_json({"batch": batch, "cards": cards})
 
+    def _api_batch_delete(self, batch_id: int):
+        """DELETE /api/batches/:id — reverse a deck_acquire batch.
+
+        Refuses with 400 for non-deck_acquire batches. Refuses with 409 if
+        any card has moved (assigned to a deck, put in a binder, or not owned).
+        On success deletes all cards and the batch row.
+        """
+        from mtg_collector.db.models import BatchRepository
+        from mtg_collector.db.schema import init_db
+
+        conn = self._get_conn()
+        try:
+            init_db(conn)
+            repo = BatchRepository(conn)
+            batch = repo.get(batch_id)
+            if not batch:
+                self._send_json({"error": "Batch not found"}, 404)
+                return
+            if batch["batch_type"] != "deck_acquire":
+                self._send_json(
+                    {"error": f"Cannot reverse batch of type '{batch['batch_type']}' — only deck_acquire batches may be reversed"},
+                    400,
+                )
+                return
+            try:
+                result = repo.reverse_acquire_batch(batch_id)
+                conn.commit()
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 409)
+                return
+        finally:
+            conn.close()
+        self._send_json(result)
+
     def _api_batch_assign_deck(self, batch_id: int, data: dict):
         """Retroactively assign a batch's cards to a deck."""
         from mtg_collector.db.models import (
@@ -6495,6 +6547,48 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         result = repo.get_deck_completeness(deck_id)
         conn.close()
+        self._send_json(result)
+
+    def _api_deck_acquire_preview(self, deck_id: int):
+        """GET /api/decks/:id/acquire — return previous acquisitions without modifying anything."""
+        conn = self._get_conn()
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        if not repo.get(deck_id):
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        previous_rows = conn.execute(
+            "SELECT id, created_at, card_count FROM batches "
+            "WHERE batch_type = 'deck_acquire' AND deck_id = ? "
+            "ORDER BY created_at DESC",
+            (deck_id,),
+        ).fetchall()
+        conn.close()
+        self._send_json({
+            "previous": [
+                {"batch_id": r["id"], "created_at": r["created_at"], "card_count": r["card_count"]}
+                for r in previous_rows
+            ]
+        })
+
+    def _api_deck_acquire(self, deck_id: int):
+        """POST /api/decks/:id/acquire — add expected cards to the collection."""
+        conn = self._get_conn()
+        try:
+            from mtg_collector.db.models import DeckRepository
+            repo = DeckRepository(conn)
+            deck = repo.get(deck_id)
+            if not deck:
+                self._send_json({"error": "Deck not found"}, 404)
+                return
+            if not repo.get_expected_cards(deck_id):
+                self._send_json({"error": "Deck has no expected cards"}, 400)
+                return
+            result = repo.acquire_expected_cards(deck_id)
+            conn.commit()
+        finally:
+            conn.close()
         self._send_json(result)
 
     def _api_deck_materialize(self, deck_id: int):

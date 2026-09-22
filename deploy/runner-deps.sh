@@ -66,6 +66,26 @@ installable() {
 # apt_install <pkg>... -- installs only the packages not already installed,
 # mapping each name to the one this release actually carries.
 APT_UPDATED=0
+# WAIT FOR THE DPKG LOCK RATHER THAN FAILING ON IT.
+#
+# A per-run VM boots, systemd starts unattended-upgrades, and this script starts
+# installing -- in that order, within seconds of each other. Whoever reaches
+# /var/lib/dpkg/lock-frontend second gets "Could not get lock ... held by
+# process N (unattended-upgr)" and, without this, simply gives up: every
+# apt_install call reports "could not install X" and the job dies before
+# deploy/ci.sh is reached. It is a RACE, so it fails perhaps one run in several
+# and looks like a broken dependency list rather than a timing bug.
+#
+# apt has had a lock timeout since 1.9.11; this is the whole fix, and it beats a
+# retry loop because it waits on the lock itself rather than sleeping and racing
+# again. Unquoted on purpose: it must expand to two words, or to nothing on an
+# apt too old to know the option.
+#
+# Ported from pokedumpster's copy of this script, which has carried it since the
+# ephemeral runners went in. The durable half is the template, which masks
+# unattended-upgrades outright -- but this script also runs on developer
+# machines, so it holds the lock-wait half and never disables anyone's updates.
+APT_LOCK_WAIT="-o DPkg::Lock::Timeout=600"
 apt_install() {
     local want=() p
     for p in "$@"; do
@@ -82,11 +102,11 @@ apt_install() {
     [ ${#want[@]} -gt 0 ] || return 0
     [ -n "$SUDO" ] || { printf 'runner-deps: need root to install: %s\n' "${want[*]}" >&2; return 1; }
     if [ "$APT_UPDATED" = 0 ]; then
-        $SUDO apt-get update -qq || true
+        $SUDO apt-get update -qq $APT_LOCK_WAIT || true
         APT_UPDATED=1
     fi
     note "installing ${want[*]}"
-    if DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "${want[@]}"; then
+    if DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq $APT_LOCK_WAIT "${want[@]}"; then
         return 0
     fi
     # One unusable name must not take the rest of the list with it. apt installs
@@ -94,7 +114,7 @@ apt_install() {
     # whether what remains is fatal.
     note "batch install failed -- retrying individually"
     for p in "${want[@]}"; do
-        DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "$p" \
+        DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq $APT_LOCK_WAIT "$p" \
             || note "could not install $p"
     done
 }

@@ -85,6 +85,43 @@ jobs:
       - name: Confirm the job landed on the ephemeral VM
         run: test "$RUNNER_NAME" = "${{ needs.provision.outputs.label }}"
 
+      # UNATTENDED-UPGRADES HAS NOTHING TO OFFER A VM THAT LIVES AN HOUR, and it
+      # can take the whole run with it: it holds the dpkg lock at exactly the
+      # moment runner-deps wants it, and with Automatic-Reboot it can restart the
+      # guest mid-suite. A restart presents as `The runner has received a shutdown
+      # signal` and NOTHING ELSE -- the service logs to the guest journal, not to
+      # this log, so the job output carries no apt message to find. Three runs died
+      # that way on 2026-09-22 (#376 #378 #379 #380) and the first pass at
+      # diagnosing them grepped this log for apt errors, found none, and wrongly
+      # ruled it out.
+      #
+      # The template masks the service (DeckDumpster/ephemeral-ci
+      # scripts/template-substrate.sh) and pokedumpster, which clones the same
+      # template 9110, has never seen a shutdown signal. So this is belt to that
+      # template's braces: it costs a second, it is idempotent, and it means a
+      # template rebuilt without the mask cannot silently reintroduce the fault.
+      #
+      # THE REPORT IS THE POINT AS MUCH AS THE MASK. Whatever the state was, it is
+      # printed before it is changed, so the next person reading a dead run can see
+      # from this log alone whether the service was live -- which is the evidence
+      # that was missing the first time.
+      - name: Defuse unattended-upgrades on the ephemeral VM
+        run: |
+          echo "== before =="
+          systemctl is-enabled unattended-upgrades.service 2>&1 || true
+          systemctl is-active  unattended-upgrades.service 2>&1 || true
+          for t in apt-daily.timer apt-daily-upgrade.timer; do
+            printf '%s: %s / %s\n' "$t" \
+              "$(systemctl is-enabled "$t" 2>&1)" "$(systemctl is-active "$t" 2>&1)"
+          done
+          test -f /var/run/reboot-required && echo "REBOOT PENDING AT JOB START" || true
+
+          sudo -n systemctl stop    unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer 2>&1 || true
+          sudo -n systemctl mask    unattended-upgrades.service apt-daily.timer apt-daily-upgrade.timer 2>&1 || true
+
+          echo "== after =="
+          systemctl is-enabled unattended-upgrades.service 2>&1 || true
+
       - name: Install runner dependencies
         run: bash deploy/runner-deps.sh
 

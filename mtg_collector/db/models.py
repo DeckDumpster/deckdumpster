@@ -2715,6 +2715,86 @@ class DeckRepository:
             "total_missing": total_missing,
         }
 
+    def acquire_expected_cards(self, deck_id: int) -> Dict:
+        """Add all expected cards for a deck to the collection.
+
+        Creates one CollectionEntry per physical copy (range over quantity).
+        Finish rule: nonfoil if the printing supports it, otherwise the
+        printing's single available finish. Raises on empty/NULL finishes —
+        that is a data defect, not a fallback case.
+
+        Returns {batch_id, cards_added, previous}.
+        previous lists earlier deck_acquire batches for this deck, newest first.
+        Caller must check for an empty expected list and return 400 before
+        calling this method; calling it on an empty list is a caller error.
+        """
+        import uuid as _uuid
+
+        rows = self.conn.execute(
+            "SELECT e.printing_id, p.oracle_id, c.name, p.set_code, "
+            "       p.collector_number, e.zone, e.quantity, p.finishes "
+            "FROM deck_expected_cards e "
+            "JOIN printings p ON e.printing_id = p.printing_id "
+            "JOIN cards c ON p.oracle_id = c.oracle_id "
+            "WHERE e.deck_id = ? ORDER BY c.name",
+            (deck_id,),
+        ).fetchall()
+        expected = [dict(r) for r in rows]
+
+        deck_row = self.conn.execute(
+            "SELECT name, origin_set_code FROM decks WHERE id = ?", (deck_id,)
+        ).fetchone()
+
+        previous_rows = self.conn.execute(
+            "SELECT id, created_at, card_count FROM batches "
+            "WHERE batch_type = 'deck_acquire' AND deck_id = ? "
+            "ORDER BY created_at DESC",
+            (deck_id,),
+        ).fetchall()
+        previous = [
+            {"batch_id": r["id"], "created_at": r["created_at"], "card_count": r["card_count"]}
+            for r in previous_rows
+        ]
+
+        batch_repo = BatchRepository(self.conn)
+        collection_repo = CollectionRepository(self.conn)
+
+        batch = Batch(
+            id=None,
+            batch_uuid=str(_uuid.uuid4()),
+            name=f"Added: {deck_row['name']}",
+            batch_type="deck_acquire",
+            set_code=deck_row["origin_set_code"],
+            deck_id=deck_id,
+        )
+        batch_id = batch_repo.create(batch)
+
+        cards_added = 0
+        for card in expected:
+            finishes = json.loads(card["finishes"]) if card["finishes"] else []
+            if not finishes:
+                raise ValueError(
+                    f"printing {card['printing_id']} has empty finishes — data defect"
+                )
+            finish = "nonfoil" if "nonfoil" in finishes else finishes[0]
+
+            for _ in range(card["quantity"]):
+                entry = CollectionEntry(
+                    id=None,
+                    printing_id=card["printing_id"],
+                    finish=finish,
+                    condition="Near Mint",
+                    source="deck_acquire",
+                    batch_id=batch_id,
+                )
+                collection_repo.add(entry)
+                cards_added += 1
+
+        batch_repo.increment_card_count(batch_id, cards_added)
+        batch_repo.complete(batch_id)
+
+        return {"batch_id": batch_id, "cards_added": cards_added, "previous": previous}
+
 
 class BinderRepository:
     """CRUD operations for binders table."""
@@ -3065,6 +3145,46 @@ class BatchRepository:
             "UPDATE batches SET completed_at = ? WHERE id = ?",
             (now_iso(), batch_id),
         )
+
+    def reverse_acquire_batch(self, batch_id: int) -> Dict[str, Any]:
+        """Remove all collection entries from a deck_acquire batch and delete the batch.
+
+        Assumes the caller has already verified the batch exists and is of type
+        deck_acquire. Raises ValueError naming all moved cards if any card has
+        been assigned to a deck, put in a binder, or is no longer owned.
+        No rows are deleted when ValueError is raised.
+
+        Returns {"deleted_cards": N, "batch_id": batch_id}.
+        """
+        rows = self.conn.execute(
+            """SELECT c.id, c.status, c.binder_id,
+                      COALESCE(c.card_name, 'card #' || c.id) AS name,
+                      (SELECT 1 FROM deck_cards dc
+                       WHERE dc.collection_id = c.id LIMIT 1) AS in_deck
+               FROM collection c
+               WHERE c.batch_id = ?""",
+            (batch_id,),
+        ).fetchall()
+
+        moved = [
+            r["name"]
+            for r in rows
+            if r["status"] != "owned" or r["binder_id"] is not None or r["in_deck"]
+        ]
+        if moved:
+            names = ", ".join(moved[:10])
+            suffix = f" (and {len(moved) - 10} more)" if len(moved) > 10 else ""
+            raise ValueError(
+                f"Cannot reverse: {len(moved)} card(s) have moved — {names}{suffix}"
+            )
+
+        ids = [r["id"] for r in rows]
+        collection_repo = CollectionRepository(self.conn)
+        result = collection_repo.bulk_delete(ids)
+
+        self.conn.execute("DELETE FROM batches WHERE id = ?", (batch_id,))
+
+        return {"deleted_cards": len(result["deleted"]), "batch_id": batch_id}
 
 
 # Backward-compatible alias
