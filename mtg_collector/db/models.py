@@ -2334,11 +2334,10 @@ class DeckRepository:
         if not row or row["state_id"] == DECK_STATE_CONSTRUCTED:
             return self.get_cards(deck_id, zone=zone)
 
-        # An expected card is a printing you may not hold, so there is no copy
-        # to take a finish from and the printing is priced instead: nonfoil if
-        # it was printed that way, foil if it only exists foil or etched.
+        # An expected card carries the finish from deck_expected_cards.finish,
+        # which is sourced from MTGJSON's isFoil at import time.
         query = f"""
-            SELECT NULL as id, e.printing_id, 'nonfoil' as finish,
+            SELECT NULL as id, e.printing_id, e.finish as finish,
                    NULL as condition, NULL as language,
                    NULL as purchase_price, NULL as acquired_at,
                    e.zone AS deck_zone, e.quantity,
@@ -2364,15 +2363,43 @@ class DeckRepository:
         query += " ORDER BY card.name"
         return [dict(row) for row in self.conn.execute(query, params)]
 
+    def _resolve_finish(self, printing_id: str, supplied: Optional[str]) -> str:
+        """Return the finish to store for a printing.
+
+        When supplied is given, validate it against the printing's finishes and
+        return it (a supplied value from MTGJSON is authoritative).  When None,
+        derive: nonfoil if offered, otherwise the single available finish.
+        Raises ValueError on empty finishes or a supplied finish the printing
+        does not offer.
+        """
+        row = self.conn.execute(
+            "SELECT finishes FROM printings WHERE printing_id = ?", (printing_id,)
+        ).fetchone()
+        finishes = json.loads(row["finishes"]) if row and row["finishes"] else []
+        if not finishes:
+            raise ValueError(
+                f"printing {printing_id!r} has empty finishes — data defect"
+            )
+        if supplied is not None:
+            if supplied not in finishes:
+                raise ValueError(
+                    f"finish {supplied!r} is not offered by printing {printing_id!r}; "
+                    f"available: {finishes}"
+                )
+            return supplied
+        return "nonfoil" if "nonfoil" in finishes else finishes[0]
+
     def add_expected_cards(self, deck_id: int, printing_ids: List[str],
-                           zone: str = "mainboard") -> int:
+                           zone: str = "mainboard",
+                           finish: Optional[str] = None) -> int:
         """Add cards to an idea/ready deck's expected list."""
         count = 0
         for pid in printing_ids:
+            resolved = self._resolve_finish(pid, finish)
             self.conn.execute(
-                "INSERT OR IGNORE INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
-                "VALUES (?, ?, ?, 1)",
-                (deck_id, pid, zone),
+                "INSERT OR IGNORE INTO deck_expected_cards (deck_id, printing_id, zone, quantity, finish) "
+                "VALUES (?, ?, ?, 1, ?)",
+                (deck_id, pid, zone, resolved),
             )
             count += self.conn.execute("SELECT changes()").fetchone()[0]
         return count
@@ -2505,8 +2532,8 @@ class DeckRepository:
         """Replace the expected card list for a deck.
 
         Each dict: {printing_id, zone, quantity, finish?}.
-        finish is optional; NULL means use the printing's default finish rule at
-        acquire time (nonfoil when available, else the single available finish).
+        finish is resolved against printings.finishes when absent (nonfoil
+        preferred; otherwise the printing's only available finish).
         Returns number of cards inserted.
         """
         self.conn.execute(
@@ -2514,11 +2541,12 @@ class DeckRepository:
         )
         count = 0
         for card in cards:
+            finish = self._resolve_finish(card["printing_id"], card.get("finish"))
             self.conn.execute(
                 "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity, finish) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (deck_id, card["printing_id"], card.get("zone", "mainboard"),
-                 card.get("quantity", 1), card.get("finish")),
+                 card.get("quantity", 1), finish),
             )
             count += 1
         return count
@@ -2526,7 +2554,8 @@ class DeckRepository:
     def get_expected_cards(self, deck_id: int) -> List[Dict]:
         """Return the expected card list with card names joined via printing."""
         rows = self.conn.execute(
-            "SELECT e.printing_id, p.oracle_id, c.name, p.set_code, p.collector_number, e.zone, e.quantity "
+            "SELECT e.printing_id, p.oracle_id, c.name, p.set_code, p.collector_number, "
+            "e.zone, e.quantity, e.finish "
             "FROM deck_expected_cards e "
             "JOIN printings p ON e.printing_id = p.printing_id "
             "JOIN cards c ON p.oracle_id = c.oracle_id "
@@ -2542,7 +2571,7 @@ class DeckRepository:
         Cards with quantity > 1 produce one row with a quantity field.
         """
         rows = self.conn.execute(
-            """SELECT p.oracle_id, e.zone, e.quantity,
+            """SELECT p.oracle_id, e.zone, e.quantity, e.finish,
                       card.name, card.type_line, card.mana_cost, card.cmc,
                       card.colors, card.color_identity,
                       p.printing_id, p.set_code, p.collector_number,
@@ -2564,7 +2593,6 @@ class DeckRepository:
             d = dict(r)
             d["deck_zone"] = d.pop("zone")
             d["id"] = None
-            d["finish"] = "nonfoil"
             d["condition"] = None
             d["language"] = None
             d["purchase_price"] = None
@@ -2659,10 +2687,13 @@ class DeckRepository:
         zone_ids: Dict[str, List[int]] = {}
 
         for exp in expected:
+            # NULL finish means old/unresolved data — treat as nonfoil (the default).
+            exp_finish = exp["finish"] if exp["finish"] is not None else "nonfoil"
             rows = self.conn.execute(
                 "SELECT col.id, col.printing_id FROM collection col "
                 "JOIN printings p ON col.printing_id = p.printing_id "
                 "WHERE p.oracle_id = ? AND col.status = 'owned' "
+                "AND col.finish = ? "
                 "AND col.binder_id IS NULL "
                 "AND NOT EXISTS ("
                 "  SELECT 1 FROM deck_cards dc "
@@ -2671,7 +2702,7 @@ class DeckRepository:
                 ") "
                 "ORDER BY CASE WHEN col.printing_id = ? THEN 0 ELSE 1 END, col.id "
                 "LIMIT ?",
-                (exp["oracle_id"], DECK_STATE_CONSTRUCTED, exp["printing_id"], exp["quantity"]),
+                (exp["oracle_id"], exp_finish, DECK_STATE_CONSTRUCTED, exp["printing_id"], exp["quantity"]),
             ).fetchall()
 
             found_ids = [r["id"] for r in rows]
