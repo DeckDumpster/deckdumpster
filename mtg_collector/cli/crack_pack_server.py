@@ -6077,7 +6077,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             uuids = []
             for zone in ("mainBoard", "sideBoard", "commander"):
                 for c in zones.get(zone, []):
-                    uuids.append((zone, c["uuid"], c.get("count", 1)))
+                    uuids.append((zone, c["uuid"], c.get("count", 1), c.get("isFoil", False)))
 
             if uuids:
                 placeholders = ",".join("?" * len(uuids))
@@ -6097,7 +6097,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                         "commander": "commander"}
             expected = []
             unresolved = []
-            for zone, uuid, count in uuids:
+            for zone, uuid, count, is_foil in uuids:
                 pid = uuid_to_pid.get(uuid)
                 if pid is None:
                     unresolved.append({"zone": zone, "uuid": uuid, "count": count})
@@ -6106,6 +6106,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     "printing_id": pid,
                     "zone": ZONE_MAP[zone],
                     "quantity": count,
+                    "finish": "foil" if is_foil else "nonfoil",
                 })
 
             # Build deck record.

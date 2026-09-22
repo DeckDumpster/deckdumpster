@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 51
+SCHEMA_VERSION = 52
 
 
 class SchemaIntegrityError(Exception):
@@ -156,7 +156,8 @@ CREATE TABLE IF NOT EXISTS deck_expected_cards (
     printing_id TEXT NOT NULL REFERENCES printings(printing_id),
     zone TEXT NOT NULL DEFAULT 'mainboard',
     quantity INTEGER NOT NULL DEFAULT 1,
-    UNIQUE(deck_id, printing_id, zone)
+    finish TEXT NOT NULL DEFAULT 'nonfoil',
+    UNIQUE(deck_id, printing_id, zone, finish)
 );
 CREATE INDEX IF NOT EXISTS idx_deck_expected_deck ON deck_expected_cards(deck_id);
 
@@ -1033,6 +1034,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v49_to_v50(conn)
         if current < 51:
             _migrate_v50_to_v51(conn)
+        if current < 52:
+            _migrate_v51_to_v52(conn)
 
     # Record schema version
     conn.execute(
@@ -3141,6 +3144,72 @@ def _migrate_v50_to_v51(conn: sqlite3.Connection):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mtgjson_printing "
             "ON mtgjson_printings(printing_id, side, uuid)"
+        )
+
+
+def _migrate_v51_to_v52(conn: sqlite3.Connection):
+    """Add finish to deck_expected_cards and widen UNIQUE constraint.
+
+    Existing rows default to 'nonfoil'.  That is a guess — isFoil was never
+    stored before this migration, so there is no way to recover the true value.
+    Re-importing a precon deck is the only way to get the correct finish for
+    foil-etched commanders and the like.
+
+    The UNIQUE constraint widens from (deck_id, printing_id, zone) to
+    (deck_id, printing_id, zone, finish) so a deck can legitimately expect
+    both a foil and a nonfoil copy of the same printing in the same zone
+    (unusual, but the data model must not preclude it).
+
+    SQLite does not support ALTER TABLE ... ADD CONSTRAINT, so the constraint
+    change requires recreating the table.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(deck_expected_cards)").fetchall()}
+    if "finish" not in cols:
+        conn.execute("ALTER TABLE deck_expected_cards ADD COLUMN finish TEXT NOT NULL DEFAULT 'nonfoil'")
+
+    # Widen the UNIQUE constraint by recreating the table.
+    # Read whether the old narrow constraint is still in place by checking the
+    # index list — the constraint creates a named implicit index.
+    indexes = {row[1] for row in conn.execute("PRAGMA index_list(deck_expected_cards)").fetchall()}
+    # If any unique index exists that does NOT include 'finish', we need to recreate.
+    needs_widen = False
+    for idx_name in indexes:
+        idx_cols = [row[2] for row in conn.execute(f"PRAGMA index_info({idx_name})").fetchall()]
+        if idx_name.startswith("sqlite_autoindex") and "finish" not in idx_cols:
+            needs_widen = True
+            break
+
+    if needs_widen:
+        conn.execute("""
+            CREATE TABLE deck_expected_cards_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                printing_id TEXT NOT NULL REFERENCES printings(printing_id),
+                zone TEXT NOT NULL DEFAULT 'mainboard',
+                quantity INTEGER NOT NULL DEFAULT 1,
+                finish TEXT NOT NULL DEFAULT 'nonfoil',
+                UNIQUE(deck_id, printing_id, zone, finish)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO deck_expected_cards_new
+                (id, deck_id, printing_id, zone, quantity, finish)
+            SELECT id, deck_id, printing_id, zone, quantity, COALESCE(finish, 'nonfoil')
+            FROM deck_expected_cards
+        """)
+        conn.execute("DROP TABLE deck_expected_cards")
+        # SQLite validates all views on RENAME; any view referencing a table that
+        # does not yet exist (e.g. latest_sealed_prices → sealed_prices in a
+        # partially-migrated test DB) raises an error.  legacy_alter_table skips
+        # that validation — the view itself is unchanged, so this is safe.
+        conn.execute("PRAGMA legacy_alter_table = ON")
+        try:
+            conn.execute("ALTER TABLE deck_expected_cards_new RENAME TO deck_expected_cards")
+        finally:
+            conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deck_expected_deck "
+            "ON deck_expected_cards(deck_id)"
         )
 
 
