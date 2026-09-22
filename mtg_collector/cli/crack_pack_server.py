@@ -5949,19 +5949,20 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     # ---------- Precon / Jumpstart import picker ----------
 
-    # MTGJSON deck types we expose. Jumpstart goes in its own kind because
-    # of the variant grouping; everything else lives under "precon".
-    _PRECON_TYPES = (
-        "Commander Deck", "Theme Deck", "Intro Pack", "Planeswalker Deck",
-        "Duel Deck", "Deck Builder's Toolkit", "Arena Starter Deck",
-        "Welcome Deck", "Starter Kit", "Box Set",
-    )
+    # Jumpstart decks go in their own kind because of the variant grouping;
+    # everything else (including types MTGJSON adds in the future) lives under
+    # "precon".  The precon predicate is the complement: type IS NULL OR type
+    # NOT IN _JUMPSTART_TYPES.  type IS NULL is required because data_cmd.py
+    # writes deck.get("type"), which is None when the field is absent, and a
+    # bare NOT IN evaluates to NULL for those rows, silently dropping them.
     _JUMPSTART_TYPES = ("Jumpstart",)
 
-    def _precon_kind_types(self, kind: str) -> tuple:
+    def _precon_kind_predicate(self, kind: str, col: str = "type") -> tuple:
+        """Return (WHERE predicate SQL, bind params) for a deck-kind filter."""
+        placeholders = ",".join("?" * len(self._JUMPSTART_TYPES))
         if kind == "jumpstart":
-            return self._JUMPSTART_TYPES
-        return self._PRECON_TYPES
+            return f"{col} IN ({placeholders})", self._JUMPSTART_TYPES
+        return f"({col} IS NULL OR {col} NOT IN ({placeholders}))", self._JUMPSTART_TYPES
 
     def _api_precons_sets(self, params: dict):
         """List sets that have decks of the requested kind, with deck counts.
@@ -5969,18 +5970,17 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         Query params: kind=jumpstart|precon (default: precon)
         """
         kind = params.get("kind", ["precon"])[0]
-        types = self._precon_kind_types(kind)
-        placeholders = ",".join("?" * len(types))
+        predicate, bind_params = self._precon_kind_predicate(kind, col="d.type")
         conn = self._get_conn()
         rows = conn.execute(
             f"""SELECT d.set_code, COALESCE(s.set_name, d.set_code) AS set_name,
                        COUNT(*) AS deck_count
                 FROM mtgjson_decks d
                 LEFT JOIN sets s ON s.set_code = d.set_code
-                WHERE d.type IN ({placeholders})
+                WHERE {predicate}
                 GROUP BY d.set_code
                 ORDER BY MAX(d.release_date) DESC, set_name""",
-            types,
+            bind_params,
         ).fetchall()
         conn.close()
         self._send_json([dict(r) for r in rows])
@@ -5995,15 +5995,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "set_code is required"}, 400)
             return
         kind = params.get("kind", ["precon"])[0]
-        types = self._precon_kind_types(kind)
-        placeholders = ",".join("?" * len(types))
+        predicate, bind_params = self._precon_kind_predicate(kind)
         conn = self._get_conn()
         rows = conn.execute(
             f"""SELECT name, base_name, variation, type, main_count, release_date
                 FROM mtgjson_decks
-                WHERE set_code = ? AND type IN ({placeholders})
+                WHERE set_code = ? AND {predicate}
                 ORDER BY base_name, variation, name""",
-            (set_code.lower(), *types),
+            (set_code.lower(), *bind_params),
         ).fetchall()
         conn.close()
 
