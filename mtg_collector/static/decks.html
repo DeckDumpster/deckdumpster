@@ -850,7 +850,14 @@ function updateJsVariations() {
   let html = '';
   group.variations.forEach((v, i) => {
     const id = 'js-var-' + i;
-    const label = v.variation != null ? '#' + v.variation : v.name;
+    let label;
+    if (v.distinct && v.distinct.length > 0) {
+      label = v.distinct.join(', ');
+    } else if (v.variation != null) {
+      label = '#' + v.variation;
+    } else {
+      label = v.name;
+    }
     html += `<label class="${i === 0 ? 'checked' : ''}" data-name="${esc(v.name)}" onclick="pickJsVariation(this)">${esc(label)}</label>`;
   });
   picker.innerHTML = html;
