@@ -1463,6 +1463,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._api_deck_expected_get(int(did))
             else:
                 self._send_json({"error": "Not found"}, 404)
+        elif path.startswith("/api/decks/") and path.endswith("/acquire"):
+            did = path[len("/api/decks/"):-len("/acquire")]
+            if did.isdigit():
+                self._api_deck_acquire_preview(int(did))
+            else:
+                self._send_json({"error": "Not found"}, 404)
         elif path.startswith("/api/decks/") and path.endswith("/completeness"):
             did = path[len("/api/decks/"):-len("/completeness")]
             if did.isdigit():
@@ -6502,6 +6508,29 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         result = repo.get_deck_completeness(deck_id)
         conn.close()
         self._send_json(result)
+
+    def _api_deck_acquire_preview(self, deck_id: int):
+        """GET /api/decks/:id/acquire — return previous acquisitions without modifying anything."""
+        conn = self._get_conn()
+        from mtg_collector.db.models import DeckRepository
+        repo = DeckRepository(conn)
+        if not repo.get(deck_id):
+            conn.close()
+            self._send_json({"error": "Deck not found"}, 404)
+            return
+        previous_rows = conn.execute(
+            "SELECT id, created_at, card_count FROM batches "
+            "WHERE batch_type = 'deck_acquire' AND deck_id = ? "
+            "ORDER BY created_at DESC",
+            (deck_id,),
+        ).fetchall()
+        conn.close()
+        self._send_json({
+            "previous": [
+                {"batch_id": r["id"], "created_at": r["created_at"], "card_count": r["card_count"]}
+                for r in previous_rows
+            ]
+        })
 
     def _api_deck_acquire(self, deck_id: int):
         """POST /api/decks/:id/acquire — add expected cards to the collection."""
