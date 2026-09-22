@@ -101,6 +101,26 @@ select:focus, input:focus { outline: 2px solid #e94560; }
   font-weight: 600;
 }
 
+.reverse-section {
+  margin: 12px 0;
+  padding: 12px;
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+}
+.reverse-section label {
+  font-size: 0.85rem;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+button.danger {
+  background: #7b1e1e;
+  border-color: #a33;
+}
+button.danger:hover { background: #9b2e2e; }
+
 .cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -190,6 +210,7 @@ const TYPE_LABELS = {
   csv_import: 'CSV',
   manual_id: 'Manual',
   binder_click: 'Binder',
+  deck_acquire: 'Deck Acquire',
 };
 const TYPE_COLORS = {
   corner: '#e94560',
@@ -197,6 +218,7 @@ const TYPE_COLORS = {
   csv_import: '#a3be8c',
   manual_id: '#d08770',
   binder_click: '#ebcb8b',
+  deck_acquire: '#b48ead',
 };
 
 function esc(s) {
@@ -277,6 +299,18 @@ function render() {
       </div>`;
   }
 
+  let reverseHtml = '';
+  if (b.batch_type === 'deck_acquire') {
+    const n = currentCards.length;
+    reverseHtml = `
+      <div class="reverse-section">
+        <label>Remove from collection</label>
+        <div style="margin-top:8px">
+          <button class="danger" onclick="reverseConfirm()">Remove these ${n} card(s) from my collection</button>
+        </div>
+      </div>`;
+  }
+
   view.innerHTML = `
     <div class="detail-header">
       <a href="/batches" style="text-decoration:none"><button class="secondary" style="padding:4px 12px;font-size:0.8rem;">&larr; Back</button></a>
@@ -285,6 +319,7 @@ function render() {
     </div>
     <div class="detail-info">${infoItems.join('')}</div>
     <div class="assign-section">${assignHtml}</div>
+    ${reverseHtml}
     <div id="detail-messages"></div>
     <div class="cards-grid">${cardsHtml}</div>`;
 }
@@ -309,6 +344,24 @@ async function assignDeck() {
     currentBatch.deck_zone = zone;
     showSuccess(`Assigned ${data.assigned} card(s) to deck`);
     render();
+  } catch (e) {
+    showError('Network error: ' + e.message);
+  }
+}
+
+async function reverseConfirm() {
+  const n = currentCards.length;
+  if (!confirm(`Remove all ${n} card(s) added by this batch? The cards are deleted from your collection. This cannot be undone.`)) {
+    return;
+  }
+  try {
+    const resp = await fetch(`/api/batches/${currentBatch.id}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showError(data.error || 'Reversal failed');
+      return;
+    }
+    window.location.href = '/batches';
   } catch (e) {
     showError('Network error: ' + e.message);
   }

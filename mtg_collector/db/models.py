@@ -3146,6 +3146,46 @@ class BatchRepository:
             (now_iso(), batch_id),
         )
 
+    def reverse_acquire_batch(self, batch_id: int) -> Dict[str, Any]:
+        """Remove all collection entries from a deck_acquire batch and delete the batch.
+
+        Assumes the caller has already verified the batch exists and is of type
+        deck_acquire. Raises ValueError naming all moved cards if any card has
+        been assigned to a deck, put in a binder, or is no longer owned.
+        No rows are deleted when ValueError is raised.
+
+        Returns {"deleted_cards": N, "batch_id": batch_id}.
+        """
+        rows = self.conn.execute(
+            """SELECT c.id, c.status, c.binder_id,
+                      COALESCE(c.card_name, 'card #' || c.id) AS name,
+                      (SELECT 1 FROM deck_cards dc
+                       WHERE dc.collection_id = c.id LIMIT 1) AS in_deck
+               FROM collection c
+               WHERE c.batch_id = ?""",
+            (batch_id,),
+        ).fetchall()
+
+        moved = [
+            r["name"]
+            for r in rows
+            if r["status"] != "owned" or r["binder_id"] is not None or r["in_deck"]
+        ]
+        if moved:
+            names = ", ".join(moved[:10])
+            suffix = f" (and {len(moved) - 10} more)" if len(moved) > 10 else ""
+            raise ValueError(
+                f"Cannot reverse: {len(moved)} card(s) have moved — {names}{suffix}"
+            )
+
+        ids = [r["id"] for r in rows]
+        collection_repo = CollectionRepository(self.conn)
+        result = collection_repo.bulk_delete(ids)
+
+        self.conn.execute("DELETE FROM batches WHERE id = ?", (batch_id,))
+
+        return {"deleted_cards": len(result["deleted"]), "batch_id": batch_id}
+
 
 # Backward-compatible alias
 CornerBatchRepository = BatchRepository
