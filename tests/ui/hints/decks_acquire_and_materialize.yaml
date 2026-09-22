@@ -1,0 +1,37 @@
+start_page: /decks
+involves:
+  - "New Deck button that opens the deck creation modal"
+  - "Jumpstart mode tab in the deck modal (#mode-jumpstart)"
+  - "Foundations Jumpstart set selector (#f-js-set)"
+  - "Angels theme selector (#f-js-theme)"
+  - "Variation chip for Angels (1) (#f-js-variations)"
+  - "Import/Save button (#modal-save-btn)"
+  - "Add to Collection button (#btn-acquire), hidden until expected list loads"
+  - "JavaScript confirm() dialog (auto-accepted by test harness)"
+  - "Materialize button (#btn-materialize)"
+  - "Completeness section (#completeness-section) showing '0 missing' after materialize"
+fixture_data:
+  set_code: j25
+  deck_name: "Angels (1)"
+  expected_card_count: 16
+notes: >
+  Open /decks and click "New Deck". Switch to the Jumpstart tab, select
+  "Foundations Jumpstart — 121 decks" from #f-js-set, then select
+  "Angels (2 variants)" from #f-js-theme. The variation chips appear; the
+  default "Angels (1)" is already highlighted. Click #modal-save-btn to
+  import the deck and navigate to /decks/:id.
+
+  Wait for #deck-builder-root h2 to confirm the deck loaded, then wait for
+  #btn-acquire to become visible (loadCompleteness runs asynchronously and
+  sets display="" on the button when expected.length > 0).
+
+  Click #btn-acquire. The harness auto-accepts the confirm dialog (text:
+  "Add 20 cards from 'Angels (1) (Foundations Jumpstart)' to your collection?
+  They will be added as owned, Near Mint, in a batch you can undo.") and the
+  result alert ("Added 20 card(s) to your collection.\nPress Materialize to
+  assign them to this deck."). The JS then calls window.location.reload().
+
+  After the reload, wait for #btn-materialize to be visible. Click it. The
+  harness auto-accepts the Materialize confirm dialog. The page reloads again.
+
+  Wait for #completeness-section to appear, then assert "0 missing" is present.

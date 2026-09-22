@@ -1,0 +1,19 @@
+start_page: /decks
+involves:
+  - "New Deck button that opens the deck creation modal"
+  - "Jumpstart mode tab (#mode-jumpstart)"
+  - "Foundations Jumpstart set selector (#f-js-set)"
+  - "Angels theme selector (#f-js-theme)"
+  - "Import/Save button (#modal-save-btn)"
+  - "Add to Collection button (#btn-acquire)"
+  - "Batches list page (/batches) with batch type badges (.batch-type-badge)"
+fixture_data:
+  set_code: j25
+  deck_name: "Angels (1)"
+notes: >
+  Create an Angels (1) Jumpstart deck via the picker and click #btn-acquire
+  on the deck page. After the confirm dialog and alert are auto-accepted and
+  the page reloads, navigate to /batches. The newest batch entry should show
+  the label "Deck" (TYPE_LABELS['deck_acquire'] = 'Deck'), not the raw string
+  "deck_acquire". The batch name will be "Added: Angels (1) (Foundations
+  Jumpstart)". The badge color is #b48ead (muted purple).
