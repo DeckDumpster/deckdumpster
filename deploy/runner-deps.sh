@@ -63,6 +63,25 @@ installable() {
     [ -n "$cand" ] && [ "$cand" != "(none)" ]
 }
 
+# WAIT FOR THE DPKG LOCK RATHER THAN FAILING ON IT. A per-run VM boots,
+# systemd starts unattended-upgrades, and this script starts installing -- in
+# that order, within seconds of each other. Whoever reaches
+# /var/lib/dpkg/lock-frontend second gets "Could not get lock ... held by
+# process N (unattended-upgr)" and, without this, simply gives up at once.
+# It is a RACE, so it fails perhaps one run in several and looks like a broken
+# dependency list rather than a timing bug -- the same list had installed
+# cleanly on the runs either side of it.
+#
+# Unquoted on purpose below: it must expand to two words, or to nothing on an
+# apt too old to know the option (added in apt 1.9.11).
+#
+# This is the belt. The braces is unattended-upgrades masked in the Proxmox VM
+# template via DeckDumpster/ephemeral-ci scripts/template-substrate.sh, which
+# is the durable fix -- a VM that lives thirty minutes has nothing to gain from
+# an unattended upgrade. Both, because the template may be rebuilt by someone
+# who skips that script.
+APT_LOCK_WAIT="-o DPkg::Lock::Timeout=600"
+
 # apt_install <pkg>... -- installs only the packages not already installed,
 # mapping each name to the one this release actually carries.
 APT_UPDATED=0
@@ -102,10 +121,12 @@ apt_install() {
     [ ${#want[@]} -gt 0 ] || return 0
     [ -n "$SUDO" ] || { printf 'runner-deps: need root to install: %s\n' "${want[*]}" >&2; return 1; }
     if [ "$APT_UPDATED" = 0 ]; then
+        # shellcheck disable=SC2086
         $SUDO apt-get update -qq $APT_LOCK_WAIT || true
         APT_UPDATED=1
     fi
     note "installing ${want[*]}"
+    # shellcheck disable=SC2086
     if DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq $APT_LOCK_WAIT "${want[@]}"; then
         return 0
     fi
@@ -114,6 +135,7 @@ apt_install() {
     # whether what remains is fatal.
     note "batch install failed -- retrying individually"
     for p in "${want[@]}"; do
+        # shellcheck disable=SC2086
         DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq $APT_LOCK_WAIT "$p" \
             || note "could not install $p"
     done
