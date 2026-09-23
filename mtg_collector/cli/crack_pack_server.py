@@ -5989,6 +5989,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """List decks in a set, grouped by base_name for jumpstart.
 
         Query params: set_code=X (required), kind=jumpstart|precon (default: precon)
+
+        For jumpstart groups with multiple variations, each variation carries a
+        `distinct` list: the card names (or "N× Name" for quantity differences)
+        that are present in this variation but absent from at least one sibling.
         """
         set_code = params.get("set_code", [None])[0]
         if not set_code:
@@ -5998,18 +6002,18 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         predicate, bind_params = self._precon_kind_predicate(kind)
         conn = self._get_conn()
         rows = conn.execute(
-            f"""SELECT name, base_name, variation, type, main_count, release_date
+            f"""SELECT name, base_name, variation, type, main_count, release_date,
+                       deck_data
                 FROM mtgjson_decks
                 WHERE set_code = ? AND {predicate}
                 ORDER BY base_name, variation, name""",
             (set_code.lower(), *bind_params),
         ).fetchall()
-        conn.close()
 
         if kind == "jumpstart":
             # Group siblings under the same base_name.
-            groups = {}
-            order = []
+            groups: dict = {}
+            order: list = []
             for r in rows:
                 key = r["base_name"]
                 if key not in groups:
@@ -6023,9 +6027,75 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                     "name": r["name"],
                     "variation": r["variation"],
                     "main_count": r["main_count"],
+                    "_deck_data": r["deck_data"],
                 })
+
+            # Resolve distinct cards for groups that have more than one variation.
+            # "distinct" for a variation = cards present here but absent from at least
+            # one sibling, compared as (name, aggregated-count) pairs.
+            multi_groups = [g for g in groups.values() if len(g["variations"]) > 1]
+            all_uuids: set = set()
+            for g in multi_groups:
+                for v in g["variations"]:
+                    for entry in json.loads(v["_deck_data"]).get("mainBoard", []):
+                        all_uuids.add(entry["uuid"])
+
+            uuid_to_name: dict = {}
+            if all_uuids:
+                ph = ",".join("?" * len(all_uuids))
+                uuid_to_name = {
+                    r["uuid"]: r["name"]
+                    for r in conn.execute(
+                        f"""SELECT m.uuid, c.name
+                            FROM mtgjson_uuid_map m
+                            JOIN printings p ON p.set_code = m.set_code
+                                            AND p.collector_number = m.collector_number
+                            JOIN cards c ON c.oracle_id = p.oracle_id
+                            WHERE m.uuid IN ({ph})""",
+                        list(all_uuids),
+                    ).fetchall()
+                }
+            conn.close()
+
+            for g in multi_groups:
+                # Build aggregated (name → count) for each variation's mainboard.
+                var_cards: list[dict] = []
+                for v in g["variations"]:
+                    counts: dict = {}
+                    for entry in json.loads(v["_deck_data"]).get("mainBoard", []):
+                        name = uuid_to_name.get(entry["uuid"])
+                        if name:
+                            counts[name] = counts.get(name, 0) + entry.get("count", 1)
+                    var_cards.append(counts)
+
+                # Common = (name, count) pairs identical across ALL variations.
+                common: frozenset = frozenset(var_cards[0].items())
+                for vc in var_cards[1:]:
+                    common &= frozenset(vc.items())
+
+                for i, v in enumerate(g["variations"]):
+                    my_items = frozenset(var_cards[i].items())
+                    distinct_pairs = my_items - common
+                    labels: list = []
+                    for name, count in sorted(distinct_pairs):
+                        # Show count only when the card appears in every sibling —
+                        # then quantity is the sole distinction ("6× Island" vs "7× Island").
+                        # When absent from some sibling, presence/absence is the signal.
+                        if all(name in var_cards[j] for j in range(len(var_cards)) if j != i):
+                            labels.append(f"{count}× {name}")
+                        else:
+                            labels.append(name)
+                    v["distinct"] = labels
+                    del v["_deck_data"]
+
+            # Strip the temp key from single-variation groups too.
+            for g in groups.values():
+                if len(g["variations"]) == 1:
+                    del g["variations"][0]["_deck_data"]
+
             self._send_json([groups[k] for k in order])
         else:
+            conn.close()
             self._send_json([
                 {
                     "name": r["name"],
