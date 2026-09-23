@@ -36,6 +36,16 @@ on:
 permissions:
   contents: read
 
+# One CI run at a time, repo-wide. Every run provisions a VM from Proxmox template
+# 9110; concurrent runs starve each other on the hypervisor (measured 2026-09-22,
+# four runs starved; again 2026-09-23 with three simultaneous provisions).
+# cancel-in-progress: false is deliberate -- cancelling mid-provision skips teardown
+# and strands the VM. VMID recycling then makes a later teardown destroy someone
+# else's machine (killed two live runners on 2026-09-23). Queue, never cancel.
+concurrency:
+  group: ci
+  cancel-in-progress: false
+
 jobs:
   provision:
     runs-on: ubuntu-latest
@@ -62,14 +72,12 @@ jobs:
 
   # The real suite, on the VM provisioned above.
   #
-  # NAMED `test` BECAUSE THAT NAME IS A CONTRACT. The `pr-required` ruleset on
-  # main requires a status check called `test`. A required check that never
-  # reports does not fail the pull request -- it blocks the merge indefinitely
-  # with "the base branch policy prohibits the merge", and nothing in the run
-  # itself looks wrong: every job is green. Renaming this job is therefore a
-  # change to the branch policy, and has to be made in both places or neither
-  # (de-323). It is also why the lifecycle above is a composite action and not a
-  # reusable workflow, which would report this check as `test / <inner-job>`.
+  # NAMED `gate` BECAUSE THAT NAME IS A CONTRACT. Spira's forge.sh check-status
+  # looks for a check named exactly `gate` to decide whether a batch PR is green.
+  # A missing gate check reads as pending forever, so a batch PR would sit until
+  # SPIRA_QUEUE_CI_MAXSEC (7200s) and then fault. pokedumpster's ci.yml already
+  # uses this name. It is also why the lifecycle above is a composite action and
+  # not a reusable workflow, which would report this check as `gate / <inner-job>`.
   #
   # It installs its own system dependencies first. deploy/ci.sh calls podman and
   # uv and installs neither; that went unnoticed for as long as CI only ever ran
@@ -83,7 +91,7 @@ jobs:
   # a pull request like anything else. Bake it later as a cache if the install
   # time justifies it -- the script is idempotent, so a template that already
   # has everything makes this step a few `command -v` calls.
-  test:
+  gate:
     needs: provision
     runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
     # statuses:write for the final step, which posts this run's result as a COMMIT
@@ -206,7 +214,7 @@ jobs:
   # runner registration to remove, which a provision that registered but never
   # got a job scheduled would otherwise leak.
   teardown:
-    needs: [provision, test]
+    needs: [provision, gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
