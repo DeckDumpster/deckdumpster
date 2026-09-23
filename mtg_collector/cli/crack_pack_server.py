@@ -6073,10 +6073,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
             zones = json.loads(row["deck_data"])
             # Resolve each UUID through mtgjson_uuid_map → printings.
+            # isFoil is carried so foil cards in precons acquire with the right finish.
             uuids = []
             for zone in ("mainBoard", "sideBoard", "commander"):
                 for c in zones.get(zone, []):
-                    uuids.append((zone, c["uuid"], c.get("count", 1)))
+                    uuids.append((zone, c["uuid"], c.get("count", 1), c.get("isFoil", False)))
 
             if uuids:
                 placeholders = ",".join("?" * len(uuids))
@@ -6096,16 +6097,19 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                         "commander": "commander"}
             expected = []
             unresolved = []
-            for zone, uuid, count in uuids:
+            for zone, uuid, count, is_foil in uuids:
                 pid = uuid_to_pid.get(uuid)
                 if pid is None:
                     unresolved.append({"zone": zone, "uuid": uuid, "count": count})
                     continue
-                expected.append({
+                entry = {
                     "printing_id": pid,
                     "zone": ZONE_MAP[zone],
                     "quantity": count,
-                })
+                }
+                if is_foil:
+                    entry["finish"] = "foil"
+                expected.append(entry)
 
             # Build deck record.
             from mtg_collector.db.models import Deck, DeckRepository
