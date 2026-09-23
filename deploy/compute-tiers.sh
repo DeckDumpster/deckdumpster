@@ -13,6 +13,11 @@
 # Known-cheap patterns (no container needed):
 #   .github/workflows/**
 #   tests/test_ci_entrypoint.py
+#   *.md  (guarded: tests/*.md is NOT cheap — a Markdown file under tests/
+#           may be a fixture whose content is test input)
+#   docs/*
+#   .gitignore
+#   LICENSE
 
 set -euo pipefail
 
@@ -26,7 +31,9 @@ while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     any=true
     case "$f" in
-        .github/workflows/* | tests/test_ci_entrypoint.py) ;;
+        tests/test_ci_entrypoint.py) ;;
+        tests/*.md) cheap=false; break ;;
+        .github/workflows/* | *.md | docs/* | .gitignore | LICENSE) ;;
         *) cheap=false; break ;;
     esac
 done

@@ -181,6 +181,35 @@ def test_compute_tiers_full_suite_for_empty_input():
     assert _run_compute_tiers([]) == "lint,unit,integration,ui"
 
 
+def test_compute_tiers_cheap_for_markdown():
+    """A diff touching only a top-level Markdown file selects lint+unit."""
+    assert _run_compute_tiers(["README.md"]) == "lint,unit"
+
+
+def test_compute_tiers_cheap_for_docs():
+    """A diff touching only files under docs/ selects lint+unit."""
+    assert _run_compute_tiers(["docs/some-guide.md"]) == "lint,unit"
+
+
+def test_compute_tiers_cheap_for_gitignore():
+    """A diff touching only .gitignore selects lint+unit."""
+    assert _run_compute_tiers([".gitignore"]) == "lint,unit"
+
+
+def test_compute_tiers_cheap_for_license():
+    """A diff touching only LICENSE selects lint+unit."""
+    assert _run_compute_tiers(["LICENSE"]) == "lint,unit"
+
+
+def test_compute_tiers_full_suite_for_tests_md():
+    """A Markdown file under tests/ must NOT read as cheap.
+
+    A file at tests/fixtures/card-list.md or similar could be test input.
+    A pattern that treated it as documentation would let a fixture change
+    skip the suite that reads it."""
+    assert _run_compute_tiers(["tests/fixtures/some-fixture.md"]) == "lint,unit,integration,ui"
+
+
 def test_run_ci_step_passes_tiers_env():
     """The Run CI step passes DECKDUMP_CI_TIERS from the tiers step's output.
 
