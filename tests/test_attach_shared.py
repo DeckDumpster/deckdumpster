@@ -642,6 +642,10 @@ def _seed_deck_fixtures(db_path):
         "VALUES (1, 'batch-uuid-1', 'Test Batch', 'manual', '2025-01-01T00:00:00')"
     )
     conn.execute("UPDATE collection SET batch_id = 1")
+    # set_expected_cards resolves finish from printings.finishes; give print-1 a finish
+    # so the UNIQUE-violation tests still reach the integrity error they are testing.
+    conn.execute("UPDATE printings SET finishes = ? WHERE printing_id = 'print-1'",
+                 ('["nonfoil"]',))
     conn.commit()
     conn.close()
 

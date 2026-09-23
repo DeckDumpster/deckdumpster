@@ -293,13 +293,12 @@ class TestAcquireExpectedCards:
             collector_number="1", finishes=["nonfoil"],
         ))
         deck_id = deck_repo.add(Deck(id=None, name="Bad Finish Deck", origin_set_code="tst4"))
-        deck_repo.set_expected_cards(deck_id, [
-            {"printing_id": "p_nf2", "zone": "mainboard", "quantity": 1, "finish": "foil"},
-        ])
-        db.commit()
-
-        with pytest.raises(ValueError, match="does not support finish"):
-            deck_repo.acquire_expected_cards(deck_id)
+        # _resolve_finish validates the supplied finish at write time, so the
+        # error is raised immediately in set_expected_cards, not deferred to acquire.
+        with pytest.raises(ValueError, match="is not offered by printing"):
+            deck_repo.set_expected_cards(deck_id, [
+                {"printing_id": "p_nf2", "zone": "mainboard", "quantity": 1, "finish": "foil"},
+            ])
 
 
 class TestReverseAcquireBatch:
