@@ -147,10 +147,40 @@ jobs:
       - name: Install runner dependencies
         run: bash deploy/runner-deps.sh
 
+      # Compute which CI tiers this run needs (db-5sku).
+      #
+      # For a push to main or a workflow_dispatch the answer is always every
+      # tier: main's baseline must stay unconditional, and a dispatch is an
+      # explicit request to run the full suite. For a pull request we ask
+      # deploy/compute-tiers.sh: if every changed file is a known-cheap path
+      # (workflow files, this test) the answer is lint+unit; anything
+      # unrecognised produces the full set.
+      #
+      # THE WORKFLOW ALWAYS RUNS AND ALWAYS POSTS ITS STATUS. Tier selection
+      # only changes what deploy/ci.sh does, not whether this job runs --
+      # using paths-ignore: to skip the workflow entirely would break the
+      # required `test` status check (de-323, db-5sku).
+      - name: Compute CI tiers
+        id: tiers
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "tiers=lint,unit,integration,ui" >> "$GITHUB_OUTPUT"
+            echo "==> Non-PR event (${{ github.event_name }}): full suite"
+            exit 0
+          fi
+          git fetch --depth=1 origin "${{ github.base_ref }}"
+          changed=$(git diff --name-only FETCH_HEAD HEAD)
+          tiers=$(echo "$changed" | bash deploy/compute-tiers.sh)
+          echo "tiers=$tiers" >> "$GITHUB_OUTPUT"
+          echo "==> Pull request: tiers=${tiers}"
+          echo "Changed files:"
+          echo "$changed" | sed 's/^/  /'
+
       - name: Run CI
         run: bash deploy/ci.sh
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DECKDUMP_CI_TIERS: ${{ steps.tiers.outputs.tiers }}
 
       # BELT AND BRACES: report this run as a commit status, whatever triggered it.
       #
