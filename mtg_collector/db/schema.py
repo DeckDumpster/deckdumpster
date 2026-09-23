@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 51
+SCHEMA_VERSION = 52
 
 
 class SchemaIntegrityError(Exception):
@@ -156,6 +156,7 @@ CREATE TABLE IF NOT EXISTS deck_expected_cards (
     printing_id TEXT NOT NULL REFERENCES printings(printing_id),
     zone TEXT NOT NULL DEFAULT 'mainboard',
     quantity INTEGER NOT NULL DEFAULT 1,
+    finish TEXT,
     UNIQUE(deck_id, printing_id, zone)
 );
 CREATE INDEX IF NOT EXISTS idx_deck_expected_deck ON deck_expected_cards(deck_id);
@@ -1033,6 +1034,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v49_to_v50(conn)
         if current < 51:
             _migrate_v50_to_v51(conn)
+        if current < 52:
+            _migrate_v51_to_v52(conn)
 
     # Record schema version
     conn.execute(
@@ -3106,6 +3109,20 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sets ADD COLUMN base_set_size INTEGER")
     if "total_set_size" not in columns:
         conn.execute("ALTER TABLE sets ADD COLUMN total_set_size INTEGER")
+
+
+def _migrate_v51_to_v52(conn: sqlite3.Connection):
+    """Add deck_expected_cards.finish — carry MTGJSON isFoil through the pipeline.
+
+    NULL means "use the printing's default finish rule at acquire time"
+    (nonfoil when available, else the single available finish).  A non-NULL
+    value pins the finish explicitly — used by _api_precons_import when
+    MTGJSON reports isFoil=true so a card with both finishes is acquired as
+    foil rather than nonfoil.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(deck_expected_cards)")}
+    if "finish" not in columns:
+        conn.execute("ALTER TABLE deck_expected_cards ADD COLUMN finish TEXT")
 
 
 def _migrate_v50_to_v51(conn: sqlite3.Connection):

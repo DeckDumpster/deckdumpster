@@ -2504,7 +2504,9 @@ class DeckRepository:
     def set_expected_cards(self, deck_id: int, cards: List[Dict]) -> int:
         """Replace the expected card list for a deck.
 
-        Each dict: {printing_id, zone, quantity}.
+        Each dict: {printing_id, zone, quantity, finish?}.
+        finish is optional; NULL means use the printing's default finish rule at
+        acquire time (nonfoil when available, else the single available finish).
         Returns number of cards inserted.
         """
         self.conn.execute(
@@ -2513,10 +2515,10 @@ class DeckRepository:
         count = 0
         for card in cards:
             self.conn.execute(
-                "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO deck_expected_cards (deck_id, printing_id, zone, quantity, finish) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (deck_id, card["printing_id"], card.get("zone", "mainboard"),
-                 card.get("quantity", 1)),
+                 card.get("quantity", 1), card.get("finish")),
             )
             count += 1
         return count
@@ -2732,7 +2734,7 @@ class DeckRepository:
 
         rows = self.conn.execute(
             "SELECT e.printing_id, p.oracle_id, c.name, p.set_code, "
-            "       p.collector_number, e.zone, e.quantity, p.finishes "
+            "       p.collector_number, e.zone, e.quantity, p.finishes, e.finish "
             "FROM deck_expected_cards e "
             "JOIN printings p ON e.printing_id = p.printing_id "
             "JOIN cards c ON p.oracle_id = c.oracle_id "
@@ -2776,7 +2778,15 @@ class DeckRepository:
                 raise ValueError(
                     f"printing {card['printing_id']} has empty finishes — data defect"
                 )
-            finish = "nonfoil" if "nonfoil" in finishes else finishes[0]
+            if card["finish"] is not None:
+                finish = card["finish"]
+                if finish not in finishes:
+                    raise ValueError(
+                        f"printing {card['printing_id']} does not support "
+                        f"finish '{finish}' — available: {finishes}"
+                    )
+            else:
+                finish = "nonfoil" if "nonfoil" in finishes else finishes[0]
 
             for _ in range(card["quantity"]):
                 entry = CollectionEntry(

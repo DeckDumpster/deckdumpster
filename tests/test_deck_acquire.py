@@ -252,6 +252,55 @@ class TestAcquireExpectedCards:
         ).fetchone()
         assert row["finish"] == "nonfoil"
 
+    def test_pinned_foil_finish_overrides_default_rule(self, db):
+        """finish='foil' in expected list pins acquisition to foil even when nonfoil is available."""
+        set_repo = SetRepository(db)
+        card_repo = CardRepository(db)
+        printing_repo = PrintingRepository(db)
+        deck_repo = DeckRepository(db)
+
+        set_repo.upsert(Set(set_code="tst3", set_name="Test Set 3"))
+        card_repo.upsert(Card(oracle_id="o4", name="Delta Card"))
+        printing_repo.upsert(Printing(
+            printing_id="p_both2", oracle_id="o4", set_code="tst3",
+            collector_number="1", finishes=["nonfoil", "foil"],
+        ))
+        deck_id = deck_repo.add(Deck(id=None, name="Foil Precon Deck", origin_set_code="tst3"))
+        deck_repo.set_expected_cards(deck_id, [
+            {"printing_id": "p_both2", "zone": "mainboard", "quantity": 1, "finish": "foil"},
+        ])
+        db.commit()
+
+        result = deck_repo.acquire_expected_cards(deck_id)
+        db.commit()
+
+        row = db.execute(
+            "SELECT finish FROM collection WHERE batch_id = ?", (result["batch_id"],)
+        ).fetchone()
+        assert row["finish"] == "foil"
+
+    def test_pinned_finish_not_in_printing_finishes_raises(self, db):
+        """finish pinned to a value the printing doesn't support is a data defect."""
+        set_repo = SetRepository(db)
+        card_repo = CardRepository(db)
+        printing_repo = PrintingRepository(db)
+        deck_repo = DeckRepository(db)
+
+        set_repo.upsert(Set(set_code="tst4", set_name="Test Set 4"))
+        card_repo.upsert(Card(oracle_id="o5", name="Epsilon Card"))
+        printing_repo.upsert(Printing(
+            printing_id="p_nf2", oracle_id="o5", set_code="tst4",
+            collector_number="1", finishes=["nonfoil"],
+        ))
+        deck_id = deck_repo.add(Deck(id=None, name="Bad Finish Deck", origin_set_code="tst4"))
+        deck_repo.set_expected_cards(deck_id, [
+            {"printing_id": "p_nf2", "zone": "mainboard", "quantity": 1, "finish": "foil"},
+        ])
+        db.commit()
+
+        with pytest.raises(ValueError, match="does not support finish"):
+            deck_repo.acquire_expected_cards(deck_id)
+
 
 class TestReverseAcquireBatch:
     def test_reverse_removes_all_collection_rows(self, seeded):
