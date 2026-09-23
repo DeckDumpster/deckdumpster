@@ -12,6 +12,7 @@ the second list that went stale in the first place.
 """
 
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -19,6 +20,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 CI_SCRIPT = REPO_ROOT / "deploy/ci.sh"
+COMPUTE_TIERS = REPO_ROOT / "deploy/compute-tiers.sh"
 
 
 def _jobs():
@@ -138,4 +140,60 @@ def test_the_required_check_is_posted():
     assert all(step.get("if") == "always()" for step in posters), (
         f"the {REQUIRED_CONTEXT!r} status step must be `if: always()` -- a red "
         "run that posts nothing blocks the merge instead of failing it"
+    )
+
+
+def _run_compute_tiers(files: list[str]) -> str:
+    """Run deploy/compute-tiers.sh with the given file list and return output."""
+    result = subprocess.run(
+        ["bash", str(COMPUTE_TIERS)],
+        input="\n".join(files) + ("\n" if files else ""),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_compute_tiers_full_suite_for_unknown_path():
+    """An unrecognised path must select every tier, never a subset.
+
+    A selector that narrows on an unfamiliar path is how a real regression
+    ships undetected: the change lands in an unrecognised location, only
+    lint+unit runs, and the integration gap is never caught (db-5sku)."""
+    assert _run_compute_tiers(["mtg_collector/server.py"]) == "lint,unit,integration,ui"
+
+
+def test_compute_tiers_cheap_for_workflow_only():
+    """A diff touching only workflow files and this test file selects lint+unit."""
+    files = [".github/workflows/ci.yml", "tests/test_ci_entrypoint.py"]
+    assert _run_compute_tiers(files) == "lint,unit"
+
+
+def test_compute_tiers_full_suite_for_mixed_diff():
+    """Cheap + unrecognised → full suite. One unknown file is enough."""
+    files = [".github/workflows/ci.yml", "mtg_collector/server.py"]
+    assert _run_compute_tiers(files) == "lint,unit,integration,ui"
+
+
+def test_compute_tiers_full_suite_for_empty_input():
+    """No changed files → full suite. Empty input cannot be narrowed safely."""
+    assert _run_compute_tiers([]) == "lint,unit,integration,ui"
+
+
+def test_run_ci_step_passes_tiers_env():
+    """The Run CI step passes DECKDUMP_CI_TIERS from the tiers step's output.
+
+    Without this, ci.sh never learns which tiers to skip and always runs
+    everything regardless of what compute-tiers selected."""
+    steps = {
+        s.get("name"): s
+        for job in _jobs().values()
+        for s in job.get("steps", [])
+        if "name" in s
+    }
+    run_ci = steps.get("Run CI", {})
+    env = run_ci.get("env", {})
+    assert "DECKDUMP_CI_TIERS" in env, (
+        "Run CI step must pass DECKDUMP_CI_TIERS so ci.sh respects tier selection"
     )

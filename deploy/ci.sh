@@ -78,6 +78,25 @@ mtgc_store_activate
 # hand-run interrupted partway.
 trap 'bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true' EXIT
 
+# ---------------------------------------------------------------------------
+# Tier selection (db-5sku)
+# ---------------------------------------------------------------------------
+# DECKDUMP_CI_TIERS: comma-separated set of tiers to run.
+# Valid tiers: lint, unit, integration, ui
+# Default (absent, empty, or unrecognised): all four tiers.
+#
+# deploy/compute-tiers.sh derives this value from the diff for pull requests;
+# the workflow passes it in via the env block. ci.sh never narrows on its own
+# -- absent or empty, it runs everything. An unrecognised tier name is harmless:
+# _has_tier() finds no match, so the step is skipped, but the known tiers run.
+DECKDUMP_CI_TIERS="${DECKDUMP_CI_TIERS:-lint,unit,integration,ui}"
+[[ -z "$DECKDUMP_CI_TIERS" ]] && DECKDUMP_CI_TIERS="lint,unit,integration,ui"
+
+_has_tier() { case ",$DECKDUMP_CI_TIERS," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+_needs_container() { _has_tier integration || _has_tier ui; }
+
+echo "==> Tiers: ${DECKDUMP_CI_TIERS}"
+
 # Before anything else: are the tools this script calls actually here?
 #
 # podman and uv are called below and installed by neither this script nor the
@@ -100,28 +119,29 @@ bash deploy/runner-deps.sh --check
 echo "==> Disk floor"
 bash deploy/diskcheck.sh --floor "${MTGC_STORE_ROOT:-$HOME}"
 
-echo "==> Clean up stale containers and images"
-bash deploy/teardown.sh "$INSTANCE" --purge 2>/dev/null || true
-podman image prune -f 2>/dev/null || true
+if _needs_container; then
+    echo "==> Clean up stale containers and images"
+    bash deploy/teardown.sh "$INSTANCE" --purge 2>/dev/null || true
+    podman image prune -f 2>/dev/null || true
 
-# Before the job writes several more gigabytes of its own: a --test bring-up
-# must put nothing under $HOME, which on the deployment box is the disk prod
-# runs from (de-3a0). de-3mo gave those bytes somewhere else to live, but
-# nothing checked that it holds, and a rule nobody tests is not enforced -- /
-# has hit 100% from non-prod container bytes twice. Costs one image build; see
-# deploy/store-isolation-gate.sh for what it asserts and why the tolerance is
-# not zero.
-echo "==> Container-store isolation gate"
-bash deploy/store-isolation-gate.sh
+    # Before the job writes several more gigabytes of its own: a --test bring-up
+    # must put nothing under $HOME, which on the deployment box is the disk prod
+    # runs from (de-3a0). de-3mo gave those bytes somewhere else to live, but
+    # nothing checked that it holds, and a rule nobody tests is not enforced -- /
+    # has hit 100% from non-prod container bytes twice. Costs one image build; see
+    # deploy/store-isolation-gate.sh for what it asserts and why the tolerance is
+    # not zero.
+    echo "==> Container-store isolation gate"
+    bash deploy/store-isolation-gate.sh
+fi
 
 echo "==> Install dependencies"
 uv sync
 
-echo "==> Install Playwright browser"
-uv run shot-scraper install
-
-echo "==> Build and start test container"
-bash deploy/setup.sh "$INSTANCE" --test
+if _has_tier ui; then
+    echo "==> Install Playwright browser"
+    uv run shot-scraper install
+fi
 
 # 127.0.0.1, NEVER localhost. `podman port` reports `0.0.0.0:<port>` -- an IPv4
 # wildcard bind, with nothing published on ::1. On a host where `localhost`
@@ -201,14 +221,30 @@ wait_for_server() {
     return 1
 }
 
-echo "==> Wait for server"
-wait_for_server
+if _needs_container; then
+    echo "==> Build and start test container"
+    bash deploy/setup.sh "$INSTANCE" --test
 
-echo "==> Run unit tests"
-uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/ui
+    echo "==> Wait for server"
+    wait_for_server
+fi
 
-echo "==> Run integration tests"
-uv run pytest tests/integration/ -q --instance "$INSTANCE"
+if _has_tier lint; then
+    echo "==> Lint"
+    uv run ruff check mtg_collector/
+fi
 
-echo "==> Run UI scenario tests"
-uv run pytest tests/ui/ -q --instance "$INSTANCE"
+if _has_tier unit; then
+    echo "==> Run unit tests"
+    uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/ui
+fi
+
+if _has_tier integration; then
+    echo "==> Run integration tests"
+    uv run pytest tests/integration/ -q --instance "$INSTANCE"
+fi
+
+if _has_tier ui; then
+    echo "==> Run UI scenario tests"
+    uv run pytest tests/ui/ -q --instance "$INSTANCE"
+fi
