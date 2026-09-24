@@ -1,11 +1,13 @@
 # Scenario: Add to Collection then Materialize a Jumpstart deck
 #
 # Related:
-#   issues: [db-rg5n]
+#   issues: [db-rg5n, db-uapp]
 
 description: >
   I open the New Deck picker, create a Foundations Jumpstart "Angels (1)" deck,
   and land on the deck page. The "Add to Collection" button is visible because
-  the deck has an expected card list. I click it, confirm the dialog, and receive
-  a summary alert. After the page reloads, I click Materialize. The completeness
-  panel then shows all expected cards present and zero missing.
+  the deck has an expected card list. I click it — no dialog fires, the acquire
+  POSTs directly. A flash banner confirms the cards were added. After the page
+  reloads, I click Materialize — again no dialog. A flash banner shows the match
+  result. The completeness panel then shows all expected cards present and zero
+  missing.

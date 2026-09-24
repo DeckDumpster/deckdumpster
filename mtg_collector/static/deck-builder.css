@@ -1,5 +1,33 @@
 /* deck-builder.css — Unified deck builder + detail page */
 
+/* Flash banner — auto-dismissing success message shown after reload */
+.deck-flash {
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent);
+  color: var(--text-primary);
+  padding: 10px 16px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+  transition: opacity 0.4s ease;
+}
+.deck-flash.deck-flash-fade { opacity: 0; }
+
+/* Inline repeat-acquire warning */
+.acquire-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: color-mix(in srgb, var(--bg-secondary) 80%, #f0a000 20%);
+  border: 1px solid #c07800;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+.acquire-warning-msg { flex: 1; min-width: 200px; }
+
 /* Create form — centered */
 .builder-create {
   max-width: 500px;

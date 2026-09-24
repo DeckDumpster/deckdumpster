@@ -7,8 +7,9 @@ involves:
   - "Variation chip for Angels (1) (#f-js-variations)"
   - "Import/Save button (#modal-save-btn)"
   - "Add to Collection button (#btn-acquire), hidden until expected list loads"
-  - "JavaScript confirm() dialog (auto-accepted by test harness)"
+  - "Flash banner (#deck-flash) shown in-page after acquire completes"
   - "Materialize button (#btn-materialize)"
+  - "Flash banner (#deck-flash) shown in-page after materialize completes"
   - "Completeness section (#completeness-section) showing '0 missing' after materialize"
 fixture_data:
   set_code: j25
@@ -25,13 +26,14 @@ notes: >
   #btn-acquire to become visible (loadCompleteness runs asynchronously and
   sets display="" on the button when expected.length > 0).
 
-  Click #btn-acquire. The harness auto-accepts the confirm dialog (text:
-  "Add 20 cards from 'Angels (1) (Foundations Jumpstart)' to your collection?
-  They will be added as owned, Near Mint, in a batch you can undo.") and the
-  result alert ("Added 20 card(s) to your collection.\nPress Materialize to
-  assign them to this deck."). The JS then calls window.location.reload().
+  Click #btn-acquire. No confirm dialog fires — the acquire POSTs directly.
+  After success, sessionStorage stores the flash message and JS calls
+  window.location.reload(). After reload, #deck-flash appears with the text
+  "card(s) to your collection" and auto-dismisses after 4 s.
 
-  After the reload, wait for #btn-materialize to be visible. Click it. The
-  harness auto-accepts the Materialize confirm dialog. The page reloads again.
+  After the reload, wait for #btn-materialize to be visible. Click it. No
+  confirm dialog fires — the materialize POSTs directly. After success,
+  sessionStorage stores the flash and the page reloads. #deck-flash appears
+  with the match result. The deck is now constructed.
 
   Wait for #completeness-section to appear, then assert "0 missing" is present.

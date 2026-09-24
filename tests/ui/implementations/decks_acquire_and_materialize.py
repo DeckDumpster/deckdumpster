@@ -2,8 +2,8 @@
 Hand-written implementation for decks_acquire_and_materialize.
 
 Creates a Foundations Jumpstart "Angels (1)" deck via the picker, clicks
-"Add to Collection", then Materializes. Verifies that the completeness panel
-reports zero missing cards.
+"Add to Collection" (no dialog — fires directly), then Materializes. Verifies
+that the completeness panel reports zero missing cards.
 """
 
 from tests.ui.budget import INTERACTION_BUDGET_MS, ROUND_TRIP_BUDGET_MS
@@ -44,16 +44,22 @@ def steps(harness):
     # loadCompleteness runs asynchronously and shows btn-acquire when expected.length > 0.
     harness.wait_for_visible("#btn-acquire", timeout=ROUND_TRIP_BUDGET_MS)
 
-    # Click Add to Collection.
-    # confirm() and the success alert() are accepted by the handler above.
+    # Click Add to Collection — no confirm dialog; fires directly.
     # window.location.reload() fires after the acquire POST completes.
     harness.click_by_selector("#btn-acquire")
+
+    # After the reload, a flash banner appears showing cards added.
+    harness.wait_for_visible("#deck-flash", timeout=ROUND_TRIP_BUDGET_MS)
+    harness.assert_text_present("card(s) to your collection")
 
     # After the reload, wait for the Materialize button to be visible.
     harness.wait_for_visible("#btn-materialize", timeout=ROUND_TRIP_BUDGET_MS)
 
-    # Click Materialize — confirm() and result alert() accepted by handler above.
+    # Click Materialize — no confirm dialog; page reloads again.
     harness.click_by_selector("#btn-materialize")
+
+    # After materialize, a flash banner shows the match result.
+    harness.wait_for_visible("#deck-flash", timeout=ROUND_TRIP_BUDGET_MS)
 
     # After materialize, the deck is constructed. Completeness shows 0 missing.
     harness.wait_for_visible("#completeness-section", timeout=ROUND_TRIP_BUDGET_MS)

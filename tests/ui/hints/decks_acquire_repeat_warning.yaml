@@ -1,0 +1,25 @@
+start_page: /decks
+involves:
+  - "New Deck button and Jumpstart mode tab in the deck creation modal"
+  - "Add to Collection button (#btn-acquire)"
+  - "In-page repeat-acquire warning (#acquire-warning)"
+  - "Add anyway button (#acquire-confirm-btn) inside the warning"
+  - "Cancel button (#acquire-cancel-btn) inside the warning"
+  - "Flash banner (#deck-flash) shown after second acquire completes"
+fixture_data:
+  set_code: j25
+  deck_name: "Angels (1)"
+notes: >
+  Create an Angels (1) Jumpstart deck and click #btn-acquire (first acquire).
+  Wait for #btn-acquire to be visible again after reload. Click #btn-acquire a
+  second time. Because a previous acquire exists, #acquire-warning appears with
+  the message "You already added this deck's cards on <date> (<N> cards). Add
+  another <count>?" and two buttons: #acquire-confirm-btn ("Add anyway") and
+  #acquire-cancel-btn ("Cancel").
+
+  First verify Cancel: click #acquire-cancel-btn and confirm #acquire-warning
+  disappears and #btn-acquire is re-enabled.
+
+  Then click #btn-acquire again, wait for #acquire-warning, and click
+  #acquire-confirm-btn. After the POST completes, #deck-flash appears and the
+  page reloads showing the flash message.

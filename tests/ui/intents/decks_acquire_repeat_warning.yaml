@@ -1,0 +1,11 @@
+# Scenario: Repeat acquire shows in-page warning, not a confirm() dialog
+#
+# Related:
+#   issues: [db-uapp]
+
+description: >
+  After I create a Jumpstart deck and click "Add to Collection" the first time,
+  I click "Add to Collection" again. An in-page warning banner (#acquire-warning)
+  appears telling me I already acquired the deck and the date. It has "Add anyway"
+  and "Cancel" buttons. Clicking "Cancel" dismisses the warning without acquiring.
+  Clicking "Add anyway" proceeds and the page reloads with a flash banner.
