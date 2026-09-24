@@ -953,10 +953,6 @@ async function saveDeck() {
   if (!res.ok) { alert('Import failed: ' + await res.text()); return; }
   const result = await res.json();
   closeModal('deck-modal');
-  const u = result.unresolved || [];
-  if (u.length) {
-    alert(`Imported ${result.expected_count} cards. ${u.length} could not be resolved to a local printing — run \`mtg cache all\` to fetch them.`);
-  }
   window.location.href = '/decks/' + result.deck.id;
 }
 
