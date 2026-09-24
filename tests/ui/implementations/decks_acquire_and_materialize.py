@@ -2,14 +2,22 @@
 Hand-written implementation for decks_acquire_and_materialize.
 
 Creates a Foundations Jumpstart "Angels (1)" deck via the picker, clicks
-"Add to Collection" (confirm/alert auto-accepted), then Materializes. Verifies
-that the completeness panel reports zero missing cards.
+"Add to Collection", then Materializes. Verifies that the completeness panel
+reports zero missing cards.
 """
 
 from tests.ui.budget import INTERACTION_BUDGET_MS, ROUND_TRIP_BUDGET_MS
 
 
 def steps(harness):
+    # saveDeck() fires alert() for unresolved cards after its async API call
+    # completes; if that fires while _snap() is running page.screenshot(), the
+    # screenshot hangs for 30 s because the browser is blocked on the dialog.
+    # btn-acquire and btn-materialize each fire confirm() + alert() the same way.
+    # Registering the handler here — before any click that may trigger a dialog —
+    # ensures every native dialog is immediately accepted rather than left open.
+    harness.page.on("dialog", lambda d: d.accept())
+
     # Open the modal and switch to the Jumpstart tab.
     harness.navigate("/decks")
     harness.click_by_text("New Deck")
@@ -37,14 +45,14 @@ def steps(harness):
     harness.wait_for_visible("#btn-acquire", timeout=ROUND_TRIP_BUDGET_MS)
 
     # Click Add to Collection.
-    # The harness auto-accepts the confirm dialog and the result alert.
+    # confirm() and the success alert() are accepted by the handler above.
     # window.location.reload() fires after the acquire POST completes.
     harness.click_by_selector("#btn-acquire")
 
     # After the reload, wait for the Materialize button to be visible.
     harness.wait_for_visible("#btn-materialize", timeout=ROUND_TRIP_BUDGET_MS)
 
-    # Click Materialize — confirm is auto-accepted; page reloads again.
+    # Click Materialize — confirm() and result alert() accepted by handler above.
     harness.click_by_selector("#btn-materialize")
 
     # After materialize, the deck is constructed. Completeness shows 0 missing.
