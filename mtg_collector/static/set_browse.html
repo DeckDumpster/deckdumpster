@@ -842,6 +842,12 @@ function modalError(message) {
 let _batchUuid = null;
 let _batchId = null;
 
+/* Serialises network requests per (printing_id, finish) so that a minus fired
+   before a preceding plus has settled cannot issue its GET-copies against an
+   empty server-side collection and spuriously fail. Optimistic DOM updates
+   still happen synchronously before queueing, so the UI remains instant. */
+const _stepQueue = new Map();
+
 function sessionBatch() {
   if (!_batchUuid) _batchUuid = crypto.randomUUID();
   return {
@@ -865,7 +871,13 @@ function showBatchLink(batchId) {
 /* One step of one finish: +1 from a pip click or the modal's +, -1 from the
    modal's -. Optimistic, because a binder pass is a run of these and waiting on
    each one is what makes the existing four-click flow unusable for it. A
-   failure rolls the step back and says so where it was clicked. */
+   failure rolls the step back and says so where it was clicked.
+
+   The network portion is serialised via _stepQueue: each request waits for the
+   previous one on the same (printing_id, finish) to settle before issuing.
+   Without this a minus fired before a preceding plus's POST has landed calls
+   GET /api/collection/copies against an empty collection, gets nothing, and
+   rolls back — painting the count back to 2 instead of 1. */
 async function changeCopies(card, finish, delta) {
   const entry = card.owned.find(o => o.finish === finish);
   if (!entry) return;
@@ -876,24 +888,34 @@ async function changeCopies(card, finish, delta) {
   let tile = repaintCard(card);
   syncModal(card);
 
-  const result = delta > 0 ? await postAdd(card, finish) : await postRemove(card, finish);
-  if (result.ok) {
-    if (result.batch_id != null) showBatchLink(result.batch_id);
-    return;
-  }
+  const key = `${card.printing_id}:${finish}`;
+  const prev = _stepQueue.get(key) ?? Promise.resolve();
+  let settle;
+  _stepQueue.set(key, new Promise(r => (settle = r)));
 
-  applyDelta(card, entry, -delta);
-  tile = repaintCard(card);
-  syncModal(card);
+  try {
+    await prev;
+    const result = delta > 0 ? await postAdd(card, finish) : await postRemove(card, finish);
+    if (result.ok) {
+      if (result.batch_id != null) showBatchLink(result.batch_id);
+      return;
+    }
 
-  if (_modalCard === card && modal.overlay.classList.contains('active')) {
-    modalError(result.message);
-  }
-  if (tile) {
-    const note = document.createElement('div');
-    note.className = 'pip-error';
-    note.textContent = result.message;
-    tile.appendChild(note);
+    applyDelta(card, entry, -delta);
+    tile = repaintCard(card);
+    syncModal(card);
+
+    if (_modalCard === card && modal.overlay.classList.contains('active')) {
+      modalError(result.message);
+    }
+    if (tile) {
+      const note = document.createElement('div');
+      note.className = 'pip-error';
+      note.textContent = result.message;
+      tile.appendChild(note);
+    }
+  } finally {
+    settle();
   }
 }
 
