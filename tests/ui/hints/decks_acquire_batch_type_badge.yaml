@@ -12,8 +12,9 @@ fixture_data:
   deck_name: "Angels (1)"
 notes: >
   Create an Angels (1) Jumpstart deck via the picker and click #btn-acquire
-  on the deck page. After the confirm dialog and alert are auto-accepted and
-  the page reloads, navigate to /batches. The newest batch entry should show
-  the label "Deck" (TYPE_LABELS['deck_acquire'] = 'Deck'), not the raw string
-  "deck_acquire". The batch name will be "Added: Angels (1) (Foundations
-  Jumpstart)". The badge color is #b48ead (muted purple).
+  on the deck page. No confirm dialog fires — the acquire POSTs directly.
+  After the page reloads (sessionStorage flash + window.location.reload()),
+  navigate to /batches. The newest batch entry should show the label "Deck"
+  (TYPE_LABELS['deck_acquire'] = 'Deck'), not the raw string "deck_acquire".
+  The batch name will be "Added: Angels (1) (Foundations Jumpstart)". The
+  badge color is #b48ead (muted purple).
