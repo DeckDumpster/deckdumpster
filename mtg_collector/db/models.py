@@ -1749,6 +1749,7 @@ class SealedCollectionRepository:
     VALID_TRANSITIONS = {
         'owned': {'sold', 'traded', 'gifted', 'listed', 'opened'},
         'listed': {'sold', 'owned'},
+        'opened': {'owned'},  # undo a jumpstart crack
     }
 
     def __init__(self, conn: sqlite3.Connection):

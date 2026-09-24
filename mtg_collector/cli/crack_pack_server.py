@@ -1674,6 +1674,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
             self._api_sealed_open(data)
+        elif path == "/api/sealed/jumpstart-crack":
+            data = self._read_json_body()
+            if data is None:
+                return
+            self._api_sealed_jumpstart_crack(data)
         elif path == "/api/sealed/collection/bulk-dispose":
             data = self._read_json_body()
             if data is None:
@@ -5384,11 +5389,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json({"batch": batch, "cards": cards})
 
     def _api_batch_delete(self, batch_id: int):
-        """DELETE /api/batches/:id — reverse a deck_acquire batch.
+        """DELETE /api/batches/:id — reverse a deck_acquire or jumpstart_crack batch.
 
-        Refuses with 400 for non-deck_acquire batches. Refuses with 409 if
-        any card has moved (assigned to a deck, put in a binder, or not owned).
-        On success deletes all cards and the batch row.
+        Refuses with 400 for other batch types. Refuses with 409 if any card
+        has moved. On success deletes all cards and the batch row.
         """
         from mtg_collector.db.models import BatchRepository
         from mtg_collector.db.schema import init_db
@@ -5401,17 +5405,25 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             if not batch:
                 self._send_json({"error": "Batch not found"}, 404)
                 return
-            if batch["batch_type"] != "deck_acquire":
+            if batch["batch_type"] == "deck_acquire":
+                try:
+                    result = repo.reverse_acquire_batch(batch_id)
+                    conn.commit()
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 409)
+                    return
+            elif batch["batch_type"] == "jumpstart_crack":
+                try:
+                    result = self._reverse_jumpstart_crack_batch(conn, batch)
+                    conn.commit()
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 409)
+                    return
+            else:
                 self._send_json(
-                    {"error": f"Cannot reverse batch of type '{batch['batch_type']}' — only deck_acquire batches may be reversed"},
+                    {"error": f"Cannot reverse batch of type '{batch['batch_type']}'"},
                     400,
                 )
-                return
-            try:
-                result = repo.reverse_acquire_batch(batch_id)
-                conn.commit()
-            except ValueError as e:
-                self._send_json({"error": str(e)}, 409)
                 return
         finally:
             conn.close()
@@ -8674,6 +8686,218 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             "sealed_added": sealed_added,
             "errors": errors,
         })
+
+    def _api_sealed_jumpstart_crack(self, data: dict):
+        """Crack a Jumpstart booster: name the theme, add its 20 cards, mark sealed entry opened.
+
+        Body: {sealed_collection_id, deck_name, set_code, condition?}
+
+        Refuses if any UUID in the deck is unresolvable (no partial adds).
+        Decrements the sealed entry using the existing dispose() flow.
+        """
+        import json as _json
+        import uuid as _uuid
+
+        from mtg_collector.db.models import (
+            Batch,
+            BatchRepository,
+            CollectionEntry,
+            CollectionRepository,
+            SealedCollectionRepository,
+        )
+        from mtg_collector.db.schema import init_db
+
+        sealed_collection_id = data.get("sealed_collection_id")
+        deck_name = data.get("deck_name")
+        set_code = (data.get("set_code") or "").lower().strip()
+
+        if not sealed_collection_id or not deck_name or not set_code:
+            self._send_json(
+                {"error": "sealed_collection_id, deck_name, and set_code are required"},
+                400,
+            )
+            return
+
+        condition = data.get("condition", "Near Mint")
+
+        conn = self._get_conn()
+        try:
+            init_db(conn)
+
+            sealed_repo = SealedCollectionRepository(conn)
+            sealed_entry = sealed_repo.get(int(sealed_collection_id))
+            if not sealed_entry:
+                self._send_json(
+                    {"error": f"Sealed collection entry {sealed_collection_id} not found"},
+                    404,
+                )
+                return
+            if sealed_entry.status != "owned":
+                self._send_json(
+                    {"error": f"Sealed entry is not 'owned' (status: {sealed_entry.status})"},
+                    400,
+                )
+                return
+
+            row = conn.execute(
+                "SELECT name, base_name, variation, deck_data FROM mtgjson_decks "
+                "WHERE set_code = ? AND name = ?",
+                (set_code, deck_name),
+            ).fetchone()
+            if not row:
+                self._send_json(
+                    {"error": f"No Jumpstart deck '{deck_name}' in set {set_code}"},
+                    404,
+                )
+                return
+
+            zones = _json.loads(row["deck_data"])
+            entries = [
+                (c["uuid"], c.get("count", 1), c.get("isFoil", False))
+                for c in zones.get("mainBoard", [])
+            ]
+            if not entries:
+                self._send_json({"error": f"Deck '{deck_name}' has no mainboard cards"}, 400)
+                return
+
+            placeholders = ",".join("?" * len(entries))
+            resolved_rows = conn.execute(
+                f"""SELECT m.uuid, p.printing_id, p.finishes
+                    FROM mtgjson_uuid_map m
+                    JOIN printings p ON p.set_code = m.set_code
+                                    AND p.collector_number = m.collector_number
+                    WHERE m.uuid IN ({placeholders})""",
+                [e[0] for e in entries],
+            ).fetchall()
+            uuid_to_info = {
+                r["uuid"]: {"printing_id": r["printing_id"], "finishes": r["finishes"]}
+                for r in resolved_rows
+            }
+
+            unresolved = [e[0] for e in entries if e[0] not in uuid_to_info]
+            if unresolved:
+                self._send_json(
+                    {
+                        "error": f"Cannot crack: {len(unresolved)} UUID(s) unresolvable — "
+                                 "run 'mtg cache all' to refresh the card catalogue",
+                        "unresolved": unresolved,
+                    },
+                    400,
+                )
+                return
+
+            batch_repo = BatchRepository(conn)
+            batch = Batch(
+                id=None,
+                batch_uuid=str(_uuid.uuid4()),
+                name=f"Cracked: {row['base_name']} ({set_code.upper()})",
+                batch_type="jumpstart_crack",
+                set_code=set_code,
+                notes=_json.dumps({"sealed_collection_id": int(sealed_collection_id)}),
+            )
+            batch_id = batch_repo.create(batch)
+
+            collection_repo = CollectionRepository(conn)
+            cards_added = 0
+
+            for uuid_val, count, _is_foil in entries:
+                info = uuid_to_info[uuid_val]
+                printing_id = info["printing_id"]
+                finishes_raw = info["finishes"]
+                finishes = (
+                    _json.loads(finishes_raw)
+                    if isinstance(finishes_raw, str)
+                    else list(finishes_raw or [])
+                )
+                if not finishes:
+                    raise ValueError(
+                        f"Printing {printing_id} has an empty finishes array — data defect"
+                    )
+                finish = "nonfoil" if "nonfoil" in finishes else finishes[0]
+                for _ in range(count):
+                    entry = CollectionEntry(
+                        id=None,
+                        printing_id=printing_id,
+                        finish=finish,
+                        condition=condition,
+                        source="jumpstart_crack",
+                        batch_id=batch_id,
+                    )
+                    collection_repo.add(entry)
+                    cards_added += 1
+
+            batch_repo.increment_card_count(batch_id, cards_added)
+            batch_repo.complete(batch_id)
+
+            sealed_repo.dispose(int(sealed_collection_id), "opened")
+
+            conn.commit()
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 400)
+            return
+        finally:
+            conn.close()
+
+        self._send_json({
+            "batch_id": batch_id,
+            "cards_added": cards_added,
+            "theme": row["base_name"],
+            "variation": row["variation"],
+        })
+
+    def _reverse_jumpstart_crack_batch(self, conn, batch: dict) -> dict:
+        """Reverse a jumpstart_crack batch: restore sealed entry and delete cards.
+
+        Raises ValueError naming moved cards if any card has been assigned to a
+        deck or binder, or is no longer owned. No changes are made on ValueError.
+        Returns {"deleted_cards": N, "batch_id": id}.
+        """
+        import json as _json
+
+        from mtg_collector.db.models import CollectionRepository, SealedCollectionRepository
+
+        batch_id = batch["id"]
+
+        rows = conn.execute(
+            """SELECT c.id, c.status, c.binder_id,
+                      COALESCE(c.card_name, 'card #' || c.id) AS name,
+                      (SELECT 1 FROM deck_cards dc
+                       WHERE dc.collection_id = c.id LIMIT 1) AS in_deck
+               FROM collection c WHERE c.batch_id = ?""",
+            (batch_id,),
+        ).fetchall()
+
+        moved = [
+            r["name"]
+            for r in rows
+            if r["status"] != "owned" or r["binder_id"] is not None or r["in_deck"]
+        ]
+        if moved:
+            names = ", ".join(moved[:10])
+            suffix = f" (and {len(moved) - 10} more)" if len(moved) > 10 else ""
+            raise ValueError(
+                f"Cannot undo: {len(moved)} card(s) have moved — {names}{suffix}"
+            )
+
+        notes = batch.get("notes") or ""
+        sealed_collection_id = None
+        try:
+            sealed_collection_id = _json.loads(notes).get("sealed_collection_id")
+        except (ValueError, TypeError):
+            pass
+
+        if sealed_collection_id is not None:
+            sealed_repo = SealedCollectionRepository(conn)
+            sealed_entry = sealed_repo.get(int(sealed_collection_id))
+            if sealed_entry and sealed_entry.status == "opened":
+                sealed_repo.dispose(int(sealed_collection_id), "owned")
+
+        ids = [r["id"] for r in rows]
+        collection_repo = CollectionRepository(conn)
+        result = collection_repo.bulk_delete(ids)
+        conn.execute("DELETE FROM batches WHERE id = ?", (batch_id,))
+
+        return {"deleted_cards": len(result["deleted"]), "batch_id": batch_id}
 
     def _api_sealed_price_history(self, tcgplayer_product_id: str):
         """Return price time series for a sealed product."""
