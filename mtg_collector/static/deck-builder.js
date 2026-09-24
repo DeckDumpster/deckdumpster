@@ -506,12 +506,6 @@
             materializeBtn.textContent = 'Materialize';
             return;
           }
-          let msg = 'Matched ' + result.total_matched + ' card(s).';
-          if (result.total_missing > 0) {
-            const names = result.missing.map(function(m) { return m.name + ' (' + (m.short || m.expected) + ' short)'; }).join('\n');
-            msg += '\n\n' + result.total_missing + ' card(s) missing:\n' + names;
-          }
-          alert(msg);
           window.location.reload();
         } catch (err) {
           alert('Materialize failed: ' + err.message);
@@ -556,10 +550,6 @@
           acquireBtn.textContent = 'Add to Collection';
           return;
         }
-        alert(
-          'Added ' + result.cards_added + ' card(s) to your collection.\n' +
-          'Press Materialize to assign them to this deck.'
-        );
         window.location.reload();
       } catch (err) {
         alert('Add to Collection failed: ' + err.message);
