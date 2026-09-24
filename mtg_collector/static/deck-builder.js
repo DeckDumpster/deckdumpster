@@ -142,6 +142,24 @@
     }
 
     renderBuilder(data);
+
+    const pendingFlash = sessionStorage.getItem('deck-flash');
+    if (pendingFlash) {
+      sessionStorage.removeItem('deck-flash');
+      showFlash(pendingFlash);
+    }
+  }
+
+  function showFlash(msg) {
+    const el = document.createElement('div');
+    el.className = 'deck-flash';
+    el.id = 'deck-flash';
+    el.textContent = msg;
+    root.insertBefore(el, root.firstChild);
+    setTimeout(() => {
+      el.classList.add('deck-flash-fade');
+      setTimeout(() => el.remove(), 400);
+    }, 4000);
   }
 
   function renderBuilder(data) {
@@ -494,7 +512,6 @@
     const materializeBtn = document.getElementById('btn-materialize');
     if (materializeBtn) {
       materializeBtn.addEventListener('click', async () => {
-        if (!confirm('Materialize this deck? This will assign owned cards from your collection and convert it to a physical deck.')) return;
         materializeBtn.disabled = true;
         materializeBtn.textContent = 'Materializing...';
         try {
@@ -506,6 +523,12 @@
             materializeBtn.textContent = 'Materialize';
             return;
           }
+          let flashMsg = 'Matched ' + result.total_matched + ' card(s).';
+          if (result.total_missing > 0) {
+            flashMsg += ' ' + result.total_missing + ' missing: ' +
+              result.missing.map(function(m) { return m.name + ' (' + (m.short || m.expected) + ' short)'; }).join(', ');
+          }
+          sessionStorage.setItem('deck-flash', flashMsg);
           window.location.reload();
         } catch (err) {
           alert('Materialize failed: ' + err.message);
@@ -528,21 +551,49 @@
         const preview = prevRes.ok ? await prevRes.json() : { previous: [] };
         const previous = preview.previous || [];
 
-        let msg = '';
         if (previous.length > 0) {
           const last = previous[0];
           const lastDate = last.created_at ? last.created_at.substring(0, 10) : '(unknown)';
-          msg += `You already added this deck's cards on ${lastDate} (${last.card_count} cards).\nAdd another ${count}?\n\n`;
-        }
-        msg += `Add ${count} cards from "${deck.name}" to your collection?\nThey will be added as owned, Near Mint, in a batch you can undo.`;
-
-        if (!confirm(msg)) {
-          acquireBtn.disabled = false;
+          showAcquireWarning(
+            `You already added this deck's cards on ${lastDate} (${last.card_count} cards). Add another ${count}?`,
+            acquireBtn,
+            () => doAcquire(deck.id, count, acquireBtn)
+          );
           return;
         }
 
-        acquireBtn.textContent = 'Adding...';
-        const res = await fetch('/api/decks/' + deck.id + '/acquire', { method: 'POST' });
+        doAcquire(deck.id, count, acquireBtn);
+      } catch (err) {
+        alert('Add to Collection failed: ' + err.message);
+        acquireBtn.disabled = false;
+        acquireBtn.textContent = 'Add to Collection';
+      }
+    });
+
+    function showAcquireWarning(msg, acquireBtn, onConfirm) {
+      const existing = document.getElementById('acquire-warning');
+      if (existing) existing.remove();
+      const el = document.createElement('div');
+      el.id = 'acquire-warning';
+      el.className = 'acquire-warning';
+      el.innerHTML = `<span class="acquire-warning-msg">${esc(msg)}</span>` +
+        `<button id="acquire-confirm-btn" class="add-btn">Add anyway</button>` +
+        `<button id="acquire-cancel-btn" class="edit-btn">Cancel</button>`;
+      acquireBtn.insertAdjacentElement('afterend', el);
+      document.getElementById('acquire-confirm-btn').addEventListener('click', () => {
+        el.remove();
+        onConfirm();
+      });
+      document.getElementById('acquire-cancel-btn').addEventListener('click', () => {
+        el.remove();
+        acquireBtn.disabled = false;
+      });
+    }
+
+    async function doAcquire(deckId, count, acquireBtn) {
+      acquireBtn.textContent = 'Adding...';
+      try {
+        const res = await fetch('/api/decks/' + deckId + '/acquire', { method: 'POST' });
         const result = await res.json();
         if (result.error) {
           alert('Error: ' + result.error);
@@ -550,13 +601,14 @@
           acquireBtn.textContent = 'Add to Collection';
           return;
         }
+        sessionStorage.setItem('deck-flash', 'Added ' + result.cards_added + ' card(s) to your collection.');
         window.location.reload();
       } catch (err) {
         alert('Add to Collection failed: ' + err.message);
         acquireBtn.disabled = false;
         acquireBtn.textContent = 'Add to Collection';
       }
-    });
+    }
 
     // Modal buttons
     document.getElementById('btn-save-deck').addEventListener('click', () => saveDeck(deck.id));
