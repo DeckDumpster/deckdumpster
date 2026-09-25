@@ -318,7 +318,7 @@ class TestCLIParsing:
         result = subprocess.run(
             [sys.executable, "-m", "mtg_collector", "--db", db_path,
              "ingest-ids", "--id", "C", "0187"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode != 0
@@ -335,7 +335,7 @@ class TestCLIParsing:
         result = subprocess.run(
             [sys.executable, "-m", "mtg_collector", "--db", db_path,
              "ingest-ids", "--id", "C", "0187", "EOE", "foil", "extra"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode != 0
@@ -352,7 +352,7 @@ class TestCLIParsing:
         result = subprocess.run(
             [sys.executable, "-m", "mtg_collector", "--db", db_path,
              "ingest-ids", "--id", "X", "0187", "EOE"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode != 0
@@ -369,7 +369,7 @@ class TestCLIParsing:
         result = subprocess.run(
             [sys.executable, "-m", "mtg_collector", "--db", db_path,
              "ingest-ids"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=30,
         )
 
         assert result.returncode != 0

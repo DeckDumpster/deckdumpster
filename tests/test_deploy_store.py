@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = REPO_ROOT / "deploy"
 SETUP = DEPLOY / "setup.sh"
@@ -131,6 +133,7 @@ class Host:
             text=True,
             env=env,
             cwd=str(REPO_ROOT),
+            timeout=DEFAULT_TIMEOUT,
         )
         if check:
             assert result.returncode == 0, result.stdout + result.stderr
@@ -367,6 +370,7 @@ def _activate(host, *, path_only=False, script=None):
         text=True,
         env={**host.env, "MTGC_STORE_ROOT": str(host.store)},
         cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
 
 
@@ -431,6 +435,7 @@ def test_a_nested_activation_keeps_the_original_tmpdir_to_restore(host):
         text=True,
         env={**host.env, "MTGC_STORE_ROOT": str(host.store), "TMPDIR": "/var/tmp"},
         cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == "/var/tmp"
@@ -545,6 +550,7 @@ def test_teardown_of_an_unstamped_instance_drops_an_inherited_store(host):
         text=True,
         env={**host.env, "MTGC_STORE_ROOT": str(host.store)},
         cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -659,7 +665,8 @@ def _netns_case(host, scaffolding: bool):
         echo REACHED_THE_END
     """
     result = subprocess.run(
-        ["bash", "-c", script], capture_output=True, text=True, env=host.env
+        ["bash", "-c", script], capture_output=True, text=True, env=host.env,
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "REACHED_THE_END" in result.stdout, result.stdout + result.stderr
@@ -820,7 +827,7 @@ def _hold_lock(home):
     holder = subprocess.Popen(["flock", "-x", str(lock), "sleep", "120"])
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
-        if subprocess.run(["flock", "-n", "-x", str(lock), "true"]).returncode != 0:
+        if subprocess.run(["flock", "-n", "-x", str(lock), "true"], timeout=5).returncode != 0:
             return holder
         time.sleep(0.05)
     holder.kill()

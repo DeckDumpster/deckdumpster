@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from tests.container_store import _env_global_args, discover_container, podman_argv
+from tests.subprocess_run import DEFAULT_TIMEOUT
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETUP = REPO_ROOT / "deploy" / "setup.sh"
@@ -114,6 +115,7 @@ class Box:
         result = subprocess.run(
             ["bash", str(SETUP), instance, "8083", *args],
             capture_output=True, text=True, env=env, cwd=str(REPO_ROOT),
+            timeout=DEFAULT_TIMEOUT,
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
@@ -224,6 +226,7 @@ def _run_pytest(box, *args):
         [sys.executable, "-m", "pytest", "tests/integration/test_search_alias.py",
          "-p", "no:cacheprovider", *args],
         capture_output=True, text=True, env=env, cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
 
 

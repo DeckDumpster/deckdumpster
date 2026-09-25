@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETUP = REPO_ROOT / "deploy" / "setup.sh"
 DEPLOY = REPO_ROOT / "deploy" / "deploy.sh"
@@ -76,6 +78,7 @@ def host(tmp_path):
                 text=True,
                 env=env,
                 cwd=str(REPO_ROOT),
+                timeout=DEFAULT_TIMEOUT,
             )
             assert result.returncode == 0, result.stdout + result.stderr
             return result
@@ -268,6 +271,7 @@ def test_a_recorded_cert_dir_that_vanished_fails_loudly(host):
         text=True,
         env=host.env,
         cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode != 0
     assert "--tls-certs directory does not exist" in result.stdout + result.stderr
