@@ -38,6 +38,8 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _STORE_LIB = _REPO_ROOT / "deploy" / "store-lib.sh"
 
@@ -92,6 +94,7 @@ def _env_global_args(root: str):
          f'. "{_STORE_LIB}" && mtgc_store_activate >/dev/null'
          ' && printf %s "$MTGC_STORE_GLOBAL_ARGS"'],
         capture_output=True, text=True, env={**os.environ, "MTGC_STORE_ROOT": root},
+        timeout=DEFAULT_TIMEOUT,
     )
     result.check_returncode()
     return result.stdout.split()
@@ -117,7 +120,7 @@ def discover_container(instance: str):
         try:
             subprocess.run(
                 [*podman_argv(instance), "container", "exists", candidate],
-                capture_output=True, check=True,
+                capture_output=True, check=True, timeout=DEFAULT_TIMEOUT,
             )
             return candidate
         except (subprocess.CalledProcessError, FileNotFoundError):

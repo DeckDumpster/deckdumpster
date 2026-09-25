@@ -25,6 +25,7 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 from tests.container_store import discover_container, podman_argv
+from tests.subprocess_run import DEFAULT_TIMEOUT
 
 log = logging.getLogger(__name__)
 
@@ -236,7 +237,7 @@ def base_url(request, instance_name, container_name, podman):
     try:
         result = subprocess.run(
             [*podman, "port", container_name, "8081/tcp"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, timeout=DEFAULT_TIMEOUT,
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         pytest.fail(f"Could not query port for '{container_name}': {exc}", pytrace=False)
@@ -281,13 +282,13 @@ def _db_snapshot(container_name, podman):
     log.info("Creating DB snapshot in container %s", container_name)
     subprocess.run(
         [*podman, "exec", container_name, "bash", "-c", _BACKUP_CMD],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
     )
     yield container_name
     # Clean up the backup file.
     subprocess.run(
         [*podman, "exec", container_name, "rm", "-f", _CONTAINER_DB_BACKUP],
-        capture_output=True,
+        capture_output=True, timeout=DEFAULT_TIMEOUT,
     )
 
 
@@ -304,7 +305,7 @@ def _restore_db(_db_snapshot, podman):
     log.info("Restoring DB snapshot in container %s", container)
     subprocess.run(
         [*podman, "exec", container, "bash", "-c", _RESTORE_CMD],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
     )
 
 

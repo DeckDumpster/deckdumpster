@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETUP = REPO_ROOT / "deploy" / "setup.sh"
 DEPLOY = REPO_ROOT / "deploy" / "deploy.sh"
@@ -95,6 +97,7 @@ def host(tmp_path):
                 text=True,
                 env=env,
                 cwd=str(REPO_ROOT),
+                timeout=DEFAULT_TIMEOUT,
             )
             if check:
                 assert result.returncode == 0, result.stdout + result.stderr
@@ -237,6 +240,7 @@ def test_units_list_rejects_a_timer_with_no_service(tmp_path, host):
         capture_output=True,
         text=True,
         env=host.env,
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode != 0
     assert "no matching" in result.stderr

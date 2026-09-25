@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKUP = REPO_ROOT / "deploy" / "backup.sh"
 
@@ -192,6 +194,7 @@ class Rig:
             capture_output=True,
             text=True,
             env=env,
+            timeout=DEFAULT_TIMEOUT,
         )
 
     # --- reading the aftermath ---
