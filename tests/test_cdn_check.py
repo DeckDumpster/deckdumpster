@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECK = REPO_ROOT / "deploy" / "cdn-check.sh"
 
@@ -106,6 +108,7 @@ def _run(tmp_path, responses, *, env=None, args=()):
     proc = subprocess.run(
         ["bash", str(CHECK), *args],
         capture_output=True, text=True, env=child, cwd=tmp_path,
+        timeout=DEFAULT_TIMEOUT,
     )
     calls = call_log.read_text() if call_log.exists() else ""
     return proc, calls
