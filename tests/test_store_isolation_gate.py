@@ -47,6 +47,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GATE = REPO_ROOT / "deploy" / "store-isolation-gate.sh"
 
@@ -340,6 +342,7 @@ def run_gate(tmp_path, mode, extra_env=None):
         text=True,
         env=env,
         cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
 
 
@@ -489,6 +492,7 @@ def test_it_refuses_a_probe_store_inside_the_store_under_test(tmp_path):
         text=True,
         env=env,
         cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
 
     assert result.returncode != 0
@@ -498,7 +502,8 @@ def test_it_refuses_a_probe_store_inside_the_store_under_test(tmp_path):
 def test_it_refuses_to_run_against_prod():
     """It builds an instance and then destroys it."""
     result = subprocess.run(
-        ["bash", str(GATE), "prod"], capture_output=True, text=True, cwd=str(REPO_ROOT)
+        ["bash", str(GATE), "prod"], capture_output=True, text=True, cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
 
     assert result.returncode != 0
@@ -546,7 +551,7 @@ def lock_held_by_someone_else(home):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if subprocess.run(
-                ["flock", "-n", "-x", str(lock), "true"]
+                ["flock", "-n", "-x", str(lock), "true"], timeout=5,
             ).returncode != 0:
                 break
             time.sleep(0.05)
