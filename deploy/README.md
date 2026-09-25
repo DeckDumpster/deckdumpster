@@ -1173,9 +1173,12 @@ that deploys `prod` — deliberately does not read it.
 The self-hosted runner can run on an ephemeral Proxmox VM cloned from a
 pre-built template. `docs/TEMPLATE.md` in DeckDumpster/ephemeral-ci is the build sheet:
 what to install, how to configure the non-root user with lingering, the
-minimum disk size (40 GB, with the arithmetic shown), what the container
-store needs — and an 11-step checklist ending in a real `bash deploy/ci.sh`
-run that validates the template before it is converted.
+Proxmox VM configuration (cloud-init drive for token injection, serial0 for
+headless diagnosis, agent:1 for the guest agent channel), the minimum disk
+size (40 GB, with the arithmetic shown), what the container store needs — and
+a verification checklist with host-side checks (from the hypervisor, against
+the template config and a booted clone) and guest-side steps, ending in a real
+`bash deploy/ci.sh` run that validates the template before it is converted.
 
 ## Troubleshooting
 
