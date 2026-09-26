@@ -26,6 +26,7 @@ import pytest
 
 from mtg_collector.db.schema import init_db
 from tests.test_deploy_store import REPO_ROOT, Host
+from tests.subprocess_run import DEFAULT_TIMEOUT
 
 
 @pytest.fixture
@@ -118,6 +119,7 @@ def test_the_refusal_is_visible_from_the_command_line(tmp_path):
          "--db", str(source),
          "db", "split", "--shared-out", str(tmp_path / "shared.sqlite"), "--prune"],
         capture_output=True, text=True, cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
 
     assert result.returncode != 0, result.stdout

@@ -20,6 +20,7 @@ import time
 import pytest
 
 from mtg_collector.cli import crack_pack_server as cps
+from tests.subprocess_run import DEFAULT_TIMEOUT
 
 # How long startup (schema migration + bind) is allowed to take.
 _STARTUP_TIMEOUT = 30.0
@@ -170,6 +171,7 @@ def test_dual_listen_serves_tls_and_plain_side_by_side(clean_env, tmp_path):
         ],
         check=True,
         capture_output=True,
+        timeout=DEFAULT_TIMEOUT,
     )
     clean_env.setenv("MTGC_TLS_CERT", str(cert))
     clean_env.setenv("MTGC_TLS_KEY", str(key))

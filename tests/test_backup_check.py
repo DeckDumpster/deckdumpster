@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECK = REPO_ROOT / "deploy" / "backup-check.sh"
 ALERT = REPO_ROOT / "deploy" / "alert.sh"
@@ -108,6 +110,7 @@ def check(tmp_path):
                 capture_output=True,
                 text=True,
                 env=env,
+                timeout=DEFAULT_TIMEOUT,
             )
 
         @property
@@ -324,6 +327,7 @@ def test_alert_fails_when_it_cannot_reach_anyone(tmp_path):
         capture_output=True,
         text=True,
         env={**os.environ, "PUSHOVER_TOKEN": "", "PUSHOVER_USER": ""},
+        timeout=DEFAULT_TIMEOUT,
     )
 
     assert result.returncode == 1
@@ -336,6 +340,7 @@ def test_alert_treats_the_scaffolded_placeholder_as_unset(tmp_path):
         capture_output=True,
         text=True,
         env={**os.environ, "PUSHOVER_TOKEN": "CHANGE_ME", "PUSHOVER_USER": "CHANGE_ME"},
+        timeout=DEFAULT_TIMEOUT,
     )
 
     assert result.returncode == 1
@@ -376,6 +381,7 @@ def test_units_are_installed_and_rendered(tmp_path):
         text=True,
         env=env,
         cwd=str(REPO_ROOT),
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

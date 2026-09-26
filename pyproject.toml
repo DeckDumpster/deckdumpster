@@ -85,6 +85,7 @@ ignore = ["E501"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "--ignore=tests/ui/ --tb=short -q"
+timeout = 300
 markers = [
     "scryfall: tests requiring Scryfall API access (use --scryfall to enable)",
     "generative: seed-based generative tests with reverse parser",
@@ -94,6 +95,7 @@ markers = [
 dev = [
     "ruff>=0.15.1",
     "pytest>=7.0.0",
+    "pytest-timeout>=2.0",
     "shot-scraper>=1.9.1",
     # Constrained directly even though it arrives via shot-scraper, because the
     # floor is a property of the machines CI runs on, not of shot-scraper.
