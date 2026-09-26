@@ -49,6 +49,8 @@ concurrency:
 jobs:
   provision:
     runs-on: ubuntu-latest
+    # VM provisioning measured under 5 min; 15 min leaves room for a slow day.
+    timeout-minutes: 15
     outputs:
       vmid: ${{ steps.vm.outputs.vmid }}
       label: ${{ steps.vm.outputs.label }}
@@ -94,6 +96,13 @@ jobs:
   gate:
     needs: provision
     runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
+    # Recent full runs measured 45-49 min (2026-09-25, run 36185545409 and
+    # neighbours). 90 min is ~2x the longest observed run, which is the
+    # headroom needed to not kill a legitimately slow full suite while still
+    # bounding a hung job well inside GitHub's 6-hour default. A PR touching
+    # only workflow files runs lint+unit, which completes in under 10 min --
+    # the cap does not threaten those either. (db-ise2)
+    timeout-minutes: 90
     # statuses:write for the final step, which posts this run's result as a COMMIT
     # STATUS. The repo default is read-only (default_workflow_permissions=read), so
     # without this the POST 403s and the belt-and-braces below silently does
@@ -247,6 +256,8 @@ jobs:
     needs: [provision, gate]
     if: always()
     runs-on: ubuntu-latest
+    # VM teardown measured under 5 min; 15 min leaves room for a slow day.
+    timeout-minutes: 15
     steps:
       - uses: DeckDumpster/ephemeral-ci/teardown@v1
         with:
