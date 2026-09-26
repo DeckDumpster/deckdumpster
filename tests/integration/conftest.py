@@ -22,6 +22,7 @@ import urllib.request
 import pytest
 
 from tests.container_store import discover_container, podman_argv
+from tests.subprocess_run import DEFAULT_TIMEOUT
 
 # Resolved in the fixture rather than registered as the option's default, so
 # "the operator named an instance" stays distinguishable from "nobody asked".
@@ -74,7 +75,7 @@ def base_url(request, instance_name):
     try:
         result = subprocess.run(
             [*podman_argv(instance_name), "port", container_name, "8081/tcp"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, timeout=DEFAULT_TIMEOUT,
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         pytest.fail(f"Could not query port for '{container_name}': {exc}", pytrace=False)
@@ -171,7 +172,7 @@ def _restore_container_after_suite(instance_name):
     podman = podman_argv(instance_name)
     snapshot = subprocess.run(
         [*podman, "exec", container, "bash", "-c", _INTEG_BACKUP_CMD],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
     )
     # If the snapshot itself failed, don't pretend we can restore — fail loudly
     # rather than silently leaving the container polluted for later suites.
@@ -179,12 +180,12 @@ def _restore_container_after_suite(instance_name):
     yield
     subprocess.run(
         [*podman, "exec", container, "bash", "-c", _INTEG_RESTORE_CMD],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
     )
     subprocess.run(
         [*podman, "exec", container, "rm", "-f",
          _CONTAINER_DB_BACKUP, _CONTAINER_SHARED_DB_BACKUP],
-        capture_output=True,
+        capture_output=True, timeout=DEFAULT_TIMEOUT,
     )
 
 

@@ -36,6 +36,7 @@ import urllib.request
 import pytest
 
 from tests.container_store import discover_container, podman_argv
+from tests.subprocess_run import DEFAULT_TIMEOUT
 
 # The container-internal port the plain listener binds (the CLI's own default).
 # 8081 is the TLS listener and the only EXPOSEd port.
@@ -54,7 +55,7 @@ def plain_publish(instance_name):
 
     result = subprocess.run(
         [*podman_argv(instance_name), "port", container, _CONTAINER_PLAIN_PORT],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
     )
     if result.returncode != 0 or not result.stdout.strip():
         pytest.skip(

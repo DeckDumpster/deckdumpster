@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECK = REPO_ROOT / "deploy" / "diskcheck.sh"
 
@@ -109,6 +111,7 @@ class Rig:
             capture_output=True,
             text=True,
             env=full,
+            timeout=DEFAULT_TIMEOUT,
         )
 
     @property

@@ -17,6 +17,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 CI_SCRIPT = REPO_ROOT / "deploy/ci.sh"
@@ -151,6 +153,7 @@ def _run_compute_tiers(files: list[str]) -> str:
         capture_output=True,
         text=True,
         check=True,
+        timeout=DEFAULT_TIMEOUT,
     )
     return result.stdout.strip()
 

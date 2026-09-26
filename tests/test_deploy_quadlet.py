@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RENDER = REPO_ROOT / "deploy" / "render-quadlet.sh"
 TEMPLATE = REPO_ROOT / "deploy" / "mtgc.container"
@@ -33,6 +35,7 @@ def render(instance, port_mapping, http_port, tls_certs="", memory_max=""):
         capture_output=True,
         text=True,
         check=True,
+        timeout=DEFAULT_TIMEOUT,
     )
     return result.stdout
 
@@ -88,6 +91,7 @@ def test_non_numeric_http_port_is_rejected():
         ["bash", str(RENDER), "myinst", ":8081", "0.0.0.0:8083", "", "", str(TEMPLATE)],
         capture_output=True,
         text=True,
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode != 0
     assert "must be numeric" in result.stderr
@@ -165,6 +169,7 @@ def test_unsafe_tls_certs_dir_is_rejected(bad):
         ["bash", str(RENDER), "myinst", ":8081", "", bad, "", str(TEMPLATE)],
         capture_output=True,
         text=True,
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode != 0
     assert "tls certs dir" in result.stderr
@@ -237,6 +242,7 @@ def test_unparseable_memory_max_is_rejected(bad):
         ["bash", str(RENDER), "myinst", ":8081", "", "", bad, str(TEMPLATE)],
         capture_output=True,
         text=True,
+        timeout=DEFAULT_TIMEOUT,
     )
     assert result.returncode != 0
     assert "memory max" in result.stderr
