@@ -94,6 +94,9 @@ DECKDUMP_CI_TIERS="${DECKDUMP_CI_TIERS:-lint,unit,integration,ui}"
 
 _has_tier() { case ",$DECKDUMP_CI_TIERS," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 _needs_container() { _has_tier integration || _has_tier ui; }
+# unit tier contains three tests that launch Chromium (test_set_browse_grid_cols,
+# test_sets_page, test_sheets_page_loads) — the browser must be installed for both.
+_needs_browser() { _has_tier unit || _has_tier ui; }
 
 echo "==> Tiers: ${DECKDUMP_CI_TIERS}"
 
@@ -138,7 +141,7 @@ fi
 echo "==> Install dependencies"
 uv sync
 
-if _has_tier ui; then
+if _needs_browser; then
     echo "==> Install Playwright browser"
     uv run shot-scraper install
 fi
