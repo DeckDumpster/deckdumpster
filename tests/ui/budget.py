@@ -14,14 +14,21 @@ behaviour under test held, and the harness raised anyway. A suite that reds
 without a single assertion firing is not measuring the app.
 
 So a budget is normalized by how oversubscribed the box is. `host_contention()`
-is runnable tasks per CPU, floored at 1.0, which means:
+is the worse of two independent measures, floored at 1.0:
 
-* On a quiet box the factor is 1.0 and every timeout is **byte-identical to what
-  it was before** — 500 ms still means 500 ms, and a payload regression still
-  reds. Nothing here relaxes the budget on the machine where you measure.
-* On a box oversubscribed 8x, 8 x 500 ms of wall clock is 500 ms of app time.
-  The budget still measures the app; it just stops charging the app for the
-  other seven tenants.
+* **Load average** (runnable tasks per CPU): on a box at 8x oversubscription,
+  8 × 500 ms of wall clock is 500 ms of app time. The budget still measures the
+  app; it just stops charging the app for the other seven tenants.
+
+* **Hypervisor steal** (fraction of vCPU time the hypervisor took back): on a
+  CI VM whose host is oversubscribed the guest's load average reads near-idle
+  because no additional tasks are runnable — but the vCPU is preempted anyway,
+  and the app is just as slow. Load average cannot see this (db-fy2p).
+
+On a quiet host with no steal both factors are 1.0 and every timeout is
+**byte-identical to what it was before** — 500 ms still means 500 ms, and a
+payload regression still reds. Nothing here relaxes the budget on the machine
+where you measure.
 
 `TIMEOUT_CEILING_MS` is Playwright's own default action timeout, and it is the
 line between "slow" and "broken": past the point where Playwright itself would
@@ -44,7 +51,11 @@ not mean "no deadline" — it inherits Playwright's 30 s, unscaled and unreadabl
 at the call site. `tests/test_ui_budget.py` fails the build on either mistake.
 """
 
+import logging
 import os
+import time
+
+logger = logging.getLogger(__name__)
 
 #: The app's answer to an interaction on an already-loaded page.
 INTERACTION_BUDGET_MS = 500
@@ -56,16 +67,59 @@ ROUND_TRIP_BUDGET_MS = 5_000
 TIMEOUT_CEILING_MS = 30_000
 
 
-def host_contention() -> float:
-    """Runnable tasks per CPU on this box, floored at 1.0.
+def _steal_fraction() -> float:
+    """Fraction of vCPU time stolen by the hypervisor over a 100 ms window.
 
-    Read from the 1-minute load average, which lags: a box that just went quiet
-    still reads busy for a while. That direction is the safe one — it spends
-    patience, never a false failure. A box that just got busy reads low, but the
-    contention that causes these failures is a whole test suite deep and lasts
-    for minutes, not seconds.
+    Samples /proc/stat twice. The 8th field of the aggregate cpu line is steal:
+    time the hypervisor took the vCPU away from this guest without any guest task
+    becoming runnable. Returns 0.0 on any error (non-Linux, no steal field, etc.).
     """
-    return max(1.0, os.getloadavg()[0] / (os.cpu_count() or 1))
+    def _sample() -> tuple[int, int]:
+        with open("/proc/stat") as f:
+            fields = f.readline().split()
+        vals = [int(x) for x in fields[1:]]
+        steal = vals[7] if len(vals) > 7 else 0
+        return sum(vals), steal
+
+    try:
+        total1, steal1 = _sample()
+        time.sleep(0.1)
+        total2, steal2 = _sample()
+        delta = total2 - total1
+        return max(0.0, (steal2 - steal1) / delta) if delta > 0 else 0.0
+    except OSError:
+        return 0.0
+
+
+def host_contention() -> float:
+    """Max of load-average and hypervisor-steal contention, floored at 1.0.
+
+    Two independent sources can starve the app without the other being visible:
+
+    * **Load average** (/proc/loadavg via os.getloadavg): runnable tasks per CPU.
+      Read from the 1-minute average, which lags: a box that just went quiet still
+      reads busy for a while. That direction is the safe one — it spends patience.
+      A box that just got busy reads low, but the contention that causes these
+      failures is a whole test suite deep and lasts for minutes.
+
+    * **Hypervisor steal** (/proc/stat field 8, sampled over 100 ms): fraction of
+      vCPU time the hypervisor took back. A guest with 50% steal gets half its
+      requested CPU even with a load average of 0.0 — no guest task is runnable,
+      so the guest reads idle while being starved. Converted to a contention
+      factor as 1 / (1 − steal). (db-fy2p)
+
+    Either source alone is enough to widen the budget. On a host with neither,
+    both factors are 1.0 and the result is exactly 1.0.
+    """
+    load_factor = os.getloadavg()[0] / (os.cpu_count() or 1)
+    steal = _steal_fraction()
+    steal_factor = 1.0 / (1.0 - steal) if steal < 1.0 else 100.0
+    factor = max(1.0, max(load_factor, steal_factor))
+    logger.debug(
+        "host_contention=%.2f (load_factor=%.2f, steal=%.3f, steal_factor=%.2f)",
+        factor, load_factor, steal, steal_factor,
+    )
+    return factor
 
 
 def budget_ms(base_ms: int, contention: float | None = None) -> int:

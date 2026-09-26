@@ -42,6 +42,7 @@ def test_contention_floors_at_one_on_an_idle_box(monkeypatch):
     """An idle box does not earn a *shorter* budget than the stated one."""
     monkeypatch.setattr(budget.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(budget.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(budget, "_steal_fraction", lambda: 0.0)
     assert host_contention() == 1.0
     assert budget_ms(INTERACTION_BUDGET_MS) == INTERACTION_BUDGET_MS
 
@@ -49,7 +50,57 @@ def test_contention_floors_at_one_on_an_idle_box(monkeypatch):
 def test_contention_is_runnable_tasks_per_cpu(monkeypatch):
     monkeypatch.setattr(budget.os, "getloadavg", lambda: (24.0, 0.0, 0.0))
     monkeypatch.setattr(budget.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(budget, "_steal_fraction", lambda: 0.0)
     assert host_contention() == 6.0
+
+
+# ── Hypervisor steal ────────────────────────────────────────────────────────
+
+
+def test_steal_alone_widens_budget(monkeypatch):
+    """50% steal → vCPU half-time → 2x budget, even with a near-zero load average.
+
+    This is the CI-VM case: guest reads idle (no runnable tasks), but the
+    hypervisor is taking half the nominal CPU away (db-fy2p).
+    """
+    monkeypatch.setattr(budget.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
+    monkeypatch.setattr(budget.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(budget, "_steal_fraction", lambda: 0.5)
+    assert host_contention() == 2.0
+    assert budget_ms(INTERACTION_BUDGET_MS, 2.0) == 1_000
+
+
+def test_steal_and_load_are_independent_contention_sources(monkeypatch):
+    """The dominant source wins; neither silences the other.
+
+    High load with no steal → load wins.
+    High steal with low load → steal wins.
+    Both above 1x → whichever is larger wins.
+    """
+    monkeypatch.setattr(budget.os, "cpu_count", lambda: 4)
+
+    # load_factor=4.0, steal_factor≈1.11 → load wins
+    monkeypatch.setattr(budget.os, "getloadavg", lambda: (16.0, 0.0, 0.0))
+    monkeypatch.setattr(budget, "_steal_fraction", lambda: 0.1)
+    assert host_contention() == 4.0
+
+    # load_factor=0.5 → floored to 1.0, steal_factor=4.0 → steal wins
+    monkeypatch.setattr(budget.os, "getloadavg", lambda: (2.0, 0.0, 0.0))
+    monkeypatch.setattr(budget, "_steal_fraction", lambda: 0.75)
+    assert host_contention() == 4.0
+
+    # load_factor=5.0, steal_factor=4.0 → load wins
+    monkeypatch.setattr(budget.os, "getloadavg", lambda: (20.0, 0.0, 0.0))
+    monkeypatch.setattr(budget, "_steal_fraction", lambda: 0.75)
+    assert host_contention() == 5.0
+
+
+def test_steal_at_zero_leaves_budget_unchanged(monkeypatch):
+    """No steal means the steal path contributes nothing."""
+    monkeypatch.setattr(budget.os, "getloadavg", lambda: (4.0, 0.0, 0.0))
+    monkeypatch.setattr(budget.os, "cpu_count", lambda: 4)
+    monkeypatch.setattr(budget, "_steal_fraction", lambda: 0.0)
+    assert host_contention() == 1.0  # load_factor = 1.0, steal_factor = 1.0
 
 
 # ── The budget on a loaded box ───────────────────────────────────────────────
