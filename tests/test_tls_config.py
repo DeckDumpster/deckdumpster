@@ -10,6 +10,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 from mtg_collector.cli.crack_pack_server import (
     _build_tls_context,
     _resolve_external_tls_paths,
@@ -34,6 +36,7 @@ def _mint_cert(tmp_path, cn):
         ],
         check=True,
         capture_output=True,
+        timeout=DEFAULT_TIMEOUT,
     )
     return cert, key
 
