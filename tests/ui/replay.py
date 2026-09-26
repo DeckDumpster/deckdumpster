@@ -12,6 +12,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tests.subprocess_run import DEFAULT_TIMEOUT
+
 from .budget import (
     INTERACTION_BUDGET_MS,
     ROUND_TRIP_BUDGET_MS,
@@ -106,7 +108,7 @@ class ReplayHarness:
             )
         subprocess.run(
             [*self.podman, "exec", self.container, "python3", "-c", script],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
         )
 
     # ── Navigation ─────────────────────────────────────────────────────
