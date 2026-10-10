@@ -51,6 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     # VM provisioning measured under 5 min; 15 min leaves room for a slow day.
     timeout-minutes: 15
+    # id-token: write is for the OIDC assumption of AWS_SPILL_ROLE_ARN, nothing else.
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       vmid: ${{ steps.vm.outputs.vmid }}
       label: ${{ steps.vm.outputs.label }}
@@ -59,6 +63,17 @@ jobs:
       # pinned provision stamps one.
       vm-token: ${{ steps.vm.outputs.vm-token }}
     steps:
+      # Spill is on, so an absent secret must be a named failure. The action skips
+      # the AWS credential step when the role is empty, which would read as a
+      # silent wait for Proxmox capacity instead of a missing secret.
+      - name: Require AWS_SPILL_ROLE_ARN
+        env:
+          AWS_SPILL_ROLE_ARN: ${{ secrets.AWS_SPILL_ROLE_ARN }}
+        run: |
+          if [ -z "$AWS_SPILL_ROLE_ARN" ]; then
+            echo "::error::secret AWS_SPILL_ROLE_ARN is not set for this repository; EC2 spill cannot assume its role"
+            exit 1
+          fi
       - uses: DeckDumpster/ephemeral-ci/provision@v1
         id: vm
         with:
@@ -72,6 +87,10 @@ jobs:
           pve-ca-cert:        ${{ vars.PVE_CA_CERT }}
           pve-node:           ${{ vars.PVE_NODE }}
           template-vmid:      ${{ vars.TEMPLATE_VMID }}
+          spill:               ec2
+          spill-after-seconds: '300'
+          spill-max-instances: '4'
+          aws-role-to-assume:  ${{ secrets.AWS_SPILL_ROLE_ARN }}
 
   # The real suite, on the VM provisioned above.
   #
