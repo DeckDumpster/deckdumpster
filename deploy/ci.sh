@@ -224,6 +224,27 @@ wait_for_server() {
     return 1
 }
 
+# Per-test timings the workflow uploads as an artifact whether the run passes or fails.
+# One progress file per tier (tests/conftest.py adds the xdist worker suffix).
+CI_TIMINGS_DIR="${CI_TIMINGS_DIR:-$PWD/ci-timings}"
+mkdir -p "$CI_TIMINGS_DIR"
+
+# Run one pytest tier, then keep its progress file(s) under the tier's name -- on a red
+# tier too, since that is when the timings are wanted. pytest writes them to the default
+# .pytest_cache/ (a custom PYTEST_PROGRESS_FILE would leave that dir unmade and
+# tests/test_progress_file.py red); xdist workers add a -gwN suffix.
+run_tier() {
+    local tier="$1" rc=0 f
+    shift
+    rm -f .pytest_cache/progress*.jsonl
+    "$@" || rc=$?
+    for f in .pytest_cache/progress*.jsonl; do
+        [ -e "$f" ] || continue
+        cp "$f" "$CI_TIMINGS_DIR/${tier}-$(basename "$f")"
+    done
+    return "$rc"
+}
+
 if _needs_container; then
     echo "==> Build and start test container"
     bash deploy/setup.sh "$INSTANCE" --test
@@ -239,15 +260,15 @@ fi
 
 if _has_tier unit; then
     echo "==> Run unit tests"
-    uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/ui
+    run_tier unit uv run pytest tests/ --durations=50 --ignore=tests/integration --ignore=tests/ui
 fi
 
 if _has_tier integration; then
     echo "==> Run integration tests"
-    uv run pytest tests/integration/ -q --instance "$INSTANCE"
+    run_tier integration uv run pytest tests/integration/ --durations=50 --instance "$INSTANCE"
 fi
 
 if _has_tier ui; then
     echo "==> Run UI scenario tests"
-    uv run pytest tests/ui/ -q --instance "$INSTANCE"
+    run_tier ui uv run pytest tests/ui/ --durations=50 --instance "$INSTANCE"
 fi
