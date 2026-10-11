@@ -142,6 +142,9 @@ KEEP_FILE=""
 if [ "${1:-}" = "--keep" ]; then
     KEEP_FILE="${2:?--keep needs a file to write the probe store path to}"
     shift 2
+    # Empty until a pass records the path, so a caller reading it after a FAILED
+    # run finds "nothing left standing" rather than no file at all.
+    : > "$KEEP_FILE"
 fi
 
 INSTANCE="${1:-store-gate}"
