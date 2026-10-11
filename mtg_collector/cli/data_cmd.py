@@ -104,6 +104,11 @@ def register(subparsers):
     )
 
     data_sub.add_parser(
+        "rebuild-growth",
+        help="Rebuild the growth series of every tenant (offline; exits 2 if any failed)",
+    )
+
+    data_sub.add_parser(
         "import",
         help="Import AllPrintings.json into SQLite (cards, booster sheets, configs)",
     )
@@ -184,6 +189,9 @@ def run(args):
         fetch_allprintings(force=args.force, db_path=getattr(args, "db_path", None))
     elif args.data_command == "fetch-prices":
         _fetch_prices(force=args.force)
+    elif args.data_command == "rebuild-growth":
+        from mtg_collector.db.connection import get_db_path
+        rebuild_growth(get_db_path(getattr(args, "db_path", None)))
     elif args.data_command == "import":
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
@@ -225,7 +233,7 @@ def run(args):
         db_path = get_db_path(getattr(args, "db_path", None))
         refresh_catalog(db_path)
     else:
-        print("Usage: mtg data {fetch|fetch-prices|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-sets|check-catalog|refresh-catalog} [options]")
+        print("Usage: mtg data {fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-sets|check-catalog|refresh-catalog} [options]")
         sys.exit(1)
 
 
@@ -872,21 +880,19 @@ def _fetch_prices(force: bool = False):
     except Exception as e:
         print(f"Warning: auto-import failed: {e}", file=sys.stderr)
 
-    # Rebuild the materialized growth series. The import above is exactly what
-    # makes it stale — new observations change what the collection was worth on
-    # the days already plotted — and this is a scheduled job, so it is the right
-    # place to pay for a full-history aggregation instead of leaving it to the
-    # first person to open the chart. Goes through get_connection() rather than
-    # import_prices' connection: prices are written to the shared reference DB,
-    # which has no `collection` to aggregate.
-    from mtg_collector.db.connection import get_connection
-    from mtg_collector.db.growth import rebuild_history
-    from mtg_collector.db.schema import init_db
+    # Rebuild every tenant's materialized growth series. The import above is
+    # exactly what makes them stale, and this is a scheduled job, so it is the
+    # right place to pay for a full-history aggregation. It runs per tenant,
+    # offline, and a failing tenant is reported and skipped, not hidden.
+    rebuild_growth(db_path)
 
-    conn = get_connection(db_path)
-    init_db(conn)
-    days = rebuild_history(conn)
-    print(f"  Collection value history: {days} day(s) materialized")
+
+def rebuild_growth(db_path: str):
+    from mtg_collector.db.tenants import rebuild_growth_all
+
+    code = rebuild_growth_all(db_path)
+    if code:
+        sys.exit(code)
 
 
 def _ensure_uuid_map(conn: sqlite3.Connection):
