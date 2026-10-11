@@ -18,7 +18,14 @@ Type=oneshot
 # manual steps, and a refresh that is two commands is a refresh where one of them
 # stops being run. `mtg data refresh-catalog` runs both in one process, so the
 # unit's exit status is the whole catalogue's verdict rather than half of it.
-ExecStart=podman exec systemd-mtgc-{{INSTANCE}} mtg data refresh-catalog
+#
+# A job container of its own (lakehouse 3), not `podman exec` into the server: a
+# ~1 GB download and a 112k-row upsert no longer share a cgroup with the site
+# that serves requests, and the container's exit status is the run's. Same
+# image and data volume as the server; every fetch is teed verbatim into the raw
+# landing zone, a host directory mounted at /lake/raw (mtg_collector/landing.py).
+ExecStartPre=/bin/mkdir -p %h/.local/share/mtgc-lake/{{INSTANCE}}/raw
+ExecStart=podman run --rm --name mtgc-refresh-{{INSTANCE}} --env-file %h/.config/mtgc/{{INSTANCE}}.env -e MTGC_HOME=/data -e MTGC_LAKE_RAW_DIR=/lake/raw -v mtgc-{{INSTANCE}}-data:/data:Z -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z localhost/mtgc:{{INSTANCE}} mtg data refresh-catalog
 # ~500 MB of Scryfall bulk data and ~500 MB of MTGJSON, then ~112k printings
 # upserted and the per-set backfills on top. Measured well inside an hour; three
 # hours is room for a slow mirror, and a bound so a wedged download eventually
