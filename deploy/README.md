@@ -751,6 +751,29 @@ is `s3api list-objects-v2`.
 { "Effect": "Allow", "Action": "s3:ListBucket", "Resource": "arn:aws:s3:::gantt-mtgc-backup" }
 ```
 
+## Litestream replication and the restore drill
+
+Beside the nightly tarball (which retires only once the drill is green **on prod**),
+the databases are replicated continuously and the tenant files are synced nightly.
+Installed by `setup.sh` / `deploy.sh` like every timer, **armed by hand**; arming prod
+is Ryan's decision.
+
+| Unit | Does |
+|---|---|
+| `mtgc-litestream` (timer supervises the sidecar) | `litestream replicate` of `collection.sqlite` (today's single tenant), `registry.sqlite`, and `tenants/*.sqlite` in directory mode — a new tenant is picked up live, no config edit. Config is rendered by `litestream-config.sh`; `shared.sqlite` is the catalogue and is not replicated. CPU-fenced. |
+| `mtgc-tenant-files` (03:30) | `tenant-files-sync.sh`: walks the **registry**, keyed by `database_id`, syncing `tenant-files/<id>/` to `s3://<bucket>/mtgc-<inst>/tenant-files/<id>/`. Never by handle or directory, so a re-created handle cannot reach a predecessor's images. One tenant failing is reported and the walk continues; the exit status is the worst. No `--delete`. |
+| `mtgc-litestream-check` (6-hourly) | `litestream-check.sh`: lists the replica, **restores** a sampled tenant and runs `integrity_check`, and fails if the replica position did not advance although a database was written since the last run (pd-1717: liveness is not freshness). |
+
+The **drill** is `litestream-drill.sh <instance>`: restore the registry first, then a
+**non-first** tenant into a scratch directory, and assert every other live tenant file
+is byte-identical before and after. It fails with fewer than two tenants. Restore
+order is always registry, then tenant.
+
+The scripts assume the registry's `user(handle, database_id, retired_at)` table
+from the multi-tenancy design and refuse a `database_id` that is not an uppercase
+ULID. Tests: `tests/test_litestream.py` (aws/litestream stubbed). The container
+drill gate in `deploy/ci.sh` and the real-Litestream run on prod are not wired here.
+
 ## Catalog freshness check
 
 The card catalogue went two months without a new set — the newest set in the

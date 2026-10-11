@@ -1,0 +1,10 @@
+[Unit]
+Description=MTGC replica freshness check ({{INSTANCE}})
+After=network-online.target
+Wants=network-online.target
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'exec bash {{REPO_DIR}}/deploy/litestream-check.sh {{INSTANCE}}'
+TimeoutStartSec=900

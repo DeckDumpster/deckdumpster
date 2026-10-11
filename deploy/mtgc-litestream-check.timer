@@ -1,0 +1,9 @@
+[Unit]
+Description=MTGC replica freshness check timer ({{INSTANCE}})
+
+[Timer]
+OnCalendar=*-*-* 00/6:20:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
