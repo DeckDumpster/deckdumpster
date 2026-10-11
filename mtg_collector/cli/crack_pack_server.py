@@ -16,6 +16,7 @@ from pathlib import Path
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse
 
+from mtg_collector.access import multitenant_enabled
 from mtg_collector.cli.page_routes import PageRoute, match_page_route
 from mtg_collector.db.connection import get_db_path, open_connection
 from mtg_collector.db.enrich import (
@@ -35,12 +36,11 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
-from mtg_collector.db.connection import open_connection
-from mtg_collector.tenancy import current_tenant
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
 from mtg_collector.tenancy import current_tenant
 from mtg_collector.tenancy.fairpool import FairPool
+from mtg_collector.tenancy import paths as tenant_paths
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
@@ -1290,8 +1290,12 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
         # The only route to a connection, and it has no answer outside a
         # resolved request: current_tenant() raises when none is bound.
-        current_tenant()
-        conn = open_connection(self.db_path, _shared_db_path)
+        tenant = current_tenant()
+        db_path = self.db_path
+        if multitenant_enabled():
+            # The tenant's id names its file; there is no other route to one.
+            db_path = str(tenant_paths.tenant_db_file(tenant.value))
+        conn = open_connection(db_path, _shared_db_path)
         return conn
 
     def do_GET(self):
@@ -9345,13 +9349,13 @@ def _build_tls_context(cert_dir):
     return ctx
 
 
-def _new_listener(app, port, tls_paths=None):
+def _new_listener(app, port, tls_paths=None, host="0.0.0.0"):
     """One uvicorn listener for the ASGI app; TLS when ``tls_paths`` is given."""
     import uvicorn
 
     config = uvicorn.Config(
         app,
-        host="0.0.0.0",
+        host=host,
         port=port,
         ssl_certfile=str(tls_paths[0]) if tls_paths else None,
         ssl_keyfile=str(tls_paths[1]) if tls_paths else None,
@@ -9365,6 +9369,15 @@ def _new_listener(app, port, tls_paths=None):
 
 def run(args):
     """Run the crack-pack-server command."""
+    from mtg_collector import access
+
+    # Fatal before anything else starts: multi mode without Access, or any
+    # partial Access configuration, must not serve.
+    if multitenant_enabled():
+        access.require_config()
+    else:
+        access.load_config()
+
     db_path = get_db_path(getattr(args, "db", None))
 
     global _ingest_executor, _background_db_path, _shared_db_path
@@ -9399,6 +9412,32 @@ def run(args):
     static_dir = Path(__file__).resolve().parent.parent / "static"
 
     from mtg_collector.asgi_app import create_app
+
+    multi = multitenant_enabled()
+    if multi:
+        # Fatal before anything binds: multi mode without Access, or with it
+        # half-configured, must not serve.
+        from mtg_collector.tenancy import MultiTenantResolver
+
+        verifier = access.AccessVerifier(access.require_config())
+        app = create_app(gen, static_dir, db_path,
+                         resolver=MultiTenantResolver(verifier), multi=True)
+        if http_port is None:
+            raise SystemExit(
+                "MTGC_MULTITENANT needs MTGC_HTTP_PORT: the loopback listener is "
+                "the only one multi-tenant mode serves (N5)"
+            )
+        # N5: 8081 bypasses Access, so it is not bound at all. Loopback only,
+        # for the tunnel origin.
+        print(f"[startup] multi-tenant: loopback listener http://127.0.0.1:{http_port}; "
+              f"port {args.port} is not served", flush=True)
+        plain = _new_listener(app, http_port, host="127.0.0.1")
+        try:
+            plain.run()
+        finally:
+            print("\nShutting down.")
+            _ingest_executor.shutdown(wait=False)
+        return
 
     app = create_app(gen, static_dir, db_path)
 
