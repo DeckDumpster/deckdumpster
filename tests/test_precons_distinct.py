@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tests.legacy_handler import bare_handler
 
 FIXTURE_DB = Path(__file__).parent / "fixtures" / "test-data.sqlite"
 
@@ -21,7 +22,7 @@ def _make_handler(db_path: str):
     """Minimal CrackPackHandler wired to an on-disk database."""
     from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
-    handler = object.__new__(CrackPackHandler)
+    handler = bare_handler()
     handler.db_path = db_path
     handler._responses = []
 

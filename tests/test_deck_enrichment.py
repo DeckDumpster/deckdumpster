@@ -27,6 +27,7 @@ import tempfile
 import pytest
 
 from mtg_collector.db.schema import init_db, refresh_latest_prices
+from tests.legacy_handler import bare_handler
 
 NOW = "2025-01-01T00:00:00.000Z"
 
@@ -158,7 +159,7 @@ class _RecordingConn:
 def _make_handler(db_path, recording=False):
     from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
-    handler = object.__new__(CrackPackHandler)
+    handler = bare_handler()
     handler.db_path = db_path
     handler.generator = object()  # truthy, never called by this path
     handler._responses = []
@@ -203,7 +204,7 @@ def test_deck_price_agrees_with_the_collection_list(deck_db):
     from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     path, constructed, _ = deck_db
-    handler = object.__new__(CrackPackHandler)
+    handler = bare_handler()
     handler.db_path = path
     handler.generator = object()
     responses = []

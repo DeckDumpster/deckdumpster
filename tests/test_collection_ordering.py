@@ -21,6 +21,7 @@ import pytest
 from mtg_collector.cli.crack_pack_server import CrackPackHandler
 from mtg_collector.db.models import CollectionEntry, CollectionRepository
 from mtg_collector.db.schema import init_db
+from tests.legacy_handler import bare_handler
 
 # Sort options offered by the collection page (keys of the handler's sort_map).
 SORTS = [
@@ -146,7 +147,7 @@ def _call_collection(db_path, params):
         return conn
 
     sent: list = []
-    handler = object.__new__(CrackPackHandler)
+    handler = bare_handler()
     handler.generator = None
     handler.db_path = db_path
     handler._get_conn = _get_conn

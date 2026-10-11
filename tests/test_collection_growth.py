@@ -25,6 +25,7 @@ import pytest
 
 from mtg_collector.db import growth
 from mtg_collector.db.schema import init_db, refresh_latest_prices
+from tests.legacy_handler import bare_handler
 
 
 def _day(offset: int) -> str:
@@ -128,7 +129,7 @@ def _growth(db_path, **params):
     """Call /api/collection/growth and return the response body."""
     from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
-    handler = object.__new__(CrackPackHandler)
+    handler = bare_handler()
     handler.db_path = db_path
     handler.generator = object()  # truthy, never called by this path
     responses = []
