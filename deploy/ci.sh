@@ -260,15 +260,15 @@ fi
 
 if _has_tier unit; then
     echo "==> Run unit tests"
-    run_tier unit uv run pytest tests/ -q --durations=50 --ignore=tests/integration --ignore=tests/ui
+    run_tier unit uv run pytest tests/ --durations=50 --ignore=tests/integration --ignore=tests/ui
 fi
 
 if _has_tier integration; then
     echo "==> Run integration tests"
-    run_tier integration uv run pytest tests/integration/ -q --durations=50 --instance "$INSTANCE"
+    run_tier integration uv run pytest tests/integration/ --durations=50 --instance "$INSTANCE"
 fi
 
 if _has_tier ui; then
     echo "==> Run UI scenario tests"
-    run_tier ui uv run pytest tests/ui/ -q --durations=50 --instance "$INSTANCE"
+    run_tier ui uv run pytest tests/ui/ --durations=50 --instance "$INSTANCE"
 fi
