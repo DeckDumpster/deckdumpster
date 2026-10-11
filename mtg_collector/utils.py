@@ -95,15 +95,19 @@ def normalize_finish(finish: str) -> str:
         return "nonfoil"
 
 
-def store_source_image(image_path: str) -> str:
+def store_source_image(image_path: str, tenant_id: Optional[str] = None) -> str:
     """
-    Copy a source image into <MTGC_HOME>/source_images/ and return the stored path.
+    Copy a source image into the tenant's source dir and return the stored path.
+
+    `tenant_id` None is single-tenant mode: <MTGC_HOME>/source_images/.
+    Otherwise tenant-files/<database_id>/source/.
 
     Generates a unique filename using a UUID suffix to avoid collisions.
     """
     src = Path(image_path).expanduser().resolve()
-    dest_dir = get_mtgc_home() / "source_images"
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    from mtg_collector.tenancy.images import source_images_dir
+
+    dest_dir = source_images_dir(tenant_id)
 
     unique_name = f"{src.stem}_{uuid.uuid4().hex[:8]}{src.suffix}"
     dest = dest_dir / unique_name
