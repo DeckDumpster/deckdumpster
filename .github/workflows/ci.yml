@@ -172,6 +172,7 @@ jobs:
     permissions:
       contents: read
       statuses: write
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -252,6 +253,9 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DECKDUMP_CI_TIERS: ${{ steps.tiers.outputs.tiers }}
+          # Pull/push of the deckdumpster-deps base image (deploy/deps-image.sh).
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
 
       # Per-test timings (--durations=50 is in the log; progress.jsonl is every test's
       # duration). if: always() so a red run still leaves its timings.

@@ -322,9 +322,9 @@ bash "$REPO_DIR/deploy/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
 # --- Build container image ---
 
 echo "==> Building container image (mtgc:latest)..."
-mapfile -t _uv_mount < <(mtgc_uv_cache_mount)
+DEPS_IMAGE="$(bash "$SCRIPT_DIR/deps-image.sh")"
 podman build -t mtgc:latest -f "$REPO_DIR/Containerfile" \
-    "${_uv_mount[@]}" "$REPO_DIR"
+    --build-arg "DEPS_IMAGE=$DEPS_IMAGE" "$REPO_DIR"
 podman tag mtgc:latest "mtgc:${INSTANCE}"
 
 # --- Generate and install Quadlet ---
