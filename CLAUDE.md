@@ -331,6 +331,15 @@ encrypted under `MTGC_MASTER_KEY` / `MTGC_MASTER_KEY_FILE` (`tenancy/keycrypt.py
 only), bound to the database_id. Nothing here routes a request: multi-tenant serving is
 later beads.
 
+### Bring-your-own-key OCR
+
+In multi mode a tenant's photo ingest runs on **that tenant's** Anthropic key, from the
+registry (`mtg tenant set-key`, `tenancy/apikey.py`), and never on `ANTHROPIC_API_KEY` —
+a tenant with no key gets a 503 naming the fix and its pending images are not queued;
+everything else works. Single-tenant mode still reads the environment key. The OCR pool is
+`tenancy/fairpool.py`: 4 workers, at most one in-flight job per tenant, round-robin across
+tenants, a job's exception stays that job's. There is no usage table or cap by design.
+
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
 holds both. A **query** is aggregated day by day inside SQLite from `collection` + `prices`;
