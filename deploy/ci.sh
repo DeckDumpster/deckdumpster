@@ -259,7 +259,7 @@ fi
 
 if _has_tier unit; then
     echo "==> Run unit tests"
-    uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/ui
+    uv run pytest tests/ -q -n 8 --dist loadgroup --ignore=tests/integration --ignore=tests/ui
 fi
 
 if _has_tier integration; then
