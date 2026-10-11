@@ -8,6 +8,7 @@ import sys
 from mtg_collector.db import get_connection, get_shared_write_path, init_db
 from mtg_collector.db.models import CardRepository, PrintingRepository, SetRepository
 from mtg_collector.db.schema import rebuild_card_names, rebuild_fts
+from mtg_collector.landing import current_run
 from mtg_collector.services.bulk_import import resolve_reversible_oracle_id
 from mtg_collector.services.scryfall import ScryfallAPI
 from mtg_collector.utils import get_mtgc_home
@@ -116,7 +117,7 @@ def cache_all(db_path: str):
 
     # Step 2: Get bulk data download URL
     print("Fetching bulk data metadata...")
-    resp = api.session.get(_BULK_DATA_URL)
+    resp = api._request_with_retry("GET", _BULK_DATA_URL)
     resp.raise_for_status()
     bulk_meta = resp.json()
 
@@ -148,6 +149,8 @@ def cache_all(db_path: str):
                 else:
                     print(f"\r  {mb:.0f} MB", end="", flush=True)
     print()  # newline after progress
+    current_run().land_file(
+        source="scryfall", dataset="default_cards", url=download_uri, path=tmp_path)
 
     # Step 4: Parse and process cards.
     # Streamed a line at a time - the decompressed file is several GB, and
