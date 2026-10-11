@@ -76,7 +76,23 @@ mtgc_store_activate
 # The old workflow tore the instance down in an `if: always()` step, so a run
 # that failed anywhere still cleaned up. A trap is that, and it also covers a
 # hand-run interrupted partway.
-trap 'bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true' EXIT
+GATE_PROBE_FILE=""
+# UI tier: one pytest-xdist worker per container, <instance>-<k> (sp-lc1puh).
+# Each --test instance peaked at ~257 MB (cgroup memory.peak); with a Chromium
+# per worker, 6 sits well inside the 16 GiB runner.
+UI_WORKERS="${MTGC_UI_WORKERS:-6}"
+_ci_cleanup() {
+    bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true
+    local k
+    for k in $(seq 0 $((UI_WORKERS - 1))); do
+        bash deploy/teardown.sh "${INSTANCE}-${k}" --purge >/dev/null 2>&1 || true
+    done
+    if [ -s "${GATE_PROBE_FILE:-}" ]; then
+        MTGC_STORE_ROOT="$(cat "$GATE_PROBE_FILE")" bash deploy/store-teardown.sh >/dev/null 2>&1 || true
+    fi
+    [ -z "${GATE_PROBE_FILE:-}" ] || rm -f "$GATE_PROBE_FILE"
+}
+trap _ci_cleanup EXIT
 
 # ---------------------------------------------------------------------------
 # Tier selection (db-5sku)
@@ -127,15 +143,14 @@ if _needs_container; then
     bash deploy/teardown.sh "$INSTANCE" --purge 2>/dev/null || true
     podman image prune -f 2>/dev/null || true
 
-    # Before the job writes several more gigabytes of its own: a --test bring-up
-    # must put nothing under $HOME, which on the deployment box is the disk prod
-    # runs from (de-3a0). de-3mo gave those bytes somewhere else to live, but
-    # nothing checked that it holds, and a rule nobody tests is not enforced -- /
-    # has hit 100% from non-prod container bytes twice. Costs one image build; see
-    # deploy/store-isolation-gate.sh for what it asserts and why the tolerance is
-    # not zero.
-    echo "==> Container-store isolation gate"
-    bash deploy/store-isolation-gate.sh
+    # The store-isolation gate (de-3a0) is asserted on the bring-up below, not on
+    # a second one: a --test bring-up must put nothing under $HOME, which on the
+    # deployment box is the disk prod runs from, and nothing checked that it holds
+    # until the gate did. It used to build its own throwaway image just to be
+    # measured -- ~230 s of a cold build. --keep runs every assertion against the
+    # build this run needs anyway and leaves the instance standing in its probe
+    # store; the trap above removes both (sp-s3kd5b).
+    GATE_PROBE_FILE="$(mktemp)"
 fi
 
 echo "==> Install dependencies"
@@ -225,8 +240,10 @@ wait_for_server() {
 }
 
 if _needs_container; then
-    echo "==> Build and start test container"
-    bash deploy/setup.sh "$INSTANCE" --test
+    echo "==> Build and start test container (container-store isolation gate)"
+    bash deploy/store-isolation-gate.sh --keep "$GATE_PROBE_FILE" "$INSTANCE"
+    # Everything below talks to the instance in the probe store it was built in.
+    mtgc_store_adopt_instance "$INSTANCE"
 
     echo "==> Wait for server"
     wait_for_server
@@ -248,6 +265,23 @@ if _has_tier integration; then
 fi
 
 if _has_tier ui; then
+    echo "==> Bring up ${UI_WORKERS} UI worker instances (parallel, one image)"
+    pids=()
+    for k in $(seq 0 $((UI_WORKERS - 1))); do
+        (
+            bash deploy/teardown.sh "${INSTANCE}-${k}" --purge >/dev/null 2>&1 || true
+            bash deploy/setup.sh "${INSTANCE}-${k}" --test --no-build \
+                >"${TMPDIR:-/tmp}/ui-worker-${INSTANCE}-${k}.log" 2>&1
+        ) &
+        pids+=($!)
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || { echo "UI worker bring-up failed:" >&2; tail -40 "${TMPDIR:-/tmp}"/ui-worker-"${INSTANCE}"-*.log >&2; exit 1; }
+    done
+    for k in $(seq 0 $((UI_WORKERS - 1))); do
+        INSTANCE="${INSTANCE}-${k}" wait_for_server
+    done
+
     echo "==> Run UI scenario tests"
-    uv run pytest tests/ui/ -q --instance "$INSTANCE"
+    uv run pytest tests/ui/ -q --instance "$INSTANCE" -n "$UI_WORKERS"
 fi
