@@ -1,0 +1,16 @@
+[Unit]
+Description=MTGC Litestream replication ({{INSTANCE}})
+# Continuous replication of the registry and every tenant database (sp-sal0ci).
+# Started and kept running by mtgc-litestream-{{INSTANCE}}.timer: starting a
+# service that is already active is a no-op, so the timer is the supervisor.
+After=network-online.target
+Wants=network-online.target
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'exec bash {{REPO_DIR}}/deploy/litestream-run.sh {{INSTANCE}}'
+Restart=on-failure
+RestartSec=30
+# Fenced: replication must never be able to starve the site it protects.
+CPUQuota=50%

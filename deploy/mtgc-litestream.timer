@@ -1,0 +1,11 @@
+[Unit]
+Description=MTGC Litestream supervisor ({{INSTANCE}})
+
+[Timer]
+# Starts the sidecar at boot and re-starts it if it ever stays down. Liveness is
+# not freshness: mtgc-litestream-check is what says whether the replica moves.
+OnBootSec=1min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target
