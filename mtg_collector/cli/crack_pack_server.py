@@ -1509,8 +1509,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Invalid JSON"}, 400)
                 return
             self._api_generate(data)
-        elif path == "/api/fetch-prices":
-            self._api_fetch_prices()
         elif path == "/api/ingest2/upload":
             self._api_ingest2_upload()
         elif path == "/api/ingest2/set-params":
@@ -1631,8 +1629,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path == "/api/import/commit":
             self._api_import_commit()
         # Sealed price fetch + TCGPlayer lookup
-        elif path == "/api/sealed/fetch-prices":
-            self._api_sealed_fetch_prices()
         elif path == "/api/sealed/from-tcgplayer":
             data = self._read_json_body()
             if data is None:
@@ -3309,23 +3305,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
         self._send_json({row["key"]: row["value"] for row in rows})
-
-    def _api_fetch_prices(self):
-        try:
-            from mtg_collector.cli.data_cmd import _fetch_prices as fetch_prices_cmd
-            fetch_prices_cmd(force=True)
-            # Return updated status
-            conn = self._get_conn()
-            try:
-                log = conn.execute(
-                    "SELECT fetched_at FROM price_fetch_log ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-                last_modified = log["fetched_at"] if log else None
-            finally:
-                conn.close()
-            self._send_json({"available": bool(log), "last_modified": last_modified})
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)
 
     # ── Ingest2 API endpoints (DB-backed) ──
 
@@ -9120,16 +9099,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
         else:
             self._send_json({"error": "Not found"}, 404)
-
-    def _api_sealed_fetch_prices(self):
-        """Trigger TCGCSV sealed price fetch."""
-        from mtg_collector.cli.data_cmd import fetch_sealed_prices
-
-        # Don't pass conn — fetch_sealed_prices writes to shared tables
-        # (tcgplayer_groups, sealed_prices) which need a direct connection
-        # to the shared DB, not the ATTACHed main DB where they're views.
-        result = fetch_sealed_prices(self.db_path)
-        self._send_json({"ok": True, **(result or {})})
 
     def _api_sealed_from_tcgplayer(self, data: dict):
         """Look up a sealed product by TCGPlayer product ID or URL."""
