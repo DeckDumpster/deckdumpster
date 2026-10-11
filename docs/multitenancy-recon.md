@@ -43,4 +43,15 @@ Decision this feeds (bead 10): if prod is split, tenant #1 = copy of the user-ow
 
 ## Results
 
-_Pending host measurements._
+
+Run by the operator's agent on the prod host, read-only, 2026-10-11 ~17:30Z (`ryangantt@ubuntu-mini-0`, container `systemd-mtgc-prod`, `MTGC_HOME=/data` on volume `mtgc-prod-data`).
+
+- **Monolithic.** `collection.sqlite` is 13,973,643,264 bytes (43 tables, 3,411,534 × 4 KiB pages); `shared.sqlite` is 0 bytes; the container's only mount is `mtgc-prod-data -> /data`, so there is no `/shared`.
+- **Rows** (no `dbstat` in this sqlite3, so rows not bytes):
+  - user tables: collection 10,301; status_log 11,279; ingest_lineage 4,184; movement_log 2,800; deck_cards 2,757; ingest_cache 1,830; ingest_images 1,826; collection_value_history 246; batches 159; decks 84; sealed_collection 79; orders 35; wishlist 14; settings 7; binders 0.
+  - catalog tables: prices 74,319,525; sealed_prices 450,807; printings 118,876; cards 38,932; cards_fts 38,932; sets 1,061; edhrec_recommendations 0.
+  - images: `ingest_images/` 874 MB, `source_images/` 114 MB.
+- **Backup restorable.** It runs from cron at `0 3 * * *` (`deploy/backup.sh prod`; the systemd `mtgc-backup-prod.timer` is disabled), producing ~3.7 GB tarballs kept in `~/mtgc-backups/prod/daily/` and in S3. The 2026-10-11 03:00 tarball extracted into scratch in 96 s; `PRAGMA quick_check` = ok; collection 10,301 rows, identical to live. The scratch copy was deleted.
+- **Edge headers** at the origin (`127.0.0.1:8091`): pages `/`, `/collection`, `/decks` send `Cache-Control: public, no-cache`; `/api/collection` and `/api/decks` send `private, no-cache`.
+- **Migration path (bead 10):** extract the small user side into the tenant file and turn the existing file into `shared.sqlite` by dropping the user tables. Never copy the 74M-row catalog.
+- **Also noticed:** no price rows dated 2026-10-09 (10-08 and 10-10 present), most likely an upstream file still dated 10-08 re-imported with INSERT OR IGNORE.
