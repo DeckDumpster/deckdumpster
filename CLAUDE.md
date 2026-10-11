@@ -98,7 +98,7 @@ The HTTP server is `mtg_collector/cli/crack_pack_server.py` — a single-file th
 
 **The only listener is an ASGI app** (`mtg_collector/asgi_app.py`: FastAPI, served by uvicorn;
 multi-tenancy N3, a strangler). `run()` builds it and binds it on the primary port (TLS when
-`--https`) and the optional `MTGC_HTTP_PORT` one. Its tenant middleware (`mtg_collector/tenancy.py`)
+`--https`) and the optional `MTGC_HTTP_PORT` one. Its tenant middleware (`mtg_collector/tenancy/context.py`)
 resolves a `TenantId` — in single-tenant mode always the one configured tenant — and binds it in a
 contextvar; `TenantId` can only be minted by a resolver. A catch-all route hands every request to
 the legacy adapter, which runs `CrackPackHandler` unchanged (in its own thread, with the context
