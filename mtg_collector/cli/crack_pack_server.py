@@ -19,7 +19,7 @@ from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse
 
 from mtg_collector.cli.page_routes import PageRoute, match_page_route
-from mtg_collector.db.connection import get_db_path
+from mtg_collector.db.connection import get_db_path, open_connection
 from mtg_collector.db.enrich import (
     COPY_IS_FOIL,
     enrich_columns,
@@ -37,7 +37,6 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
-from mtg_collector.db.connection import open_connection
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
 
