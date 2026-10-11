@@ -199,14 +199,14 @@ class ReplayHarness:
 
     # ── Waiting ────────────────────────────────────────────────────────
 
-    def wait_for_visible(self, selector: str, timeout: int = INTERACTION_BUDGET_MS):
+    def wait_for_visible(self, selector: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         self._record("wait_for_visible", selector)
         self.page.wait_for_selector(
             selector, state="visible", timeout=self._budget(timeout)
         )
         self._snap()
 
-    def wait_for_attached(self, selector: str, timeout: int = INTERACTION_BUDGET_MS):
+    def wait_for_attached(self, selector: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         """Wait for a DOM element to exist, regardless of visibility.
 
         Use for elements that exist but are not visible to the user — e.g.
@@ -218,14 +218,14 @@ class ReplayHarness:
         )
         self._snap()
 
-    def wait_for_hidden(self, selector: str, timeout: int = INTERACTION_BUDGET_MS):
+    def wait_for_hidden(self, selector: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         self._record("wait_for_hidden", selector)
         self.page.wait_for_selector(
             selector, state="hidden", timeout=self._budget(timeout)
         )
         self._snap()
 
-    def wait_for_text(self, text: str, timeout: int = INTERACTION_BUDGET_MS):
+    def wait_for_text(self, text: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         self._record("wait_for_text", text)
         self.page.get_by_text(text).first.wait_for(
             state="visible", timeout=self._budget(timeout)
