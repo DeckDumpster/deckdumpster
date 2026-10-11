@@ -23,17 +23,22 @@ HOME_DIR="$(mtgc_ls_home "$INSTANCE")"
 # fallback: tenants/ is where tenants live whether or not any exist yet.
 mkdir -p "$HOME_DIR/tenants"
 
+# Resolved before the heredoc: a failure inside $( ) in a heredoc does not abort.
+URL_COLLECTION="$(mtgc_ls_replica_url "$INSTANCE" collection)"
+URL_REGISTRY="$(mtgc_ls_replica_url "$INSTANCE" registry)"
+URL_TENANTS="$(mtgc_ls_replica_url "$INSTANCE" tenants)"
+
 cat <<YAML
 dbs:
   - path: ${HOME_DIR}/collection.sqlite
     replica:
-      url: $(mtgc_ls_replica_url "$INSTANCE" collection)
+      url: ${URL_COLLECTION}
   - path: ${HOME_DIR}/registry.sqlite
     replica:
-      url: $(mtgc_ls_replica_url "$INSTANCE" registry)
+      url: ${URL_REGISTRY}
   - dir: ${HOME_DIR}/tenants
     pattern: "*.sqlite"
     watch: true
     replica:
-      url: $(mtgc_ls_replica_url "$INSTANCE" tenants)
+      url: ${URL_TENANTS}
 YAML

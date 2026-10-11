@@ -5,6 +5,9 @@
 #
 # Sourced, not run. Callers have set -euo pipefail.
 
+# shellcheck source=deploy/store-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/store-lib.sh"
+
 # mtgc_ls_home <instance> — the directory holding registry.sqlite, tenants/ and
 # tenant-files/ (the volume mount; /data inside the container). MTGC_LITESTREAM_HOME
 # names it outright; only tests use that, production asks podman.
@@ -15,6 +18,9 @@ mtgc_ls_home() {
         return 0
     fi
     volume="mtgc-${instance}-data"
+    # The volume lives in the store the instance's unit records (de-3mo).
+    mtgc_store_adopt_instance "$instance"
+    mtgc_store_activate
     podman volume exists "$volume" \
         || { echo "ERROR: volume '$volume' not found." >&2; return 1; }
     podman volume inspect "$volume" --format '{{.Mountpoint}}'
