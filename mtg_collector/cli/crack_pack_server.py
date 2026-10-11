@@ -37,7 +37,6 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
-from mtg_collector.db.connection import open_connection
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
 
