@@ -37,17 +37,14 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
+from mtg_collector.db.connection import open_connection
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
     """Look up a single price from the latest_prices view."""
-    conn = sqlite3.connect(db_path)
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     row = conn.execute(
         "SELECT price FROM latest_prices WHERE set_code = ? AND collector_number = ? AND source = ? AND price_type = ?",
         (set_code.lower(), collector_number, source, price_type),
@@ -863,15 +860,7 @@ def _process_image_background(db_path, image_id):
 
     _log_ingest(f"[bg:{image_id}] Background worker started")
 
-    conn = sqlite3.connect(db_path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
-        # FK enforcement is incompatible with ATTACH'd shared tables.
-    else:
-        conn.execute("PRAGMA foreign_keys = ON")
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     init_db(conn)
 
     # Atomic claim
@@ -964,12 +953,7 @@ def _recover_pending_images(db_path):
     from mtg_collector.utils import now_iso
 
     print("[startup] Running database migrations ...", flush=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     init_db(conn)
     print("[startup] Database ready", flush=True)
 
@@ -1285,16 +1269,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _get_conn(self):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL")
-        if _shared_db_path and os.path.exists(_shared_db_path):
-            from mtg_collector.db.connection import attach_shared
-            attach_shared(conn, _shared_db_path)
-            # FK enforcement is incompatible with ATTACH'd shared tables —
-            # SQLite FK checks only see empty main-schema tables.
-        else:
-            conn.execute("PRAGMA foreign_keys = ON")
+        conn = open_connection(self.db_path, _shared_db_path)
         return conn
 
     def do_GET(self):

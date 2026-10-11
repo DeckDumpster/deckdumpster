@@ -11,7 +11,7 @@ from functools import lru_cache
 import anthropic
 import httpx
 
-from mtg_collector.db.connection import get_db_path
+from mtg_collector.db.connection import get_db_path, get_shared_db_path, open_connection
 from mtg_collector.services.claude import ClaudeVision
 
 AGENT_MODEL_HAIKU = "claude-haiku-4-5-20251001"
@@ -517,8 +517,7 @@ def run_agent(
     client = anthropic.Anthropic(
         timeout=httpx.Timeout(600.0, connect=10.0),
     )
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
+    conn = open_connection(get_db_path(), get_shared_db_path(), wal=False)
     _install_accent_insensitive_like(conn)
     tools = _build_tools(conn)
 
