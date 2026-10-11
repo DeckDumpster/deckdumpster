@@ -279,7 +279,7 @@ NOOP_STUB = "#!/usr/bin/env bash\nexit 0\n"
 LINGER_STUB = "#!/usr/bin/env bash\necho 'Linger=yes'\nexit 0\n"
 
 
-def run_gate(tmp_path, mode, extra_env=None):
+def run_gate(tmp_path, mode, extra_env=None, keep_file=None):
     """Drive the real gate in a throwaway $HOME with podman acting out `mode`."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -337,7 +337,7 @@ def run_gate(tmp_path, mode, extra_env=None):
     env.update(extra_env or {})
 
     return subprocess.run(
-        ["bash", str(GATE), "gatetest"],
+        ["bash", str(GATE), *(["--keep", str(keep_file)] if keep_file else []), "gatetest"],
         capture_output=True,
         text=True,
         env=env,
@@ -375,6 +375,27 @@ def test_it_passes_when_podman_honours_the_store(honoured):
 def test_it_leaves_neither_store_behind(honoured):
     """A gate that fills a disk every run is its own version of the bug."""
     assert "Default store after cleanup" in honoured.stdout, honoured.stdout
+
+
+def test_keep_asserts_on_the_bring_up_and_leaves_it_standing(tmp_path):
+    """sp-s3kd5b: CI asserts on the build it already does. A pass under --keep
+    leaves the probe store on disk and records where it is."""
+    keep = tmp_path / "probe-path"
+    result = run_gate(tmp_path, "honoured", keep_file=keep)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS" in result.stdout
+    assert keep.read_text().strip() == str(tmp_path / "probe")
+    assert (tmp_path / "probe").exists()
+
+
+def test_keep_still_fails_and_cleans_up_a_leak(tmp_path):
+    keep = tmp_path / "probe-path"
+    result = run_gate(tmp_path, "ignored", keep_file=keep)
+
+    assert result.returncode != 0
+    assert not keep.read_text().strip()
+    assert not (tmp_path / "probe").exists()
 
 
 def test_it_fails_when_the_bytes_land_in_the_default_store(ignored):
@@ -522,6 +543,9 @@ def test_ci_runs_the_gate():
 
     assert "deploy/ci.sh" in workflow
     assert "deploy/store-isolation-gate.sh" in ci
+    # Asserted on the bring-up CI already does, not a second image build.
+    assert "store-isolation-gate.sh --keep" in ci
+    assert ci.count("deploy/setup.sh") == 0
 
 
 # ── A concurrent prod deploy (de: 2026-08-30) ───────────────────────────────
