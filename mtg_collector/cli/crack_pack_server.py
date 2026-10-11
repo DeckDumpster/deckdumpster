@@ -37,17 +37,14 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
+from mtg_collector.db.connection import open_connection
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
     """Look up a single price from the latest_prices view."""
-    conn = sqlite3.connect(db_path)
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     row = conn.execute(
         "SELECT price FROM latest_prices WHERE set_code = ? AND collector_number = ? AND source = ? AND price_type = ?",
         (set_code.lower(), collector_number, source, price_type),
@@ -863,15 +860,7 @@ def _process_image_background(db_path, image_id):
 
     _log_ingest(f"[bg:{image_id}] Background worker started")
 
-    conn = sqlite3.connect(db_path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
-        # FK enforcement is incompatible with ATTACH'd shared tables.
-    else:
-        conn.execute("PRAGMA foreign_keys = ON")
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     init_db(conn)
 
     # Atomic claim
@@ -964,12 +953,7 @@ def _recover_pending_images(db_path):
     from mtg_collector.utils import now_iso
 
     print("[startup] Running database migrations ...", flush=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     init_db(conn)
     print("[startup] Database ready", flush=True)
 
@@ -1285,16 +1269,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _get_conn(self):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL")
-        if _shared_db_path and os.path.exists(_shared_db_path):
-            from mtg_collector.db.connection import attach_shared
-            attach_shared(conn, _shared_db_path)
-            # FK enforcement is incompatible with ATTACH'd shared tables —
-            # SQLite FK checks only see empty main-schema tables.
-        else:
-            conn.execute("PRAGMA foreign_keys = ON")
+        conn = open_connection(self.db_path, _shared_db_path)
         return conn
 
     def do_GET(self):
@@ -1534,8 +1509,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Invalid JSON"}, 400)
                 return
             self._api_generate(data)
-        elif path == "/api/fetch-prices":
-            self._api_fetch_prices()
         elif path == "/api/ingest2/upload":
             self._api_ingest2_upload()
         elif path == "/api/ingest2/set-params":
@@ -1656,8 +1629,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path == "/api/import/commit":
             self._api_import_commit()
         # Sealed price fetch + TCGPlayer lookup
-        elif path == "/api/sealed/fetch-prices":
-            self._api_sealed_fetch_prices()
         elif path == "/api/sealed/from-tcgplayer":
             data = self._read_json_body()
             if data is None:
@@ -3334,23 +3305,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
         self._send_json({row["key"]: row["value"] for row in rows})
-
-    def _api_fetch_prices(self):
-        try:
-            from mtg_collector.cli.data_cmd import _fetch_prices as fetch_prices_cmd
-            fetch_prices_cmd(force=True)
-            # Return updated status
-            conn = self._get_conn()
-            try:
-                log = conn.execute(
-                    "SELECT fetched_at FROM price_fetch_log ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-                last_modified = log["fetched_at"] if log else None
-            finally:
-                conn.close()
-            self._send_json({"available": bool(log), "last_modified": last_modified})
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)
 
     # ── Ingest2 API endpoints (DB-backed) ──
 
@@ -9145,16 +9099,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
         else:
             self._send_json({"error": "Not found"}, 404)
-
-    def _api_sealed_fetch_prices(self):
-        """Trigger TCGCSV sealed price fetch."""
-        from mtg_collector.cli.data_cmd import fetch_sealed_prices
-
-        # Don't pass conn — fetch_sealed_prices writes to shared tables
-        # (tcgplayer_groups, sealed_prices) which need a direct connection
-        # to the shared DB, not the ATTACHed main DB where they're views.
-        result = fetch_sealed_prices(self.db_path)
-        self._send_json({"ok": True, **(result or {})})
 
     def _api_sealed_from_tcgplayer(self, data: dict):
         """Look up a sealed product by TCGPlayer product ID or URL."""

@@ -304,6 +304,31 @@ fixture had neither column, so every set in a `--test` container reported `owned
 table with `0` — which `clean_size` reads as an absence — so one cached set stays NULL and
 both branches have a fixture. Do not "fix" `spg` to a positive number.
 
+### Tenants (registry and `mtg tenant`)
+
+`$MTGC_HOME/registry.sqlite` (`db/registry.py`) is the control plane: `user` (handle ->
+opaque ULID `database_id`, `retired_at`, `purged_at`), `user_identity` (email -> database_id),
+`tenant_key` (encrypted). Rules are schema CHECKs and partial unique indexes (one active
+handle; one active tenant per email; purge only after detach), not just function checks.
+`mtg_collector/tenancy/paths.py` is the **only** constructor of tenant paths and takes a
+database_id, never a handle; it refuses lowercase or malformed ULIDs. A re-created handle
+gets a new ULID, so it can never reach the old files or replica. `mtg tenant
+create|list|rename|detach|reattach|purge|adopt|migrate|set-key|identity` is the lifecycle;
+`migrate` needs a handle or `--all` and reports every tenant. Keys are read from stdin and
+encrypted under `MTGC_MASTER_KEY` / `MTGC_MASTER_KEY_FILE` (`tenancy/keycrypt.py`, stdlib
+only), bound to the database_id. Nothing here routes a request: multi-tenant serving is
+later beads.
+
+### Legacy upgrade path (`mtg tenant legacy-migrate` / `legacy-rollback`)
+`tenancy/upgrade.py` moves a pre-tenancy `collection.sqlite` onto a ULID tenant. The legacy
+file is **never written**: the catalogue is copied to `$MTGC_HOME/shared.sqlite` (kept if
+present, never rewritten), the user file is copied via `sqlite3.backup()` onto a fresh ULID,
+the catalogue is dropped from the copy, and the served `collection_view` digest must match
+or the copy is detached and purged. Each step is idempotent and refuses a write-locked
+database. Rollback is a detach; migrating again makes a *new* copy of the legacy file. Nothing
+here is imported by the server (never a startup gate) and nothing touches backups, so the old
+backup prefix stays addressable. `tests/test_upgrade_path.py` is the gate.
+
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
 holds both. A **query** is aggregated day by day inside SQLite from `collection` + `prices`;
@@ -463,6 +488,17 @@ per warm load, and it is now none.
   de-dai left it. An asset opts *into* immutability by existing on disk, so a
   reference naming no file stays the visible 404 it always was, and the two JS
   files that build `/static/card_back.jpeg` in a string keep today's behaviour.
+
+### Catalog placement (multi-tenancy 4)
+`db/schema.py` holds three DDL constants: `USER_SCHEMA_SQL` (a tenant file), `SHARED_SCHEMA_SQL`
+(catalogue, prices, sealed reference, `cards_fts`) and `REGISTRY_SCHEMA_SQL`. `SCHEMA_SQL` is
+user+shared for a monolithic DB. `init_db` on a connection with `shared` attached creates user
+objects only, and `get_current_version` reads `main.schema_version` (unqualified it would find
+the catalogue's). `cards_fts` is reached by plain name resolution: a tenant file holds none, so
+SQLite falls through to `shared`; the v53 migration drops a split-mode copy. No request handler
+writes the catalogue: price fetches are the `mtgc-prices` timer / `mtg data fetch-prices` only
+(`tests/test_catalog_placement.py` pins it). `mtg data rebuild-growth` walks `db/tenants.py`'s
+tenant list, skips and reports a failing tenant, and exits 2 when partial.
 
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
