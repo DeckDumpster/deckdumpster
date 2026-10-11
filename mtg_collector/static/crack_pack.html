@@ -515,7 +515,7 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
     <div class="col-controls"><button class="col-btn" id="col-minus">&minus;</button><div class="col-count" id="col-count"></div><button class="col-btn" id="col-plus">+</button></div>
   </div>
   <div id="status">
-    <span class="prices-status" id="prices-status" title="Click to update CK prices"></span>
+    <span class="prices-status" id="prices-status"></span>
     <span id="status-text"></span>
   </div>
 </header>
@@ -615,23 +615,6 @@ async function loadPricesStatus() {
     pricesStatus.textContent = 'CK: unavailable';
   }
 }
-
-pricesStatus.addEventListener('click', async () => {
-  pricesStatus.classList.add('loading');
-  pricesStatus.textContent = 'CK: downloading...';
-  try {
-    const res = await fetch('/api/fetch-prices', { method: 'POST' });
-    const data = await res.json();
-    if (data.error) {
-      pricesStatus.textContent = 'CK: error';
-    } else {
-      pricesStatus.textContent = `CK: ${formatTimeAgo(data.last_modified)}`;
-    }
-  } catch {
-    pricesStatus.textContent = 'CK: error';
-  }
-  pricesStatus.classList.remove('loading');
-});
 
 // --- Border colors ---
 

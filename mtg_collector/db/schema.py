@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 52
+SCHEMA_VERSION = 53
 
 
 class SchemaIntegrityError(Exception):
@@ -20,82 +20,12 @@ SHARED_TABLES = [
     "edhrec_recommendations",
 ]
 SHARED_VIEWS = ["latest_prices", "latest_sealed_prices"]
+# Virtual tables cannot be shadowed by a temp view (MATCH does not push through
+# one), so cards_fts is reached by plain name resolution instead: a tenant file
+# holds none, and SQLite falls through temp -> main -> shared.
+SHARED_VIRTUAL = ["cards_fts"]
 
-SCHEMA_SQL = """
--- Abstract cards (oracle-level, cached from Scryfall)
-CREATE TABLE IF NOT EXISTS cards (
-    oracle_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    type_line TEXT,
-    mana_cost TEXT,
-    cmc REAL,
-    oracle_text TEXT,
-    colors TEXT,           -- JSON array: ["R", "G"]
-    color_identity TEXT,   -- JSON array
-    keywords TEXT,         -- JSON array: ["Flying", "Trample"]
-    legalities TEXT        -- JSON object: {"standard": "legal", ...}
-);
-
--- Sets (cached from Scryfall)
-CREATE TABLE IF NOT EXISTS sets (
-    set_code TEXT PRIMARY KEY,
-    set_name TEXT NOT NULL,
-    set_type TEXT,
-    released_at TEXT,
-    digital INTEGER NOT NULL DEFAULT 0,  -- 1 if MTGO/Arena-only set
-    cards_fetched_at TEXT,  -- NULL = card list not cached, otherwise ISO timestamp
-    -- Where the base set ends and boosterfun begins, and how big the set is in
-    -- total.  Both are stored rather than derived: the base/boosterfun boundary
-    -- cannot be read off the treatment columns, because frame_effects=["legendary"]
-    -- is an ordinary base-set frame and any rule keyed on frame_effects puts fin's
-    -- boundary at #6 instead of #309.  Populated at ingest only -- base_set_size
-    -- from MTGJSON's baseSetSize, total_set_size from Scryfall's card_count.
-    -- NULL is permanent and legitimate for a set with no AllPrintings match; the
-    -- UI hides the completion bar rather than rendering 0/0.
-    base_set_size INTEGER,
-    total_set_size INTEGER
-);
-
--- Specific printings
-CREATE TABLE IF NOT EXISTS printings (
-    printing_id TEXT PRIMARY KEY,  -- Externally-defined ID (Scryfall printing UUID)
-    oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
-    set_code TEXT NOT NULL REFERENCES sets(set_code),
-    collector_number TEXT NOT NULL,
-    rarity TEXT,
-    frame_effects TEXT,    -- JSON array
-    border_color TEXT,
-    full_art INTEGER,
-    promo INTEGER,
-    promo_types TEXT,      -- JSON array
-    finishes TEXT,         -- JSON array (what finishes exist for this printing)
-    artist TEXT,
-    image_uri TEXT,
-    raw_json TEXT,         -- Full Scryfall API response as JSON (for semantic search, etc.)
-    power TEXT,
-    toughness TEXT,
-    loyalty TEXT,
-    layout TEXT,
-    flavor_text TEXT,
-    flavor_name TEXT,
-    watermark TEXT,
-    digital INTEGER DEFAULT 0,
-    reserved INTEGER DEFAULT 0,
-    reprint INTEGER DEFAULT 0,
-    produced_mana TEXT,    -- JSON array
-    games TEXT,            -- JSON array: ["paper", "mtgo", "arena"]
-    face0_mana_cost TEXT,
-    face1_mana_cost TEXT,
-    -- Denormalised copy of cards.name, so the collection's default sort can be
-    -- served by an index.  See idx_printings_card_name below for why this has
-    -- to live on printings rather than being read across the join.
-    card_name TEXT,
-    -- collector_number encoded as an integer that sorts, computed at ingest.
-    -- See mtg_collector/db/collector_number.py for the encoding, and
-    -- idx_printings_set_sortable below for why the column has to exist.
-    number_sortable INTEGER,
-    UNIQUE(set_code, collector_number)
-);
+USER_SCHEMA_SQL = """
 
 -- Orders (TCGPlayer, Card Kingdom, etc.)
 CREATE TABLE IF NOT EXISTS orders (
@@ -173,21 +103,6 @@ CREATE TABLE IF NOT EXISTS deck_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards(deck_id);
 CREATE INDEX IF NOT EXISTS idx_deck_cards_collection ON deck_cards(collection_id);
-
--- EDHREC recommendations (popularity data per commander)
-CREATE TABLE IF NOT EXISTS edhrec_recommendations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    commander_oracle_id TEXT NOT NULL,
-    card_oracle_id TEXT NOT NULL,
-    inclusion_rate REAL,
-    rank INTEGER,
-    synergy_score REAL,
-    fetched_at TEXT NOT NULL,
-    FOREIGN KEY (commander_oracle_id) REFERENCES cards(oracle_id),
-    FOREIGN KEY (card_oracle_id) REFERENCES cards(oracle_id),
-    UNIQUE(commander_oracle_id, card_oracle_id)
-);
-CREATE INDEX IF NOT EXISTS idx_edhrec_commander ON edhrec_recommendations(commander_oracle_id);
 
 -- Binders (physical binder groupings)
 CREATE TABLE IF NOT EXISTS binders (
@@ -381,6 +296,184 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at TEXT NOT NULL
 );
 
+-- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_collection_printing ON collection(printing_id);
+CREATE INDEX IF NOT EXISTS idx_collection_source ON collection(source);
+CREATE INDEX IF NOT EXISTS idx_collection_status ON collection(status);
+
+-- User's sealed product collection (one row per acquisition)
+CREATE TABLE IF NOT EXISTS sealed_collection (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sealed_product_uuid TEXT NOT NULL REFERENCES sealed_products(uuid),
+    quantity INTEGER NOT NULL DEFAULT 1,
+    condition TEXT DEFAULT 'Near Mint',
+    purchase_price REAL,
+    purchase_date TEXT,
+    source TEXT,
+    seller_name TEXT,
+    notes TEXT,
+    status TEXT NOT NULL DEFAULT 'owned'
+        CHECK (status IN ('owned', 'listed', 'sold', 'traded', 'gifted', 'opened')),
+    sale_price REAL,
+    added_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sealed_collection_product ON sealed_collection(sealed_product_uuid);
+CREATE INDEX IF NOT EXISTS idx_sealed_collection_status ON sealed_collection(status);
+
+-- Denormalized sealed collection view
+CREATE VIEW IF NOT EXISTS sealed_collection_view AS
+SELECT
+    sc.id, sc.quantity, sc.condition, sc.purchase_price, sc.purchase_date,
+    sc.source, sc.seller_name, sc.notes, sc.status, sc.sale_price, sc.added_at,
+    sp.uuid, sp.name, sp.set_code, sp.category, sp.subtype,
+    sp.tcgplayer_product_id, sp.card_count, sp.release_date,
+    sp.purchase_url_tcgplayer, sp.purchase_url_cardkingdom,
+    s.set_name, s.set_type, s.released_at AS set_released_at
+FROM sealed_collection sc
+JOIN sealed_products sp ON sc.sealed_product_uuid = sp.uuid
+LEFT JOIN sets s ON sp.set_code = s.set_code;
+
+-- Denormalized collection view
+CREATE VIEW IF NOT EXISTS collection_view AS
+SELECT
+    c.id,
+    card.name,
+    s.set_name,
+    p.set_code,
+    p.collector_number,
+    p.rarity,
+    p.promo,
+    c.finish,
+    c.condition,
+    c.language,
+    card.type_line,
+    card.mana_cost,
+    card.cmc,
+    card.colors,
+    card.color_identity,
+    p.artist,
+    c.purchase_price,
+    c.acquired_at,
+    c.source,
+    c.source_image,
+    c.notes,
+    c.tags,
+    c.tradelist,
+    c.status,
+    c.sale_price,
+    c.printing_id,
+    p.oracle_id,
+    c.order_id,
+    dc.deck_id,
+    dc.zone AS deck_zone,
+    c.binder_id,
+    c.batch_id,
+    d.name AS deck_name,
+    ds.name AS deck_state,
+    b.name AS binder_name,
+    bat.name AS batch_name
+FROM collection c
+JOIN printings p ON c.printing_id = p.printing_id
+JOIN cards card ON p.oracle_id = card.oracle_id
+JOIN sets s ON p.set_code = s.set_code
+LEFT JOIN deck_cards dc ON dc.collection_id = c.id
+LEFT JOIN decks d ON dc.deck_id = d.id
+LEFT JOIN deck_states ds ON d.state_id = ds.id
+LEFT JOIN binders b ON c.binder_id = b.id
+LEFT JOIN batches bat ON c.batch_id = bat.id;
+"""
+
+SHARED_SCHEMA_SQL = """
+-- Abstract cards (oracle-level, cached from Scryfall)
+CREATE TABLE IF NOT EXISTS cards (
+    oracle_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type_line TEXT,
+    mana_cost TEXT,
+    cmc REAL,
+    oracle_text TEXT,
+    colors TEXT,           -- JSON array: ["R", "G"]
+    color_identity TEXT,   -- JSON array
+    keywords TEXT,         -- JSON array: ["Flying", "Trample"]
+    legalities TEXT        -- JSON object: {"standard": "legal", ...}
+);
+
+-- Sets (cached from Scryfall)
+CREATE TABLE IF NOT EXISTS sets (
+    set_code TEXT PRIMARY KEY,
+    set_name TEXT NOT NULL,
+    set_type TEXT,
+    released_at TEXT,
+    digital INTEGER NOT NULL DEFAULT 0,  -- 1 if MTGO/Arena-only set
+    cards_fetched_at TEXT,  -- NULL = card list not cached, otherwise ISO timestamp
+    -- Where the base set ends and boosterfun begins, and how big the set is in
+    -- total.  Both are stored rather than derived: the base/boosterfun boundary
+    -- cannot be read off the treatment columns, because frame_effects=["legendary"]
+    -- is an ordinary base-set frame and any rule keyed on frame_effects puts fin's
+    -- boundary at #6 instead of #309.  Populated at ingest only -- base_set_size
+    -- from MTGJSON's baseSetSize, total_set_size from Scryfall's card_count.
+    -- NULL is permanent and legitimate for a set with no AllPrintings match; the
+    -- UI hides the completion bar rather than rendering 0/0.
+    base_set_size INTEGER,
+    total_set_size INTEGER
+);
+
+-- Specific printings
+CREATE TABLE IF NOT EXISTS printings (
+    printing_id TEXT PRIMARY KEY,  -- Externally-defined ID (Scryfall printing UUID)
+    oracle_id TEXT NOT NULL REFERENCES cards(oracle_id),
+    set_code TEXT NOT NULL REFERENCES sets(set_code),
+    collector_number TEXT NOT NULL,
+    rarity TEXT,
+    frame_effects TEXT,    -- JSON array
+    border_color TEXT,
+    full_art INTEGER,
+    promo INTEGER,
+    promo_types TEXT,      -- JSON array
+    finishes TEXT,         -- JSON array (what finishes exist for this printing)
+    artist TEXT,
+    image_uri TEXT,
+    raw_json TEXT,         -- Full Scryfall API response as JSON (for semantic search, etc.)
+    power TEXT,
+    toughness TEXT,
+    loyalty TEXT,
+    layout TEXT,
+    flavor_text TEXT,
+    flavor_name TEXT,
+    watermark TEXT,
+    digital INTEGER DEFAULT 0,
+    reserved INTEGER DEFAULT 0,
+    reprint INTEGER DEFAULT 0,
+    produced_mana TEXT,    -- JSON array
+    games TEXT,            -- JSON array: ["paper", "mtgo", "arena"]
+    face0_mana_cost TEXT,
+    face1_mana_cost TEXT,
+    -- Denormalised copy of cards.name, so the collection's default sort can be
+    -- served by an index.  See idx_printings_card_name below for why this has
+    -- to live on printings rather than being read across the join.
+    card_name TEXT,
+    -- collector_number encoded as an integer that sorts, computed at ingest.
+    -- See mtg_collector/db/collector_number.py for the encoding, and
+    -- idx_printings_set_sortable below for why the column has to exist.
+    number_sortable INTEGER,
+    UNIQUE(set_code, collector_number)
+);
+
+-- EDHREC recommendations (popularity data per commander)
+CREATE TABLE IF NOT EXISTS edhrec_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    commander_oracle_id TEXT NOT NULL,
+    card_oracle_id TEXT NOT NULL,
+    inclusion_rate REAL,
+    rank INTEGER,
+    synergy_score REAL,
+    fetched_at TEXT NOT NULL,
+    FOREIGN KEY (commander_oracle_id) REFERENCES cards(oracle_id),
+    FOREIGN KEY (card_oracle_id) REFERENCES cards(oracle_id),
+    UNIQUE(commander_oracle_id, card_oracle_id)
+);
+CREATE INDEX IF NOT EXISTS idx_edhrec_commander ON edhrec_recommendations(commander_oracle_id);
+
 -- MTGJSON UUID → (set_code, collector_number) mapping
 CREATE TABLE IF NOT EXISTS mtgjson_uuid_map (
     uuid TEXT PRIMARY KEY,
@@ -503,11 +596,6 @@ CREATE TABLE IF NOT EXISTS mtgjson_decks (
 );
 CREATE INDEX IF NOT EXISTS idx_mtgjson_decks_type ON mtgjson_decks(type);
 CREATE INDEX IF NOT EXISTS idx_mtgjson_decks_set_type ON mtgjson_decks(set_code, type);
-
--- Indexes for common queries
-CREATE INDEX IF NOT EXISTS idx_collection_printing ON collection(printing_id);
-CREATE INDEX IF NOT EXISTS idx_collection_source ON collection(source);
-CREATE INDEX IF NOT EXISTS idx_collection_status ON collection(status);
 CREATE INDEX IF NOT EXISTS idx_printings_oracle ON printings(oracle_id);
 CREATE INDEX IF NOT EXISTS idx_printings_set ON printings(set_code);
 CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name);
@@ -588,25 +676,6 @@ CREATE TABLE IF NOT EXISTS sealed_product_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_spc_product ON sealed_product_cards(sealed_product_uuid);
 
--- User's sealed product collection (one row per acquisition)
-CREATE TABLE IF NOT EXISTS sealed_collection (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sealed_product_uuid TEXT NOT NULL REFERENCES sealed_products(uuid),
-    quantity INTEGER NOT NULL DEFAULT 1,
-    condition TEXT DEFAULT 'Near Mint',
-    purchase_price REAL,
-    purchase_date TEXT,
-    source TEXT,
-    seller_name TEXT,
-    notes TEXT,
-    status TEXT NOT NULL DEFAULT 'owned'
-        CHECK (status IN ('owned', 'listed', 'sold', 'traded', 'gifted', 'opened')),
-    sale_price REAL,
-    added_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_sealed_collection_product ON sealed_collection(sealed_product_uuid);
-CREATE INDEX IF NOT EXISTS idx_sealed_collection_status ON sealed_collection(status);
-
 -- Sealed product prices (time series from TCGCSV)
 CREATE TABLE IF NOT EXISTS sealed_prices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -633,19 +702,6 @@ CREATE TABLE IF NOT EXISTS tcgplayer_groups (
 );
 CREATE INDEX IF NOT EXISTS idx_tcgplayer_groups_abbr ON tcgplayer_groups(abbreviation);
 
--- Denormalized sealed collection view
-CREATE VIEW IF NOT EXISTS sealed_collection_view AS
-SELECT
-    sc.id, sc.quantity, sc.condition, sc.purchase_price, sc.purchase_date,
-    sc.source, sc.seller_name, sc.notes, sc.status, sc.sale_price, sc.added_at,
-    sp.uuid, sp.name, sp.set_code, sp.category, sp.subtype,
-    sp.tcgplayer_product_id, sp.card_count, sp.release_date,
-    sp.purchase_url_tcgplayer, sp.purchase_url_cardkingdom,
-    s.set_name, s.set_type, s.released_at AS set_released_at
-FROM sealed_collection sc
-JOIN sealed_products sp ON sc.sealed_product_uuid = sp.uuid
-LEFT JOIN sets s ON sp.set_code = s.set_code;
-
 -- Latest sealed prices view: most recent row PER product (same per-key semantics
 -- as latest_prices). A global MAX(observed_at) would drop any product missing from
 -- the newest fetch even though it has usable price history.
@@ -659,55 +715,6 @@ WHERE p.observed_at = (
     SELECT MAX(p2.observed_at) FROM sealed_prices p2
     WHERE p2.tcgplayer_product_id = p.tcgplayer_product_id
 );
-
--- Denormalized collection view
-CREATE VIEW IF NOT EXISTS collection_view AS
-SELECT
-    c.id,
-    card.name,
-    s.set_name,
-    p.set_code,
-    p.collector_number,
-    p.rarity,
-    p.promo,
-    c.finish,
-    c.condition,
-    c.language,
-    card.type_line,
-    card.mana_cost,
-    card.cmc,
-    card.colors,
-    card.color_identity,
-    p.artist,
-    c.purchase_price,
-    c.acquired_at,
-    c.source,
-    c.source_image,
-    c.notes,
-    c.tags,
-    c.tradelist,
-    c.status,
-    c.sale_price,
-    c.printing_id,
-    p.oracle_id,
-    c.order_id,
-    dc.deck_id,
-    dc.zone AS deck_zone,
-    c.binder_id,
-    c.batch_id,
-    d.name AS deck_name,
-    ds.name AS deck_state,
-    b.name AS binder_name,
-    bat.name AS batch_name
-FROM collection c
-JOIN printings p ON c.printing_id = p.printing_id
-JOIN cards card ON p.oracle_id = card.oracle_id
-JOIN sets s ON p.set_code = s.set_code
-LEFT JOIN deck_cards dc ON dc.collection_id = c.id
-LEFT JOIN decks d ON dc.deck_id = d.id
-LEFT JOIN deck_states ds ON d.state_id = ds.id
-LEFT JOIN binders b ON c.binder_id = b.id
-LEFT JOIN batches bat ON c.batch_id = bat.id;
 """
 
 # The growth cache, kept as its own constant because _migrate_v46_to_v47 applies
@@ -770,7 +777,43 @@ BEGIN
 END;
 """
 
-SCHEMA_SQL = SCHEMA_SQL + GROWTH_CACHE_SQL
+USER_SCHEMA_SQL = USER_SCHEMA_SQL + GROWTH_CACHE_SQL
+
+# What a tenant file holds: collection, decks, binders, wishlist, orders, ingest,
+# settings and the growth cache.  Never a catalog table (sp-y8iflb).
+# What shared.sqlite holds: the card catalogue, prices, sealed reference data and
+# the cards_fts index over `cards`.  Rebuildable, never replicated.
+# A monolithic database (single-DB mode) is both at once.
+SCHEMA_SQL = USER_SCHEMA_SQL + SHARED_SCHEMA_SQL
+
+# Control plane (registry.sqlite): who the tenants are.  `database_id` is an
+# opaque uppercase ULID that names tenants/<ULID>.sqlite, so a re-created handle
+# can never reach a predecessor's file or backups.
+REGISTRY_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS user (
+    handle TEXT NOT NULL CHECK (handle GLOB '[a-z0-9]*' AND handle NOT GLOB '*[^a-z0-9_-]*'
+                                AND length(handle) BETWEEN 1 AND 32),
+    database_id TEXT PRIMARY KEY CHECK (length(database_id) = 26
+                                AND database_id NOT GLOB '*[^0-9A-HJKMNP-TV-Z]*'),
+    created_at TEXT NOT NULL,
+    retired_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_active_handle
+    ON user(handle) WHERE retired_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS user_identity (
+    email TEXT NOT NULL,
+    database_id TEXT NOT NULL REFERENCES user(database_id),
+    retired_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_identity_active_email
+    ON user_identity(email) WHERE retired_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS tenant_key (
+    database_id TEXT PRIMARY KEY REFERENCES user(database_id),
+    wrapped_key BLOB NOT NULL
+);
+"""
 
 
 # TRIGGER is in here with the rest: the growth cache's invalidation triggers are
@@ -843,7 +886,7 @@ def verify_shared_schema(conn: sqlite3.Connection) -> list[str]:
         return []
 
     present = {r[0] for r in conn.execute("SELECT name FROM shared.sqlite_master")}
-    return sorted(set(SHARED_TABLES + SHARED_VIEWS) - present)
+    return sorted(set(SHARED_TABLES + SHARED_VIEWS + SHARED_VIRTUAL) - present)
 
 
 def refresh_latest_prices(conn: sqlite3.Connection) -> int:
@@ -926,10 +969,13 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
         # resolves to the temp *view* and SQLite raises "views may not be
         # indexed", which broke `mtg db init --force` — the very repair the
         # integrity check above tells the operator to run.
-        from mtg_collector.db.connection import suspend_shared_shadow
+        from mtg_collector.db.connection import shared_is_attached, suspend_shared_shadow
 
+        # With a catalogue attached the connection's main file is a tenant file,
+        # and a tenant file never contains catalog tables.
+        ddl = USER_SCHEMA_SQL if shared_is_attached(conn) else SCHEMA_SQL
         with suspend_shared_shadow(conn):
-            conn.executescript(SCHEMA_SQL)
+            conn.executescript(ddl)
         # Seed default settings
         _seed_default_settings(conn)
     else:
@@ -1036,6 +1082,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v50_to_v51(conn)
         if current < 52:
             _migrate_v51_to_v52(conn)
+        if current < 53:
+            _migrate_v52_to_v53(conn)
 
     # Record schema version
     conn.execute(
@@ -3109,6 +3157,18 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sets ADD COLUMN base_set_size INTEGER")
     if "total_set_size" not in columns:
         conn.execute("ALTER TABLE sets ADD COLUMN total_set_size INTEGER")
+
+
+def _migrate_v52_to_v53(conn: sqlite3.Connection):
+    """Move cards_fts out of a tenant file: under a shared catalogue it lives there.
+
+    A copy left in `main` would shadow shared.cards_fts by name resolution and
+    keep a catalog-sized index per tenant.  Monolithic databases keep theirs.
+    """
+    from mtg_collector.db.connection import shared_is_attached
+
+    if shared_is_attached(conn):
+        conn.execute("DROP TABLE IF EXISTS main.cards_fts")
 
 
 def _migrate_v51_to_v52(conn: sqlite3.Connection):
