@@ -40,6 +40,11 @@ _PROGRESS_PATH = os.environ.get(
     "PYTEST_PROGRESS_FILE",
     _default_progress_path(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
 )
+# Under xdist the controller already receives every worker's reports, so a
+# worker writing the same fixed path would truncate the controller's file.
+_worker = os.environ.get("PYTEST_XDIST_WORKER")
+if _worker:
+    _PROGRESS_PATH += f".{_worker}"
 _progress_file = None
 _session_start = None
 
