@@ -176,7 +176,7 @@ def test_tenant_refused_per_file_if_newer(reg):
     from mtg_collector.db.schema import SCHEMA_VERSION
     i = registry.create_tenant(reg, "alice")
     c = sqlite3.connect(paths.tenant_db_file(i))
-    c.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION + 1,))
+    c.execute("INSERT INTO schema_version (version, applied_at) VALUES (?, 'now')", (SCHEMA_VERSION + 1,))
     c.commit()
     c.close()
     with pytest.raises(SchemaTooNewError):

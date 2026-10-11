@@ -120,19 +120,23 @@ class _tx:
         return False
 
 
-def find_tenant(conn, handle: str, *, active_only: bool = True):
-    """The tenant row a handle names: the active one, else the latest retired one."""
+def find_tenant(conn, handle: str):
+    """The active tenant a handle names."""
     paths.validate_handle(handle)
     row = conn.execute(
         "SELECT * FROM user WHERE handle = ? AND retired_at IS NULL", (handle,)
     ).fetchone()
-    if row or active_only:
-        if not row:
-            raise RegistryError(f"no active tenant with handle {handle!r}")
-        return row
+    if not row:
+        raise RegistryError(f"no active tenant with handle {handle!r}")
+    return row
+
+
+def find_detached(conn, handle: str):
+    """The most recently detached, unpurged tenant a handle named."""
+    paths.validate_handle(handle)
     row = conn.execute(
-        "SELECT * FROM user WHERE handle = ? AND purged_at IS NULL "
-        "ORDER BY retired_at DESC LIMIT 1", (handle,)
+        "SELECT * FROM user WHERE handle = ? AND retired_at IS NOT NULL AND purged_at IS NULL "
+        "ORDER BY retired_at DESC, database_id DESC LIMIT 1", (handle,)
     ).fetchone()
     if not row:
         raise RegistryError(f"no detached tenant with handle {handle!r}")
@@ -214,9 +218,7 @@ def detach_tenant(conn, handle: str) -> str:
 
 def reattach_tenant(conn, handle: str, *, as_handle: Optional[str] = None) -> str:
     """Bring a detached tenant back, with the identities that went with it."""
-    row = find_tenant(conn, handle, active_only=False)
-    if row["retired_at"] is None:
-        raise RegistryError(f"tenant {handle!r} is not detached")
+    row = find_detached(conn, handle)
     new_handle = as_handle or handle
     paths.validate_handle(new_handle)
     if not paths.tenant_db_file(row["database_id"]).exists():
@@ -236,8 +238,10 @@ def reattach_tenant(conn, handle: str, *, as_handle: Optional[str] = None) -> st
 
 def purge_tenant(conn, handle: str) -> str:
     """Delete a detached tenant's files and key. The registry row stays, spent."""
-    row = find_tenant(conn, handle, active_only=False)
-    if row["retired_at"] is None:
+    try:
+        row = find_detached(conn, handle)
+    except RegistryError:
+        find_tenant(conn, handle)  # raises "no tenant" if the handle names nothing at all
         raise RegistryError(f"tenant {handle!r} is active; detach it before purging")
     database_id = row["database_id"]
     with _tx(conn):
