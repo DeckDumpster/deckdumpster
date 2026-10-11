@@ -96,6 +96,18 @@ worktree. The UI tier needs `ANTHROPIC_API_KEY`; CI passes it in as a repository
 
 The HTTP server is `mtg_collector/cli/crack_pack_server.py` — a single-file threaded stdlib `http.server` with manual path dispatch in `do_GET`/`do_POST`/`do_PUT`/`do_DELETE`. SSE is used for long-running ingest processing. No framework.
 
+**The only listener is an ASGI app** (`mtg_collector/asgi_app.py`: FastAPI, served by uvicorn;
+multi-tenancy N3, a strangler). `run()` builds it and binds it on the primary port (TLS when
+`--https`) and the optional `MTGC_HTTP_PORT` one. Its tenant middleware (`mtg_collector/tenancy.py`)
+resolves a `TenantId` — in single-tenant mode always the one configured tenant — and binds it in a
+contextvar; `TenantId` can only be minted by a resolver. A catch-all route hands every request to
+the legacy adapter, which runs `CrackPackHandler` unchanged (in its own thread, with the context
+copied) and relays the raw HTTP it writes, SSE included. `CrackPackHandler._get_conn()` raises
+outside a request. Routes move to native FastAPI handlers family by family; docs/OpenAPI routes
+stay off until the adapter no longer needs every path. The stdlib `ThreadingHTTPServer` is no
+longer a listener; it survives only for tests that drive the handler on a bare socket
+(`tests/legacy_handler.py` binds the tenant they lack).
+
 **HTML pages are dispatched from a table, not the `elif` chain.**
 `mtg_collector/cli/page_routes.py` holds `PAGE_ROUTES`, and `do_GET` routes every page
 through `match_page_route`, so the table *is* the routing rather than a description of it.
