@@ -40,6 +40,12 @@ _PROGRESS_PATH = os.environ.get(
     "PYTEST_PROGRESS_FILE",
     _default_progress_path(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))),
 )
+_worker = os.environ.get("PYTEST_XDIST_WORKER")
+if _worker:
+    # One file per xdist worker: workers truncating one shared file would
+    # interleave each other's nodeids.
+    _root, _ext = os.path.splitext(_PROGRESS_PATH)
+    _PROGRESS_PATH = f"{_root}-{_worker}{_ext}"
 _progress_file = None
 _session_start = None
 

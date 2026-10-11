@@ -211,6 +211,16 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DECKDUMP_CI_TIERS: ${{ steps.tiers.outputs.tiers }}
 
+      # Per-test timings (--durations=50 is in the log; progress.jsonl is every test's
+      # duration). if: always() so a red run still leaves its timings.
+      - name: Upload per-test timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-timings
+          path: ci-timings/
+          if-no-files-found: warn
+
       # BELT AND BRACES: report this run as a commit status, whatever triggered it.
       #
       # GitHub creates one check suite per (commit, app). A `workflow_dispatch` run
