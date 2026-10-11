@@ -2,10 +2,10 @@
 
 import os
 import sqlite3
-from urllib.parse import quote
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 from mtg_collector.utils import get_mtgc_home
 
