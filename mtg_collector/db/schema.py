@@ -915,7 +915,7 @@ def get_current_version(conn: sqlite3.Connection) -> int:
     """Get the current schema version, or 0 if not initialized."""
     try:
         cursor = conn.execute(
-            "SELECT MAX(version) FROM schema_version"
+            "SELECT MAX(version) FROM main.schema_version"
         )
         row = cursor.fetchone()
         return row[0] if row[0] is not None else 0
