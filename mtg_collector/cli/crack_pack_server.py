@@ -12,7 +12,6 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
@@ -37,6 +36,7 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
+from mtg_collector.tenancy import current_tenant
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
 
@@ -1274,6 +1274,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _get_conn(self):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
+        # The only route to a connection, and it has no answer outside a
+        # resolved request: current_tenant() raises when none is bound.
+        current_tenant()
         conn = open_connection(self.db_path, _shared_db_path)
         return conn
 
@@ -9303,15 +9306,8 @@ def _generate_self_signed(cert_file, key_file):
     )
 
 
-def _build_tls_context(cert_dir):
-    """Build the server's SSL context.
-
-    Uses the externally-provided certificate when ``MTGC_TLS_CERT`` /
-    ``MTGC_TLS_KEY`` are set; otherwise falls back to the auto-generated
-    self-signed pair under ``cert_dir``.
-    """
-    import ssl
-
+def _tls_cert_paths(cert_dir):
+    """The certificate pair to serve: the operator's, else a generated one."""
     external = _resolve_external_tls_paths()
     if external is not None:
         cert_file, key_file = external
@@ -9321,10 +9317,35 @@ def _build_tls_context(cert_dir):
         key_file = cert_dir / "server-key.pem"
         if not cert_file.exists() or not key_file.exists():
             _generate_self_signed(cert_file, key_file)
+    return cert_file, key_file
 
+
+def _build_tls_context(cert_dir):
+    """Build an SSL context for the certificate pair ``_tls_cert_paths`` picks."""
+    import ssl
+
+    cert_file, key_file = _tls_cert_paths(cert_dir)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(str(cert_file), str(key_file))
     return ctx
+
+
+def _new_listener(app, port, tls_paths=None):
+    """One uvicorn listener for the ASGI app; TLS when ``tls_paths`` is given."""
+    import uvicorn
+
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=port,
+        ssl_certfile=str(tls_paths[0]) if tls_paths else None,
+        ssl_keyfile=str(tls_paths[1]) if tls_paths else None,
+        lifespan="off",
+        access_log=False,
+        log_level="warning",
+        timeout_keep_alive=30,
+    )
+    return uvicorn.Server(config)
 
 
 def run(args):
@@ -9361,19 +9382,21 @@ def run(args):
     gen = PackGenerator(db_path)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
-    handler = partial(CrackPackHandler, gen, static_dir, db_path)
 
-    server = ThreadingHTTPServer(("", args.port), handler)
-    plain_server = ThreadingHTTPServer(("", http_port), handler) if http_port is not None else None
+    from mtg_collector.asgi_app import create_app
 
+    app = create_app(gen, static_dir, db_path)
+
+    tls_paths = None
     if args.https:
         cert_dir = Path(os.environ.get("MTGC_HOME", Path.home() / ".mtgc"))
-        ctx = _build_tls_context(cert_dir)
-        server.socket = ctx.wrap_socket(server.socket, server_side=True)
-        server.socket.settimeout(10)
+        tls_paths = _tls_cert_paths(cert_dir)
         scheme = "https"
     else:
         scheme = "http"
+
+    server = _new_listener(app, args.port, tls_paths)
+    plain_server = _new_listener(app, http_port) if http_port is not None else None
 
     print(f"Server running at {scheme}://localhost:{args.port}")
     print(f"Crack-a-Pack: {scheme}://localhost:{args.port}/crack")
@@ -9389,13 +9412,14 @@ def run(args):
     print("Press Ctrl+C to stop.")
 
     if plain_server is not None:
-        threading.Thread(target=plain_server.serve_forever, daemon=True).start()
+        # Not the main thread, so uvicorn installs no signal handlers on it;
+        # the primary's Ctrl+C handling stops both below.
+        threading.Thread(target=plain_server.run, daemon=True).start()
 
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
+        server.run()
+    finally:
         print("\nShutting down.")
         _ingest_executor.shutdown(wait=False)
-        server.shutdown()
         if plain_server is not None:
-            plain_server.shutdown()
+            plain_server.should_exit = True
