@@ -45,18 +45,18 @@ def _server_process(monkeypatch, tmp_path, https=False):
     """Run ``crack_pack_server.run()`` in a thread, recording every listener.
 
     Yields ``(created, error, thread)`` where ``created`` is the list of
-    ``ThreadingHTTPServer`` instances the wiring actually constructed, in
+    uvicorn servers the wiring actually constructed, in
     construction order, and ``error`` collects anything ``run()`` raised.
     """
     created = []
-    real_server_cls = cps.ThreadingHTTPServer
+    real_new_listener = cps._new_listener
 
-    def recording(address, handler):
-        server = real_server_cls(address, handler)
+    def recording(app, port, tls_paths=None):
+        server = real_new_listener(app, port, tls_paths)
         created.append(server)
         return server
 
-    monkeypatch.setattr(cps, "ThreadingHTTPServer", recording)
+    monkeypatch.setattr(cps, "_new_listener", recording)
 
     args = argparse.Namespace(db=str(tmp_path / "collection.sqlite"), port=0, https=https)
     error = []
@@ -73,21 +73,24 @@ def _server_process(monkeypatch, tmp_path, https=False):
         yield created, error, thread
     finally:
         for server in created:
-            # shutdown() blocks until serve_forever() acknowledges, and
-            # serve_forever() may never have started — bound the wait.
-            stopper = threading.Thread(target=server.shutdown, daemon=True)
-            stopper.start()
-            stopper.join(timeout=5)
-            with contextlib.suppress(Exception):
-                server.server_close()
+            server.should_exit = True
         if cps._ingest_executor is not None:
             cps._ingest_executor.shutdown(wait=False)
         thread.join(timeout=10)
 
 
+def _port(server):
+    """The OS-assigned port of a started uvicorn server (None until it is up)."""
+    if not server.started:
+        return None
+    return server.servers[0].sockets[0].getsockname()[1]
+
+
 def _get_root(server, scheme):
     """GET / against a bound listener, returning the HTTP status code."""
-    port = server.server_address[1]
+    port = _port(server)
+    if port is None:
+        raise ConnectionError("listener not started")
     if scheme == "https":
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
@@ -149,7 +152,7 @@ def test_http_port_zero_adds_a_second_listener(clean_env, tmp_path):
         assert _wait_for_root(primary, "http") == 200
         assert _wait_for_root(plain, "http") == 200
         # Distinct OS-assigned ports, neither of them 0.
-        ports = {primary.server_address[1], plain.server_address[1]}
+        ports = {_port(primary), _port(plain)}
         assert 0 not in ports
         assert len(ports) == 2
 
