@@ -47,7 +47,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A push to main is nearly always the exact tree its batch pull request just
+  # passed (sp-fkhwo4). deploy/ci_skip_decision.py checks that the merged PR's
+  # head tree IS the pushed tree, that a successful run of this workflow covered
+  # that head with every tier, and otherwise says "run". It fails closed: no PR,
+  # no run, a differing tree, reduced tiers or an API error all run the suite.
+  # Only a skip posts the `test` status here; a run posts it from `gate`.
+  # The workflow-level concurrency group still queues this run behind the slot;
+  # it holds no VM while it waits.
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      skip: ${{ steps.decide.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decide whether this tree was already tested
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 deploy/ci_skip_decision.py
+      - name: Record the skip as the test status
+        if: steps.decide.outputs.skip == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MESSAGE: ${{ steps.decide.outputs.message }}
+        run: |
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${GITHUB_API_URL}/repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -d "$(printf '{"state":"success","context":"test","target_url":"%s","description":"%s"}' \
+                  "${GITHUB_SERVER_URL}/${{ github.repository }}/actions/runs/${{ github.run_id }}" "${MESSAGE:0:140}")" >/dev/null
+
   provision:
+    needs: decide
+    if: needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
     # VM provisioning measured under 5 min; 15 min leaves room for a slow day.
     timeout-minutes: 15
@@ -114,7 +155,8 @@ jobs:
   # time justifies it -- the script is idempotent, so a template that already
   # has everything makes this step a few `command -v` calls.
   gate:
-    needs: provision
+    needs: [decide, provision]
+    if: needs.decide.outputs.skip != 'true'
     runs-on: [self-hosted, "${{ needs.provision.outputs.label }}"]
     # Recent full runs measured 45-49 min (2026-09-25, run 36185545409 and
     # neighbours). 90 min is ~2x the longest observed run, which is the
@@ -273,8 +315,8 @@ jobs:
   # runner registration to remove, which a provision that registered but never
   # got a job scheduled would otherwise leak.
   teardown:
-    needs: [provision, gate]
-    if: always()
+    needs: [decide, provision, gate]
+    if: always() && needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
     # VM teardown measured under 5 min; 15 min leaves room for a slow day.
     timeout-minutes: 15
