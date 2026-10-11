@@ -34,6 +34,9 @@ StartLimitBurst=10
 [Container]
 Image=localhost/mtgc:{{INSTANCE}}
 EnvironmentFile=%h/.config/mtgc/{{INSTANCE}}.env
+# No leading '-': a missing file must fail the unit loudly, not boot the
+# instance without its Access gate. setup.sh and deploy.sh scaffold it.
+EnvironmentFile=%h/.config/mtgc/{{INSTANCE}}/access.env
 Environment=MTGC_HOME=/data
 PublishPort={{PORT}}:8081
 {{HTTP_PUBLISH}}

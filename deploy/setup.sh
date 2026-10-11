@@ -372,6 +372,10 @@ if [ "$INSTANCE" != "prod" ]; then
     MEMORY_MAX="2G"
 fi
 
+# shellcheck source=deploy/units-lib.sh
+. "$SCRIPT_DIR/units-lib.sh"
+mtgc_scaffold_access_env "$INSTANCE"
+
 bash "$REPO_DIR/deploy/render-quadlet.sh" \
     "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" "$MEMORY_MAX" \
     "$REPO_DIR/deploy/mtgc.container" > "$QUADLET_FILE"
