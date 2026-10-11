@@ -10,7 +10,6 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -37,17 +36,15 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
+from mtg_collector.db.connection import open_connection
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
+from mtg_collector.tenancy.fairpool import FairPool
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
     """Look up a single price from the latest_prices view."""
-    conn = sqlite3.connect(db_path)
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     row = conn.execute(
         "SELECT price FROM latest_prices WHERE set_code = ? AND collector_number = ? AND source = ? AND price_type = ?",
         (set_code.lower(), collector_number, source, price_type),
@@ -98,10 +95,8 @@ def _bulk_attach_prices(conn, cards: list[dict]) -> None:
         card["ck_price"] = price_map.get((sc, cn, "cardkingdom", f"buylist_{pt}")) or price_map.get((sc, cn, "cardkingdom", pt))
 
 
-_INGEST_IMAGES_DIR = None  # Set in _get_ingest_images_dir()
-
 # ── Background ingest worker ──
-_ingest_executor: ThreadPoolExecutor | None = None
+_ingest_executor: FairPool | None = None
 _scryfall_rate_lock = threading.Lock()
 _scryfall_last_request: float = 0.0
 _background_db_path: str | None = None
@@ -121,13 +116,9 @@ def _batch_ingest_query(image_id=None):
     return query, params
 
 
-def _get_ingest_images_dir() -> Path:
-    global _INGEST_IMAGES_DIR
-    if _INGEST_IMAGES_DIR is None:
-        from mtg_collector.utils import get_mtgc_home
-        _INGEST_IMAGES_DIR = get_mtgc_home() / "ingest_images"
-    _INGEST_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    return _INGEST_IMAGES_DIR
+def _get_ingest_images_dir(tenant_id=None) -> Path:
+    from mtg_collector.tenancy.images import ingest_images_dir
+    return ingest_images_dir(tenant_id)
 
 
 def _md5_file(filepath: str) -> str:
@@ -604,9 +595,11 @@ def _scryfall_rate_limit():
         _scryfall_last_request = time.time()
 
 
-def _has_api_key():
-    """Check if ANTHROPIC_API_KEY is available."""
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+def _has_api_key(tenant_id=None):
+    """Whether this tenant can call Claude: ANTHROPIC_API_KEY single-tenant, the tenant's own key otherwise."""
+    from mtg_collector.tenancy.apikey import has_tenant_api_key
+
+    return has_tenant_api_key(tenant_id)
 
 
 def _has_fake_agent():
@@ -614,12 +607,21 @@ def _has_fake_agent():
     return bool(os.environ.get("MTGC_FAKE_AGENT"))
 
 
-def _can_process():
+def _can_process(tenant_id=None):
     """Check if image processing is possible (real or fake agent)."""
-    return _has_api_key() or _has_fake_agent()
+    return _has_api_key(tenant_id) or _has_fake_agent()
 
 
-def _process_image_core(conn, image_id, img, log_fn):
+def _no_key_error(tenant_id, what):
+    """The 503 body for a tenant who cannot call Claude."""
+    from mtg_collector.tenancy.apikey import NO_KEY_MESSAGE
+
+    if tenant_id is None:
+        return {"error": f"ANTHROPIC_API_KEY not set — {what} requires an API key"}
+    return {"error": NO_KEY_MESSAGE}
+
+
+def _process_image_core(conn, image_id, img, log_fn, tenant_id=None):
     """Process a single image: OCR -> Claude -> DB lookup. Returns final status string.
 
     Used by both the SSE endpoint and background workers.
@@ -641,16 +643,17 @@ def _process_image_core(conn, image_id, img, log_fn):
                 return fake_agent(image_path, ocr_fragments=ocr_fragments,
                                   status_callback=status_callback, trace_out=trace_out)
             except ValueError:
-                if _has_api_key():
+                if _has_api_key(tenant_id):
                     _log_ingest("Fake agent miss, falling back to real agent")
                 else:
                     raise
         return real_agent(image_path, ocr_fragments=ocr_fragments,
                           status_callback=status_callback, trace_out=trace_out,
-                          set_hint=set_hint)
+                          set_hint=set_hint, api_key=tenant_api_key(tenant_id))
+    from mtg_collector.tenancy.apikey import tenant_api_key
     from mtg_collector.utils import now_iso
 
-    image_path = str(_get_ingest_images_dir() / img["stored_name"])
+    image_path = str(_get_ingest_images_dir(tenant_id) / img["stored_name"])
     md5 = img["md5"]
 
     _log_ingest(f"Processing image {image_id}: {img['filename']} (MD5={md5})")
@@ -856,22 +859,14 @@ def _refinish_ingest_image(conn, image_id, md5):
     )
 
 
-def _process_image_background(db_path, image_id):
+def _process_image_background(db_path, image_id, tenant_id=None):
     """Background worker: process one image end-to-end in its own thread."""
     from mtg_collector.db.schema import init_db
     from mtg_collector.utils import now_iso
 
     _log_ingest(f"[bg:{image_id}] Background worker started")
 
-    conn = sqlite3.connect(db_path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
-        # FK enforcement is incompatible with ATTACH'd shared tables.
-    else:
-        conn.execute("PRAGMA foreign_keys = ON")
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     init_db(conn)
 
     # Atomic claim
@@ -895,7 +890,7 @@ def _process_image_background(db_path, image_id):
 
     try:
         ocr_fragments, claude_cards, all_matches, all_crops, disambiguated, agent_trace, api_usage = _process_image_core(
-            conn, image_id, img, log_fn,
+            conn, image_id, img, log_fn, tenant_id,
         )
 
         final_status = "READY_FOR_DISAMBIGUATION"
@@ -958,18 +953,20 @@ def _process_image_background(db_path, image_id):
         conn.close()
 
 
-def _recover_pending_images(db_path):
-    """On startup, re-queue any READY_FOR_OCR or stale PROCESSING images."""
+def _recover_pending_images(single_db_path):
+    """On startup, re-queue pending OCR for every tenant database (just the one in single-tenant mode)."""
+    from mtg_collector.tenancy.images import recovery_targets
+
+    for tenant_id, db_path in recovery_targets(single_db_path):
+        _recover_pending_images_for(db_path, tenant_id)
+
+
+def _recover_pending_images_for(db_path, tenant_id):
     from mtg_collector.db.schema import init_db
     from mtg_collector.utils import now_iso
 
     print("[startup] Running database migrations ...", flush=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     init_db(conn)
     print("[startup] Database ready", flush=True)
 
@@ -987,13 +984,13 @@ def _recover_pending_images(db_path):
     rows = conn.execute("SELECT id FROM ingest_images WHERE status='READY_FOR_OCR'").fetchall()
     conn.close()
 
-    if rows and _can_process():
+    if rows and _can_process(tenant_id):
         print(f"[startup] Re-queuing {len(rows)} pending image(s) for OCR", flush=True)
         for row in rows:
             _log_ingest(f"Recovering image {row['id']} for background processing")
-            _ingest_executor.submit(_process_image_background, db_path, row["id"])
+            _ingest_executor.submit(tenant_id, _process_image_background, db_path, row["id"], tenant_id)
     elif rows:
-        print(f"[startup] {len(rows)} pending image(s) waiting — ANTHROPIC_API_KEY not set, skipping processing", flush=True)
+        print(f"[startup] {len(rows)} pending image(s) waiting — no Anthropic API key for tenant {tenant_id or '(single)'}, skipping processing", flush=True)
 
 
 #: Stand-in for "the card name", substituted per template in _api_collection.
@@ -1268,6 +1265,11 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 class CrackPackHandler(BaseHTTPRequestHandler):
     """HTTP handler for crack-a-pack web UI."""
 
+    #: The requesting tenant's database_id; None is single-tenant mode. Set per
+    #: request by the tenant resolver, and the only thing image paths and OCR
+    #: jobs are keyed on.
+    tenant_id = None
+
     # HTTP/1.1 keep-alive: reuses one TCP+TLS connection for the whole page's
     # assets instead of a fresh handshake per request. Requires Content-Length
     # on every response that has a body -- `_respond` sets it, and the 304 and
@@ -1285,16 +1287,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _get_conn(self):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL")
-        if _shared_db_path and os.path.exists(_shared_db_path):
-            from mtg_collector.db.connection import attach_shared
-            attach_shared(conn, _shared_db_path)
-            # FK enforcement is incompatible with ATTACH'd shared tables —
-            # SQLite FK checks only see empty main-schema tables.
-        else:
-            conn.execute("PRAGMA foreign_keys = ON")
+        conn = open_connection(self.db_path, _shared_db_path)
         return conn
 
     def do_GET(self):
@@ -3741,7 +3734,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 continue
 
             stored_name = original_name
-            dest = _get_ingest_images_dir() / stored_name
+            dest = _get_ingest_images_dir(self.tenant_id) / stored_name
 
             if dest.exists():
                 collisions.append(original_name)
@@ -3768,8 +3761,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             })
 
             # Submit for background processing (requires API key or fake agent)
-            if _ingest_executor is not None and _can_process():
-                _ingest_executor.submit(_process_image_background, self.db_path, image_id)
+            if _ingest_executor is not None and _can_process(self.tenant_id):
+                _ingest_executor.submit(self.tenant_id, _process_image_background, self.db_path, image_id, self.tenant_id)
 
         conn.close()
         self._send_json({"uploaded": uploaded, "collisions": collisions})
@@ -3791,8 +3784,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_ingest2_process_sse(self, image_id):
         """SSE endpoint: process one image through OCR -> Claude -> DB lookup, DB-backed."""
-        if not _can_process():
-            self._send_json({"error": "ANTHROPIC_API_KEY not set — card identification requires an API key"}, 503)
+        if not _can_process(self.tenant_id):
+            self._send_json(_no_key_error(self.tenant_id, "card identification"), 503)
             return
         conn = self._ingest2_db()
         img = self._ingest2_load_image(conn, image_id)
@@ -3853,7 +3846,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
     def _process_image2_sse(self, conn, image_id, img, send_event):
         """Process a single image: OCR -> Claude -> DB lookup, streaming SSE events. DB-backed."""
         ocr_fragments, claude_cards, all_matches, all_crops, disambiguated, agent_trace, api_usage = _process_image_core(
-            conn, image_id, img, send_event,
+            conn, image_id, img, send_event, self.tenant_id,
         )
 
         # Save all state to DB
@@ -4458,10 +4451,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         _log_ingest(f"Reset image {image_id}: {img['filename']} — requeued for processing")
 
         # Submit for background processing (requires API key or fake agent)
-        if _ingest_executor is not None and _can_process():
-            _ingest_executor.submit(_process_image_background, self.db_path, image_id)
+        if _ingest_executor is not None and _can_process(self.tenant_id):
+            _ingest_executor.submit(self.tenant_id, _process_image_background, self.db_path, image_id, self.tenant_id)
 
-        self._send_json({"ok": True, "processing": _can_process()})
+        self._send_json({"ok": True, "processing": _can_process(self.tenant_id)})
 
     def _api_ingest2_refinish(self):
         """Remove all collection entries for an image so it reappears on Recents for finish re-selection."""
@@ -4587,7 +4580,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
 
         # Delete file
-        filepath = _get_ingest_images_dir() / img["stored_name"]
+        filepath = _get_ingest_images_dir(self.tenant_id) / img["stored_name"]
         if filepath.is_file():
             filepath.unlink()
 
@@ -4605,8 +4598,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         if "/" in filename or "\\" in filename or ".." in filename:
             self._send_json({"error": "Invalid filename"}, 400)
             return
-        filepath = _get_ingest_images_dir() / filename
-        if not filepath.is_file():
+        from mtg_collector.tenancy.images import tenant_image_path
+        filepath = tenant_image_path(self.tenant_id, filename)
+        if filepath is None or not filepath.is_file():
             self._send_json({"error": "Not found"}, 404)
             return
         content = filepath.read_bytes()
@@ -5052,13 +5046,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_corners_detect(self):
         """Upload a photo, run Claude Vision corner detection, resolve cards."""
-        if not _has_api_key():
-            self._send_json({"error": "ANTHROPIC_API_KEY not set — corner detection requires an API key"}, 503)
+        if not _has_api_key(self.tenant_id):
+            self._send_json(_no_key_error(self.tenant_id, "corner detection"), 503)
             return
         from mtg_collector.cli.ingest_ids import RARITY_MAP, lookup_card
         from mtg_collector.db.models import PrintingRepository, SetRepository
         from mtg_collector.db.schema import init_db
         from mtg_collector.services.claude import ClaudeVision
+        from mtg_collector.tenancy.apikey import tenant_api_key
 
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
@@ -5102,7 +5097,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         ext = Path(original_name).suffix.lower()
         stored_name = f"corners_{ts}{ext}"
-        dest = _get_ingest_images_dir() / stored_name
+        dest = _get_ingest_images_dir(self.tenant_id) / stored_name
         dest.write_bytes(file_content)
         image_key = stored_name
 
@@ -5110,7 +5105,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         # Run Claude Vision corner detection
         try:
-            claude = ClaudeVision()
+            claude = ClaudeVision(api_key=tenant_api_key(self.tenant_id))
             detections, skipped = claude.read_card_corners(str(dest))
         except Exception as e:
             self._send_json({"error": f"Claude Vision error: {e}"}, 500)
@@ -5284,9 +5279,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             # Store source image permanently if image_key provided
             source_image = None
             if image_key:
-                src_path = _get_ingest_images_dir() / image_key
+                src_path = _get_ingest_images_dir(self.tenant_id) / image_key
                 if src_path.exists():
-                    source_image = store_source_image(str(src_path))
+                    source_image = store_source_image(str(src_path), self.tenant_id)
 
             added = []
             entry_ids = []
@@ -5316,7 +5311,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 entry_ids.append(entry_id)
 
                 # Insert lineage record with batch_id
-                md5 = _md5_file(str(_get_ingest_images_dir() / image_key)) if image_key else ""
+                md5 = _md5_file(str(_get_ingest_images_dir(self.tenant_id) / image_key)) if image_key else ""
                 conn.execute(
                     """INSERT INTO ingest_lineage (collection_id, image_md5, image_path, card_index, batch_id, created_at)
                        VALUES (?, ?, ?, ?, ?, ?)""",
@@ -9359,7 +9354,7 @@ def run(args):
     # exits non-zero.
     http_port = _resolve_http_port()
     _background_db_path = db_path
-    _ingest_executor = ThreadPoolExecutor(max_workers=4)
+    _ingest_executor = FairPool(max_workers=4)
     _recover_pending_images(db_path)
 
     # Auto-import MTGJSON data if tables are empty but AllPrintings.json exists

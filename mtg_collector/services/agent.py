@@ -11,7 +11,7 @@ from functools import lru_cache
 import anthropic
 import httpx
 
-from mtg_collector.db.connection import get_db_path
+from mtg_collector.db.connection import get_db_path, get_shared_db_path, open_connection
 from mtg_collector.services.claude import ClaudeVision
 
 AGENT_MODEL_HAIKU = "claude-haiku-4-5-20251001"
@@ -381,9 +381,9 @@ def _tool_query_local_db(sql: str, conn: sqlite3.Connection) -> str:
     return "\n".join(lines)
 
 
-def _tool_analyze_image(image_path: str, client: anthropic.Anthropic) -> tuple[str, object]:
+def _tool_analyze_image(image_path: str, client: anthropic.Anthropic, api_key: str | None = None) -> tuple[str, object]:
     """Returns (description_text, response.usage)."""
-    vision = ClaudeVision(model=VISION_MODEL)
+    vision = ClaudeVision(model=VISION_MODEL, api_key=api_key)
     image_data = vision.encode_image(image_path)
     media_type = vision._get_media_type(image_path)
 
@@ -489,6 +489,7 @@ def run_agent(
     status_callback=None,
     trace_out: list[str] | None = None,
     set_hint: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[list[dict], list[str], dict]:
     """Run the tool-using agent to identify MTG cards from an image.
 
@@ -515,10 +516,10 @@ def run_agent(
     agent_model = AGENT_MODEL_SONNET if n > LARGE_FRAGMENT_THRESHOLD else AGENT_MODEL_HAIKU
 
     client = anthropic.Anthropic(
+        api_key=api_key,
         timeout=httpx.Timeout(600.0, connect=10.0),
     )
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
+    conn = open_connection(get_db_path(), get_shared_db_path(), wal=False)
     _install_accent_insensitive_like(conn)
     tools = _build_tools(conn)
 
@@ -614,7 +615,7 @@ def run_agent(
                         "[analyze_image already called — use query_local_db instead.]"
                     )
                 else:
-                    result, vision_usage = _tool_analyze_image(image_path, client)
+                    result, vision_usage = _tool_analyze_image(image_path, client, api_key)
                     usage["opus"]["input"] += vision_usage.input_tokens
                     usage["opus"]["output"] += vision_usage.output_tokens
                     vision_used[0] = True
