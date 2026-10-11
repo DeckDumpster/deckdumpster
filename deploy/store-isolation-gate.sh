@@ -131,6 +131,22 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# --keep <file>: assert on the bring-up and then LEAVE it standing, writing the
+# probe store's path to <file>. deploy/ci.sh uses this so the one image build a
+# run does is the build under test, rather than paying for a second, throwaway
+# one just to be measured (sp-s3kd5b). Every assertion below still runs; only
+# the teardown and its re-check are skipped on a pass. A FAILING run is still
+# cleaned up, which is the run whose cleanup matters (de-y5g). The caller owns
+# removing the instance and the probe store afterwards.
+KEEP_FILE=""
+if [ "${1:-}" = "--keep" ]; then
+    KEEP_FILE="${2:?--keep needs a file to write the probe store path to}"
+    shift 2
+    # Empty until a pass records the path, so a caller reading it after a FAILED
+    # run finds "nothing left standing" rather than no file at all.
+    : > "$KEEP_FILE"
+fi
+
 INSTANCE="${1:-store-gate}"
 if [ "$INSTANCE" = "prod" ]; then
     echo "ERROR: this gate builds and then destroys an instance. Not prod." >&2
@@ -547,6 +563,15 @@ fi
 if [ "$PROBE_KB" -lt "$FLOOR_KB" ]; then
     fail "the probe store holds only ${PROBE_KB} KB, under the ${FLOOR_KB} KB floor." \
          "An image build did not happen."
+fi
+
+if [ -n "$KEEP_FILE" ] && [ "$FAILED" != true ]; then
+    printf '%s\n' "$PROBE" > "$KEEP_FILE"
+    trap 'rm -rf "$WORK"' EXIT
+    echo ""
+    echo "==> PASS — the --test bring-up wrote nothing to Podman's default store."
+    echo "    Instance and probe store left standing for the caller: $PROBE"
+    exit 0
 fi
 
 if [ "$FAILED" = true ]; then
