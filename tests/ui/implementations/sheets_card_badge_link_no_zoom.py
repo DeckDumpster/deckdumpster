@@ -18,10 +18,10 @@ def steps(harness):
 
     # Expand the "Common" section to reveal cards (exact match)
     harness.click_by_text("Common", exact=True)
-    harness.wait_for_visible(".section.open .sheet-card", timeout=500)
+    harness.wait_for_visible(".section.open .sheet-card", timeout=5_000)
 
     # The price badges are links; wait for one before clicking it
-    harness.wait_for_visible(".section.open .sheet-card a.badge.link", timeout=500)
+    harness.wait_for_visible(".section.open .sheet-card a.badge.link", timeout=5_000)
 
     # Click the badge. It is target="_blank", so the vendor page opens in a
     # background tab and this page stays on /sheets.

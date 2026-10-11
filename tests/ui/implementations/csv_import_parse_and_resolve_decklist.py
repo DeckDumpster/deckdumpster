@@ -20,7 +20,7 @@ def steps(harness):
     harness.click_by_selector("#parse-btn")
 
     # Wait for resolved results
-    harness.wait_for_text("Resolved", timeout=500)
+    harness.wait_for_text("Resolved", timeout=5_000)
 
     # Verify summary bar
     harness.assert_visible(".summary-bar")

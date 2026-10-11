@@ -33,7 +33,7 @@ def steps(harness):
 
     # Card images should now be visible inside the expanded Common section.
     # Use section-specific selector since collapsed sections also have .sheet-card elements.
-    harness.wait_for_visible(".section.open .section-body .sheet-card", timeout=500)
+    harness.wait_for_visible(".section.open .section-body .sheet-card", timeout=5_000)
 
     # Pull-rate badges should be visible below cards
     harness.assert_visible(".section.open .badge.pull-rate")

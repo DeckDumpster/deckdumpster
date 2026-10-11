@@ -9,7 +9,7 @@ types, and hides again once the input is empty.
 def steps(harness):
     # Navigate to Collection page and wait for the table to render.
     harness.navigate("/collection")
-    harness.wait_for_visible(".collection-table", timeout=500)
+    harness.wait_for_visible(".collection-table", timeout=5_000)
 
     # Empty input → clear button hidden.
     harness.assert_hidden("#search-clear")

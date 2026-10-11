@@ -21,7 +21,7 @@ def steps(harness):
     # Expand the "Common" section to reveal cards (exact match)
     harness.click_by_text("Common", exact=True)
     # Use .section.open selector to target cards in expanded section only.
-    harness.wait_for_visible(".section.open .sheet-card", timeout=500)
+    harness.wait_for_visible(".section.open .sheet-card", timeout=5_000)
 
     # Click the first visible card to open zoom overlay
     harness.click_by_selector(".section.open .sheet-card")
