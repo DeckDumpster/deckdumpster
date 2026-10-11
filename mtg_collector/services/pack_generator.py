@@ -4,7 +4,7 @@ import json
 import random
 import sqlite3
 
-from mtg_collector.db.connection import attach_shared, get_db_path, get_shared_db_path
+from mtg_collector.db.connection import get_db_path, open_catalog_connection
 from mtg_collector.db.mtgjson_faces import front_face_sql
 
 
@@ -15,11 +15,7 @@ class PackGenerator:
         self.db_path = db_path or get_db_path()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        shared = get_shared_db_path()
-        if shared:
-            attach_shared(conn, shared)
+        conn = open_catalog_connection(self.db_path)
         return conn
 
     def list_sets(self) -> list[tuple[str, str]]:
