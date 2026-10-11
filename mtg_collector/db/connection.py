@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+from urllib.parse import quote
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
