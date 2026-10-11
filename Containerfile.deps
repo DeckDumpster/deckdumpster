@@ -1,0 +1,28 @@
+# Dependency base image: everything that changes only when uv.lock or this file does.
+#
+# deploy/deps-image.sh builds it, tags it deckdumpster-deps:<hash(uv.lock, this file)>
+# and, in CI, pushes it to ghcr so a run whose hash is unchanged pulls ~10-20 s of
+# image instead of rebuilding ~180 s of uv sync, apt and RapidOCR model download
+# (sp-83v558). The project's own Containerfile is FROM this image.
+#
+# Build with the host uv cache mounted (deps-image.sh does):
+#   -v <uv cache>:/root/.cache/uv:z
+FROM python:3.12-slim
+
+# First instruction, so every layer commit carries it: deploy/store-isolation-gate.sh
+# finds this build's images by this label (de-y5g).
+LABEL cards.dumpster.mtgc.build=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Pre-download RapidOCR models so containers don't fetch on first use
+RUN /app/.venv/bin/python -c "from rapidocr import RapidOCR, LangRec; RapidOCR(params={'Rec.lang_type': LangRec.EN, 'Global.log_level': 'critical'})"
