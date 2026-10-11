@@ -258,3 +258,17 @@ def seed_range(request):
         return range(int(single), int(single) + 1)
     count = int(request.config.getoption("--seeds"))
     return range(count)
+
+
+@pytest.fixture(autouse=True)
+def _single_tenant_bound():
+    """Run every test inside the one configured tenant, as a request would.
+
+    `_get_conn()` raises outside a resolved request, so a handler built by hand
+    needs the binding the front door's middleware gives a real one. A test that
+    wants the unbound state runs its call in a fresh `contextvars.Context()`.
+    """
+    from mtg_collector.tenancy import SingleTenantResolver, bind
+
+    with bind(SingleTenantResolver().resolve(None)):
+        yield
