@@ -8,21 +8,18 @@ import shutil
 import sqlite3
 import sys
 import time
-import urllib.request
+import urllib.error
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
 from mtg_collector.db.connection import get_shared_write_path
+from mtg_collector.landing import current_run
 from mtg_collector.utils import get_mtgc_home, now_iso
 
-_USER_AGENT = "MTGCollectionTool/2.0"
-
-def _download(url: str, dest: Path):
-    """Download a URL to a file with proper User-Agent."""
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req) as resp, open(dest, "wb") as out:
-        shutil.copyfileobj(resp, out)
+def _download(url: str, dest: Path, *, source: str, dataset: str):
+    """Download a URL to a file, landing the bytes verbatim in the raw zone."""
+    current_run().download(url, dest, source=source, dataset=dataset)
 
 MTGJSON_URL = "https://mtgjson.com/api/v5/AllPrintings.json.gz"
 MTGJSON_PRICES_URL = "https://mtgjson.com/api/v5/AllPricesToday.json.gz"
@@ -243,7 +240,7 @@ def fetch_allprintings(force: bool = False, db_path: str | None = None):
     gz_path = dest.parent / "AllPrintings.json.gz"
 
     print(f"Downloading {MTGJSON_URL} ...")
-    _download(MTGJSON_URL, gz_path)
+    _download(MTGJSON_URL, gz_path, source="mtgjson", dataset="allprintings")
 
     print("Decompressing ...")
     with gzip.open(gz_path, "rb") as f_in:
@@ -797,9 +794,8 @@ def refresh_catalog(db_path: str):
 def _fetch_mtgjson_version() -> str | None:
     """Fetch the current MTGJSON build version from Meta.json."""
     try:
-        req = urllib.request.Request(MTGJSON_META_URL, headers={"User-Agent": _USER_AGENT})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            meta = json.loads(resp.read())
+        meta = json.loads(current_run().fetch(
+            MTGJSON_META_URL, source="mtgjson", dataset="meta", timeout=10))
         return meta.get("data", {}).get("version")
     except Exception as e:
         print(f"Warning: could not fetch MTGJSON meta: {e}", file=sys.stderr)
@@ -852,7 +848,7 @@ def _fetch_prices(force: bool = False):
     gz_path = dest.parent / "AllPricesToday.json.gz"
 
     print(f"Downloading {MTGJSON_PRICES_URL} ...")
-    _download(MTGJSON_PRICES_URL, gz_path)
+    _download(MTGJSON_PRICES_URL, gz_path, source="mtgjson", dataset="allpricestoday")
 
     print("Decompressing ...")
     with gzip.open(gz_path, "rb") as f_in:
@@ -1140,9 +1136,8 @@ def fetch_sealed_prices(db_path: str, set_code: str = None, conn: sqlite3.Connec
 
     # Step 1: Fetch and cache TCGCSV groups
     print("Fetching TCGCSV groups...")
-    req = urllib.request.Request(TCGCSV_GROUPS_URL, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req) as resp:
-        groups_data = json.loads(resp.read())
+    groups_data = json.loads(current_run().fetch(
+        TCGCSV_GROUPS_URL, source="tcgcsv", dataset="groups"))
 
     groups = groups_data.get("results", [])
     print(f"  {len(groups)} groups from TCGCSV")
@@ -1202,9 +1197,8 @@ def fetch_sealed_prices(db_path: str, set_code: str = None, conn: sqlite3.Connec
     for gid, target_pids in groups_to_fetch:
         url = TCGCSV_PRICES_URL.format(group_id=gid)
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-            with urllib.request.urlopen(req) as resp:
-                price_data = json.loads(resp.read())
+            price_data = json.loads(current_run().fetch(
+                url, source="tcgcsv", dataset="prices"))
         except urllib.error.HTTPError as e:
             print(f"  Group {gid}: HTTP {e.code}, skipping")
             time.sleep(0.1)
@@ -1314,9 +1308,8 @@ def import_sealed_products(db_path: str, set_code: str = None):
 
     # Step 1: Fetch and cache TCGCSV groups (reuse pattern from fetch_sealed_prices)
     print("Fetching TCGCSV groups...")
-    req = urllib.request.Request(TCGCSV_GROUPS_URL, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req) as resp:
-        groups_data = json.loads(resp.read())
+    groups_data = json.loads(current_run().fetch(
+        TCGCSV_GROUPS_URL, source="tcgcsv", dataset="groups"))
 
     groups = groups_data.get("results", [])
     print(f"  {len(groups)} groups from TCGCSV")
@@ -1381,9 +1374,8 @@ def import_sealed_products(db_path: str, set_code: str = None):
     for gid, sc, group_name in groups_to_scan:
         url = TCGCSV_PRODUCTS_URL.format(group_id=gid)
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-            with urllib.request.urlopen(req) as resp:
-                product_data = json.loads(resp.read())
+            product_data = json.loads(current_run().fetch(
+                url, source="tcgcsv", dataset="products"))
         except urllib.error.HTTPError as e:
             print(f"  Group {gid} ({group_name}): HTTP {e.code}, skipping")
             time.sleep(0.1)
@@ -1509,9 +1501,8 @@ def fetch_edhrec(db_path: str, force: bool = False):
 
         url = f"https://json.edhrec.com/pages/commanders/{slug}.json"
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = resp.read()
+            data = current_run().fetch(
+                url, source="edhrec", dataset="commanders", timeout=15)
             with open(dest, "wb") as f:
                 f.write(data)
             fetched += 1
