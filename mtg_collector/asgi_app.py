@@ -24,6 +24,7 @@ from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
 from mtg_collector.cli.crack_pack_server import CrackPackHandler
+from mtg_collector.routes import collection as collection_routes
 from mtg_collector.tenancy import SingleTenantResolver, bind
 
 LEGACY_METHODS = ["GET", "POST", "PUT", "DELETE"]
@@ -174,6 +175,9 @@ def create_app(generator, static_dir: Path, db_path: str, resolver=None) -> Fast
     # them, and the adapter must see every path it served.
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TenantMiddleware, resolver=resolver or SingleTenantResolver())
+    # Native families first; Starlette matches in registration order, so
+    # anything they do not claim falls through to the adapter below.
+    app.include_router(collection_routes.create_router(db_path))
     app.add_route(
         "/{path:path}",
         make_legacy_endpoint(generator, static_dir, db_path),
