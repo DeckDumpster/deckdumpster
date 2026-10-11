@@ -1,0 +1,10 @@
+[Unit]
+Description=MTGC per-tenant file sync ({{INSTANCE}})
+After=network-online.target
+Wants=network-online.target
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'exec bash {{REPO_DIR}}/deploy/tenant-files-sync.sh {{INSTANCE}}'
+TimeoutStartSec=3600
