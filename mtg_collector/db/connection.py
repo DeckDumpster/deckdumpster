@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+from urllib.parse import quote
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
@@ -76,26 +77,10 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     db_dir = Path(path).parent
     db_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create new connection
-    _connection = sqlite3.connect(path, timeout=10.0)
-    _connection.row_factory = sqlite3.Row
-    _connection.execute("PRAGMA journal_mode = WAL")
-    # FK enforcement is deferred until after potential ATTACH — see below
-    _db_path = path
-    _attached = False
-
-    # Auto-ATTACH shared reference DB if configured
-    # Skip if this connection IS the shared DB (write-path for import commands)
     shared = get_shared_db_path()
-    if shared and os.path.abspath(path) != os.path.abspath(shared):
-        attach_shared(_connection, shared)
-        _attached = True
-    else:
-        # Only enable FK enforcement when NOT using split DB.
-        # With ATTACH, temp views shadow the main tables but SQLite FK checks
-        # only look at main-schema tables (which are empty after prune),
-        # causing false constraint failures.
-        _connection.execute("PRAGMA foreign_keys = ON")
+    _connection = open_connection(path, shared)
+    _db_path = path
+    _attached = bool(shared) and os.path.abspath(path) != os.path.abspath(shared)
 
     return _connection
 
@@ -117,10 +102,108 @@ def shared_is_attached(conn) -> bool:
     return any(row[1] == "shared" for row in conn.execute("PRAGMA database_list"))
 
 
+class SchemaTooNewError(Exception):
+    """A database file records a schema newer than this code understands."""
+
+
+class IsolationError(Exception):
+    """A connection's attached databases are not the ones it was meant to have."""
+
+
+def _ro_uri(path: str) -> str:
+    return "file:" + quote(os.path.abspath(path)) + "?mode=ro"
+
+
+def file_schema_version(conn, schema: str = "main") -> int:
+    """Highest schema_version recorded in one attached file (0 if none)."""
+    try:
+        row = conn.execute(f"SELECT MAX(version) FROM [{schema}].schema_version").fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return row[0] or 0
+
+
+def refuse_if_newer(conn, schema: str = "main") -> None:
+    """Raise if this file was written by newer code than this process runs."""
+    from mtg_collector.db.schema import SCHEMA_VERSION
+
+    found = file_schema_version(conn, schema)
+    if found > SCHEMA_VERSION:
+        raise SchemaTooNewError(
+            f"{schema} database records schema version {found}, but this code "
+            f"understands up to {SCHEMA_VERSION}. Deploy a newer build; "
+            "refusing to open it."
+        )
+
+
 def attach_shared(conn, shared_db_path):
-    """ATTACH a shared reference DB and create temp views to shadow local tables."""
-    conn.execute("ATTACH DATABASE ? AS shared", (shared_db_path,))
+    """ATTACH the shared catalogue read-only and create temp views to shadow local tables.
+
+    The connection must have been opened with uri=True (open_connection does).
+    """
+    conn.execute("ATTACH DATABASE ? AS shared", (_ro_uri(shared_db_path),))
+    refuse_if_newer(conn, "shared")
     create_shared_shadow(conn)
+
+
+def assert_isolated(conn, main_path: str, shared_path: Optional[str] = None) -> None:
+    """Fail unless PRAGMA database_list is exactly {main: main_path[, shared: shared_path]}."""
+    got = {
+        row[1]: os.path.realpath(row[2])
+        for row in conn.execute("PRAGMA database_list")
+        if row[1] != "temp"
+    }
+    want = {"main": os.path.realpath(main_path)}
+    if shared_path:
+        want["shared"] = os.path.realpath(shared_path)
+    if got != want:
+        raise IsolationError(f"connection databases {got} != expected {want}")
+
+
+def open_connection(
+    path: str,
+    shared_path: Optional[str] = None,
+    *,
+    timeout: float = 10.0,
+    wal: bool = True,
+) -> sqlite3.Connection:
+    """The one place a connection is opened.
+
+    Opens `path`, attaches `shared_path` (when it exists and is a different
+    file) read-only, refuses either file if its recorded schema is newer than
+    this code, and asserts the connection sees exactly those two files.
+    """
+    conn = sqlite3.connect("file:" + quote(os.path.abspath(path)), timeout=timeout, uri=True)
+    conn.row_factory = sqlite3.Row
+    if wal:
+        conn.execute("PRAGMA journal_mode = WAL")
+    refuse_if_newer(conn, "main")
+    split = bool(shared_path) and os.path.exists(shared_path) and (
+        os.path.abspath(shared_path) != os.path.abspath(path)
+    )
+    if split:
+        attach_shared(conn, shared_path)
+        # FK enforcement is incompatible with ATTACH'd shared tables —
+        # SQLite FK checks only see empty main-schema tables.
+    else:
+        conn.execute("PRAGMA foreign_keys = ON")
+    assert_isolated(conn, path, shared_path if split else None)
+    return conn
+
+
+def open_catalog_connection(db_path: str) -> sqlite3.Connection:
+    """A read-only connection to the card catalogue and nothing else.
+
+    In split mode that is the shared file alone, so a catalogue reader never
+    holds a tenant file; in single-DB mode the catalogue lives in `db_path`.
+    """
+    shared = get_shared_db_path()
+    target = shared if shared else db_path
+    conn = sqlite3.connect(_ro_uri(target), timeout=10.0, uri=True)
+    conn.row_factory = sqlite3.Row
+    refuse_if_newer(conn, "main")
+    assert_isolated(conn, target)
+    return conn
 
 
 def create_shared_shadow(conn):

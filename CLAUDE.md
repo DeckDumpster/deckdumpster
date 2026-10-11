@@ -304,6 +304,30 @@ fixture had neither column, so every set in a `--test` container reported `owned
 table with `0` — which `clean_size` reads as an absence — so one cached set stays NULL and
 both branches have a fixture. Do not "fix" `spg` to a positive number.
 
+### Tenants (registry and `mtg tenant`)
+
+`$MTGC_HOME/registry.sqlite` (`db/registry.py`) is the control plane: `user` (handle ->
+opaque ULID `database_id`, `retired_at`, `purged_at`), `user_identity` (email -> database_id),
+`tenant_key` (encrypted). Rules are schema CHECKs and partial unique indexes (one active
+handle; one active tenant per email; purge only after detach), not just function checks.
+`mtg_collector/tenancy/paths.py` is the **only** constructor of tenant paths and takes a
+database_id, never a handle; it refuses lowercase or malformed ULIDs. A re-created handle
+gets a new ULID, so it can never reach the old files or replica. `mtg tenant
+create|list|rename|detach|reattach|purge|adopt|migrate|set-key|identity` is the lifecycle;
+`migrate` needs a handle or `--all` and reports every tenant. Keys are read from stdin and
+encrypted under `MTGC_MASTER_KEY` / `MTGC_MASTER_KEY_FILE` (`tenancy/keycrypt.py`, stdlib
+only), bound to the database_id. Nothing here routes a request: multi-tenant serving is
+later beads.
+
+### Bring-your-own-key OCR
+
+In multi mode a tenant's photo ingest runs on **that tenant's** Anthropic key, from the
+registry (`mtg tenant set-key`, `tenancy/apikey.py`), and never on `ANTHROPIC_API_KEY` —
+a tenant with no key gets a 503 naming the fix and its pending images are not queued;
+everything else works. Single-tenant mode still reads the environment key. The OCR pool is
+`tenancy/fairpool.py`: 4 workers, at most one in-flight job per tenant, round-robin across
+tenants, a job's exception stays that job's. There is no usage table or cap by design.
+
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
 holds both. A **query** is aggregated day by day inside SQLite from `collection` + `prices`;
