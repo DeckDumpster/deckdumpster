@@ -235,7 +235,10 @@ if _needs_container; then
     echo "==> Build and start test container (container-store isolation gate)"
     bash deploy/store-isolation-gate.sh --keep "$GATE_PROBE_FILE" "$INSTANCE"
     # Everything below talks to the instance in the probe store it was built in.
+    # adopt only names the store; activate puts the podman shim on PATH, which is
+    # what makes `podman port/ps/logs` below look there and not in the default store.
     mtgc_store_adopt_instance "$INSTANCE"
+    mtgc_store_activate
 
     echo "==> Wait for server"
     wait_for_server
