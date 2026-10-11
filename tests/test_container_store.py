@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.xdist_group('podman-store')
+
 from tests.container_store import _env_global_args, discover_container, podman_argv
 from tests.subprocess_run import DEFAULT_TIMEOUT
 

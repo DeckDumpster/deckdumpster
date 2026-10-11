@@ -47,6 +47,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.xdist_group('podman-store')
+
 from tests.subprocess_run import DEFAULT_TIMEOUT
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
