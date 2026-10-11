@@ -479,6 +479,17 @@ per warm load, and it is now none.
   reference naming no file stays the visible 404 it always was, and the two JS
   files that build `/static/card_back.jpeg` in a string keep today's behaviour.
 
+### Catalog placement (multi-tenancy 4)
+`db/schema.py` holds three DDL constants: `USER_SCHEMA_SQL` (a tenant file), `SHARED_SCHEMA_SQL`
+(catalogue, prices, sealed reference, `cards_fts`) and `REGISTRY_SCHEMA_SQL`. `SCHEMA_SQL` is
+user+shared for a monolithic DB. `init_db` on a connection with `shared` attached creates user
+objects only, and `get_current_version` reads `main.schema_version` (unqualified it would find
+the catalogue's). `cards_fts` is reached by plain name resolution: a tenant file holds none, so
+SQLite falls through to `shared`; the v53 migration drops a split-mode copy. No request handler
+writes the catalogue: price fetches are the `mtgc-prices` timer / `mtg data fetch-prices` only
+(`tests/test_catalog_placement.py` pins it). `mtg data rebuild-growth` walks `db/tenants.py`'s
+tenant list, skips and reports a failing tenant, and exits 2 when partial.
+
 ### Card data access policy
 All runtime lookups MUST use the local database. Never Scryfall API. See `architecture/CARD_DATA_ACCESS.md`. The Scryfall API is only used by `mtg setup` / `mtg cache all` to populate the DB.
 
