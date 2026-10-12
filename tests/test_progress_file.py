@@ -26,7 +26,8 @@ def test_this_run_is_writing_where_it_says_it_is():
     expected = os.environ.get("PYTEST_PROGRESS_FILE", _default_progress_path(_REPO_ROOT))
     worker = os.environ.get("PYTEST_XDIST_WORKER")
     if worker:
-        expected += f".{worker}"
+        root, ext = os.path.splitext(expected)
+        expected = f"{root}-{worker}{ext}"
     assert _PROGRESS_PATH == expected
     assert os.path.exists(_PROGRESS_PATH)
 
