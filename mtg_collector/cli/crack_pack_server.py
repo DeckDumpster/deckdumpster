@@ -36,9 +36,9 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
-from mtg_collector.tenancy import current_tenant
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
+from mtg_collector.tenancy import current_tenant
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
