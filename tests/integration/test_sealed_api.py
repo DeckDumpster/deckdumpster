@@ -366,20 +366,13 @@ class TestSealedCollectionStats:
 
 
 class TestSealedPriceFetch:
-    def test_fetch_prices(self, api):
-        """POST /api/sealed/fetch-prices triggers TCGCSV price fetch."""
-        status, data = api.post("/api/sealed/fetch-prices", {}, timeout=120)
-        assert status == 200
-        assert "groups_fetched" in data
-        assert "prices_for_today" in data
-        assert isinstance(data["groups_fetched"], int)
-        assert isinstance(data["prices_for_today"], int)
+    # No test of POST /api/sealed/fetch-prices: it reaches TCGCSV from inside
+    # the container, so its result depended on the network and flipped
+    # (RemoteDisconnected, sp-8umjhi). Coverage gap recorded: the endpoint's
+    # response shape (groups_fetched, prices_for_today) is untested here.
 
     def test_collection_list_has_price_fields(self, api):
-        """After a price fetch, collection list entries should include price columns."""
-        # Ensure prices are fetched first
-        api.post("/api/sealed/fetch-prices", {}, timeout=120)
-
+        """Collection list entries should include price columns."""
         # Add an entry for a product that likely has a TCGPlayer price
         _, products = api.get("/api/sealed/products?q=play+booster+box&limit=1")
         if not products:
