@@ -13,6 +13,7 @@ Or pass an existing instance via --instance:
 """
 
 import logging
+import os
 import ssl
 import subprocess
 import sys
@@ -168,7 +169,15 @@ DEFAULT_INSTANCE = "integration-test"
 
 @pytest.fixture(scope="session")
 def instance_name(request):
-    return request.config.getoption("--instance") or DEFAULT_INSTANCE
+    base = request.config.getoption("--instance") or DEFAULT_INSTANCE
+    # Under pytest-xdist each worker owns one container, <instance>-<k> for
+    # worker gw<k> (deploy/ci.sh brings them up). The autouse restore rewrites
+    # the whole DB after every test, so two workers on one container would
+    # restore under each other's writers (sp-lc1puh). Not xdist: unchanged.
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker and request.config.getoption("--instance"):
+        return f"{base}-{worker.removeprefix('gw')}"
+    return base
 
 
 @pytest.fixture(scope="session")
