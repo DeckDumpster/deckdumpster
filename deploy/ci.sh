@@ -77,12 +77,18 @@ mtgc_store_activate
 # that failed anywhere still cleaned up. A trap is that, and it also covers a
 # hand-run interrupted partway.
 GATE_PROBE_FILE=""
+UNIT_PID=""
+UNIT_LOG=""
 _ci_cleanup() {
     bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true
     if [ -s "${GATE_PROBE_FILE:-}" ]; then
         MTGC_STORE_ROOT="$(cat "$GATE_PROBE_FILE")" bash deploy/store-teardown.sh >/dev/null 2>&1 || true
     fi
     [ -z "${GATE_PROBE_FILE:-}" ] || rm -f "$GATE_PROBE_FILE"
+    if [ -n "${UNIT_PID:-}" ] && kill -0 "$UNIT_PID" 2>/dev/null; then
+        kill "$UNIT_PID" 2>/dev/null || true
+    fi
+    [ -z "${UNIT_LOG:-}" ] || rm -f "$UNIT_LOG"
 }
 trap _ci_cleanup EXIT
 
@@ -152,6 +158,51 @@ if _needs_browser; then
     echo "==> Install Playwright browser"
     uv run shot-scraper install
 fi
+
+# Per-test timings the workflow uploads as an artifact whether the run passes or fails.
+# One progress file per tier (tests/conftest.py adds the xdist worker suffix).
+CI_TIMINGS_DIR="${CI_TIMINGS_DIR:-$PWD/ci-timings}"
+mkdir -p "$CI_TIMINGS_DIR"
+
+# Run one pytest tier, then keep its progress file(s) under the tier's name -- on a red
+# tier too, since that is when the timings are wanted. pytest writes them to the default
+# .pytest_cache/ (a custom PYTEST_PROGRESS_FILE would leave that dir unmade and
+# tests/test_progress_file.py red); xdist workers add a -gwN suffix.
+run_tier() {
+    local tier="$1" rc=0 f
+    shift
+    rm -f .pytest_cache/progress*.jsonl
+    "$@" || rc=$?
+    for f in .pytest_cache/progress*.jsonl; do
+        [ -e "$f" ] || continue
+        cp "$f" "$CI_TIMINGS_DIR/${tier}-$(basename "$f")"
+    done
+    return "$rc"
+}
+
+# The unit tier needs no container, so it runs beside the image build and the
+# ci-test bring-up instead of after them (sp-mdos6i). Its output goes to a file
+# and is replayed at the join, so the two streams do not interleave; the join
+# fails the run with the tier's own output, never a masked status.
+if _has_tier unit; then
+    echo "==> Run unit tests (background, joined before integration/ui)"
+    UNIT_LOG="$(mktemp)"
+    run_tier unit uv run pytest tests/ --durations=50 --ignore=tests/integration --ignore=tests/ui >"$UNIT_LOG" 2>&1 &
+    UNIT_PID=$!
+fi
+
+join_unit_tier() {
+    [ -n "$UNIT_PID" ] || return 0
+    local rc=0
+    wait "$UNIT_PID" || rc=$?
+    UNIT_PID=""
+    echo "==> Unit tests output"
+    cat "$UNIT_LOG"
+    if [ "$rc" -ne 0 ]; then
+        echo "==> Unit tests FAILED (exit $rc)" >&2
+        return "$rc"
+    fi
+}
 
 # 127.0.0.1, NEVER localhost. `podman port` reports `0.0.0.0:<port>` -- an IPv4
 # wildcard bind, with nothing published on ::1. On a host where `localhost`
@@ -231,26 +282,6 @@ wait_for_server() {
     return 1
 }
 
-# Per-test timings the workflow uploads as an artifact whether the run passes or fails.
-# One progress file per tier (tests/conftest.py adds the xdist worker suffix).
-CI_TIMINGS_DIR="${CI_TIMINGS_DIR:-$PWD/ci-timings}"
-mkdir -p "$CI_TIMINGS_DIR"
-
-# Run one pytest tier, then keep its progress file(s) under the tier's name -- on a red
-# tier too, since that is when the timings are wanted. pytest writes them to the default
-# .pytest_cache/ (a custom PYTEST_PROGRESS_FILE would leave that dir unmade and
-# tests/test_progress_file.py red); xdist workers add a -gwN suffix.
-run_tier() {
-    local tier="$1" rc=0 f
-    shift
-    rm -f .pytest_cache/progress*.jsonl
-    "$@" || rc=$?
-    for f in .pytest_cache/progress*.jsonl; do
-        [ -e "$f" ] || continue
-        cp "$f" "$CI_TIMINGS_DIR/${tier}-$(basename "$f")"
-    done
-    return "$rc"
-}
 
 if _needs_container; then
     echo "==> Build and start test container (container-store isolation gate)"
@@ -270,10 +301,7 @@ if _has_tier lint; then
     uv run ruff check mtg_collector/
 fi
 
-if _has_tier unit; then
-    echo "==> Run unit tests"
-    run_tier unit uv run pytest tests/ --durations=50 --ignore=tests/integration --ignore=tests/ui
-fi
+join_unit_tier
 
 if _has_tier integration; then
     echo "==> Run integration tests"
