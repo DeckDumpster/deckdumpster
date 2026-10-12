@@ -174,20 +174,24 @@ def open_connection(
     this code, and asserts the connection sees exactly those two files.
     """
     conn = sqlite3.connect("file:" + quote(os.path.abspath(path)), timeout=timeout, uri=True)
-    conn.row_factory = sqlite3.Row
-    if wal:
-        conn.execute("PRAGMA journal_mode = WAL")
-    refuse_if_newer(conn, "main")
-    split = bool(shared_path) and os.path.exists(shared_path) and (
-        os.path.abspath(shared_path) != os.path.abspath(path)
-    )
-    if split:
-        attach_shared(conn, shared_path)
-        # FK enforcement is incompatible with ATTACH'd shared tables —
-        # SQLite FK checks only see empty main-schema tables.
-    else:
-        conn.execute("PRAGMA foreign_keys = ON")
-    assert_isolated(conn, path, shared_path if split else None)
+    try:
+        conn.row_factory = sqlite3.Row
+        if wal:
+            conn.execute("PRAGMA journal_mode = WAL")
+        refuse_if_newer(conn, "main")
+        split = bool(shared_path) and os.path.exists(shared_path) and (
+            os.path.abspath(shared_path) != os.path.abspath(path)
+        )
+        if split:
+            attach_shared(conn, shared_path)
+            # FK enforcement is incompatible with ATTACH'd shared tables —
+            # SQLite FK checks only see empty main-schema tables.
+        else:
+            conn.execute("PRAGMA foreign_keys = ON")
+        assert_isolated(conn, path, shared_path if split else None)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -200,9 +204,13 @@ def open_catalog_connection(db_path: str) -> sqlite3.Connection:
     shared = get_shared_db_path()
     target = shared if shared else db_path
     conn = sqlite3.connect(_ro_uri(target), timeout=10.0, uri=True)
-    conn.row_factory = sqlite3.Row
-    refuse_if_newer(conn, "main")
-    assert_isolated(conn, target)
+    try:
+        conn.row_factory = sqlite3.Row
+        refuse_if_newer(conn, "main")
+        assert_isolated(conn, target)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
