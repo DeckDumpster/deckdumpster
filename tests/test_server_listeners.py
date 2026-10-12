@@ -30,8 +30,8 @@ _STARTUP_TIMEOUT = 30.0
 def clean_env(monkeypatch, tmp_path):
     """Isolate the process env and filesystem the server reads at startup.
 
-    ``MTGC_HOME`` points at a scratch dir so the MTGJSON auto-import branch
-    finds no AllPrintings.json and merely warns, and so self-signed certs (if
+    ``MTGC_HOME`` points at a scratch dir so the empty-MTGJSON warning branch
+    merely warns, and so self-signed certs (if
     any test reaches that path) land in the tmpdir.
     """
     monkeypatch.setenv("MTGC_HOME", str(tmp_path))
