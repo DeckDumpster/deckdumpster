@@ -92,7 +92,7 @@ def test_split_copies_shared_tables(monolithic_db):
     shared.close()
 
     # Source still has everything (no prune)
-    source = sqlite3.connect(monolithic_db)
+    source = sqlite3.connect(monolithic_db, uri=True)
     assert source.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 1
     assert source.execute("SELECT COUNT(*) FROM collection").fetchone()[0] == 1
     source.close()
@@ -119,7 +119,7 @@ def test_split_with_prune(monolithic_db):
     shared.close()
 
     # Source has shared tables emptied, user tables kept
-    source = sqlite3.connect(monolithic_db)
+    source = sqlite3.connect(monolithic_db, uri=True)
     assert source.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 0
     assert source.execute("SELECT COUNT(*) FROM sets").fetchone()[0] == 0
     assert source.execute("SELECT COUNT(*) FROM printings").fetchone()[0] == 0
@@ -143,7 +143,7 @@ def test_split_then_attach_round_trip(monolithic_db):
     run_split(FakeArgs())
 
     # Open user DB, ATTACH shared
-    conn = sqlite3.connect(monolithic_db)
+    conn = sqlite3.connect(monolithic_db, uri=True)
     conn.row_factory = sqlite3.Row
     attach_shared(conn, shared_path)
 
@@ -187,7 +187,7 @@ def test_a_collection_write_fills_card_name_through_the_shadow(monolithic_db):
 
     run_split(FakeArgs())
 
-    conn = sqlite3.connect(monolithic_db)
+    conn = sqlite3.connect(monolithic_db, uri=True)
     conn.row_factory = sqlite3.Row
     attach_shared(conn, shared_path)
     # Nothing to read the name from in this database itself.
