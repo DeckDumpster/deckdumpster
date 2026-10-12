@@ -9346,20 +9346,14 @@ def run(args):
     _ingest_executor = FairPool(max_workers=4)
     _recover_pending_images(db_path)
 
-    # Auto-import MTGJSON data if tables are empty but AllPrintings.json exists
+    # The web process never writes the catalogue (N8): an empty MTGJSON table is
+    # filled by `mtg data refresh-catalog` (daily timer), not here.
     _conn = sqlite3.connect(db_path)
     _has_data = _conn.execute("SELECT COUNT(*) FROM mtgjson_booster_configs").fetchone()[0]
     _conn.close()
     if not _has_data:
-        from mtg_collector.cli.data_cmd import get_allprintings_path, import_mtgjson
-
-        ap = get_allprintings_path()
-        if ap.exists():
-            print("[startup] MTGJSON tables empty — auto-importing from AllPrintings.json ...", flush=True)
-            import_mtgjson(db_path)
-        else:
-            print("[startup] WARNING: MTGJSON tables empty and AllPrintings.json not found.", flush=True)
-            print("[startup] Crack-a-Pack set search will not work. Run: mtg data fetch", flush=True)
+        print("[startup] WARNING: MTGJSON tables empty. Crack-a-Pack set search will not work. "
+              "Run: mtg data refresh-catalog", flush=True)
 
     gen = PackGenerator(db_path)
 
