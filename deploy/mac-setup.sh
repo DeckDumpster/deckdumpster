@@ -106,7 +106,9 @@ fi
 # --- Build container image ---
 
 echo "==> Building container image (mtgc:$INSTANCE)..."
-podman build -t "mtgc:${INSTANCE}" -f "$REPO_DIR/Containerfile" "$REPO_DIR"
+DEPS_IMAGE="$(bash "$REPO_DIR/deploy/deps-image.sh")"
+podman build -t "mtgc:${INSTANCE}" -f "$REPO_DIR/Containerfile" \
+    --build-arg "DEPS_IMAGE=$DEPS_IMAGE" "$REPO_DIR"
 
 # --- Optional: initialize data volume ---
 

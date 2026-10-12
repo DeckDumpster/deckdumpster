@@ -136,6 +136,14 @@ bash deploy/runner-deps.sh --check
 echo "==> Disk floor"
 bash deploy/diskcheck.sh --floor "${MTGC_STORE_ROOT:-$HOME}"
 
+# The dependency base image is keyed on uv.lock + Containerfile.deps and pulled
+# from / pushed to ghcr by deploy/deps-image.sh (sp-83v558). Push only from CI,
+# which hands in a token; a hand run builds locally and publishes nothing.
+if [ -n "${GHCR_TOKEN:-}" ]; then
+    printf '%s' "$GHCR_TOKEN" | podman login ghcr.io -u "${GHCR_USER:?GHCR_USER required with GHCR_TOKEN}" --password-stdin
+    export MTGC_DEPS_PUSH=1
+fi
+
 if _needs_container; then
     echo "==> Clean up stale containers and images"
     bash deploy/teardown.sh "$INSTANCE" --purge 2>/dev/null || true

@@ -98,9 +98,9 @@ else
     bash "$SCRIPT_DIR/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
 
     echo "==> Building container image (mtgc:latest)..."
-    mapfile -t _uv_mount < <(mtgc_uv_cache_mount)
+    DEPS_IMAGE="$(bash "$SCRIPT_DIR/deps-image.sh")"
     podman build -t mtgc:latest -f Containerfile \
-        "${_uv_mount[@]}" .
+        --build-arg "DEPS_IMAGE=$DEPS_IMAGE" .
     podman tag mtgc:latest "mtgc:${INSTANCE}"
 
     # Reinstall the timer units from this checkout. deploy.sh runs setup.sh
