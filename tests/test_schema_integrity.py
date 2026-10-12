@@ -277,23 +277,26 @@ def test_force_repair_succeeds_under_split_db(split_dbs):
     conn.close()
 
 
-def test_force_repair_recreates_an_index_the_shadow_hides(split_dbs):
-    """The repair is genuine: the index really lands in main, not skipped."""
+def test_force_repair_recreates_a_user_index_in_main(split_dbs):
+    """With a catalogue attached the repair is genuine for the tenant file.
+
+    A tenant file holds user objects only, so the repair writes those to main and
+    never catalogue objects (sp-y8iflb); the shared file is rebuilt, not repaired.
+    """
     user_path, shared_path = split_dbs
-    for path in (user_path, shared_path):
-        conn = sqlite3.connect(path)
-        conn.execute("DROP INDEX idx_latest_prices_card")
-        conn.commit()
-        conn.close()
+    conn = sqlite3.connect(user_path)
+    conn.execute("DROP INDEX idx_orders_number")
+    conn.commit()
+    conn.close()
 
     conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
-    assert "idx_latest_prices_card" in verify_schema(conn)
+    assert "idx_orders_number" in verify_schema(conn)
 
     init_db(conn, force=True)
 
     assert conn.execute(
-        "SELECT 1 FROM main.sqlite_master WHERE name='idx_latest_prices_card'"
+        "SELECT 1 FROM main.sqlite_master WHERE name='idx_orders_number'"
     ).fetchone()
     assert verify_schema(conn) == []
     conn.close()
@@ -320,11 +323,10 @@ def test_shadow_is_restored_after_the_repair(split_dbs):
 def test_damaged_split_db_reports_then_the_named_remedy_repairs_it(split_dbs):
     """End to end: detect, run exactly what the message says, come back clean."""
     user_path, shared_path = split_dbs
-    for path in (user_path, shared_path):
-        conn = sqlite3.connect(path)
-        conn.execute("DROP TABLE sealed_products")
-        conn.commit()
-        conn.close()
+    conn = sqlite3.connect(user_path)
+    conn.execute("DROP TABLE wishlist")
+    conn.commit()
+    conn.close()
 
     conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
