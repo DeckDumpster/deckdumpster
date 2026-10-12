@@ -176,7 +176,7 @@ def split_dbs():
     shared.commit()
     shared.close()
 
-    user = sqlite3.connect(user_path)
+    user = sqlite3.connect(user_path, uri=True)
     init_db(user)
     for table in SHARED_TABLES:
         user.execute(f"DELETE FROM {table}")
@@ -199,7 +199,7 @@ def split_dbs():
 def test_split_db_is_not_a_false_alarm(split_dbs):
     """main.printings is empty BY DESIGN — that must not read as damage."""
     user_path, shared_path = split_dbs
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
 
     assert conn.execute("SELECT COUNT(*) FROM main.printings").fetchone()[0] == 0
@@ -218,7 +218,7 @@ def test_split_db_still_detects_real_damage(split_dbs):
         conn.commit()
         conn.close()
 
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
     # attach_shared leaves a temp view named sealed_products behind even though
     # its target is gone; the check must not be fooled by it.
@@ -235,12 +235,12 @@ def test_object_present_only_in_shared_counts_as_present(split_dbs):
     """An object dropped from main but live in shared is not missing."""
     user_path, shared_path = split_dbs
 
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     conn.execute("DROP TABLE tcgplayer_groups")
     conn.commit()
     conn.close()
 
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
     assert "tcgplayer_groups" not in verify_schema(conn)
     conn.close()
@@ -262,7 +262,7 @@ def test_force_repair_succeeds_under_split_db(split_dbs):
     sqlite3.OperationalError: views may not be indexed.
     """
     user_path, shared_path = split_dbs
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
 
     # The shadow is up: latest_prices is a TABLE in main and a VIEW in temp.
@@ -277,23 +277,26 @@ def test_force_repair_succeeds_under_split_db(split_dbs):
     conn.close()
 
 
-def test_force_repair_recreates_an_index_the_shadow_hides(split_dbs):
-    """The repair is genuine: the index really lands in main, not skipped."""
-    user_path, shared_path = split_dbs
-    for path in (user_path, shared_path):
-        conn = sqlite3.connect(path)
-        conn.execute("DROP INDEX idx_latest_prices_card")
-        conn.commit()
-        conn.close()
+def test_force_repair_recreates_a_user_index_in_main(split_dbs):
+    """With a catalogue attached the repair is genuine for the tenant file.
 
+    A tenant file holds user objects only, so the repair writes those to main and
+    never catalogue objects (sp-y8iflb); the shared file is rebuilt, not repaired.
+    """
+    user_path, shared_path = split_dbs
     conn = sqlite3.connect(user_path)
+    conn.execute("DROP INDEX idx_orders_number")
+    conn.commit()
+    conn.close()
+
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
-    assert "idx_latest_prices_card" in verify_schema(conn)
+    assert "idx_orders_number" in verify_schema(conn)
 
     init_db(conn, force=True)
 
     assert conn.execute(
-        "SELECT 1 FROM main.sqlite_master WHERE name='idx_latest_prices_card'"
+        "SELECT 1 FROM main.sqlite_master WHERE name='idx_orders_number'"
     ).fetchone()
     assert verify_schema(conn) == []
     conn.close()
@@ -302,7 +305,7 @@ def test_force_repair_recreates_an_index_the_shadow_hides(split_dbs):
 def test_shadow_is_restored_after_the_repair(split_dbs):
     """Suspending the shadow for DDL must not leave the connection degraded."""
     user_path, shared_path = split_dbs
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
 
     init_db(conn, force=True)
@@ -320,13 +323,12 @@ def test_shadow_is_restored_after_the_repair(split_dbs):
 def test_damaged_split_db_reports_then_the_named_remedy_repairs_it(split_dbs):
     """End to end: detect, run exactly what the message says, come back clean."""
     user_path, shared_path = split_dbs
-    for path in (user_path, shared_path):
-        conn = sqlite3.connect(path)
-        conn.execute("DROP TABLE sealed_products")
-        conn.commit()
-        conn.close()
-
     conn = sqlite3.connect(user_path)
+    conn.execute("DROP TABLE wishlist")
+    conn.commit()
+    conn.close()
+
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
 
     with pytest.raises(SchemaIntegrityError) as exc:
@@ -356,7 +358,7 @@ def test_shared_gap_is_invisible_to_the_boot_path_check(split_dbs):
     conn.commit()
     conn.close()
 
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
     assert verify_schema(conn) == []  # masked by main's surviving definition
     assert init_db(conn) is False  # so the server still boots
@@ -370,7 +372,7 @@ def test_verify_shared_schema_reports_the_shared_gap(split_dbs):
     conn.commit()
     conn.close()
 
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
     assert "sealed_products" in verify_shared_schema(conn)
     conn.close()
@@ -378,7 +380,7 @@ def test_verify_shared_schema_reports_the_shared_gap(split_dbs):
 
 def test_verify_shared_schema_is_quiet_on_an_intact_split_db(split_dbs):
     user_path, shared_path = split_dbs
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
     assert verify_shared_schema(conn) == []
     conn.close()
@@ -401,7 +403,7 @@ def test_force_does_not_claim_to_repair_the_shared_db(split_dbs):
     conn.commit()
     conn.close()
 
-    conn = sqlite3.connect(user_path)
+    conn = sqlite3.connect(user_path, uri=True)
     attach_shared(conn, shared_path)
     init_db(conn, force=True)
     assert "sealed_products" in verify_shared_schema(conn)
