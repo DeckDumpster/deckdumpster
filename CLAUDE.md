@@ -96,6 +96,18 @@ worktree. The UI tier needs `ANTHROPIC_API_KEY`; CI passes it in as a repository
 
 The HTTP server is `mtg_collector/cli/crack_pack_server.py` — a single-file threaded stdlib `http.server` with manual path dispatch in `do_GET`/`do_POST`/`do_PUT`/`do_DELETE`. SSE is used for long-running ingest processing. No framework.
 
+**The only listener is an ASGI app** (`mtg_collector/asgi_app.py`: FastAPI, served by uvicorn;
+multi-tenancy N3, a strangler). `run()` builds it and binds it on the primary port (TLS when
+`--https`) and the optional `MTGC_HTTP_PORT` one. Its tenant middleware (`mtg_collector/tenancy.py`)
+resolves a `TenantId` — in single-tenant mode always the one configured tenant — and binds it in a
+contextvar; `TenantId` can only be minted by a resolver. A catch-all route hands every request to
+the legacy adapter, which runs `CrackPackHandler` unchanged (in its own thread, with the context
+copied) and relays the raw HTTP it writes, SSE included. `CrackPackHandler._get_conn()` raises
+outside a request. Routes move to native FastAPI handlers family by family; docs/OpenAPI routes
+stay off until the adapter no longer needs every path. The stdlib `ThreadingHTTPServer` is no
+longer a listener; it survives only for tests that drive the handler on a bare socket
+(`tests/legacy_handler.py` binds the tenant they lack).
+
 **HTML pages are dispatched from a table, not the `elif` chain.**
 `mtg_collector/cli/page_routes.py` holds `PAGE_ROUTES`, and `do_GET` routes every page
 through `match_page_route`, so the table *is* the routing rather than a description of it.
@@ -303,6 +315,21 @@ fixture had neither column, so every set in a `--test` container reported `owned
 (`total_set_size` already arrived with `ensure_set_cached`), and Special Guests is in that
 table with `0` — which `clean_size` reads as an absence — so one cached set stays NULL and
 both branches have a fixture. Do not "fix" `spg` to a positive number.
+
+### Tenants (registry and `mtg tenant`)
+
+`$MTGC_HOME/registry.sqlite` (`db/registry.py`) is the control plane: `user` (handle ->
+opaque ULID `database_id`, `retired_at`, `purged_at`), `user_identity` (email -> database_id),
+`tenant_key` (encrypted). Rules are schema CHECKs and partial unique indexes (one active
+handle; one active tenant per email; purge only after detach), not just function checks.
+`mtg_collector/tenancy/paths.py` is the **only** constructor of tenant paths and takes a
+database_id, never a handle; it refuses lowercase or malformed ULIDs. A re-created handle
+gets a new ULID, so it can never reach the old files or replica. `mtg tenant
+create|list|rename|detach|reattach|purge|adopt|migrate|set-key|identity` is the lifecycle;
+`migrate` needs a handle or `--all` and reports every tenant. Keys are read from stdin and
+encrypted under `MTGC_MASTER_KEY` / `MTGC_MASTER_KEY_FILE` (`tenancy/keycrypt.py`, stdlib
+only), bound to the database_id. Nothing here routes a request: multi-tenant serving is
+later beads.
 
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`

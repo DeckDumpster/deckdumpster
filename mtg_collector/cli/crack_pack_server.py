@@ -12,14 +12,14 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, unquote, urlparse
 
+from mtg_collector.access import multitenant_enabled
 from mtg_collector.cli.page_routes import PageRoute, match_page_route
-from mtg_collector.db.connection import get_db_path
+from mtg_collector.db.connection import get_db_path, open_connection
 from mtg_collector.db.enrich import (
     COPY_IS_FOIL,
     enrich_columns,
@@ -39,15 +39,13 @@ from mtg_collector.http_cache import (
 )
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
+from mtg_collector.tenancy import current_tenant
+from mtg_collector.tenancy import paths as tenant_paths
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
     """Look up a single price from the latest_prices view."""
-    conn = sqlite3.connect(db_path)
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     row = conn.execute(
         "SELECT price FROM latest_prices WHERE set_code = ? AND collector_number = ? AND source = ? AND price_type = ?",
         (set_code.lower(), collector_number, source, price_type),
@@ -863,15 +861,7 @@ def _process_image_background(db_path, image_id):
 
     _log_ingest(f"[bg:{image_id}] Background worker started")
 
-    conn = sqlite3.connect(db_path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
-        # FK enforcement is incompatible with ATTACH'd shared tables.
-    else:
-        conn.execute("PRAGMA foreign_keys = ON")
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     init_db(conn)
 
     # Atomic claim
@@ -964,12 +954,7 @@ def _recover_pending_images(db_path):
     from mtg_collector.utils import now_iso
 
     print("[startup] Running database migrations ...", flush=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    if _shared_db_path and os.path.exists(_shared_db_path):
-        from mtg_collector.db.connection import attach_shared
-        attach_shared(conn, _shared_db_path)
+    conn = open_connection(db_path, _shared_db_path, wal=False)
     init_db(conn)
     print("[startup] Database ready", flush=True)
 
@@ -1285,16 +1270,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _get_conn(self):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL")
-        if _shared_db_path and os.path.exists(_shared_db_path):
-            from mtg_collector.db.connection import attach_shared
-            attach_shared(conn, _shared_db_path)
-            # FK enforcement is incompatible with ATTACH'd shared tables —
-            # SQLite FK checks only see empty main-schema tables.
-        else:
-            conn.execute("PRAGMA foreign_keys = ON")
+        # The only route to a connection, and it has no answer outside a
+        # resolved request: current_tenant() raises when none is bound.
+        tenant = current_tenant()
+        db_path = self.db_path
+        if multitenant_enabled():
+            # The tenant's id names its file; there is no other route to one.
+            db_path = str(tenant_paths.tenant_db_file(tenant.value))
+        conn = open_connection(db_path, _shared_db_path)
         return conn
 
     def do_GET(self):
@@ -9322,15 +9305,8 @@ def _generate_self_signed(cert_file, key_file):
     )
 
 
-def _build_tls_context(cert_dir):
-    """Build the server's SSL context.
-
-    Uses the externally-provided certificate when ``MTGC_TLS_CERT`` /
-    ``MTGC_TLS_KEY`` are set; otherwise falls back to the auto-generated
-    self-signed pair under ``cert_dir``.
-    """
-    import ssl
-
+def _tls_cert_paths(cert_dir):
+    """The certificate pair to serve: the operator's, else a generated one."""
     external = _resolve_external_tls_paths()
     if external is not None:
         cert_file, key_file = external
@@ -9340,14 +9316,48 @@ def _build_tls_context(cert_dir):
         key_file = cert_dir / "server-key.pem"
         if not cert_file.exists() or not key_file.exists():
             _generate_self_signed(cert_file, key_file)
+    return cert_file, key_file
 
+
+def _build_tls_context(cert_dir):
+    """Build an SSL context for the certificate pair ``_tls_cert_paths`` picks."""
+    import ssl
+
+    cert_file, key_file = _tls_cert_paths(cert_dir)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(str(cert_file), str(key_file))
     return ctx
 
 
+def _new_listener(app, port, tls_paths=None, host="0.0.0.0"):
+    """One uvicorn listener for the ASGI app; TLS when ``tls_paths`` is given."""
+    import uvicorn
+
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        ssl_certfile=str(tls_paths[0]) if tls_paths else None,
+        ssl_keyfile=str(tls_paths[1]) if tls_paths else None,
+        lifespan="off",
+        access_log=False,
+        log_level="warning",
+        timeout_keep_alive=30,
+    )
+    return uvicorn.Server(config)
+
+
 def run(args):
     """Run the crack-pack-server command."""
+    from mtg_collector import access
+
+    # Fatal before anything else starts: multi mode without Access, or any
+    # partial Access configuration, must not serve.
+    if multitenant_enabled():
+        access.require_config()
+    else:
+        access.load_config()
+
     db_path = get_db_path(getattr(args, "db", None))
 
     global _ingest_executor, _background_db_path, _shared_db_path
@@ -9380,19 +9390,47 @@ def run(args):
     gen = PackGenerator(db_path)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
-    handler = partial(CrackPackHandler, gen, static_dir, db_path)
 
-    server = ThreadingHTTPServer(("", args.port), handler)
-    plain_server = ThreadingHTTPServer(("", http_port), handler) if http_port is not None else None
+    from mtg_collector.asgi_app import create_app
 
+    multi = multitenant_enabled()
+    if multi:
+        # Fatal before anything binds: multi mode without Access, or with it
+        # half-configured, must not serve.
+        from mtg_collector.tenancy import MultiTenantResolver
+
+        verifier = access.AccessVerifier(access.require_config())
+        app = create_app(gen, static_dir, db_path,
+                         resolver=MultiTenantResolver(verifier), multi=True)
+        if http_port is None:
+            raise SystemExit(
+                "MTGC_MULTITENANT needs MTGC_HTTP_PORT: the loopback listener is "
+                "the only one multi-tenant mode serves (N5)"
+            )
+        # N5: 8081 bypasses Access, so it is not bound at all. Loopback only,
+        # for the tunnel origin.
+        print(f"[startup] multi-tenant: loopback listener http://127.0.0.1:{http_port}; "
+              f"port {args.port} is not served", flush=True)
+        plain = _new_listener(app, http_port, host="127.0.0.1")
+        try:
+            plain.run()
+        finally:
+            print("\nShutting down.")
+            _ingest_executor.shutdown(wait=False)
+        return
+
+    app = create_app(gen, static_dir, db_path)
+
+    tls_paths = None
     if args.https:
         cert_dir = Path(os.environ.get("MTGC_HOME", Path.home() / ".mtgc"))
-        ctx = _build_tls_context(cert_dir)
-        server.socket = ctx.wrap_socket(server.socket, server_side=True)
-        server.socket.settimeout(10)
+        tls_paths = _tls_cert_paths(cert_dir)
         scheme = "https"
     else:
         scheme = "http"
+
+    server = _new_listener(app, args.port, tls_paths)
+    plain_server = _new_listener(app, http_port) if http_port is not None else None
 
     print(f"Server running at {scheme}://localhost:{args.port}")
     print(f"Crack-a-Pack: {scheme}://localhost:{args.port}/crack")
@@ -9408,13 +9446,14 @@ def run(args):
     print("Press Ctrl+C to stop.")
 
     if plain_server is not None:
-        threading.Thread(target=plain_server.serve_forever, daemon=True).start()
+        # Not the main thread, so uvicorn installs no signal handlers on it;
+        # the primary's Ctrl+C handling stops both below.
+        threading.Thread(target=plain_server.run, daemon=True).start()
 
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
+        server.run()
+    finally:
         print("\nShutting down.")
         _ingest_executor.shutdown(wait=False)
-        server.shutdown()
         if plain_server is not None:
-            plain_server.shutdown()
+            plain_server.should_exit = True
