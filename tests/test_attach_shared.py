@@ -118,7 +118,7 @@ def single_db_path():
 
 
 def test_attach_creates_temp_views(user_db_path, shared_db_path):
-    conn = sqlite3.connect(user_db_path)
+    conn = sqlite3.connect(user_db_path, uri=True)
     attach_shared(conn, shared_db_path)
 
     temp_views = [
@@ -135,7 +135,7 @@ def test_attach_creates_temp_views(user_db_path, shared_db_path):
 
 
 def test_reads_resolve_to_shared_db(user_db_path, shared_db_path):
-    conn = sqlite3.connect(user_db_path)
+    conn = sqlite3.connect(user_db_path, uri=True)
     conn.row_factory = sqlite3.Row
     attach_shared(conn, shared_db_path)
 
@@ -149,7 +149,7 @@ def test_reads_resolve_to_shared_db(user_db_path, shared_db_path):
 
 
 def test_writes_go_to_user_db(user_db_path, shared_db_path):
-    conn = sqlite3.connect(user_db_path)
+    conn = sqlite3.connect(user_db_path, uri=True)
     conn.row_factory = sqlite3.Row
     attach_shared(conn, shared_db_path)
 
@@ -242,7 +242,7 @@ def test_get_conn_shared_mode_nonexistent_path(single_db_path):
 
 def test_collection_view_with_attach(user_db_path, shared_db_path):
     """collection_view joins cards + printings + sets — all from shared DB."""
-    conn = sqlite3.connect(user_db_path)
+    conn = sqlite3.connect(user_db_path, uri=True)
     conn.row_factory = sqlite3.Row
     attach_shared(conn, shared_db_path)
 
@@ -278,7 +278,7 @@ def test_deck_with_attach(user_db_path, shared_db_path):
     """Decks work through ATTACH — deck cards reference shared printings."""
     from mtg_collector.db.models import Deck, DeckRepository
 
-    conn = sqlite3.connect(user_db_path)
+    conn = sqlite3.connect(user_db_path, uri=True)
     conn.row_factory = sqlite3.Row
     attach_shared(conn, shared_db_path)
 
@@ -304,7 +304,7 @@ def test_deck_with_attach(user_db_path, shared_db_path):
 
 def test_card_search_with_attach(user_db_path, shared_db_path):
     """Card name search works through ATTACH."""
-    conn = sqlite3.connect(user_db_path)
+    conn = sqlite3.connect(user_db_path, uri=True)
     conn.row_factory = sqlite3.Row
     attach_shared(conn, shared_db_path)
 
@@ -319,11 +319,11 @@ def test_card_search_with_attach(user_db_path, shared_db_path):
 
 def test_multiple_connections_independent(user_db_path, shared_db_path):
     """Each connection gets its own ATTACH — no cross-contamination."""
-    conn1 = sqlite3.connect(user_db_path)
+    conn1 = sqlite3.connect(user_db_path, uri=True)
     conn1.row_factory = sqlite3.Row
     attach_shared(conn1, shared_db_path)
 
-    conn2 = sqlite3.connect(user_db_path)
+    conn2 = sqlite3.connect(user_db_path, uri=True)
     conn2.row_factory = sqlite3.Row
     # conn2 does NOT attach
 
