@@ -256,7 +256,7 @@ def _mtg(home, *args, stdin=None):
     env = dict(os.environ, MTGC_HOME=str(home))
     return subprocess.run(
         [sys.executable, "-m", "mtg_collector", *args],
-        env=env, input=stdin, capture_output=True, text=True,
+        env=env, input=stdin, capture_output=True, text=True, timeout=60,
     )
 
 
