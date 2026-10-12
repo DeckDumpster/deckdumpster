@@ -10,7 +10,6 @@ import sys
 import threading
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import partial
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -39,6 +38,7 @@ from mtg_collector.http_cache import (
 )
 from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
+from mtg_collector.tenancy.fairpool import FairPool
 
 
 def _get_sqlite_price(db_path: str, set_code: str, collector_number: str, source: str, price_type: str) -> str | None:
@@ -95,7 +95,7 @@ def _bulk_attach_prices(conn, cards: list[dict]) -> None:
 
 
 # ── Background ingest worker ──
-_ingest_executor: ThreadPoolExecutor | None = None
+_ingest_executor: FairPool | None = None
 _scryfall_rate_lock = threading.Lock()
 _scryfall_last_request: float = 0.0
 _background_db_path: str | None = None
@@ -594,9 +594,11 @@ def _scryfall_rate_limit():
         _scryfall_last_request = time.time()
 
 
-def _has_api_key():
-    """Check if ANTHROPIC_API_KEY is available."""
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+def _has_api_key(tenant_id=None):
+    """Whether this tenant can call Claude: ANTHROPIC_API_KEY single-tenant, the tenant's own key otherwise."""
+    from mtg_collector.tenancy.apikey import has_tenant_api_key
+
+    return has_tenant_api_key(tenant_id)
 
 
 def _has_fake_agent():
@@ -604,9 +606,18 @@ def _has_fake_agent():
     return bool(os.environ.get("MTGC_FAKE_AGENT"))
 
 
-def _can_process():
+def _can_process(tenant_id=None):
     """Check if image processing is possible (real or fake agent)."""
-    return _has_api_key() or _has_fake_agent()
+    return _has_api_key(tenant_id) or _has_fake_agent()
+
+
+def _no_key_error(tenant_id, what):
+    """The 503 body for a tenant who cannot call Claude."""
+    from mtg_collector.tenancy.apikey import NO_KEY_MESSAGE
+
+    if tenant_id is None:
+        return {"error": f"ANTHROPIC_API_KEY not set — {what} requires an API key"}
+    return {"error": NO_KEY_MESSAGE}
 
 
 def _process_image_core(conn, image_id, img, log_fn, tenant_id=None):
@@ -631,13 +642,14 @@ def _process_image_core(conn, image_id, img, log_fn, tenant_id=None):
                 return fake_agent(image_path, ocr_fragments=ocr_fragments,
                                   status_callback=status_callback, trace_out=trace_out)
             except ValueError:
-                if _has_api_key():
+                if _has_api_key(tenant_id):
                     _log_ingest("Fake agent miss, falling back to real agent")
                 else:
                     raise
         return real_agent(image_path, ocr_fragments=ocr_fragments,
                           status_callback=status_callback, trace_out=trace_out,
-                          set_hint=set_hint)
+                          set_hint=set_hint, api_key=tenant_api_key(tenant_id))
+    from mtg_collector.tenancy.apikey import tenant_api_key
     from mtg_collector.utils import now_iso
 
     image_path = str(_get_ingest_images_dir(tenant_id) / img["stored_name"])
@@ -971,13 +983,13 @@ def _recover_pending_images_for(db_path, tenant_id):
     rows = conn.execute("SELECT id FROM ingest_images WHERE status='READY_FOR_OCR'").fetchall()
     conn.close()
 
-    if rows and _can_process():
+    if rows and _can_process(tenant_id):
         print(f"[startup] Re-queuing {len(rows)} pending image(s) for OCR", flush=True)
         for row in rows:
             _log_ingest(f"Recovering image {row['id']} for background processing")
-            _ingest_executor.submit(_process_image_background, db_path, row["id"], tenant_id)
+            _ingest_executor.submit(tenant_id, _process_image_background, db_path, row["id"], tenant_id)
     elif rows:
-        print(f"[startup] {len(rows)} pending image(s) waiting — ANTHROPIC_API_KEY not set, skipping processing", flush=True)
+        print(f"[startup] {len(rows)} pending image(s) waiting — no Anthropic API key for tenant {tenant_id or '(single)'}, skipping processing", flush=True)
 
 
 #: Stand-in for "the card name", substituted per template in _api_collection.
@@ -3727,8 +3739,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             })
 
             # Submit for background processing (requires API key or fake agent)
-            if _ingest_executor is not None and _can_process():
-                _ingest_executor.submit(_process_image_background, self.db_path, image_id, self.tenant_id)
+            if _ingest_executor is not None and _can_process(self.tenant_id):
+                _ingest_executor.submit(self.tenant_id, _process_image_background, self.db_path, image_id, self.tenant_id)
 
         conn.close()
         self._send_json({"uploaded": uploaded, "collisions": collisions})
@@ -3750,8 +3762,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_ingest2_process_sse(self, image_id):
         """SSE endpoint: process one image through OCR -> Claude -> DB lookup, DB-backed."""
-        if not _can_process():
-            self._send_json({"error": "ANTHROPIC_API_KEY not set — card identification requires an API key"}, 503)
+        if not _can_process(self.tenant_id):
+            self._send_json(_no_key_error(self.tenant_id, "card identification"), 503)
             return
         conn = self._ingest2_db()
         img = self._ingest2_load_image(conn, image_id)
@@ -4417,10 +4429,10 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         _log_ingest(f"Reset image {image_id}: {img['filename']} — requeued for processing")
 
         # Submit for background processing (requires API key or fake agent)
-        if _ingest_executor is not None and _can_process():
-            _ingest_executor.submit(_process_image_background, self.db_path, image_id, self.tenant_id)
+        if _ingest_executor is not None and _can_process(self.tenant_id):
+            _ingest_executor.submit(self.tenant_id, _process_image_background, self.db_path, image_id, self.tenant_id)
 
-        self._send_json({"ok": True, "processing": _can_process()})
+        self._send_json({"ok": True, "processing": _can_process(self.tenant_id)})
 
     def _api_ingest2_refinish(self):
         """Remove all collection entries for an image so it reappears on Recents for finish re-selection."""
@@ -5012,13 +5024,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _api_corners_detect(self):
         """Upload a photo, run Claude Vision corner detection, resolve cards."""
-        if not _has_api_key():
-            self._send_json({"error": "ANTHROPIC_API_KEY not set — corner detection requires an API key"}, 503)
+        if not _has_api_key(self.tenant_id):
+            self._send_json(_no_key_error(self.tenant_id, "corner detection"), 503)
             return
         from mtg_collector.cli.ingest_ids import RARITY_MAP, lookup_card
         from mtg_collector.db.models import PrintingRepository, SetRepository
         from mtg_collector.db.schema import init_db
         from mtg_collector.services.claude import ClaudeVision
+        from mtg_collector.tenancy.apikey import tenant_api_key
 
         content_type = self.headers.get("Content-Type", "")
         if "multipart/form-data" not in content_type:
@@ -5070,7 +5083,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         # Run Claude Vision corner detection
         try:
-            claude = ClaudeVision()
+            claude = ClaudeVision(api_key=tenant_api_key(self.tenant_id))
             detections, skipped = claude.read_card_corners(str(dest))
         except Exception as e:
             self._send_json({"error": f"Claude Vision error: {e}"}, 500)
@@ -9309,7 +9322,7 @@ def run(args):
     # exits non-zero.
     http_port = _resolve_http_port()
     _background_db_path = db_path
-    _ingest_executor = ThreadPoolExecutor(max_workers=4)
+    _ingest_executor = FairPool(max_workers=4)
     _recover_pending_images(db_path)
 
     # Auto-import MTGJSON data if tables are empty but AllPrintings.json exists
