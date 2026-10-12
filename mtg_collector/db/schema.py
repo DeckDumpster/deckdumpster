@@ -929,14 +929,7 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
         from mtg_collector.db.connection import suspend_shared_shadow
 
         with suspend_shared_shadow(conn):
-            # One transaction: executescript autocommits each of the ~90
-            # statements, and every commit is an fsync.
-            try:
-                conn.executescript("BEGIN;\n" + SCHEMA_SQL + "\nCOMMIT;")
-            except BaseException:
-                if conn.in_transaction:
-                    conn.rollback()
-                raise
+            conn.executescript(SCHEMA_SQL)
         # Seed default settings
         _seed_default_settings(conn)
     else:
