@@ -77,8 +77,16 @@ mtgc_store_activate
 # that failed anywhere still cleaned up. A trap is that, and it also covers a
 # hand-run interrupted partway.
 GATE_PROBE_FILE=""
+# UI tier: one pytest-xdist worker per container, <instance>-<k> (sp-lc1puh).
+# Each --test instance peaked at ~257 MB (cgroup memory.peak); with a Chromium
+# per worker, 6 sits well inside the 16 GiB runner.
+UI_WORKERS="${MTGC_UI_WORKERS:-6}"
 _ci_cleanup() {
     bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true
+    local k
+    for k in $(seq 0 $((UI_WORKERS - 1))); do
+        bash deploy/teardown.sh "${INSTANCE}-${k}" --purge >/dev/null 2>&1 || true
+    done
     if [ -s "${GATE_PROBE_FILE:-}" ]; then
         MTGC_STORE_ROOT="$(cat "$GATE_PROBE_FILE")" bash deploy/store-teardown.sh >/dev/null 2>&1 || true
     fi
@@ -281,6 +289,23 @@ if _has_tier integration; then
 fi
 
 if _has_tier ui; then
+    echo "==> Bring up ${UI_WORKERS} UI worker instances (parallel, one image)"
+    pids=()
+    for k in $(seq 0 $((UI_WORKERS - 1))); do
+        (
+            bash deploy/teardown.sh "${INSTANCE}-${k}" --purge >/dev/null 2>&1 || true
+            bash deploy/setup.sh "${INSTANCE}-${k}" --test --no-build \
+                >"${TMPDIR:-/tmp}/ui-worker-${INSTANCE}-${k}.log" 2>&1
+        ) &
+        pids+=($!)
+    done
+    for pid in "${pids[@]}"; do
+        wait "$pid" || { echo "UI worker bring-up failed:" >&2; tail -40 "${TMPDIR:-/tmp}"/ui-worker-"${INSTANCE}"-*.log >&2; exit 1; }
+    done
+    for k in $(seq 0 $((UI_WORKERS - 1))); do
+        INSTANCE="${INSTANCE}-${k}" wait_for_server
+    done
+
     echo "==> Run UI scenario tests"
-    run_tier ui uv run pytest tests/ui/ --durations=50 --instance "$INSTANCE"
+    run_tier ui uv run pytest tests/ui/ --durations=50 --instance "$INSTANCE" -n "$UI_WORKERS"
 fi
