@@ -66,6 +66,6 @@ def rebuild_growth_all(db_path: str, *, rebuild=None, open_tenant=None) -> int:
             print(f"  [{label}] FAILED: {type(e).__name__}: {e}")
     if failed:
         print(f"PARTIAL: {len(tenants) - len(failed)}/{len(tenants)} tenants rebuilt; "
-              f"failed: {', '.join(l for l, _ in failed)}")
+              f"failed: {', '.join(label for label, _ in failed)}")
         return PARTIAL_EXIT
     return 0
