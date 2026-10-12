@@ -372,18 +372,7 @@ fi
 
 if _has_tier ui; then
     echo "==> Bring up ${UI_WORKERS} UI worker instances (parallel, one image)"
-    pids=()
-    for k in $(seq 0 $((UI_WORKERS - 1))); do
-        (
-            bash deploy/teardown.sh "${INSTANCE}-${k}" --purge >/dev/null 2>&1 || true
-            bash deploy/setup.sh "${INSTANCE}-${k}" --test --no-build \
-                >"${TMPDIR:-/tmp}/ui-worker-${INSTANCE}-${k}.log" 2>&1
-        ) &
-        pids+=($!)
-    done
-    for pid in "${pids[@]}"; do
-        wait "$pid" || { echo "UI worker bring-up failed:" >&2; tail -40 "${TMPDIR:-/tmp}"/ui-worker-"${INSTANCE}"-*.log >&2; exit 1; }
-    done
+    bash deploy/ci-ui-workers.sh "$INSTANCE" "$UI_WORKERS" "$(cat "$GATE_PROBE_FILE")"
     for k in $(seq 0 $((UI_WORKERS - 1))); do
         INSTANCE="${INSTANCE}-${k}" wait_for_server
     done
