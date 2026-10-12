@@ -23,6 +23,7 @@ from functools import partial
 import pytest
 
 from mtg_collector.cli import crack_pack_server as cps
+from tests.legacy_handler import BoundCrackPackHandler
 from mtg_collector.http_cache import (
     CACHE_API,
     CACHE_DOCUMENT,
@@ -131,7 +132,7 @@ def server(tmp_path):
     nothing needs a database: this stays in the no-container tier.
     """
     (tmp_path / "index.html").write_text(PAGE)
-    handler = partial(cps.CrackPackHandler, None, tmp_path, str(tmp_path / "nodb.sqlite"))
+    handler = partial(BoundCrackPackHandler, None, tmp_path, str(tmp_path / "nodb.sqlite"))
     httpd = cps.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
