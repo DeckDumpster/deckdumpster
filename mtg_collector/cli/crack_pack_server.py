@@ -1535,8 +1535,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "Invalid JSON"}, 400)
                 return
             self._api_generate(data)
-        elif path == "/api/fetch-prices":
-            self._api_fetch_prices()
         elif path == "/api/ingest2/upload":
             self._api_ingest2_upload()
         elif path == "/api/ingest2/set-params":
@@ -1657,8 +1655,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         elif path == "/api/import/commit":
             self._api_import_commit()
         # Sealed price fetch + TCGPlayer lookup
-        elif path == "/api/sealed/fetch-prices":
-            self._api_sealed_fetch_prices()
         elif path == "/api/sealed/from-tcgplayer":
             data = self._read_json_body()
             if data is None:
@@ -3335,23 +3331,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
         self._send_json({row["key"]: row["value"] for row in rows})
-
-    def _api_fetch_prices(self):
-        try:
-            from mtg_collector.cli.data_cmd import _fetch_prices as fetch_prices_cmd
-            fetch_prices_cmd(force=True)
-            # Return updated status
-            conn = self._get_conn()
-            try:
-                log = conn.execute(
-                    "SELECT fetched_at FROM price_fetch_log ORDER BY id DESC LIMIT 1"
-                ).fetchone()
-                last_modified = log["fetched_at"] if log else None
-            finally:
-                conn.close()
-            self._send_json({"available": bool(log), "last_modified": last_modified})
-        except Exception as e:
-            self._send_json({"error": str(e)}, 500)
 
     # ── Ingest2 API endpoints (DB-backed) ──
 
@@ -9149,16 +9128,6 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"error": "Not found"}, 404)
 
-    def _api_sealed_fetch_prices(self):
-        """Trigger TCGCSV sealed price fetch."""
-        from mtg_collector.cli.data_cmd import fetch_sealed_prices
-
-        # Don't pass conn — fetch_sealed_prices writes to shared tables
-        # (tcgplayer_groups, sealed_prices) which need a direct connection
-        # to the shared DB, not the ATTACHed main DB where they're views.
-        result = fetch_sealed_prices(self.db_path)
-        self._send_json({"ok": True, **(result or {})})
-
     def _api_sealed_from_tcgplayer(self, data: dict):
         """Look up a sealed product by TCGPlayer product ID or URL."""
         from mtg_collector.db.models import SealedProductRepository
@@ -9392,20 +9361,14 @@ def run(args):
     _ingest_executor = FairPool(max_workers=4)
     _recover_pending_images(db_path)
 
-    # Auto-import MTGJSON data if tables are empty but AllPrintings.json exists
+    # The web process never writes the catalogue (N8): an empty MTGJSON table is
+    # filled by `mtg data refresh-catalog` (daily timer), not here.
     _conn = sqlite3.connect(db_path)
     _has_data = _conn.execute("SELECT COUNT(*) FROM mtgjson_booster_configs").fetchone()[0]
     _conn.close()
     if not _has_data:
-        from mtg_collector.cli.data_cmd import get_allprintings_path, import_mtgjson
-
-        ap = get_allprintings_path()
-        if ap.exists():
-            print("[startup] MTGJSON tables empty — auto-importing from AllPrintings.json ...", flush=True)
-            import_mtgjson(db_path)
-        else:
-            print("[startup] WARNING: MTGJSON tables empty and AllPrintings.json not found.", flush=True)
-            print("[startup] Crack-a-Pack set search will not work. Run: mtg data fetch", flush=True)
+        print("[startup] WARNING: MTGJSON tables empty. Crack-a-Pack set search will not work. "
+              "Run: mtg data refresh-catalog", flush=True)
 
     gen = PackGenerator(db_path)
 
