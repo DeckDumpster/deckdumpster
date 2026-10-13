@@ -128,8 +128,12 @@ jobs:
           pve-ca-cert:        ${{ vars.PVE_CA_CERT }}
           pve-node:           ${{ vars.PVE_NODE }}
           template-vmid:      ${{ vars.TEMPLATE_VMID }}
-          spill:               ec2
-          spill-after-seconds: '300'
+          # EC2 only, per Ryan 2026-10-13, until the suites are optimised and the Proxmox disk
+          # contention is fixed: on the shared host the unit tier stalled in fsync and the UI
+          # tier timed out (PRs 445-450), so no batch could go green. Revert to `ec2` after.
+          spill:               ec2-only
+          instance-type:       c7i.4xlarge
+          spill-after-seconds: '60'
           spill-max-instances: '4'
           aws-role-to-assume:  ${{ secrets.AWS_SPILL_ROLE_ARN }}
 
