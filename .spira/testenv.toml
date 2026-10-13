@@ -1,0 +1,28 @@
+# Declares deploy/ci.sh's tiers to testenv (testenv/DESIGN.md §2.1.1), so
+# `testenv --suites <tier> <branch> deckdumpster` runs what CI runs for that tier.
+# Tier names and argv mirror deploy/ci.sh (DECKDUMP_CI_TIERS); keep them in step.
+# The uv image stands in for CI's host runner: lint and unit need only python+uv.
+# integration and ui drive deploy/ci.sh itself, which needs podman and systemd and
+# so only works where those are reachable; they are not in `default`.
+image = "ghcr.io/astral-sh/uv:python3.12-bookworm"
+workdir = "/work"
+timeout = 1800
+default = ["lint", "unit"]
+
+[tier.lint]
+argv = ["sh", "-c", "uv sync && uv run ruff check mtg_collector/"]
+timeout = 300
+
+[tier.unit]
+argv = ["sh", "-c", "uv sync && uv run shot-scraper install && uv run pytest tests/ -n 8 --dist loadgroup --ignore=tests/integration --ignore=tests/ui"]
+timeout = 1800
+
+[tier.integration]
+argv = ["bash", "deploy/ci.sh"]
+env = { DECKDUMP_CI_TIERS = "integration" }
+timeout = 1200
+
+[tier.ui]
+argv = ["bash", "deploy/ci.sh"]
+env = { DECKDUMP_CI_TIERS = "ui" }
+timeout = 2400
