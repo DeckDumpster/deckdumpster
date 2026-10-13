@@ -47,15 +47,19 @@ on:
 permissions:
   contents: read
 
-# One CI run at a time, repo-wide. Every run provisions a VM from Proxmox template
-# 9110; concurrent runs starve each other on the hypervisor (measured 2026-09-22,
-# four runs starved; again 2026-09-23 with three simultaneous provisions).
-# cancel-in-progress: false is deliberate -- cancelling mid-provision skips teardown
-# and strands the VM. VMID recycling then makes a later teardown destroy someone
-# else's machine (killed two live runners on 2026-09-23). Queue, never cancel.
-concurrency:
-  group: ci
-  cancel-in-progress: false
+# NO concurrency: BLOCK -- deliberately. A repo-wide group made runs wait on
+# GitHub BEFORE provisioning, where spill cannot help, and GitHub keeps one pending
+# run per group, so each new arrival cancelled the previous pending one: PR 442's
+# batch run was evicted within a minute, and PR 443's sat pending 57 min behind a
+# run that had already finished (2026-10-12). pokedumpster removed its block for the
+# same reason. The two scars the block was added for no longer apply:
+#   - Proxmox starvation (2026-09-22/23): provision now waits for capacity and
+#     spills to EC2 after spill-after-seconds (cap spill-max-instances).
+#   - VMID recycling (2026-09-23): provision emits vmid and vmtoken before it polls
+#     the clone task, and teardown.sh refuses any VM whose description (Proxmox) or
+#     ephemeral-ci:vmtoken tag (EC2) does not carry the vm-token this run was
+#     handed, so a late teardown cannot destroy another run's VM.
+# Do not add a repo-wide group back; a guard, if one is ever needed, is per ref.
 
 jobs:
   # A push to main is nearly always the exact tree its batch pull request just
@@ -64,8 +68,6 @@ jobs:
   # that head with every tier, and otherwise says "run". It fails closed: no PR,
   # no run, a differing tree, reduced tiers or an API error all run the suite.
   # Only a skip posts the `test` status here; a run posts it from `gate`.
-  # The workflow-level concurrency group still queues this run behind the slot;
-  # it holds no VM while it waits.
   decide:
     runs-on: ubuntu-latest
     timeout-minutes: 10
