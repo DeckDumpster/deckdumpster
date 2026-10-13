@@ -18,7 +18,6 @@ from mtg_collector.db.connection import attach_shared
 from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS, init_db
 from tests.legacy_handler import bare_handler
 
-
 # ── Fixtures ──
 
 
@@ -181,7 +180,6 @@ def test_without_attach_works_normally(single_db_path):
 
 def _make_handler(db_path):
     """Build a minimal mock CrackPackHandler."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = bare_handler()
     handler.db_path = db_path

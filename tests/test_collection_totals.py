@@ -545,7 +545,6 @@ def mixed_db():
 
 def _recorded(db_path, **params):
     """Call /api/collection, returning (envelope, statements it ran)."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     statements = []
 

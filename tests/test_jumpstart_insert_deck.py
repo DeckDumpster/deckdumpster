@@ -66,7 +66,6 @@ def db_path():
 
 def _make_handler(db_path):
     """Build a minimal mock CrackPackHandler with just enough to call the method."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = bare_handler()
     handler.db_path = db_path

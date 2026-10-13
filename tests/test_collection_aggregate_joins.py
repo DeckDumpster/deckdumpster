@@ -149,7 +149,6 @@ class _RecordingConn:
 
 def _call(db_path, **params):
     """Run /api/collection and return (body, statements)."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = bare_handler()
     handler.db_path = db_path

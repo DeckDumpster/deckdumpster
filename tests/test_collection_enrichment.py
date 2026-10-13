@@ -157,7 +157,6 @@ class _RecordingConn:
 
 def _make_handler(db_path, recording=False):
     """Build a minimal mock CrackPackHandler that captures _send_json output."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = bare_handler()
     handler.db_path = db_path

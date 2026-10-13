@@ -127,7 +127,6 @@ def conn(db_path):
 
 def _growth(db_path, **params):
     """Call /api/collection/growth and return the response body."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = bare_handler()
     handler.db_path = db_path

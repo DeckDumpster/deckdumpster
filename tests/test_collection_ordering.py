@@ -18,7 +18,6 @@ from collections import Counter
 
 import pytest
 
-from mtg_collector.cli.crack_pack_server import CrackPackHandler
 from mtg_collector.db.models import CollectionEntry, CollectionRepository
 from mtg_collector.db.schema import init_db
 from tests.legacy_handler import bare_handler

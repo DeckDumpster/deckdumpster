@@ -157,7 +157,6 @@ class _RecordingConn:
 
 
 def _make_handler(db_path, recording=False):
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = bare_handler()
     handler.db_path = db_path
@@ -201,7 +200,6 @@ def test_foil_copy_uses_foil_prices(deck_db):
 
 def test_deck_price_agrees_with_the_collection_list(deck_db):
     """Same copy, two pages, one number."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     path, constructed, _ = deck_db
     handler = bare_handler()

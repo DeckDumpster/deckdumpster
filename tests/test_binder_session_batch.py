@@ -68,7 +68,6 @@ def db_path():
 
 def _add(db_path, printing_id="print-1", finish="nonfoil", batch=None):
     """POST /api/collection, returning (status, body)."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = bare_handler()
     handler.db_path = db_path

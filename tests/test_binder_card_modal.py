@@ -64,7 +64,6 @@ def db_path():
 
 def _add(db_path, **payload):
     """POST /api/collection, returning (status, body)."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
     handler = bare_handler()
     handler.db_path = db_path
@@ -158,7 +157,6 @@ class TestTheMinusStepGivesTheBatchSlotBack:
         return row[0]
 
     def _delete(self, db_path, entry_id):
-        from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
         handler = bare_handler()
         handler.db_path = db_path
