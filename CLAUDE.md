@@ -31,6 +31,12 @@ MTG Card Collection Builder. Web app (primary) plus a CLI (bulk ingest / scripti
 - **Tests that demonstrate bugs must fail.** A passing test means the bug is fixed; a failing test means the bug still exists. Never assert the broken behaviour.
 - **After implementing any feature with UI changes, run `/qa-finish`.** This skill (`.claude/skills/qa-finish/SKILL.md`) deploys a test container, walks the feature, and writes intent + hint + implementation YAML/Python under `tests/ui/`. Do not hand-write UI scenario tests outside this workflow.
 
+## Before `work submit`
+
+Run the tiers your change touches: `testenv --suites <lint|unit|integration|ui> spira/<bead> deckdumpster`
+(declared in `.spira/testenv.toml`, mirroring `deploy/ci.sh`; with no `--suites` it runs `lint` and `unit`).
+Commit first — it tests the committed branch. Keep that file's tiers in step with `deploy/ci.sh`.
+
 ## Commands
 
 ```bash
