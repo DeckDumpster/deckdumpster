@@ -120,6 +120,9 @@ else
     # Ends in `systemctl --user daemon-reload`, which is also what picks up any
     # Quadlet change — hence no second reload here.
     mtgc_install_units "$INSTANCE" "$REPO_DIR"
+    # The Quadlet names access.env without a leading '-', so it must exist
+    # before the restart below.
+    mtgc_scaffold_access_env "$INSTANCE"
 
     # A unit that hit its start limit is `failed`, and systemd will not restart
     # it out of that state on its own — the point of the limit (de-z9xj). This
