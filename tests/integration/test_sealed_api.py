@@ -366,20 +366,13 @@ class TestSealedCollectionStats:
 
 
 class TestSealedPriceFetch:
-    def test_fetch_prices(self, api):
-        """POST /api/sealed/fetch-prices triggers TCGCSV price fetch."""
-        status, data = api.post("/api/sealed/fetch-prices", {}, timeout=120)
-        assert status == 200
-        assert "groups_fetched" in data
-        assert "prices_for_today" in data
-        assert isinstance(data["groups_fetched"], int)
-        assert isinstance(data["prices_for_today"], int)
+    def test_fetch_prices_is_not_a_request(self, api):
+        """Catalog writes are timer/CLI only: no request fetches sealed prices (N8)."""
+        status, _ = api.post("/api/sealed/fetch-prices", {}, timeout=30)
+        assert status == 404
 
     def test_collection_list_has_price_fields(self, api):
         """After a price fetch, collection list entries should include price columns."""
-        # Ensure prices are fetched first
-        api.post("/api/sealed/fetch-prices", {}, timeout=120)
-
         # Add an entry for a product that likely has a TCGPlayer price
         _, products = api.get("/api/sealed/products?q=play+booster+box&limit=1")
         if not products:
