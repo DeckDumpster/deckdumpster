@@ -229,3 +229,29 @@ def test_run_ci_step_passes_tiers_env():
     assert "DECKDUMP_CI_TIERS" in env, (
         "Run CI step must pass DECKDUMP_CI_TIERS so ci.sh respects tier selection"
     )
+
+
+def _provision_spill():
+    steps = _jobs()["provision"]["steps"]
+    (step,) = [
+        s for s in steps
+        if str(s.get("uses", "")).startswith("DeckDumpster/ephemeral-ci/provision")
+    ]
+    return step["with"]["spill"]
+
+
+def test_force_spill_dispatch_input_defaults_false():
+    doc = yaml.safe_load(WORKFLOW.read_text())
+    triggers = doc.get("on", doc.get(True))
+    spec = triggers["workflow_dispatch"]["inputs"]["force_spill"]
+    assert spec["type"] == "boolean"
+    assert spec["default"] is False
+
+
+def test_only_a_true_force_spill_yields_ec2_only():
+    expr = _provision_spill()
+    # Ryan's 2026-10-13 EC2-only override makes the fallback 'ec2-only' too; once it is
+    # reverted the fallback is 'ec2'. Either way a true input must yield 'ec2-only'.
+    assert expr.startswith("${{ inputs.force_spill && 'ec2-only' || '")
+    assert expr.endswith("' }}")
+    # An absent input (push, pull_request) is empty, hence falsy: 'ec2'.
