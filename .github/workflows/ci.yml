@@ -260,6 +260,10 @@ jobs:
 
       - name: Run CI
         run: bash deploy/ci.sh
+        # Inside the job's 90 so the if: always() steps below still run when this one
+        # hangs; a job-level timeout kills them too, which is how PR 445 left no log,
+        # no timings and no annotations (sp-undk0p). ci.sh's per-tier walls fire first.
+        timeout-minutes: 80
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DECKDUMP_CI_TIERS: ${{ steps.tiers.outputs.tiers }}
@@ -273,6 +277,16 @@ jobs:
           name: ci-timings
           path: ci-timings/
           if-no-files-found: warn
+
+      # What a failed or timed-out tier left behind: its output, the test that was
+      # running, ps/container state (deploy/ci.sh writes these, and the summary).
+      - name: Upload CI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence
+          path: ci-evidence/
+          if-no-files-found: ignore
 
       # BELT AND BRACES: report this run as a commit status, whatever triggered it.
       #
