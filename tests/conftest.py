@@ -276,3 +276,33 @@ def seed_range(request):
         return range(int(single), int(single) + 1)
     count = int(request.config.getoption("--seeds"))
     return range(count)
+
+
+# ---------------------------------------------------------------------------
+# Throwaway test databases need no durability
+# ---------------------------------------------------------------------------
+# Most unit tests build a fresh SQLite file per test through init_db, whose
+# ~90 autocommitted DDL statements each fsync.  The fsync buys nothing on a
+# database the test deletes, so connections handed to init_db run with
+# synchronous=OFF.  Test-only: production init_db is untouched.
+
+
+def _install_unsynced_init_db():
+    import functools
+
+    import mtg_collector.db as db
+    import mtg_collector.db.schema as schema
+
+    original = schema.init_db
+
+    @functools.wraps(original)
+    def init_db(conn, *args, **kwargs):
+        conn.execute("PRAGMA synchronous = OFF")
+        return original(conn, *args, **kwargs)
+
+    schema.init_db = init_db
+    # The package re-exports it; `from mtg_collector.db import init_db` binds this.
+    db.init_db = init_db
+
+
+_install_unsynced_init_db()
