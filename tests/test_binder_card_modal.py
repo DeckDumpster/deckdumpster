@@ -31,6 +31,7 @@ import pytest
 
 from mtg_collector.db.schema import init_db
 from mtg_collector.utils import CONDITIONS
+from tests.legacy_handler import bare_handler
 
 NOW = "2025-01-01T00:00:00.000Z"
 
@@ -63,9 +64,8 @@ def db_path():
 
 def _add(db_path, **payload):
     """POST /api/collection, returning (status, body)."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
-    handler = object.__new__(CrackPackHandler)
+    handler = bare_handler()
     handler.db_path = db_path
     responses = []
     handler._send_json = lambda obj, status=200: responses.append((status, obj))
@@ -157,9 +157,8 @@ class TestTheMinusStepGivesTheBatchSlotBack:
         return row[0]
 
     def _delete(self, db_path, entry_id):
-        from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
-        handler = object.__new__(CrackPackHandler)
+        handler = bare_handler()
         handler.db_path = db_path
         responses = []
         handler._send_json = lambda obj, status=200: responses.append((status, obj))
