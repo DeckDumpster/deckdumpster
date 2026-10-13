@@ -20,10 +20,11 @@ from unittest.mock import patch
 import pytest
 
 from mtg_collector.cli import crack_pack_server as cps
+from tests.legacy_handler import bare_handler
 
 
 def _bare_handler(path: str):
-    handler = object.__new__(cps.CrackPackHandler)
+    handler = bare_handler()
     handler.path = path
     return handler
 
