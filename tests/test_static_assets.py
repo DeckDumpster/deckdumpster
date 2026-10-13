@@ -27,10 +27,10 @@ from functools import partial
 import pytest
 
 from mtg_collector.cli import crack_pack_server as cps
-from tests.legacy_handler import BoundCrackPackHandler
 from mtg_collector.db.schema import init_db
 from mtg_collector.http_cache import CACHE_DOCUMENT, CACHE_HASHED_ASSET
 from mtg_collector.static_assets import DIGEST_LENGTH, AssetHasher
+from tests.legacy_handler import BoundCrackPackHandler
 
 CSS = "body{color:red}"
 PAGE = (
