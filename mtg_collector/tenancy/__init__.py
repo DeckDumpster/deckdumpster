@@ -2,6 +2,8 @@
 
 from mtg_collector.tenancy.context import (
     SINGLE_TENANT,
+    Forbidden,
+    MultiTenantResolver,
     NoTenantError,
     SingleTenantResolver,
     TenantId,
@@ -11,6 +13,8 @@ from mtg_collector.tenancy.context import (
 
 __all__ = [
     "SINGLE_TENANT",
+    "Forbidden",
+    "MultiTenantResolver",
     "NoTenantError",
     "SingleTenantResolver",
     "TenantId",
