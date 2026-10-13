@@ -18,6 +18,7 @@ from mtg_collector.db.connection import attach_shared
 from mtg_collector.db.schema import (
     SCHEMA_OBJECTS,
     SCHEMA_VERSION,
+    SHARED_SCHEMA_SQL,
     SHARED_TABLES,
     SHARED_VIEWS,
     SchemaIntegrityError,
@@ -170,8 +171,10 @@ def split_dbs():
         fds.append(path)
     user_path, shared_path = fds
 
+    # A catalogue file holds shared objects only (sp-y8iflb); building it from the
+    # full schema would let its copy of a user index mask the tenant file's loss.
     shared = sqlite3.connect(shared_path)
-    init_db(shared)
+    shared.executescript(SHARED_SCHEMA_SQL)
     shared.execute("INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test')")
     shared.commit()
     shared.close()
