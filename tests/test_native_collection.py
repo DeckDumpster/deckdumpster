@@ -96,9 +96,9 @@ def test_update_missing_entry_is_404(client):
     assert client.put("/api/collection/99", json={"condition": "NM"}).status_code == 404
 
 
-def test_delete_needs_confirm_then_404s_for_missing(client):
+def test_delete_needs_confirm_then_400s_for_missing(client):
     assert client.delete("/api/collection/99").json() == {"error": "Must pass ?confirm=true"}
-    assert client.delete("/api/collection/99?confirm=true").status_code == 404
+    assert client.delete("/api/collection/99?confirm=true").status_code == 400
 
 
 def test_receive_missing_entry_reports_zero(client):
