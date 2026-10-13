@@ -82,7 +82,7 @@ def ensure_shared(source: str, legacy_shared: Optional[str] = None) -> str:
                 "pass --legacy-shared to say where the catalogue is"
             )
         with closing(src):
-            out = sqlite3.connect(tmp)
+            out = sqlite3.connect(tmp, uri=True)
             with closing(out):
                 if legacy_shared:
                     src.backup(out)
