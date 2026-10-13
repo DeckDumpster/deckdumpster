@@ -27,6 +27,7 @@ from functools import partial
 import pytest
 
 from mtg_collector.cli import crack_pack_server as cps
+from tests.legacy_handler import BoundCrackPackHandler
 from mtg_collector.db.schema import init_db
 from mtg_collector.http_cache import CACHE_DOCUMENT, CACHE_HASHED_ASSET
 from mtg_collector.static_assets import DIGEST_LENGTH, AssetHasher
@@ -137,7 +138,7 @@ def test_a_stale_digest_resolves_to_nothing(static_dir):
 
 @pytest.fixture
 def server(static_dir):
-    handler = partial(cps.CrackPackHandler, None, static_dir, str(static_dir / "nodb.sqlite"))
+    handler = partial(BoundCrackPackHandler, None, static_dir, str(static_dir / "nodb.sqlite"))
     httpd = cps.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
