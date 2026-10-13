@@ -106,7 +106,7 @@ fi
 
 # ---------- 7b. MTGJSON booster data ----------
 # mtg setup --demo does not import MTGJSON booster configs. Without this,
-# the server auto-imports from AllPrintings.json on every container start (~5 min).
+# the Crack-a-Pack set search is empty (the server no longer auto-imports).
 info "Checking MTGJSON booster data"
 HAS_MTGJSON=$(podman run --rm \
     -v "${VM_CODE}:/app" \
