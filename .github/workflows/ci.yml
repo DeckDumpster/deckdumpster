@@ -6,7 +6,18 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      force_spill:
+        description: 'Run the job on EC2 now (spill: ec2-only), skipping Proxmox'
+        type: boolean
+        default: false
 
+# FORCING A SPILL. `gh workflow run ci.yml -f force_spill=true` makes provision
+# pass spill: ec2-only, so the runner is an EC2 instance regardless of hypervisor
+# capacity. Used by the Concierge and the spill probe proof after a runner/AMI
+# change. Push, pull_request and a dispatch without the input keep spill: ec2
+# (EC2 only when Proxmox stays full) and pay nothing extra.
+#
 # The suite runs on a Proxmox VM created for this run and destroyed after it.
 # Provision and teardown are separate jobs rather than one, because a runner has
 # to exist before a job can be scheduled onto it and has to be destroyed after
@@ -132,8 +143,9 @@ jobs:
           template-vmid:      ${{ vars.TEMPLATE_VMID }}
           # EC2 only, per Ryan 2026-10-13, until the suites are optimised and the Proxmox disk
           # contention is fixed: on the shared host the unit tier stalled in fsync and the UI
-          # tier timed out (PRs 445-450), so no batch could go green. Revert to `ec2` after.
-          spill:               ec2-only
+          # tier timed out (PRs 445-450), so no batch could go green. Revert to `ec2` after (the second 'ec2-only' below is that fallback,
+          # force_spill is already the first).
+          spill:               ${{ inputs.force_spill && 'ec2-only' || 'ec2-only' }}
           instance-type:       c7i.4xlarge
           spill-after-seconds: '60'
           spill-max-instances: '4'
