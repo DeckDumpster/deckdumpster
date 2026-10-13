@@ -152,8 +152,14 @@ def server(static_dir):
         thread.join(timeout=5)
 
 
+# A hang detector, not a latency budget: this suite asserts what the server says,
+# never how fast. Under xdist on a loaded box a single request has been starved
+# past 10 s with no related change (sp-yr3agh).
+_HANG_TIMEOUT_S = 60
+
+
 def _get(server, path="/", headers=None):
-    conn = http.client.HTTPConnection(*server.server_address, timeout=10)
+    conn = http.client.HTTPConnection(*server.server_address, timeout=_HANG_TIMEOUT_S)
     try:
         conn.request("GET", path, headers=headers or {})
         resp = conn.getresponse()
@@ -235,6 +241,10 @@ def test_a_page_served_with_init_data_is_rewritten_too(server, static_dir):
     init_db(conn)
     conn.commit()
     conn.close()
+    # The handler imports the repository lazily; pay that here, on the test's
+    # thread, so the first request on a loaded worker is not the one that does.
+    import mtg_collector.db.models  # noqa: F401
+
     (static_dir / "decks.html").write_text(
         '<script>const D = /*INIT_DATA*/;</script>'
         '<link rel="stylesheet" href="/static/app.css">'
