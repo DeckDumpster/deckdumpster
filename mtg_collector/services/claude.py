@@ -13,8 +13,9 @@ import httpx
 class ClaudeVision:
     """Interface to Claude API for card image analysis."""
 
-    def __init__(self, model: str = "claude-opus-4-6", max_retries: int = 4):
+    def __init__(self, model: str = "claude-opus-4-6", max_retries: int = 4, api_key: str | None = None):
         self.client = anthropic.Anthropic(
+            api_key=api_key,
             timeout=httpx.Timeout(600.0, connect=10.0),
         )
         self.model = model
