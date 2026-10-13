@@ -66,6 +66,44 @@ class SingleTenantResolver:
         return self._tenant
 
 
+class Forbidden(Exception):
+    """A verified identity that no tenant claims: a 403 that names the fix."""
+
+
+class MultiTenantResolver:
+    """Verified identity -> registry -> TenantId. Never creates anything.
+
+    The id it mints is the tenant's opaque database_id, the only thing a path is
+    ever built from.
+    """
+
+    def __init__(self, verifier, registry_path=None):
+        self._verifier = verifier
+        self._registry_path = registry_path
+
+    def resolve(self, scope) -> TenantId:
+        from mtg_collector import access
+        from mtg_collector.db import registry
+
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                   for k, v in scope["headers"]}
+        token = access.token_from(headers, headers.get("cookie"))
+        if token is None:
+            raise access.AccessDenied("no Access token")
+        identity = self._verifier.verify(token)
+        conn = registry.open_registry(self._registry_path, create=False)
+        try:
+            database_id = registry.resolve_identity(conn, identity.email)
+        finally:
+            conn.close()
+        if database_id is None:
+            raise Forbidden(
+                f"{identity.email} is not bound to a tenant: "
+                f"ask the operator to run `mtg tenant identity add <handle> {identity.email}`"
+            )
+        return TenantId(database_id, _mint=_MINT)
+
+
 def current_tenant() -> TenantId:
     tenant = _current.get()
     if tenant is None:
