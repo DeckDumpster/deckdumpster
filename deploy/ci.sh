@@ -236,19 +236,101 @@ wait_for_server() {
 CI_TIMINGS_DIR="${CI_TIMINGS_DIR:-$PWD/ci-timings}"
 mkdir -p "$CI_TIMINGS_DIR"
 
-# Run one pytest tier, then keep its progress file(s) under the tier's name -- on a red
-# tier too, since that is when the timings are wanted. pytest writes them to the default
-# .pytest_cache/ (a custom PYTEST_PROGRESS_FILE would leave that dir unmade and
+# Evidence that outlives the run (sp-undk0p). PR 445's gate sat 110 minutes on an idle VM,
+# was cancelled, and left no log, no timings and no annotations, so the batch could not be
+# attributed. Job summaries and artifacts persist when the log upload does not, so a tier
+# that fails or times out writes both before ci.sh exits.
+CI_EVIDENCE_DIR="${CI_EVIDENCE_DIR:-$PWD/ci-evidence}"
+mkdir -p "$CI_EVIDENCE_DIR"
+
+# Hard wall per tier, in seconds. A hang must fail the run within minutes, not hours. The
+# defaults are ~1.5x the recorded green walls (full run 45-49 min, 2026-09-25 run
+# 36185545409); override per tier with MTGC_CI_TIMEOUT_<TIER> after re-measuring from the
+# ci-timings artifact. Their sum stays under the workflow's Run CI step timeout.
+tier_timeout() {
+    case "$1" in
+        lint)        echo "${MTGC_CI_TIMEOUT_LINT:-300}" ;;
+        unit)        echo "${MTGC_CI_TIMEOUT_UNIT:-1800}" ;;
+        integration) echo "${MTGC_CI_TIMEOUT_INTEGRATION:-1200}" ;;
+        ui)          echo "${MTGC_CI_TIMEOUT_UI:-2400}" ;;
+        *)           echo 1800 ;;
+    esac
+}
+
+# Which test was running: the last test_start in the tier's progress file(s) with no
+# test_result after it (tests/conftest.py writes both).
+_running_tests() {
+    python3 -I - "$@" <<'PY'
+import json, sys
+for path in sys.argv[1:]:
+    started, done = {}, set()
+    for line in open(path, errors="replace"):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("event") == "test_start":
+            started[e["nodeid"]] = e["ts"]
+        elif e.get("event") == "test_result":
+            done.add(e["nodeid"])
+    for n in started:
+        if n not in done:
+            print(f"{n}  ({path})")
+PY
+}
+
+_capture_evidence() {
+    local tier="$1" rc="$2" log="$3" limit="$4" out="$CI_EVIDENCE_DIR/$1" running
+    mkdir -p "$out"
+    cp "$log" "$out/output.log" 2>/dev/null || true
+    {
+        echo "== tier: $tier  exit: $rc  limit: ${limit}s"
+        [ "$rc" = 124 ] || [ "$rc" = 137 ] && echo "TIMED OUT after ${limit}s"
+        echo "== date: $(date -u +%FT%TZ)"
+        echo "== ps (by cpu)";            ps -eo pid,ppid,stat,etime,pcpu,args --sort=-pcpu 2>&1 | head -40
+        echo "== uptime";                 uptime 2>&1
+        echo "== podman ps -a";           podman ps -a 2>&1 | head -30
+        echo "== podman logs (last 100)"; podman logs --tail 100 "systemd-mtgc-${INSTANCE}" 2>&1 | tail -100
+        echo "== journalctl mtgc-${INSTANCE} (last 100)"
+        journalctl --user -u "mtgc-${INSTANCE}" -n 100 --no-pager 2>&1 | tail -100
+    } > "$out/state.txt" 2>&1 || true
+    # shellcheck disable=SC2046
+    running="$(_running_tests $(ls .pytest_cache/progress*.jsonl 2>/dev/null) 2>/dev/null || true)"
+    printf '%s\n' "$running" > "$out/running-tests.txt"
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        {
+            echo "### CI tier \`$tier\` failed (exit $rc, limit ${limit}s)"
+            if [ -n "$running" ]; then
+                echo "Test running when it stopped:"; echo '```'; echo "$running"; echo '```'
+            fi
+            echo "Last 40 lines of output:"; echo '```'; tail -40 "$log"; echo '```'
+        } >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+    fi
+    echo "==> Evidence for failed tier $tier written to $out" >&2
+}
+
+# Run one pytest tier under its wall, then keep its progress file(s) under the tier's name
+# -- on a red tier too, since that is when the timings are wanted. pytest writes them to the
+# default .pytest_cache/ (a custom PYTEST_PROGRESS_FILE would leave that dir unmade and
 # tests/test_progress_file.py red); xdist workers add a -gwN suffix.
+#
+# `timeout` leads its own process group and signals all of it, so a hung pytest, its xdist
+# workers and any child holding the pipe to `tee` all die together; -k escalates to KILL.
 run_tier() {
-    local tier="$1" rc=0 f
+    local tier="$1" rc=0 f limit log
     shift
+    limit="$(tier_timeout "$tier")"
+    log="$CI_EVIDENCE_DIR/${tier}.log"
     rm -f .pytest_cache/progress*.jsonl
-    "$@" || rc=$?
+    timeout -k 30 "$limit" "$@" 2>&1 | tee "$log" || rc=$?
+    # PIPESTATUS is clobbered by the `||` above; with pipefail rc is the first non-zero.
     for f in .pytest_cache/progress*.jsonl; do
         [ -e "$f" ] || continue
         cp "$f" "$CI_TIMINGS_DIR/${tier}-$(basename "$f")"
     done
+    if [ "$rc" -ne 0 ]; then
+        _capture_evidence "$tier" "$rc" "$log" "$limit"
+    fi
     return "$rc"
 }
 
