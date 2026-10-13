@@ -372,7 +372,7 @@ class TestSealedPriceFetch:
         assert status == 404
 
     def test_collection_list_has_price_fields(self, api):
-        """Collection list entries should include price columns."""
+        """After a price fetch, collection list entries should include price columns."""
         # Add an entry for a product that likely has a TCGPlayer price
         _, products = api.get("/api/sealed/products?q=play+booster+box&limit=1")
         if not products:
