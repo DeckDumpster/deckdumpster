@@ -48,6 +48,16 @@ def register(subparsers):
     g.add_argument("--all", action="store_true", help="Every active tenant, each reported")
     s.set_defaults(func=run_migrate)
 
+    s = sub.add_parser("legacy-migrate", help="Copy a pre-tenancy database onto a ULID tenant (source untouched)")
+    s.add_argument("handle")
+    s.add_argument("source", help="Path to the legacy collection.sqlite")
+    s.add_argument("--legacy-shared", help="The legacy split deployment's shared.sqlite, if it had one")
+    s.set_defaults(func=run_legacy_migrate)
+
+    s = sub.add_parser("legacy-rollback", help="Detach a migrated tenant so the legacy database serves again")
+    s.add_argument("handle")
+    s.set_defaults(func=run_legacy_rollback)
+
     s = sub.add_parser("set-key", help="Store a tenant's Anthropic API key (read from stdin)")
     s.add_argument("handle")
     s.set_defaults(func=run_set_key)
@@ -155,6 +165,22 @@ def _migrate(conn, args):
         sys.exit(1)
 
 
+def _legacy_migrate(conn, args):
+    from mtg_collector.tenancy import upgrade
+
+    database_id, outcome = upgrade.migrate_legacy(
+        conn, args.handle, args.source, legacy_shared=args.legacy_shared
+    )
+    print(f"{outcome}: {args.handle} -> {database_id}; {args.source} was not modified")
+
+
+def _legacy_rollback(conn, args):
+    from mtg_collector.tenancy import upgrade
+
+    database_id, outcome = upgrade.rollback_legacy(conn, args.handle)
+    print(f"{outcome}: {args.handle} ({database_id}); files kept, legacy database serves again")
+
+
 def _set_key(conn, args):
     secret = sys.stdin.read().strip()
     if not secret:
@@ -186,6 +212,8 @@ run_reattach = _guarded(_reattach)
 run_purge = _guarded(_purge)
 run_adopt = _guarded(_adopt)
 run_migrate = _guarded(_migrate)
+run_legacy_migrate = _guarded(_legacy_migrate)
+run_legacy_rollback = _guarded(_legacy_rollback)
 run_set_key = _guarded(_set_key)
 run_identity_add = _guarded(_identity_add)
 run_identity_list = _guarded(_identity_list)
