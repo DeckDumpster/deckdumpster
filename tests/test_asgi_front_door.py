@@ -77,13 +77,13 @@ def test_request_runs_inside_a_bound_tenant(static_dir, tmp_path, monkeypatch):
 def test_legacy_routes_pass_through_with_query_and_headers(client, monkeypatch):
     got = {}
 
-    def spy(self, params):
+    def spy(self, set_code, params):
         got["params"] = params
         got["accept"] = self.headers.get("Accept-Language")
         self._send_json({"n": 1})
 
-    monkeypatch.setattr(cps.CrackPackHandler, "_api_collection", spy)
-    r = client.get("/api/collection?q=t%3Acat&limit=5", headers={"Accept-Language": "xx"})
+    monkeypatch.setattr(cps.CrackPackHandler, "_api_set_browse", spy)
+    r = client.get("/api/set-browse/xyz?q=t%3Acat&limit=5", headers={"Accept-Language": "xx"})
     assert r.status_code == 200
     assert got["params"] == {"q": ["t:cat"], "limit": ["5"]}
     assert got["accept"] == "xx"
