@@ -14,6 +14,7 @@ import asyncio
 import contextvars
 import email.message
 import io
+import json
 import sys
 import threading
 import traceback
@@ -21,10 +22,20 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from starlette.requests import Request
-from starlette.responses import StreamingResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
+from mtg_collector.access import AccessDenied
 from mtg_collector.cli.crack_pack_server import CrackPackHandler
-from mtg_collector.tenancy import SingleTenantResolver, bind
+from mtg_collector.http_cache import CACHE_HASHED_ASSET
+from mtg_collector.tenancy import Forbidden, SingleTenantResolver, bind
+
+# The only routes served without an identity in multi-tenant mode: ops probes
+# (serving-check, backup-check, cdn-check). A ratchet test pins this tuple; a
+# route joins it by a reviewed edit here, never by a handler opting out.
+PUBLIC_ROUTES = ("/health", "/api/backup-status")
+
+# N4: a tenant response cached at the edge would be served to another tenant.
+CACHE_TENANT = "private, no-store"
 
 LEGACY_METHODS = ["GET", "POST", "PUT", "DELETE"]
 
@@ -34,18 +45,65 @@ _SERVER_OWNED = {"connection", "keep-alive", "transfer-encoding", "server", "dat
 
 
 class TenantMiddleware:
-    """Resolve the tenant, bind it, run the request inside the binding."""
+    """Resolve the tenant, bind it, run the request inside the binding.
 
-    def __init__(self, app, resolver):
+    ``multi`` is multi-tenant mode: the resolver may refuse (401 bad or absent
+    identity, 403 unbound), ``PUBLIC_ROUTES`` skip resolution and bind no tenant,
+    and every response but a content-addressed asset is ``private, no-store``.
+    """
+
+    def __init__(self, app, resolver, multi: bool = False):
         self.app = app
         self.resolver = resolver
+        self.multi = multi
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
-        with bind(self.resolver.resolve(scope)):
-            await self.app(scope, receive, send)
+        if not self.multi:
+            with bind(self.resolver.resolve(scope)):
+                await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            raise RuntimeError("multi-tenant mode serves http only")
+        if scope["path"] in PUBLIC_ROUTES:
+            await self.app(scope, receive, self._private(send))
+            return
+        try:
+            tenant = await asyncio.to_thread(self.resolver.resolve, scope)
+        except AccessDenied as exc:
+            await self._refuse(send, 401, str(exc))
+            return
+        except Forbidden as exc:
+            await self._refuse(send, 403, str(exc))
+            return
+        with bind(tenant):
+            await self.app(scope, receive, self._private(send))
+
+    @staticmethod
+    def _private(send):
+        async def wrapped(message):
+            if message["type"] == "http.response.start":
+                headers = [(k, v) for k, v in message["headers"]
+                           if k.lower() not in (b"cache-control", b"etag")]
+                original = [v for k, v in message["headers"] if k.lower() == b"cache-control"]
+                if original and original[-1].decode("latin-1") == CACHE_HASHED_ASSET:
+                    message = {**message, "headers": message["headers"]}
+                else:
+                    headers.append((b"cache-control", CACHE_TENANT.encode()))
+                    message = {**message, "headers": headers}
+            await send(message)
+        return wrapped
+
+    async def _refuse(self, send, status: int, detail: str):
+        body = json.dumps({"error": detail}).encode()
+        await self._private(send)({
+            "type": "http.response.start", "status": status,
+            "headers": [(b"content-type", b"application/json"),
+                        (b"content-length", str(len(body)).encode())],
+        })
+        await send({"type": "http.response.body", "body": body})
 
 
 class _Pipe:
@@ -168,12 +226,19 @@ def make_legacy_endpoint(generator, static_dir: Path, db_path: str):
     return legacy
 
 
-def create_app(generator, static_dir: Path, db_path: str, resolver=None) -> FastAPI:
+async def _health(request: Request):
+    return JSONResponse({"ok": True})
+
+
+def create_app(generator, static_dir: Path, db_path: str, resolver=None,
+               multi: bool = False) -> FastAPI:
     """The app: tenant middleware in front, the legacy adapter behind every path."""
     # No /docs, /redoc or /openapi.json yet: the legacy server never served
     # them, and the adapter must see every path it served.
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    app.add_middleware(TenantMiddleware, resolver=resolver or SingleTenantResolver())
+    app.add_middleware(TenantMiddleware, resolver=resolver or SingleTenantResolver(),
+                       multi=multi)
+    app.add_route("/health", _health, methods=["GET"], include_in_schema=False)
     app.add_route(
         "/{path:path}",
         make_legacy_endpoint(generator, static_dir, db_path),
