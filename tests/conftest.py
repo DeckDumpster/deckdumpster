@@ -85,6 +85,18 @@ def pytest_collection_finish(session):
         _progress_file.flush()
 
 
+def pytest_runtest_logstart(nodeid, location):
+    # Written before the test runs, so a hang leaves the hung test's name as the
+    # last test_start with no test_result after it (sp-undk0p).
+    if _progress_file:
+        _progress_file.write(json.dumps({
+            "event": "test_start",
+            "nodeid": nodeid,
+            "ts": time.time(),
+        }) + "\n")
+        _progress_file.flush()
+
+
 def pytest_runtest_logreport(report):
     if _progress_file and report.when == "call":
         elapsed = time.monotonic() - _session_start
