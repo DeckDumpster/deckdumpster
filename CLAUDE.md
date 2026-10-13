@@ -304,6 +304,21 @@ fixture had neither column, so every set in a `--test` container reported `owned
 table with `0` — which `clean_size` reads as an absence — so one cached set stays NULL and
 both branches have a fixture. Do not "fix" `spg` to a positive number.
 
+### Tenants (registry and `mtg tenant`)
+
+`$MTGC_HOME/registry.sqlite` (`db/registry.py`) is the control plane: `user` (handle ->
+opaque ULID `database_id`, `retired_at`, `purged_at`), `user_identity` (email -> database_id),
+`tenant_key` (encrypted). Rules are schema CHECKs and partial unique indexes (one active
+handle; one active tenant per email; purge only after detach), not just function checks.
+`mtg_collector/tenancy/paths.py` is the **only** constructor of tenant paths and takes a
+database_id, never a handle; it refuses lowercase or malformed ULIDs. A re-created handle
+gets a new ULID, so it can never reach the old files or replica. `mtg tenant
+create|list|rename|detach|reattach|purge|adopt|migrate|set-key|identity` is the lifecycle;
+`migrate` needs a handle or `--all` and reports every tenant. Keys are read from stdin and
+encrypted under `MTGC_MASTER_KEY` / `MTGC_MASTER_KEY_FILE` (`tenancy/keycrypt.py`, stdlib
+only), bound to the database_id. Nothing here routes a request: multi-tenant serving is
+later beads.
+
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
 holds both. A **query** is aggregated day by day inside SQLite from `collection` + `prices`;
