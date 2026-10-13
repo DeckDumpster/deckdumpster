@@ -40,3 +40,4 @@ plans/
 # uv cache (deploy/ci.sh default)
 .uv-cache/
 ci-timings/
+ci-evidence/
