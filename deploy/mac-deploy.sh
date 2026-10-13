@@ -49,7 +49,9 @@ if [ "$MACHINE_MEM" -gt 0 ] && [ "$MACHINE_MEM" -lt 4096 ]; then
 fi
 
 echo "==> Building container image (mtgc:$INSTANCE)..."
-podman build -t "mtgc:${INSTANCE}" -f "$REPO_DIR/Containerfile" "$REPO_DIR"
+DEPS_IMAGE="$(bash "$REPO_DIR/deploy/deps-image.sh")"
+podman build -t "mtgc:${INSTANCE}" -f "$REPO_DIR/Containerfile" \
+    --build-arg "DEPS_IMAGE=$DEPS_IMAGE" "$REPO_DIR"
 
 echo "==> Stopping old container..."
 podman stop "$CONTAINER_NAME" 2>/dev/null || true
