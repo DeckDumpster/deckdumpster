@@ -27,6 +27,7 @@ from mtg_collector.db.models import (
     SetRepository,
 )
 from mtg_collector.db.schema import init_db
+from tests.legacy_handler import bare_handler
 
 
 @pytest.fixture
@@ -65,9 +66,8 @@ def db_path():
 
 def _make_handler(db_path):
     """Build a minimal mock CrackPackHandler with just enough to call the method."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
-    handler = object.__new__(CrackPackHandler)
+    handler = bare_handler()
     handler.db_path = db_path
     handler._responses = []
 

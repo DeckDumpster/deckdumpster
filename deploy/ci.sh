@@ -397,6 +397,14 @@ if _has_tier integration; then
     run_tier integration uv run pytest tests/integration/ --durations=50 --instance "$INSTANCE"
 fi
 
+if _has_tier integration; then
+    # The multi-tenant front door against a real container and a real JWKS
+    # server (sp-0knuwi). The pytest half of the isolation gate,
+    # tests/test_isolation_gate.py, runs in the unit tier above.
+    echo "==> Isolation gate: handles.sh"
+    bash deploy/handles.sh
+fi
+
 if _has_tier ui; then
     echo "==> Run UI scenario tests"
     run_tier ui uv run pytest tests/ui/ --durations=50 --instance "$INSTANCE"
