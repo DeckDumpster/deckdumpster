@@ -23,7 +23,6 @@ from functools import partial
 import pytest
 
 from mtg_collector.cli import crack_pack_server as cps
-from tests.legacy_handler import BoundCrackPackHandler
 from mtg_collector.http_cache import (
     CACHE_API,
     CACHE_DOCUMENT,
@@ -34,6 +33,7 @@ from mtg_collector.http_cache import (
     negotiate_gzip,
     parse_range,
 )
+from tests.legacy_handler import BoundCrackPackHandler
 
 # Comfortably over GZIP_MIN_BYTES and compressible, so "was it gzipped" is a
 # question about negotiation rather than about the size threshold.
