@@ -1266,10 +1266,17 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 class CrackPackHandler(BaseHTTPRequestHandler):
     """HTTP handler for crack-a-pack web UI."""
 
-    #: The requesting tenant's database_id; None is single-tenant mode. Set per
-    #: request by the tenant resolver, and the only thing image paths and OCR
-    #: jobs are keyed on.
-    tenant_id = None
+    @property
+    def tenant_id(self):
+        """The requesting tenant's database_id; None is single-tenant mode.
+
+        Read from the tenant the front door bound for this request, never stored
+        on the handler: the only thing image paths and OCR jobs are keyed on, and
+        a value nobody had to remember to set cannot be left at None in multi mode
+        (it was, and every image path fell through to the global directory).
+        """
+        tenant = current_tenant()
+        return tenant.value if multitenant_enabled() else None
 
     # HTTP/1.1 keep-alive: reuses one TCP+TLS connection for the whole page's
     # assets instead of a fresh handshake per request. Requires Content-Length
