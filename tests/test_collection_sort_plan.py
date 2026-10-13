@@ -40,6 +40,7 @@ from mtg_collector.db.models import (
     PrintingRepository,
 )
 from mtg_collector.db.schema import init_db
+from tests.legacy_handler import bare_handler
 
 NOW = "2025-01-01T00:00:00.000Z"
 
@@ -117,9 +118,8 @@ class _RecordingConnection:
 
 def _run_collection(db_path, **params):
     """Call /api/collection and return (envelope, recorded statements)."""
-    from mtg_collector.cli.crack_pack_server import CrackPackHandler
 
-    handler = object.__new__(CrackPackHandler)
+    handler = bare_handler()
     handler.db_path = db_path
     handler.generator = object()  # truthy, never called by this path
     rec = _RecordingConnection(db_path)

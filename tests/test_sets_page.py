@@ -36,6 +36,7 @@ from playwright.sync_api import sync_playwright
 
 from mtg_collector.cli import crack_pack_server as cps
 from mtg_collector.cli.page_routes import match_page_route
+from tests.legacy_handler import bare_handler
 
 STATIC = Path(cps.__file__).resolve().parent.parent / "static"
 
@@ -48,7 +49,7 @@ _CONTENT_TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/
 
 
 def _bare_handler(path: str):
-    handler = object.__new__(cps.CrackPackHandler)
+    handler = bare_handler()
     handler.path = path
     return handler
 
