@@ -26,6 +26,12 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_DIR"
 
 INSTANCE="${INSTANCE:-ci-test}"
+
+# Every podman call below must hit the store the instance's image was built in.
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
+mtgc_store_adopt_instance "$INSTANCE"
+mtgc_store_activate
 IMAGE="localhost/mtgc:${INSTANCE}"
 PORT="${HANDLES_PORT:-18091}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/handles.XXXXXX")"
