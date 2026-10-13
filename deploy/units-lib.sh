@@ -120,3 +120,26 @@ mtgc_install_units() {
 
     systemctl --user daemon-reload
 }
+
+# Scaffold ~/.config/mtgc/<instance>/access.env, fully commented out, if absent.
+# Never overwrites: an operator's filled-in file is theirs. systemd's
+# EnvironmentFile= does not strip inline comments, so every value line is bare
+# (no trailing '# ...'), and the Quadlet names the file without a leading '-'.
+mtgc_scaffold_access_env() {
+    local instance="$1"
+    local dir="${HOME}/.config/mtgc/${instance}"
+    local file="${dir}/access.env"
+    [ -f "$file" ] && return 0
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    cat > "$file" <<'EOF'
+# Cloudflare Access gate for multi-tenant mode. Set all three or none.
+# Comments live on their own lines; a '#' after a value becomes part of it.
+#MTGC_ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com
+#MTGC_ACCESS_AUD=<application audience tag>
+#MTGC_ACCESS_JWKS_URL=https://<team>.cloudflareaccess.com/cdn-cgi/access/certs
+# Multi-tenant mode itself (needs MTGC_HTTP_PORT too; serves loopback only):
+#MTGC_MULTITENANT=1
+EOF
+    chmod 600 "$file"
+}
