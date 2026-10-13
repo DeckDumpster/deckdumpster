@@ -189,7 +189,7 @@ def test_cli_roundtrip(legacy, home):
     import subprocess
     env = {**__import__("os").environ, "MTGC_HOME": str(home), "MTGC_MASTER_KEY": keycrypt.generate_master_key()}
     def run(*a):
-        return subprocess.run([sys.executable, "-m", "mtg_collector", "tenant", *a], env=env, capture_output=True, text=True)
+        return subprocess.run([sys.executable, "-m", "mtg_collector", "tenant", *a], env=env, capture_output=True, text=True, timeout=120)
     r = run("legacy-migrate", "ryan", legacy); assert r.returncode == 0, r.stderr
     assert "created" in r.stdout
     r = run("legacy-rollback", "ryan"); assert r.returncode == 0, r.stderr
