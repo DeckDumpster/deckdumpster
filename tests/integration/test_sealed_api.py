@@ -366,10 +366,10 @@ class TestSealedCollectionStats:
 
 
 class TestSealedPriceFetch:
-    # No test of POST /api/sealed/fetch-prices: it reaches TCGCSV from inside
-    # the container, so its result depended on the network and flipped
-    # (RemoteDisconnected, sp-8umjhi). Coverage gap recorded: the endpoint's
-    # response shape (groups_fetched, prices_for_today) is untested here.
+    def test_fetch_prices_is_not_a_request(self, api):
+        """Catalog writes are timer/CLI only: no request fetches sealed prices (N8)."""
+        status, _ = api.post("/api/sealed/fetch-prices", {}, timeout=30)
+        assert status == 404
 
     def test_collection_list_has_price_fields(self, api):
         """Collection list entries should include price columns."""
