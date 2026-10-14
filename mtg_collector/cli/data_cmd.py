@@ -17,6 +17,7 @@ from mtg_collector.db.connection import get_shared_write_path
 from mtg_collector.landing import current_run
 from mtg_collector.utils import get_mtgc_home, now_iso
 
+
 def _download(url: str, dest: Path, *, source: str, dataset: str):
     """Download a URL to a file, landing the bytes verbatim in the raw zone."""
     current_run().download(url, dest, source=source, dataset=dataset)
