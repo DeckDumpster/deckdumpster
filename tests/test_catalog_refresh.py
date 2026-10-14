@@ -164,7 +164,7 @@ def test_the_unit_is_one_execstart_that_alerts_on_failure():
     # One line, because a refresh split across two commands is a refresh where
     # one of them stops being run -- which is the whole history here.
     assert len(exec_lines) == 1
-    assert exec_lines[0].endswith("mtg data refresh-catalog")
+    assert exec_lines[0].endswith("mtg data refresh-catalog")  # in its own job container (lakehouse 3)
     # A refresh that fails nightly in silence reopens the gap it closed.
     assert "OnFailure=mtgc-alert-{{INSTANCE}}@%n.service" in unit
     # ~1 GB of downloads plus ~112k upserts: the default 90s would kill it mid-run.
