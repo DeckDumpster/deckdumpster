@@ -84,6 +84,10 @@ fi
 # --- provision: one tenant bound to one email, the legacy db initialised --------
 "${BASE[@]}" --entrypoint python "$IMAGE" -c \
     "import sqlite3; from mtg_collector.db.schema import init_db; c = sqlite3.connect('/data/collection.sqlite'); init_db(c); c.commit()"
+# Prod has a shared.sqlite once migrated, and multi-tenant startup refuses to run without
+# one; an empty catalogue is enough for what this gate asserts.
+"${BASE[@]}" --entrypoint python "$IMAGE" -c \
+    "import sqlite3; from mtg_collector.db.schema import init_db; c = sqlite3.connect('/data/shared.sqlite'); init_db(c); c.commit()"
 "${BASE[@]}" -e MTGC_MULTITENANT=1 --entrypoint mtg "$IMAGE" tenant create alice >/dev/null
 "${BASE[@]}" -e MTGC_MULTITENANT=1 --entrypoint mtg "$IMAGE" tenant identity add alice "$BOUND" >/dev/null
 
