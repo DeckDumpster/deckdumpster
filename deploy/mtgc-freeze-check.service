@@ -1,0 +1,12 @@
+[Unit]
+Description=MTGC stale deploy-freeze check ({{INSTANCE}})
+# A deploy freeze (deploy/freeze.sh) blocks deploy.sh until cleared, even past
+# its stated end. This fails the unit, and so pages through OnFailure=, when a
+# marker has outlived its window, so a forgotten freeze cannot silently hold
+# every merge off prod (sp-4vlkdc).
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'exec bash {{REPO_DIR}}/deploy/freeze.sh alarm {{INSTANCE}}'
+TimeoutStartSec=60
