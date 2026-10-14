@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 53
+SCHEMA_VERSION = 54
 
 
 class SchemaIntegrityError(Exception):
@@ -778,6 +778,72 @@ END;
 
 USER_SCHEMA_SQL = USER_SCHEMA_SQL + GROWTH_CACHE_SQL
 
+# Holdings outbox (lakehouse K4).  Written by the triggers below in the same
+# transaction as the mutation, so a rolled-back mutation leaves no row and a
+# committed one cannot miss.  It ships holdings only -- collection and
+# sealed_collection, and only the columns valuation reads: never notes, tags,
+# source_image, or any deck / binder / order reference.  Each added source is a
+# deletion and retention obligation; add one in its own design.
+# A reader folds the log by (source, row_id), highest seq wins; see
+# mtg_collector/lake/holdings_outbox.py.  The column lists here and there are one
+# fact, pinned by a test.
+HOLDINGS_OUTBOX_SQL = """
+CREATE TABLE IF NOT EXISTS holdings_outbox (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL CHECK (source IN ('collection', 'sealed_collection')),
+    row_id INTEGER NOT NULL,
+    op TEXT NOT NULL CHECK (op IN ('upsert', 'delete')),
+    payload TEXT,
+    CHECK ((op = 'upsert') = (payload IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_holdings_outbox_key ON holdings_outbox(source, row_id, seq);
+
+CREATE TRIGGER IF NOT EXISTS holdings_outbox_collection_insert
+AFTER INSERT ON collection
+BEGIN
+    INSERT INTO holdings_outbox (source, row_id, op, payload)
+    VALUES ('collection', NEW.id, 'upsert', json_object('id', NEW.id, 'printing_id', NEW.printing_id, 'finish', NEW.finish, 'condition', NEW.condition, 'language', NEW.language, 'purchase_price', NEW.purchase_price, 'acquired_at', NEW.acquired_at, 'status', NEW.status, 'sale_price', NEW.sale_price, 'is_alter', NEW.is_alter, 'proxy', NEW.proxy, 'signed', NEW.signed, 'misprint', NEW.misprint));
+END;
+
+CREATE TRIGGER IF NOT EXISTS holdings_outbox_collection_update
+AFTER UPDATE OF printing_id, finish, condition, language, purchase_price, acquired_at, status, sale_price, is_alter, proxy, signed, misprint ON collection
+BEGIN
+    INSERT INTO holdings_outbox (source, row_id, op, payload)
+    VALUES ('collection', NEW.id, 'upsert', json_object('id', NEW.id, 'printing_id', NEW.printing_id, 'finish', NEW.finish, 'condition', NEW.condition, 'language', NEW.language, 'purchase_price', NEW.purchase_price, 'acquired_at', NEW.acquired_at, 'status', NEW.status, 'sale_price', NEW.sale_price, 'is_alter', NEW.is_alter, 'proxy', NEW.proxy, 'signed', NEW.signed, 'misprint', NEW.misprint));
+END;
+
+CREATE TRIGGER IF NOT EXISTS holdings_outbox_collection_delete
+AFTER DELETE ON collection
+BEGIN
+    INSERT INTO holdings_outbox (source, row_id, op, payload)
+    VALUES ('collection', OLD.id, 'delete', NULL);
+END;
+
+CREATE TRIGGER IF NOT EXISTS holdings_outbox_sealed_collection_insert
+AFTER INSERT ON sealed_collection
+BEGIN
+    INSERT INTO holdings_outbox (source, row_id, op, payload)
+    VALUES ('sealed_collection', NEW.id, 'upsert', json_object('id', NEW.id, 'sealed_product_uuid', NEW.sealed_product_uuid, 'quantity', NEW.quantity, 'condition', NEW.condition, 'purchase_price', NEW.purchase_price, 'purchase_date', NEW.purchase_date, 'status', NEW.status, 'sale_price', NEW.sale_price, 'added_at', NEW.added_at));
+END;
+
+CREATE TRIGGER IF NOT EXISTS holdings_outbox_sealed_collection_update
+AFTER UPDATE OF sealed_product_uuid, quantity, condition, purchase_price, purchase_date, status, sale_price, added_at ON sealed_collection
+BEGIN
+    INSERT INTO holdings_outbox (source, row_id, op, payload)
+    VALUES ('sealed_collection', NEW.id, 'upsert', json_object('id', NEW.id, 'sealed_product_uuid', NEW.sealed_product_uuid, 'quantity', NEW.quantity, 'condition', NEW.condition, 'purchase_price', NEW.purchase_price, 'purchase_date', NEW.purchase_date, 'status', NEW.status, 'sale_price', NEW.sale_price, 'added_at', NEW.added_at));
+END;
+
+CREATE TRIGGER IF NOT EXISTS holdings_outbox_sealed_collection_delete
+AFTER DELETE ON sealed_collection
+BEGIN
+    INSERT INTO holdings_outbox (source, row_id, op, payload)
+    VALUES ('sealed_collection', OLD.id, 'delete', NULL);
+END;
+"""
+
+USER_SCHEMA_SQL = USER_SCHEMA_SQL + HOLDINGS_OUTBOX_SQL
+
+
 # What a tenant file holds: collection, decks, binders, wishlist, orders, ingest,
 # settings and the growth cache.  Never a catalog table (sp-y8iflb).
 # What shared.sqlite holds: the card catalogue, prices, sealed reference data and
@@ -1083,6 +1149,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v51_to_v52(conn)
         if current < 53:
             _migrate_v52_to_v53(conn)
+        if current < 54:
+            _migrate_v53_to_v54(conn)
 
     # Record schema version
     conn.execute(
@@ -3156,6 +3224,12 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sets ADD COLUMN base_set_size INTEGER")
     if "total_set_size" not in columns:
         conn.execute("ALTER TABLE sets ADD COLUMN total_set_size INTEGER")
+
+
+def _migrate_v53_to_v54(conn: sqlite3.Connection):
+    """Add the holdings outbox and its triggers.  Existing rows are not in it:
+    `mtg_collector.lake.holdings_outbox.emit` backfills them."""
+    conn.executescript(HOLDINGS_OUTBOX_SQL)
 
 
 def _migrate_v52_to_v53(conn: sqlite3.Connection):
