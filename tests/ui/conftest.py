@@ -314,29 +314,22 @@ class DbWrites:
 
     READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
-    # Actions after which a request may have been issued whose "request" event
-    # the test never waited long enough to receive. Playwright delivers events
-    # to the Python side only while a call is in flight, so a scenario whose
-    # last step is the click that POSTs can end and close its context first.
-    INTERACTIONS = frozenset({
-        "click_by_text", "click_by_selector", "click_by_test_id", "press_key",
-        "select_by_label", "set_input_files",
-    })
+    # Any step that acts on the page may have issued a write. Playwright
+    # delivers request events to the Python side only while a call is in
+    # flight, so a request can go unobserved; the step itself cannot. A test
+    # that never acts (navigate, wait, assert) cannot have written.
+    INTERACTIONS = ("click_", "fill_", "press_key", "select_", "set_input_files")
 
     def __init__(self):
         self.dirty = False
-        self._unsettled = False
 
     def settled_after(self, action):
-        """Track whether the latest step could have left a request unobserved."""
-        if action in self.INTERACTIONS:
-            self._unsettled = True
-        elif action.startswith(("wait_", "assert_")):
-            self._unsettled = False
+        if action.startswith(self.INTERACTIONS):
+            self.dirty = True
 
     @property
     def must_restore(self):
-        return self.dirty or self._unsettled
+        return self.dirty
 
     def mark(self):
         self.dirty = True
@@ -400,9 +393,4 @@ def page(browser, db_writes):
     context.on("request", db_writes.on_request)
     p = context.new_page()
     yield p
-    # A click that ends the scenario has issued its request but the driver
-    # delivers the event only to a call in flight: give it one, so db_writes
-    # sees the POST before the restore decision is made.
-    if not p.is_closed():
-        p.wait_for_timeout(250)
     context.close()
