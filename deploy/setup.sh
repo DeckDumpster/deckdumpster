@@ -9,7 +9,7 @@
 #   loginctl enable-linger $USER
 #
 # Usage:
-#   bash deploy/setup.sh <instance> [port] [--init] [--test] [--no-build] [--http-port <p>] [--tls-certs <dir>]
+#   bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]
 #
 # Examples:
 #   bash deploy/setup.sh prod 8081        # pin the host port (recorded; sticky)
@@ -63,7 +63,6 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 INIT=false
 TEST=false
-NO_BUILD=false
 HTTP_PORT=""
 TLS_CERTS=""
 POSITIONAL=()
@@ -71,7 +70,6 @@ while [ $# -gt 0 ]; do
     case $1 in
         --init) INIT=true ;;
         --test) TEST=true ;;
-        --no-build) NO_BUILD=true ;;
         --http-port)
             if [ $# -lt 2 ]; then
                 echo "ERROR: --http-port requires a port number"
@@ -94,7 +92,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ${#POSITIONAL[@]} -lt 1 ]; then
-    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test] [--no-build] [--http-port <p>] [--tls-certs <dir>]"
+    echo "Usage: bash deploy/setup.sh <instance> [port] [--init] [--test] [--http-port <p>] [--tls-certs <dir>]"
     echo "Example: bash deploy/setup.sh prod 8081"
     echo "         bash deploy/setup.sh test --init    # build + init data with demo dataset"
     echo "         bash deploy/setup.sh ui-test --test # fast setup from pre-built fixture"
@@ -323,22 +321,10 @@ bash "$REPO_DIR/deploy/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
 
 # --- Build container image ---
 
-# --no-build tags the mtgc:latest an earlier bring-up already built instead of
-# building again. CI's UI tier stands up several instances from the one image
-# (sp-lc1puh); N concurrent `podman build`s of the same Containerfile would
-# contend for nothing and prove nothing. A missing image is a hard error.
-if [ "$NO_BUILD" = "true" ]; then
-    echo "==> Reusing container image (mtgc:latest)..."
-    podman image exists mtgc:latest || {
-        echo "ERROR: --no-build but mtgc:latest does not exist in this store"
-        exit 1
-    }
-else
-    echo "==> Building container image (mtgc:latest)..."
-    DEPS_IMAGE="$(bash "$SCRIPT_DIR/deps-image.sh")"
-    podman build -t mtgc:latest -f "$REPO_DIR/Containerfile" \
-        --build-arg "DEPS_IMAGE=$DEPS_IMAGE" "$REPO_DIR"
-fi
+echo "==> Building container image (mtgc:latest)..."
+DEPS_IMAGE="$(bash "$SCRIPT_DIR/deps-image.sh")"
+podman build -t mtgc:latest -f "$REPO_DIR/Containerfile" \
+    --build-arg "DEPS_IMAGE=$DEPS_IMAGE" "$REPO_DIR"
 podman tag mtgc:latest "mtgc:${INSTANCE}"
 
 # --- Generate and install Quadlet ---
