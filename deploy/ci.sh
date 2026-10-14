@@ -403,6 +403,11 @@ if _has_tier integration; then
     # tests/test_isolation_gate.py, runs in the unit tier above.
     echo "==> Isolation gate: handles.sh"
     bash deploy/handles.sh
+
+    # The tenant zone's governance against a MinIO standing in for the bucket
+    # (lakehouse bead 10): every claim seen green and red.
+    echo "==> Tenant-zone governance gate: tests/lake/tenant_zone.sh"
+    bash tests/lake/tenant_zone.sh
 fi
 
 if _has_tier ui; then

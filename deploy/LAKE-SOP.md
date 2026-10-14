@@ -149,3 +149,21 @@ aws s3 rm s3://LAKE/tenant/_probe --profile mtgc-tenant
 Any "allowed" line failing, or any "must be AccessDenied" line succeeding, means
 the policy is wrong: fix it before any job is armed. Record the account id,
 bucket names and role ARNs in `~/.config/mtgc/<instance>.env` for the jobs.
+
+## 6. Governing the tenant zone (any operator, after the console steps)
+
+```bash
+bash deploy/setup-tenant-zone.sh --render --out DIR            # the two role documents, bucket substituted
+bash deploy/setup-tenant-zone.sh --apply --profile mtgc-lifecycle-admin
+bash deploy/setup-tenant-zone.sh --check --profile mtgc-lifecycle-admin
+```
+
+The bucket is `MTGC_LAKE_S3_BUCKET` in `~/.config/mtgc/<instance>.env`; the script
+refuses a bucket equal to `MTGC_BACKUP_S3_BUCKET` / `MTGC_LITESTREAM_S3_BUCKET`.
+The documents under `deploy/policies/tenant-zone/` are the ones in §2 plus
+explicit Denies on the other zone's listing and on rewriting the governance.
+`--check` exits **0** correct, **1** present but wrong (wrong window, or a rule
+reaching `raw/`/`lake/`, or any refusal), **3** absent, **4** cannot verify (the
+read was denied or failed: never reported as absent), **2** usage.
+`tests/lake/tenant_zone.sh` proves every one of these, green and red, against
+MinIO. Key custody: `deploy/LAKE-KEYS.md`.
