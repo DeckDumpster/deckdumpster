@@ -823,9 +823,9 @@ def build_catalog(db_path: str):
     this instance's own database, which is what db_path names in both modes.
     """
     from mtg_collector.cli.cache_cmd import cache_all
-    from mtg_collector.landing import Replay
     from mtg_collector.db.connection import get_connection
     from mtg_collector.db.schema import rebuild_collection_card_names
+    from mtg_collector.landing import Replay
 
     if not isinstance(current_run(), Replay):
         raise RuntimeError(
