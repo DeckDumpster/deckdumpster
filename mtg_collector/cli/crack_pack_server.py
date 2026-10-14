@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from mtg_collector.access import multitenant_enabled
 from mtg_collector.cli.page_routes import PageRoute, match_page_route
-from mtg_collector.db.connection import get_db_path, open_connection
+from mtg_collector.db.connection import get_db_path, open_catalog_connection, open_connection
 from mtg_collector.db.enrich import (
     COPY_IS_FOIL,
     enrich_columns,
@@ -8353,6 +8353,14 @@ def run(args):
     db_path = get_db_path(getattr(args, "db", None))
 
     global _ingest_executor, _background_db_path, _shared_db_path
+    if multitenant_enabled():
+        # A tenant file holds no catalogue: every connection to one, startup
+        # recovery included, must ATTACH $MTGC_HOME/shared.sqlite. Pinned in the
+        # environment so open_catalog_connection and every other reader agree.
+        shared = tenant_paths.shared_file()
+        if not shared.exists():
+            raise SystemExit(f"multi-tenant mode needs the shared catalogue at {shared}")
+        os.environ["MTGC_SHARED_DB"] = str(shared)
     _shared_db_path = os.environ.get("MTGC_SHARED_DB")
     if _shared_db_path:
         print(f"[startup] Shared reference DB: {_shared_db_path}", flush=True)
@@ -8366,7 +8374,7 @@ def run(args):
 
     # The web process never writes the catalogue (N8): an empty MTGJSON table is
     # filled by `mtg data refresh-catalog` (daily timer), not here.
-    _conn = sqlite3.connect(db_path)
+    _conn = open_catalog_connection(db_path) if multitenant_enabled() else sqlite3.connect(db_path)
     _has_data = _conn.execute("SELECT COUNT(*) FROM mtgjson_booster_configs").fetchone()[0]
     _conn.close()
     if not _has_data:
