@@ -352,8 +352,8 @@ def readback_tenant(zone: Zone, state: sqlite3.Connection, database_id: str, lak
                 raise ZoneError(f"seq {e[0]} differs between parts of {database_id}")
         parts.append((key, lo, hi, len(decoded)))
 
-    covered = _ranges_union([(lo, hi) for _, lo, hi, _ in parts])
-    skipped = [(lo, hi) for lo, hi in state.execute(
+    covered = _ranges_union([[lo, hi] for _, lo, hi, _ in parts])
+    skipped = [[lo, hi] for lo, hi in state.execute(
         "SELECT from_seq, to_seq FROM ship_gap WHERE database_id = ?", (database_id,))]
     top = max((hi for _, hi in covered), default=0)
     need = [[1, top]] if top else []

@@ -203,8 +203,8 @@ def test_readback_rejects_another_tenants_part_and_wrong_key(tenant, state, zone
 
 
 def test_backfill_once(tenant, state):
-    tenant.execute("DROP TRIGGER holdings_outbox_collection_insert")
     _card(tenant)
+    tenant.execute("DELETE FROM holdings_outbox")      # a row that predates the triggers
     assert shipper.backfill(tenant, state, A) == 1
     with pytest.raises(shipper.ZoneError):
         shipper.backfill(tenant, state, A)
@@ -216,8 +216,8 @@ def test_run_all_exit_codes(tmp_path, monkeypatch, zone):
     from mtg_collector.db import registry
     from mtg_collector.lake import keys
     reg = registry.open_registry()
-    reg.execute("INSERT INTO user (handle, database_id, created_at) VALUES ('a', ?, 'x')", (A,))
-    reg.execute("INSERT INTO user (handle, database_id, created_at) VALUES ('b', ?, 'x')", (B,))
+    reg.execute("INSERT INTO user (handle, database_id, created_at) VALUES ('aaa', ?, 'x')", (A,))
+    reg.execute("INSERT INTO user (handle, database_id, created_at) VALUES ('bbb', ?, 'x')", (B,))
     master = os.urandom(32)
     keys.register(reg, A)
     keys.tombstone(reg, B, "gone")
@@ -249,7 +249,7 @@ def test_run_all_exit_codes(tmp_path, monkeypatch, zone):
     assert run() == shipper.EXIT_GAP
     reg.execute("DELETE FROM user WHERE database_id = ?", (B,))
     unregistered = "01CX5ZZKBKACTAV9WEVGEMMVRY"
-    reg.execute("INSERT INTO user (handle, database_id, created_at) VALUES ('c', ?, 'x')", (unregistered,))
+    reg.execute("INSERT INTO user (handle, database_id, created_at) VALUES ('ccc', ?, 'x')", (unregistered,))
     state.execute("DELETE FROM ship_gap")
     state.execute("UPDATE ship_cursor SET shipped_through = 2")
     assert run() == shipper.EXIT_PARTIAL
