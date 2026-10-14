@@ -50,6 +50,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "PyJWT[crypto]>=2.8",
+    "pyarrow>=15,<21",
 ]
 
 [project.optional-dependencies]
