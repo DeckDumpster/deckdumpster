@@ -168,6 +168,15 @@ def register(subparsers):
         ),
     )
 
+    export_parser = data_sub.add_parser(
+        "export-price-history",
+        help="One-time: export prices and sealed_prices into the lake as Parquet and verify row for row",
+    )
+    export_parser.add_argument(
+        "--dest", required=True,
+        help="Destination URI: s3://<lake>/lake/export or a local directory",
+    )
+
     data_sub.add_parser(
         "check-catalog",
         help="Fail if the local set list has fallen behind upstream (exit 1 = stale)",
@@ -222,6 +231,12 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         backfill_sets(db_path)
+    elif args.data_command == "export-price-history":
+        from mtg_collector.db.connection import get_connection, get_db_path
+        from mtg_collector.lake.price_export import export_history
+        conn = get_connection(get_db_path(getattr(args, "db_path", None)))
+        for name, r in export_history(conn, args.dest).items():
+            print(f"{name}: {r['rows']} rows over {r['dates']} dates verified ({r['written']} dates written)")
     elif args.data_command == "check-catalog":
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
@@ -231,7 +246,7 @@ def run(args):
         db_path = get_db_path(getattr(args, "db_path", None))
         refresh_catalog(db_path)
     else:
-        print("Usage: mtg data {fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-sets|check-catalog|refresh-catalog} [options]")
+        print("Usage: mtg data {fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-sets|check-catalog|refresh-catalog|export-price-history} [options]")
         sys.exit(1)
 
 
