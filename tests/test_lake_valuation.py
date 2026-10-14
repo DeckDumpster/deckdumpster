@@ -11,6 +11,8 @@ from mtg_collector.db.schema import init_db
 from mtg_collector.lake import holdings_outbox, shipper, valuation
 from mtg_collector.lake import iceberg_prices as lake
 
+_PRICE = ("INSERT INTO prices (set_code, collector_number, source, price_type, price, observed_at)"
+          " VALUES (?,?,?,?,?,?)")
 A = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 
 
@@ -35,9 +37,9 @@ def tenant(tmp_path):
     # prices begin before and inside the holding window; one card has none
     for off, tcg, ck in ((-30, 1.10, 0.90), (-10, 2.25, 1.75), (-2, 3.33, 2.01)):
         for n in (1, 2):
-            c.execute("INSERT INTO prices VALUES (?,?,?,?,?,?)", ("tst", str(n), "tcgplayer", "normal", tcg * n, _day(off)))
-            c.execute("INSERT INTO prices VALUES (?,?,?,?,?,?)", ("tst", str(n), "cardkingdom", "normal", ck * n, _day(off)))
-        c.execute("INSERT INTO prices VALUES (?,?,?,?,?,?)", ("tst", "1", "tcgplayer", "foil", tcg * 4, _day(off)))
+            c.execute(_PRICE, ("tst", str(n), "tcgplayer", "normal", round(tcg * n, 2), _day(off)))
+            c.execute(_PRICE, ("tst", str(n), "cardkingdom", "normal", round(ck * n, 2), _day(off)))
+        c.execute(_PRICE, ("tst", "1", "tcgplayer", "foil", round(tcg * 4, 2), _day(off)))
     for pid, fin, off, st in (("p1", "nonfoil", -20, "owned"), ("p1", "foil", -5, "ordered"),
                               ("p2", "nonfoil", -8, "owned"), ("p2", "nonfoil", -8, "sold"),
                               ("p3", "nonfoil", -1, "owned")):
