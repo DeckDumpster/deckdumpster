@@ -81,8 +81,8 @@ UNIT_PID=""
 UNIT_LOG=""
 # UI tier: one pytest-xdist worker per container, <instance>-<k> (sp-lc1puh).
 # Each --test instance peaked at ~257 MB (cgroup memory.peak); with a Chromium
-# per worker, 6 sits well inside the 16 GiB runner.
-UI_WORKERS="${MTGC_UI_WORKERS:-6}"
+# per worker, 4 fits the 16 GiB runner with headroom (6 starved Chromium: PRs 507/508 screenshot protocol errors).
+UI_WORKERS="${MTGC_UI_WORKERS:-4}"
 _ci_cleanup() {
     bash deploy/teardown.sh "$INSTANCE" --purge >/dev/null 2>&1 || true
     local k
