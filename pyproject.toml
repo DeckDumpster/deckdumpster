@@ -65,6 +65,7 @@ dev = [
 
 [project.scripts]
 mtg = "mtg_collector.cli:main"
+mtg-erase = "mtg_collector.lake.erase:main"
 
 [project.urls]
 Repository = "https://github.com/ryangantt/efj-mtgc"
