@@ -31,8 +31,10 @@ class _Verifier:
 
 def test_server_starts_multitenant_and_serves_the_tenant(tmp_path, monkeypatch):
     monkeypatch.setenv("MTGC_HOME", str(tmp_path))
-    for k in ("MTGC_DB", "MTGC_SHARED_DB"):
-        monkeypatch.delenv(k, raising=False)
+    monkeypatch.delenv("MTGC_DB", raising=False)
+    # run() pins MTGC_SHARED_DB in os.environ; setenv first so monkeypatch
+    # restores it (a delenv of an absent var records nothing and the pin leaks).
+    monkeypatch.setenv("MTGC_SHARED_DB", "")
     monkeypatch.setenv("MTGC_MASTER_KEY", keycrypt.generate_master_key())
     monkeypatch.setenv("MTGC_MULTITENANT", "1")
     monkeypatch.setenv("MTGC_HTTP_PORT", "18080")
