@@ -699,6 +699,7 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   correct reading, not a false positive. See
   `mtg_collector/db/catalog_freshness.py`, `deploy/mtgc-catalog-check.{service,timer}`,
   and `deploy/README.md` → "Catalog freshness check".
+- **Refresh only lands (lakehouse 5).** `mtg data refresh-catalog` fetches every upstream byte into the raw landing zone (`land_catalog`) and then runs `derive_catalog` on that run; it writes no catalogue row itself. The inline fetch-and-import build is deleted: `build_catalog` raises unless the process is replaying a landed run, and there is no land-only flag, so a refresh cannot succeed without its derive.
 - **`mtg data refresh-catalog` is the whole catalogue refresh, and it is one command
   because it used to be two** (de-wdq). `mtg cache all` (Scryfall sets + printings) and
   `mtg data fetch` (MTGJSON) were both by hand, and the second is the one that stopped
