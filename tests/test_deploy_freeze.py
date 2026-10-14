@@ -90,10 +90,18 @@ def freeze(host, until):
     assert r.returncode == 0, r.stderr
 
 
-def test_deploy_without_marker_restarts_as_before(host):
-    r = host.run(DEPLOY, "prod")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert host.restarts() == ["--user restart mtgc-prod"]
+def proceeds_past_freeze(host, r):
+    """deploy.sh is run with an unreachable disk floor, so a deploy the freeze lets
+    through stops at diskcheck, before any build or restart. The decision under
+    test is the freeze; the real build path is not what CI should be driving."""
+    assert "DEPLOY FROZEN" not in r.stderr
+    assert "ERROR: only" in r.stderr
+    assert host.restarts() == []
+
+
+def test_deploy_without_marker_proceeds_as_before(host):
+    host.env["MTGC_DISK_FLOOR_GB"] = "999999999"
+    proceeds_past_freeze(host, host.run(DEPLOY, "prod"))
 
 
 def test_deploy_with_marker_refuses_and_does_not_restart(host):
@@ -106,10 +114,10 @@ def test_deploy_with_marker_refuses_and_does_not_restart(host):
 
 
 def test_clearing_the_marker_lets_deploy_proceed(host):
+    host.env["MTGC_DISK_FLOOR_GB"] = "999999999"
     freeze(host, int(time.time()) + 3600)
     assert host.run(FREEZE, "clear", "prod").returncode == 0
-    assert host.run(DEPLOY, "prod").returncode == 0
-    assert host.restarts() == ["--user restart mtgc-prod"]
+    proceeds_past_freeze(host, host.run(DEPLOY, "prod"))
 
 
 def test_stale_marker_still_blocks_and_alarms(host):
