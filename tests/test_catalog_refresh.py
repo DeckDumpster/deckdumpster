@@ -102,7 +102,7 @@ def test_a_failing_import_fails_the_command(tmp_path, monkeypatch):
     """
     dest = tmp_path / "AllPrintings.json"
     monkeypatch.setattr(data_cmd, "get_allprintings_path", lambda: dest)
-    monkeypatch.setattr(data_cmd, "_download", lambda url, path: path.write_bytes(_gzipped(b"{}")))
+    monkeypatch.setattr(data_cmd, "_download", lambda url, path, **kw: path.write_bytes(_gzipped(b"{}")))
     monkeypatch.setattr(data_cmd, "import_mtgjson", _raise)
 
     with pytest.raises(RuntimeError):
@@ -113,7 +113,7 @@ def test_the_import_follows_the_db_path_it_was_given(tmp_path, monkeypatch):
     """It used to import into get_db_path() regardless of --db."""
     dest = tmp_path / "AllPrintings.json"
     monkeypatch.setattr(data_cmd, "get_allprintings_path", lambda: dest)
-    monkeypatch.setattr(data_cmd, "_download", lambda url, path: path.write_bytes(_gzipped(b"{}")))
+    monkeypatch.setattr(data_cmd, "_download", lambda url, path, **kw: path.write_bytes(_gzipped(b"{}")))
     monkeypatch.setattr(data_cmd, "_fetch_mtgjson_version", lambda: None)
     seen = []
     monkeypatch.setattr(data_cmd, "import_mtgjson", seen.append)
@@ -164,7 +164,7 @@ def test_the_unit_is_one_execstart_that_alerts_on_failure():
     # One line, because a refresh split across two commands is a refresh where
     # one of them stops being run -- which is the whole history here.
     assert len(exec_lines) == 1
-    assert exec_lines[0].endswith("mtg data refresh-catalog")
+    assert exec_lines[0].endswith("mtg data refresh-catalog")  # in its own job container (lakehouse 3)
     # A refresh that fails nightly in silence reopens the gap it closed.
     assert "OnFailure=mtgc-alert-{{INSTANCE}}@%n.service" in unit
     # ~1 GB of downloads plus ~112k upserts: the default 90s would kill it mid-run.
