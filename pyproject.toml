@@ -44,6 +44,7 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "lark>=1.1",
     "numpy<2",
+    "pyiceberg[pyarrow,sql-sqlite]>=0.9",
     "onnxruntime>=1.18.0,<=1.23.0",
     "rapidocr>=3.3,<4",
     "requests>=2.28.0",
