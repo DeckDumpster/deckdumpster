@@ -400,4 +400,9 @@ def page(browser, db_writes):
     context.on("request", db_writes.on_request)
     p = context.new_page()
     yield p
+    # A click that ends the scenario has issued its request but the driver
+    # delivers the event only to a call in flight: give it one, so db_writes
+    # sees the POST before the restore decision is made.
+    if not p.is_closed():
+        p.wait_for_timeout(250)
     context.close()
