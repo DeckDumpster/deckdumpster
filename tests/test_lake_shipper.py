@@ -229,18 +229,20 @@ def test_run_all_exit_codes(tmp_path, monkeypatch, zone):
     t.commit()
     lines = []
 
-    def run():
-        return shipper.run_all(reg, state, zone, master=master, open_tenant=lambda i: t,
-                               as_of=DAY, out=lines.append)
+    t_real = t
 
     class NoClose:
         def __getattr__(self, n):
-            return getattr(t, n)
+            return getattr(t_real, n)
 
         def close(self):
             pass
-    t_real, t = t, NoClose()
-    assert run() == 0
+
+    def run():
+        return shipper.run_all(reg, state, zone, master=master, open_tenant=lambda i: NoClose(),
+                               as_of=DAY, out=lines.append)
+
+    assert run() == 0, lines
     assert any("tombstoned" in x for x in lines)
     t_real.execute("INSERT INTO collection (printing_id, finish, acquired_at, source, status) "
                    "VALUES ('q', 'nonfoil', 'x', 'm', 'owned')")
