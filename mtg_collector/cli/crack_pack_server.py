@@ -8401,11 +8401,14 @@ def run(args):
                 "MTGC_MULTITENANT needs MTGC_HTTP_PORT: the loopback listener is "
                 "the only one multi-tenant mode serves (N5)"
             )
-        # N5: 8081 bypasses Access, so it is not bound at all. Loopback only,
-        # for the tunnel origin.
-        print(f"[startup] multi-tenant: loopback listener http://127.0.0.1:{http_port}; "
+        # N5: 8081 bypasses Access, so it is not bound at all. The one listener
+        # binds the container's interface: in the container, loopback is the
+        # container's own and a published port could never reach it (sp-7mib1t).
+        # Exposure is the Quadlet's decision (PublishPort=127.0.0.1:...), and
+        # every request still needs an Access token.
+        print(f"[startup] multi-tenant: listener http://0.0.0.0:{http_port}; "
               f"port {args.port} is not served", flush=True)
-        plain = _new_listener(app, http_port, host="127.0.0.1")
+        plain = _new_listener(app, http_port)
         try:
             plain.run()
         finally:

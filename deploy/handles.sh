@@ -137,6 +137,35 @@ cc="$(curl -s -D - -o /dev/null -H "Cf-Access-Jwt-Assertion: $(cat "$WORK/jwks/t
 if [ "$cc" = "private, no-store" ]; then pass "tenant page is private, no-store"; else
     fail "tenant page cache-control is [$cc]"; fi
 
+# --- the production container shape: published port, no host network -------------
+# The listener binds the container's interface and the Quadlet publishes it on the
+# host's loopback only. A listener on the container's own loopback answers nothing
+# through a publish (sp-7mib1t, cutover #4). The JWKS server lives on the host
+# loopback, unreachable from here; neither assertion below needs a key fetch.
+podman rm -f "$CONTAINER" >/dev/null 2>&1 || true
+PUB_PORT="${HANDLES_PUBLISHED_PORT:-18092}"
+PUB_CONTAINER="mtgc-handles-pub-$$"
+trap 'podman rm -f "$PUB_CONTAINER" >/dev/null 2>&1 || true; cleanup' EXIT
+podman run -d --name "$PUB_CONTAINER" -p "127.0.0.1:${PUB_PORT}:8080" \
+    -v "${VOLUME}:/data:Z" -e MTGC_HOME=/data -e MTGC_DB=/data/collection.sqlite \
+    -e MTGC_MULTITENANT=1 -e MTGC_HTTP_PORT=8080 \
+    -e MTGC_ACCESS_TEAM_DOMAIN=https://gate.cloudflareaccess.com \
+    -e MTGC_ACCESS_AUD=gate-aud-tag \
+    -e MTGC_ACCESS_JWKS_URL=http://127.0.0.1:1/certs \
+    "$IMAGE" >/dev/null
+for _ in $(seq 1 60); do
+    curl -sf "http://127.0.0.1:${PUB_PORT}/health" >/dev/null 2>&1 && break
+    sleep 1
+done
+got="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PUB_PORT}/health" || true)"
+if [ "$got" = "200" ]; then pass "published 127.0.0.1:${PUB_PORT} answers /health in the prod container shape"; else
+    fail "published port answered [$got] on /health: the listener is unreachable through the publish"
+    podman logs --tail 30 "$PUB_CONTAINER" >&2 || true
+fi
+got="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PUB_PORT}/api/binders" || true)"
+if [ "$got" = "401" ]; then pass "published port refuses an Access-less request (401)"; else
+    fail "published port: Access-less /api/binders wanted 401, got [$got]"; fi
+
 # --- single-tenant mode is unaffected -------------------------------------------
 SINGLE_PORT="$(podman port "systemd-mtgc-${INSTANCE}" 8081/tcp 2>/dev/null | head -1 | cut -d: -f2 || true)"
 if [ -n "$SINGLE_PORT" ]; then
