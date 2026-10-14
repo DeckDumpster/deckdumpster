@@ -1,10 +1,11 @@
-"""The offline derive is row-identical to the inline build (lakehouse 4).
+"""The refresh lands, the derive builds, and nothing else writes the catalogue (lakehouse 4, 5).
 
-The inline build runs the refresh with the network stubbed to a fixture upstream,
-landing every byte. The derive then rebuilds a second database from that landed
-run alone, with the network made to raise. The two catalogues must match row for
-row; `derive` is `refresh_catalog` reading a replay, so a divergence means the
-replay layer changed a byte.
+`refresh_catalog` runs with the network stubbed to a fixture upstream: it lands
+every byte and derives the first database from that run. A second derive then
+rebuilds another database from the landed run alone, with the network made to
+raise. The two catalogues must match row for row, so a divergence means the
+replay layer changed a byte. The inline build is gone: calling the build with the
+network live is refused.
 """
 
 import gzip
@@ -171,3 +172,20 @@ def test_the_newest_run_is_the_one_replayed(tmp_path):
 def test_an_empty_root_is_a_miss(tmp_path):
     with pytest.raises(ReplayMiss):
         Replay(tmp_path)
+
+
+def test_the_build_refuses_to_run_on_the_network(tmp_path):
+    reset_run()
+    with pytest.raises(RuntimeError, match="mtg data derive"):
+        data_cmd.build_catalog(str(tmp_path / "x.sqlite"))
+    assert not (tmp_path / "x.sqlite").exists()
+
+
+def test_landing_alone_writes_no_catalogue(partition, tmp_path):
+    raw, _ = partition
+    reset_run()
+    before = sorted(p.name for p in tmp_path.glob("*.sqlite"))
+    run_id = data_cmd.land_catalog()
+    reset_run()
+    assert run_id
+    assert before == sorted(p.name for p in tmp_path.glob("*.sqlite"))
