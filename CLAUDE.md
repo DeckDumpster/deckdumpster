@@ -352,7 +352,7 @@ file is **never written**: the catalogue is copied to `$MTGC_HOME/shared.sqlite`
 present, never rewritten), the user file is copied via `sqlite3.backup()` onto a fresh ULID,
 the catalogue is dropped from the copy, and the served `collection_view` digest must match
 or the copy is detached and purged. Each step is idempotent and refuses a write-locked
-database. Rollback is a detach; migrating again makes a *new* copy of the legacy file. Nothing
+database. Before touching anything it measures what it will write (catalogue copy + tenant copy + 25% prune/VACUUM headroom) and refuses with "needs N G, has M G free on <fs>"; `legacy-migrate --check-space` runs only that check, for the cutover runbook *before* production is stopped (sp-9a5dth). Rollback is a detach; migrating again makes a *new* copy of the legacy file. Nothing
 here is imported by the server (never a startup gate) and nothing touches backups, so the old
 backup prefix stays addressable. `tests/test_upgrade_path.py` is the gate.
 
