@@ -540,12 +540,11 @@ CREATE TABLE IF NOT EXISTS mtgjson_printings (
     -- -- so this is the only column that says which row is the card you see.
     -- Read it through mtg_collector/db/mtgjson_faces.py, never by hand.
     --
-    -- Last, and that is load-bearing: `mtg db split` copies each table with
-    -- `INSERT INTO shared.t SELECT * FROM main.t`, which pairs columns by
-    -- position.  ALTER TABLE ADD COLUMN appends, so a migrated database has
-    -- this column last; declaring it anywhere else here would shift `side` and
-    -- `imported_at` past each other on a deployed instance and fail the copy
-    -- on imported_at's NOT NULL.
+    -- Declared last, matching where ALTER TABLE ADD COLUMN put it on deployed
+    -- databases.  Catalogue copies (`mtg db split`, `tenant legacy-migrate`)
+    -- now pair columns by name (db/table_copy.py, sp-63y52k), so order no
+    -- longer decides correctness; it was a positional copy that swapped
+    -- sets.digital and sets.cards_fetched_at on prod.
     side            TEXT
 );
 -- Carries the whole of the front-face resolution in mtgjson_faces:
