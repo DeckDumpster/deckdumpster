@@ -193,3 +193,117 @@ def test_cli_roundtrip(legacy, home):
     r = run("legacy-migrate", "ryan", legacy); assert r.returncode == 0, r.stderr
     assert "created" in r.stdout
     r = run("legacy-rollback", "ryan"); assert r.returncode == 0, r.stderr
+
+
+# --- Real-data drift (sp-63y52k) --------------------------------------------
+# Prod's collection.sqlite (schema v53, 2026-10-14) was created before `sets.digital`
+# existed; `_migrate_v26`-era ALTER TABLE appended it, so the deployed table reads
+# (set_code, set_name, set_type, released_at, cards_fetched_at, digital, ...) while a
+# fresh init_db declares digital *before* cards_fetched_at. A positional
+# `INSERT ... SELECT *` then pours cards_fetched_at into digital: 37 prod sets carry a
+# NULL cards_fetched_at, which failed `NOT NULL constraint failed: sets.digital`, and
+# every other set would have had its digital flag and fetch timestamp swapped.
+
+_LEGACY_SETS_DDL = """
+CREATE TABLE sets (
+    set_code TEXT PRIMARY KEY,
+    set_name TEXT NOT NULL,
+    set_type TEXT,
+    released_at TEXT,
+    cards_fetched_at TEXT
+, digital INTEGER NOT NULL DEFAULT 0, base_set_size INTEGER, total_set_size INTEGER)
+"""
+
+
+def _with_legacy_sets_order(path):
+    """Rebuild `sets` in the column order prod's ALTER-grown table has, rows intact."""
+    c = sqlite3.connect(path)
+    c.execute("PRAGMA foreign_keys = OFF")
+    c.execute("PRAGMA legacy_alter_table = ON")  # leave collection_view pointing at `sets`
+    c.execute("ALTER TABLE sets RENAME TO sets_fresh")
+    c.execute(_LEGACY_SETS_DDL)
+    c.execute("INSERT INTO sets (set_code, set_name, set_type, released_at, cards_fetched_at, digital, "
+              "base_set_size, total_set_size) SELECT set_code, set_name, set_type, released_at, "
+              "cards_fetched_at, digital, base_set_size, total_set_size FROM sets_fresh")
+    c.execute("DROP TABLE sets_fresh")
+    # one set never had its card list cached (NULL), one is digital-only and was
+    c.execute("INSERT INTO sets (set_code, set_name, cards_fetched_at, digital) VALUES ('nul', 'Never Fetched', NULL, 0)")
+    c.execute("INSERT INTO sets (set_code, set_name, cards_fetched_at, digital) "
+              "VALUES ('dig', 'Digital Only', '2026-01-01T00:00:00Z', 1)")
+    c.commit()
+    c.close()
+
+
+def _rows(path, table):
+    c = sqlite3.connect(path)
+    c.row_factory = sqlite3.Row
+    try:
+        return sorted((repr(sorted(dict(r).items())) for r in c.execute(f"SELECT * FROM [{table}]")))
+    finally:
+        c.close()
+
+
+def test_prod_column_order_drift_copies_by_name(legacy, reg):
+    _with_legacy_sets_order(legacy)
+    before_bytes = _sha(legacy)
+    served = upgrade.collection_digest(legacy)
+
+    dbid, outcome = upgrade.migrate_legacy(reg, "ryan", legacy)
+    assert outcome == "created"
+    assert _served_tenant(dbid) == served
+    assert _sha(legacy) == before_bytes
+    # every value lands in the column of the same name, not the same position
+    assert _rows(paths.shared_file(), "sets") == _rows(legacy, "sets")
+    c = sqlite3.connect(paths.shared_file())
+    assert c.execute("SELECT digital, cards_fetched_at FROM sets WHERE set_code='dig'").fetchone() == (1, "2026-01-01T00:00:00Z")
+    assert c.execute("SELECT digital, cards_fetched_at FROM sets WHERE set_code='nul'").fetchone() == (0, None)
+    c.close()
+
+
+def test_every_shared_table_round_trips_with_counts(legacy, reg):
+    from mtg_collector.db.schema import SHARED_TABLES
+    _with_legacy_sets_order(legacy)
+    lines = []
+    upgrade.migrate_legacy(reg, "ryan", legacy, report=lines.append)
+    for t in SHARED_TABLES:
+        assert _rows(paths.shared_file(), t) == _rows(legacy, t), t
+        assert any(line.split()[0] == t for line in lines), t
+
+
+def test_a_null_in_a_not_null_column_with_a_default_takes_the_default(legacy, reg):
+    # The shape the prod error message suggested: a legacy row whose NOT NULL column
+    # holds NULL (possible in a table whose constraint was added later). The declared
+    # default stands in for it, and the substitution is reported, never silent.
+    c = sqlite3.connect(legacy)
+    c.execute("PRAGMA foreign_keys = OFF")
+    c.execute("PRAGMA legacy_alter_table = ON")  # leave collection_view pointing at `sets`
+    c.execute("ALTER TABLE sets RENAME TO sets_fresh")
+    c.execute(_LEGACY_SETS_DDL.replace("digital INTEGER NOT NULL DEFAULT 0", "digital INTEGER"))
+    c.execute("INSERT INTO sets (set_code, set_name, set_type, released_at, cards_fetched_at, digital) "
+              "SELECT set_code, set_name, set_type, released_at, cards_fetched_at, NULL FROM sets_fresh")
+    c.execute("DROP TABLE sets_fresh")
+    c.commit(); c.close()
+    lines = []
+    upgrade.migrate_legacy(reg, "ryan", legacy, report=lines.append)
+    s = sqlite3.connect(paths.shared_file())
+    assert s.execute("SELECT COUNT(*) FROM sets WHERE digital = 0").fetchone()[0] == 1
+    s.close()
+    assert any("sets.digital" in line and "default" in line for line in lines), lines
+
+
+def test_an_empty_shared_file_is_treated_as_absent(legacy, reg):
+    # Prod's volume carried a 0-byte shared.sqlite from an earlier experiment.
+    paths.shared_file().write_bytes(b"")
+    dbid, _ = upgrade.migrate_legacy(reg, "ryan", legacy)
+    assert upgrade._count(str(paths.shared_file()), "printings") == 3
+    assert _served_tenant(dbid) == upgrade.collection_digest(legacy)
+
+
+def test_a_non_catalogue_shared_file_is_refused(legacy, reg):
+    c = sqlite3.connect(paths.shared_file())
+    c.execute("CREATE TABLE something_else (x)"); c.commit(); c.close()
+    before = _sha(paths.shared_file())
+    with pytest.raises(RegistryError, match="holds no catalogue"):
+        upgrade.migrate_legacy(reg, "ryan", legacy)
+    assert _sha(paths.shared_file()) == before
+    assert registry.list_tenants(reg) == []
