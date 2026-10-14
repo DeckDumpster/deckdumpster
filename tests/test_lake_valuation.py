@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import shutil
 import sqlite3
 
 import pytest
@@ -27,6 +28,7 @@ def tenant(tmp_path):
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys = OFF")
     init_db(c)
+    c.execute("INSERT INTO sets (set_code, set_name) VALUES ('tst', 'Test')")
     for n in (1, 2, 3):
         c.execute("INSERT INTO cards (oracle_id, name) VALUES (?, ?)", (f"o{n}", f"Card {n}"))
         c.execute(
@@ -56,7 +58,9 @@ def work_and_state(tenant, tmp_path):
     wh.mkdir()
     catalog = lake.open_catalog(str(tmp_path / "cat.sqlite"), f"file://{wh}")
     lake.build(c, catalog)
-    work = valuation.open_work(path)
+    shared = tmp_path / "shared.sqlite"
+    shutil.copy(path, shared)
+    work = valuation.open_work(str(shared))
     valuation.load_prices(work, catalog.load_table(lake.PRICES))
     state = shipper.open_state(":memory:")
     for source, rows in holdings_outbox.fold(c).items():
