@@ -1,8 +1,12 @@
-"""Tenant lifecycle: mtg tenant create|list|rename|detach|reattach|purge|adopt|migrate|set-key|identity"""
+"""Tenant lifecycle: mtg tenant create|list|rename|detach|reattach|purge|adopt|migrate|set-key|identity|lake-key"""
 
+import base64
+import os
 import sys
 
 from mtg_collector.db import registry
+from mtg_collector.lake import crypto
+from mtg_collector.lake import keys as lake_keys
 from mtg_collector.tenancy import keycrypt, paths
 
 
@@ -79,6 +83,26 @@ def register(subparsers):
     s.set_defaults(func=run_identity_remove)
     ident.set_defaults(func=lambda a: ident.print_help())
 
+    lk = sub.add_parser("lake-key", help="Lake (tenant zone) key custody: init, backup, register, tombstone, status")
+    lsub = lk.add_subparsers(dest="lake_key_command", metavar="<subcommand>")
+    s = lsub.add_parser("init", help="Mint the lake master key file (refuses to overwrite)")
+    s.set_defaults(func=run_lake_init)
+    s = lsub.add_parser("backup", help="Print the lake master key for the password manager")
+    s.add_argument("--yes", action="store_true", help="acknowledge this prints secret material")
+    s.set_defaults(func=run_lake_backup)
+    s = lsub.add_parser("register", help="Make tenants' lake keys derivable (one database_id, or --all active)")
+    s.add_argument("database_id", nargs="?")
+    s.add_argument("--all", action="store_true")
+    s.set_defaults(func=run_lake_register)
+    s = lsub.add_parser("tombstone", help="Revoke a tenant's lake key permanently")
+    s.add_argument("database_id")
+    s.add_argument("--reason", required=True)
+    s.add_argument("--yes", action="store_true", help="acknowledge a tombstone is terminal")
+    s.set_defaults(func=run_lake_tombstone)
+    s = lsub.add_parser("status", help="Key state per database_id, and the master key fingerprint")
+    s.set_defaults(func=run_lake_status)
+    lk.set_defaults(func=lambda a: lk.print_help())
+
     p.set_defaults(func=lambda a: p.print_help())
 
 
@@ -87,7 +111,7 @@ def _guarded(fn):
         try:
             with _registry() as conn:
                 fn(conn, args)
-        except (registry.RegistryError, paths.InvalidHandle, keycrypt.MasterKeyError) as exc:
+        except (registry.RegistryError, paths.InvalidHandle, keycrypt.MasterKeyError, crypto.LakeCryptoError, lake_keys.LakeKeyError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
     return run
@@ -205,6 +229,55 @@ def _identity_remove(conn, args):
     print(f"unbound {args.email.strip().lower()}")
 
 
+def _lake_init(conn, args):
+    path = crypto.master_key_path()
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise crypto.LakeCryptoError(
+            f"{path} exists; overwriting the lake master key destroys every tenant's derived key. "
+            "Move it aside by hand if that is what you mean."
+        ) from None
+    with os.fdopen(fd, "w", encoding="ascii") as f:
+        f.write(crypto.generate_master_key() + "\n")
+    print(f"wrote {path} (mode 600); fingerprint {crypto.fingerprint(crypto.load_master_key(path))}")
+    print("BACK IT UP NOW: `mtg tenant lake-key backup --yes` into the password manager. "
+          "A lost key is not a deleted tenant.")
+
+
+def _lake_backup(conn, args):
+    if not args.yes:
+        raise crypto.LakeCryptoError("this prints secret material; pass --yes")
+    master = crypto.load_master_key(crypto.master_key_path())
+    print(base64.urlsafe_b64encode(master).decode("ascii"))
+
+
+def _lake_register(conn, args):
+    if bool(args.database_id) == bool(args.all):
+        raise registry.RegistryError("name one database_id, or pass --all")
+    ids = [args.database_id] if args.database_id else [
+        r["database_id"] for r in registry.list_tenants(conn) if r["retired_at"] is None]
+    for i in ids:
+        paths.validate_database_id(i)
+        lake_keys.register(conn, i)
+        print(f"registered {i}")
+
+
+def _lake_tombstone(conn, args):
+    if not args.yes:
+        raise registry.RegistryError("a tombstone is terminal; pass --yes")
+    paths.validate_database_id(args.database_id)
+    lake_keys.tombstone(conn, args.database_id, args.reason)
+    print(f"tombstoned {args.database_id}")
+
+
+def _lake_status(conn, args):
+    path = crypto.master_key_path()
+    print(f"master {path} fingerprint {crypto.fingerprint(crypto.load_master_key(path))}")
+    for r in conn.execute("SELECT database_id, state, reason FROM lake_tenant_key ORDER BY database_id"):
+        print(f"{r['database_id']}  {r['state']}  {r['reason'] or ''}".rstrip())
+
+
 run_create = _guarded(_create)
 run_list = _guarded(_list)
 run_rename = _guarded(_rename)
@@ -219,3 +292,8 @@ run_set_key = _guarded(_set_key)
 run_identity_add = _guarded(_identity_add)
 run_identity_list = _guarded(_identity_list)
 run_identity_remove = _guarded(_identity_remove)
+run_lake_init = _guarded(_lake_init)
+run_lake_backup = _guarded(_lake_backup)
+run_lake_register = _guarded(_lake_register)
+run_lake_tombstone = _guarded(_lake_tombstone)
+run_lake_status = _guarded(_lake_status)

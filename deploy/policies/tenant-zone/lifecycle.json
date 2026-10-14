@@ -1,0 +1,12 @@
+{
+  "Rules": [
+    {
+      "ID": "tenant-90d",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "tenant/"},
+      "Expiration": {"Days": 90},
+      "NoncurrentVersionExpiration": {"NoncurrentDays": 1},
+      "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}
+    }
+  ]
+}
