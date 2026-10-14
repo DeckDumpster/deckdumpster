@@ -244,8 +244,9 @@ def test_run_all_exit_codes(tmp_path, monkeypatch, zone):
 
     assert run() == 0, lines
     assert any("tombstoned" in x for x in lines)
-    t_real.execute("INSERT INTO collection (printing_id, finish, acquired_at, source, status) "
-                   "VALUES ('q', 'nonfoil', 'x', 'm', 'owned')")
+    for pid in ("q", "r"):
+        t_real.execute("INSERT INTO collection (printing_id, finish, acquired_at, source, status) "
+                       "VALUES (?, 'nonfoil', 'x', 'm', 'owned')", (pid,))
     t_real.execute("DELETE FROM holdings_outbox WHERE seq = 2")
     t_real.commit()
     assert run() == shipper.EXIT_GAP
@@ -253,5 +254,5 @@ def test_run_all_exit_codes(tmp_path, monkeypatch, zone):
     unregistered = "01CX5ZZKBKACTAV9WEVGEMMVRY"
     reg.execute("INSERT INTO user (handle, database_id, created_at) VALUES ('ccc', ?, 'x')", (unregistered,))
     state.execute("DELETE FROM ship_gap")
-    state.execute("UPDATE ship_cursor SET shipped_through = 2")
+    state.execute("UPDATE ship_cursor SET shipped_through = 3")
     assert run() == shipper.EXIT_PARTIAL
