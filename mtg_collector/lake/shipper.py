@@ -138,6 +138,9 @@ class Zone:
         with self.fs.open_input_stream(self._p(key)) as f:
             return f.read()
 
+    def delete(self, key: str) -> None:
+        self.fs.delete_file(self._p(key))
+
     def list(self, prefix: str) -> list[str]:
         base = self._p(prefix).rstrip("/")
         infos = self.fs.get_file_info(pafs.FileSelector(base, recursive=True, allow_not_found=True))
