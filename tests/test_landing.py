@@ -47,11 +47,13 @@ def test_land_file_is_content_addressed(tmp_path):
 def test_every_upstream_fetch_is_landed():
     """Default-deny: a module that opens an upstream connection must name the landing module.
 
-    `_api_shorten` posts a user-supplied URL to a link shortener; it fetches no
-    upstream data and is the one deliberate exception.
+    Deliberate exceptions, none of which fetches catalog or price data:
+    `_api_shorten` posts a user-supplied URL to a link shortener, and
+    `access.py` fetches Cloudflare Access's signing keys to verify a login.
     """
     fetchers = re.compile(r"urlopen\(|requests\.(get|post)\(|session\.(get|request)\(")
-    exempt = {"mtg_collector/cli/crack_pack_server.py", "mtg_collector/landing.py"}
+    exempt = {"mtg_collector/cli/crack_pack_server.py", "mtg_collector/access.py",
+              "mtg_collector/landing.py"}
     offenders = []
     for path in (ROOT / "mtg_collector").rglob("*.py"):
         rel = str(path.relative_to(ROOT))
