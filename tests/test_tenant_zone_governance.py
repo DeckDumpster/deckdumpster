@@ -63,7 +63,7 @@ def run(tmp_path):
         }
         if env_file is not None:
             (tmp_path / "conf" / "prod.env").write_text(env_file)
-        return subprocess.run(["bash", str(SCRIPT), *args, *bucket], env=env, capture_output=True, text=True)
+        return subprocess.run(["bash", str(SCRIPT), *args, *bucket], env=env, capture_output=True, text=True, timeout=60)
 
     _run.put_log = tmp_path / "put.log"
     return _run
