@@ -15,10 +15,11 @@ this module neither copies, renames nor deletes anything under it.
 import hashlib
 import os
 import sqlite3
+import time
 from contextlib import closing
-from typing import Optional
+from typing import Callable, Optional
 
-from mtg_collector.db import registry
+from mtg_collector.db import registry, table_copy
 from mtg_collector.db.registry import RegistryError
 from mtg_collector.tenancy import paths
 
@@ -62,11 +63,26 @@ def collection_digest(db: str, shared: Optional[str] = None) -> str:
         return h.hexdigest()
 
 
-def ensure_shared(source: str, legacy_shared: Optional[str] = None) -> str:
-    """Make `$MTGC_HOME/shared.sqlite` hold the catalogue. An existing one is kept, never rewritten."""
+def _nothing(_line: str) -> None:
+    pass
+
+
+def ensure_shared(source: str, legacy_shared: Optional[str] = None,
+                  report: Callable[[str], None] = _nothing) -> str:
+    """Make `$MTGC_HOME/shared.sqlite` hold the catalogue. An existing one is kept, never rewritten.
+
+    A 0-byte file is absent (prod's volume carried one from an earlier experiment).
+    A non-empty file that holds no catalogue is refused rather than overwritten:
+    nothing here knows what it is.
+    """
     dest = str(paths.shared_file())
-    if os.path.exists(dest) and _count(dest, "printings"):
-        return dest
+    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+        if _count(dest, "printings"):
+            report(f"shared catalogue present, kept: {dest}")
+            return dest
+        raise RegistryError(
+            f"{dest} exists but holds no catalogue (no printings); move it aside and retry"
+        )
     paths.ensure_private_dir(paths.home())
     tmp = dest + ".partial"
     try:
@@ -90,12 +106,16 @@ def ensure_shared(source: str, legacy_shared: Optional[str] = None) -> str:
                     # Same copy `mtg db split` makes, minus the prune: the source is not ours to edit.
                     init_db(out)
                     out.execute("ATTACH DATABASE ? AS src", (f"file:{os.path.abspath(source)}?mode=ro",))
+                    # By column name: a deployed table grown by ALTER TABLE has its
+                    # columns in a different order than a fresh init_db (sp-63y52k).
                     for t in SHARED_TABLES + SHARED_VIEWS:
                         if out.execute(
                             "SELECT 1 FROM src.sqlite_master WHERE type='table' AND name=?", (t,)
                         ).fetchone():
-                            out.execute(f"DELETE FROM main.[{t}]")
-                            out.execute(f"INSERT INTO main.[{t}] SELECT * FROM src.[{t}]")
+                            try:
+                                report(table_copy.describe(table_copy.copy_table(out, "src", "main", t)))
+                            except table_copy.TableCopyError as exc:
+                                raise RegistryError(f"catalogue copy refused: {exc}") from exc
                     out.commit()
                     out.execute("DETACH DATABASE src")
                     from mtg_collector.db.schema import rebuild_fts
@@ -107,6 +127,18 @@ def ensure_shared(source: str, legacy_shared: Optional[str] = None) -> str:
             if os.path.exists(tmp + suffix):
                 os.unlink(tmp + suffix)
     return dest
+
+
+class _Clock:
+    """Reports how long each step took: the prod run takes what the rehearsal took."""
+
+    def __init__(self, report):
+        self.report, self.t = report, time.monotonic()
+
+    def lap(self, step: str) -> None:
+        now = time.monotonic()
+        self.report(f"{step}: {now - self.t:.1f}s")
+        self.t = now
 
 
 def _prune_catalogue(tenant_file: str) -> None:
@@ -123,7 +155,8 @@ def _prune_catalogue(tenant_file: str) -> None:
         conn.execute("VACUUM")
 
 
-def migrate_legacy(conn, handle: str, source: str, *, legacy_shared: Optional[str] = None):
+def migrate_legacy(conn, handle: str, source: str, *, legacy_shared: Optional[str] = None,
+                   report: Callable[[str], None] = _nothing):
     """Copy `source` onto a fresh ULID under `handle`. Returns (database_id, 'created'|'already').
 
     Idempotent: with an active `handle` it does nothing. After a rollback it
@@ -136,17 +169,25 @@ def migrate_legacy(conn, handle: str, source: str, *, legacy_shared: Optional[st
     except RegistryError:
         pass
     refuse_if_busy(source)
-    shared = ensure_shared(source, legacy_shared)
+    clock = _Clock(report)
+    shared = ensure_shared(source, legacy_shared, report)
+    clock.lap("catalogue copy")
     want = collection_digest(source, legacy_shared if legacy_shared else None)
+    clock.lap("source digest")
 
     database_id = registry.adopt_database(conn, handle, source)
+    clock.lap("tenant copy + quick_check")
     try:
         dest = str(paths.tenant_db_file(database_id))
         _prune_catalogue(dest)
+        clock.lap("prune + vacuum")
         registry.migrate_tenant(database_id)
+        clock.lap("tenant schema migrate")
         got = collection_digest(dest, shared)
+        clock.lap("tenant digest")
         if got != want:
             raise RegistryError(f"served collection differs after migration ({want[:12]} != {got[:12]})")
+        report(f"collection_view digest {got[:16]} matches the legacy file")
     except BaseException:
         registry.detach_tenant(conn, handle)
         registry.purge_tenant(conn, handle)
