@@ -346,6 +346,16 @@ everything else works. Single-tenant mode still reads the environment key. The O
 `tenancy/fairpool.py`: 4 workers, at most one in-flight job per tenant, round-robin across
 tenants, a job's exception stays that job's. There is no usage table or cap by design.
 
+### Legacy upgrade path (`mtg tenant legacy-migrate` / `legacy-rollback`)
+`tenancy/upgrade.py` moves a pre-tenancy `collection.sqlite` onto a ULID tenant. The legacy
+file is **never written**: the catalogue is copied to `$MTGC_HOME/shared.sqlite` (kept if
+present, never rewritten), the user file is copied via `sqlite3.backup()` onto a fresh ULID,
+the catalogue is dropped from the copy, and the served `collection_view` digest must match
+or the copy is detached and purged. Each step is idempotent and refuses a write-locked
+database. Rollback is a detach; migrating again makes a *new* copy of the legacy file. Nothing
+here is imported by the server (never a startup gate) and nothing touches backups, so the old
+backup prefix stays addressable. `tests/test_upgrade_path.py` is the gate.
+
 ### Growth chart
 `/api/collection/growth` has two routes to the same numbers, and `mtg_collector/db/growth.py`
 holds both. A **query** is aggregated day by day inside SQLite from `collection` + `prices`;
