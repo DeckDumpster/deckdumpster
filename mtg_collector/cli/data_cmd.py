@@ -160,6 +160,17 @@ def register(subparsers):
         help="Import downloaded EDHREC data into SQLite",
     )
 
+    for lake_cmd, lake_help in (
+        ("lake-build", "Append new price days to the Iceberg price tables"),
+        ("lake-check-age", "Exit 1 if an Iceberg price table's newest day is stale"),
+        ("lake-verify", "Exit 1 if the Iceberg price tables disagree with SQLite"),
+    ):
+        data_sub.add_parser(lake_cmd, help=lake_help)
+    data_sub.add_parser(
+        "lake-guard-selftest",
+        help="Plant tenant data on each catalog-zone surface; fail unless the guard flags it",
+    )
+
     data_sub.add_parser(
         "backfill-sets",
         help=(
@@ -241,6 +252,12 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         import_edhrec(db_path)
+    elif args.data_command in (
+        "lake-build", "lake-check-age", "lake-verify", "lake-guard-selftest",
+    ):
+        from mtg_collector.db.connection import get_db_path
+        sys.exit(_lake_command(
+            args.data_command, get_db_path(getattr(args, "db_path", None))))
     elif args.data_command == "backfill-sets":
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
@@ -264,8 +281,35 @@ def run(args):
         db_path = get_db_path(getattr(args, "db_path", None))
         derive_catalog(db_path, raw_root=args.raw_root, run_id=args.run)
     else:
-        print("Usage: mtg data {derive|fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-sets|check-catalog|refresh-catalog|export-price-history} [options]")
-        sys.exit(1)
+        print("Usage: mtg data {derive|fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|lake-build|lake-check-age|lake-verify|lake-guard-selftest|backfill-sets|check-catalog|refresh-catalog|export-price-history} [options]")
+
+
+def _lake_command(command: str, db_path: str) -> int:
+    """MTGC_LAKE_CATALOG (the SQL catalog file) and MTGC_LAKE_WAREHOUSE (where
+    the Parquet lives) are required; there is no default location."""
+    from datetime import date
+
+    from mtg_collector.lake import iceberg_prices as lake
+    from mtg_collector.lake.zone_guard import selftest
+
+    if command == "lake-guard-selftest":
+        selftest()
+        print("guard self-test: every planted violation was flagged")
+        return 0
+
+    catalog = lake.open_catalog(os.environ["MTGC_LAKE_CATALOG"], os.environ["MTGC_LAKE_WAREHOUSE"])
+    if command == "lake-build":
+        conn = sqlite3.connect(db_path)
+        for table, n in lake.build(conn, catalog).items():
+            print(f"  {table}: {n} rows landed")
+        return 0
+    if command == "lake-check-age":
+        problems = lake.check_age(catalog, date.today())
+    else:
+        problems = lake.verify(sqlite3.connect(db_path), catalog)
+    for p in problems:
+        print(f"  {p}")
+    return 1 if problems else 0
 
 
 def fetch_allprintings(force: bool = False, db_path: str | None = None):
