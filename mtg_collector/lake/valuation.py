@@ -46,7 +46,7 @@ class ValuationError(Exception):
 
 def open_work(shared_path: str) -> sqlite3.Connection:
     """The scratch database: the catalogue ATTACHed read-only for printings."""
-    conn = sqlite3.connect(":memory:")
+    conn = sqlite3.connect(":memory:", uri=True)
     conn.row_factory = sqlite3.Row
     conn.execute("ATTACH DATABASE ? AS shared", (f"file:{shared_path}?mode=ro",))
     conn.executescript(_PRICES_SQL)
