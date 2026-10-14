@@ -102,7 +102,7 @@ def test_a_failing_import_fails_the_command(tmp_path, monkeypatch):
     """
     dest = tmp_path / "AllPrintings.json"
     monkeypatch.setattr(data_cmd, "get_allprintings_path", lambda: dest)
-    monkeypatch.setattr(data_cmd, "_download", lambda url, path: path.write_bytes(_gzipped(b"{}")))
+    monkeypatch.setattr(data_cmd, "_download", lambda url, path, **kw: path.write_bytes(_gzipped(b"{}")))
     monkeypatch.setattr(data_cmd, "import_mtgjson", _raise)
 
     with pytest.raises(RuntimeError):
@@ -113,7 +113,7 @@ def test_the_import_follows_the_db_path_it_was_given(tmp_path, monkeypatch):
     """It used to import into get_db_path() regardless of --db."""
     dest = tmp_path / "AllPrintings.json"
     monkeypatch.setattr(data_cmd, "get_allprintings_path", lambda: dest)
-    monkeypatch.setattr(data_cmd, "_download", lambda url, path: path.write_bytes(_gzipped(b"{}")))
+    monkeypatch.setattr(data_cmd, "_download", lambda url, path, **kw: path.write_bytes(_gzipped(b"{}")))
     monkeypatch.setattr(data_cmd, "_fetch_mtgjson_version", lambda: None)
     seen = []
     monkeypatch.setattr(data_cmd, "import_mtgjson", seen.append)
