@@ -58,10 +58,8 @@ class ReplayHarness:
     """Execute a generated implementation with zero Claude calls."""
 
     def __init__(self, page, base_url: str, screenshot_dir: Path, scenario_name: str,
-                 container: str | None = None, podman: list | None = None,
-                 db_writes=None):
+                 container: str | None = None, podman: list | None = None):
         self.page = page
-        self._db_writes = db_writes
         self.base_url = base_url
         self.screenshot_dir = screenshot_dir
         self.scenario_name = scenario_name
@@ -108,8 +106,6 @@ class ReplayHarness:
             raise RuntimeError(
                 "db_exec needs a container: run with --instance, not --base-url"
             )
-        if self._db_writes is not None:
-            self._db_writes.mark()
         subprocess.run(
             [*self.podman, "exec", self.container, "python3", "-c", script],
             check=True, capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
@@ -316,8 +312,6 @@ class ReplayHarness:
         self._step += 1
         step = ReplayStep(number=self._step, action=action, detail=detail)
         self._steps.append(step)
-        if self._db_writes is not None:
-            self._db_writes.settled_after(action)
         log.info(
             "[%s] Step %d: %s(%s)", self.scenario_name, self._step, action, detail
         )

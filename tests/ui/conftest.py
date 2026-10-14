@@ -301,58 +301,15 @@ def _db_snapshot(container_name, podman):
     )
 
 
-class DbWrites:
-    """Whether the current test could have changed the database.
-
-    The restore is a `podman exec` that starts python3 and copies two databases
-    back, ~270 s of a run spent on tests that wrote nothing. A test dirties the
-    database in exactly two ways: the browser sends a request that is not a
-    read (GET/HEAD/OPTIONS), or the scenario seeds rows itself through
-    `db_exec`. Both mark this; a test that does neither has nothing to undo.
-    A read-only POST costs one needless restore, never a missed one.
-    """
-
-    READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-
-    # Any step that acts on the page may have issued a write. Playwright
-    # delivers request events to the Python side only while a call is in
-    # flight, so a request can go unobserved; the step itself cannot. A test
-    # that never acts (navigate, wait, assert) cannot have written.
-    INTERACTIONS = ("click_", "fill_", "press_key", "select_", "set_input_files")
-
-    def __init__(self):
-        self.dirty = False
-
-    def settled_after(self, action):
-        if action.startswith(self.INTERACTIONS):
-            self.dirty = True
-
-    @property
-    def must_restore(self):
-        return self.dirty
-
-    def mark(self):
-        self.dirty = True
-
-    def on_request(self, request):
-        if request.method not in self.READ_METHODS:
-            self.dirty = True
-
-
-@pytest.fixture
-def db_writes():
-    return DbWrites()
-
-
 @pytest.fixture(autouse=True)
-def _restore_db(_db_snapshot, podman, db_writes):
-    """Restore the DB to its snapshot state after a test that wrote to it.
+def _restore_db(_db_snapshot, podman):
+    """Restore the DB to its snapshot state after each test.
 
     No-op when running against a local server (--base-url, no container).
     """
     yield
     container = _db_snapshot
-    if container is None or not db_writes.must_restore:
+    if container is None:
         return
     log.info("Restoring DB snapshot in container %s", container)
     subprocess.run(
@@ -384,13 +341,12 @@ def browser():
 
 
 @pytest.fixture
-def page(browser, db_writes):
+def page(browser):
     """Fresh browser page per test (isolated context)."""
     context = browser.new_context(
         viewport={"width": 1280, "height": 900},
         ignore_https_errors=True,
     )
-    context.on("request", db_writes.on_request)
     p = context.new_page()
     yield p
     context.close()

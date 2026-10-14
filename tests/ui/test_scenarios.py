@@ -67,7 +67,7 @@ _tests = list(discover_tests())
     _tests,
     ids=[name for name, _, _ in _tests],
 )
-def test_scenario(intent_name, intent_path, impl_path, base_url, page, screenshot_dir, db_writes,
+def test_scenario(intent_name, intent_path, impl_path, base_url, page, screenshot_dir,
                   container_name, podman, request):
     config = request.config
 
@@ -117,8 +117,7 @@ def test_scenario(intent_name, intent_path, impl_path, base_url, page, screensho
         log.info("[%s] Running deterministic replay", intent_name)
         steps_fn = _load_implementation(impl_path)
         harness = ReplayHarness(page, base_url, screenshot_dir, intent_name,
-                                container=container_name, podman=podman,
-                                db_writes=db_writes)
+                                container=container_name, podman=podman)
 
         # Auto-accept JS dialogs.
         def _handle_dialog(dialog):
