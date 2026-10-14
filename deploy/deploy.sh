@@ -39,6 +39,12 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 mtgc_store_adopt_instance "$INSTANCE"
 mtgc_store_activate
 
+# A production cutover may hold this instance behind a freeze marker
+# (deploy/freeze.sh). Refuse before building anything, and again right before the
+# restart, since the build can take minutes. Red on purpose: a silent skip would
+# read as a deployed merge (sp-4vlkdc).
+bash "$SCRIPT_DIR/freeze.sh" check "$INSTANCE"
+
 QUADLET_FILE="$HOME/.config/containers/systemd/${SERVICE_NAME}.container"
 
 # Nothing else may write MTGC build images to Podman's default store while this
@@ -130,6 +136,8 @@ else
     # no-op on a healthy unit, and `|| true` because a unit that has never
     # failed makes this an error on some systemd versions.
     systemctl --user reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+
+    bash "$SCRIPT_DIR/freeze.sh" check "$INSTANCE"
 
     echo "==> Restarting $SERVICE_NAME..."
     systemctl --user restart "$SERVICE_NAME"
