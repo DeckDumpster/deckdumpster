@@ -4,7 +4,8 @@
 a human label, reusable once retired — to an opaque `database_id`, and the
 database_id is the only thing any path is ever built from (see
 `mtg_collector.tenancy.paths`). `user_identity` binds a verified email to one
-database_id. `tenant_key` holds a tenant's encrypted secret.
+database_id. `tenant_key` holds a tenant's encrypted secret. `lake_tenant_key`
+holds whether that tenant's lake key may still be derived.
 
 Rules live in the schema as CHECKs and partial unique indexes, not only in the
 functions below, so a hand-written INSERT cannot break them.
@@ -22,10 +23,11 @@ from contextlib import closing
 from pathlib import Path
 from typing import Optional
 
+from mtg_collector.lake import keys as lake_keys
 from mtg_collector.tenancy import keycrypt, paths
 from mtg_collector.utils import now_iso
 
-REGISTRY_VERSION = 1
+REGISTRY_VERSION = 2
 
 REGISTRY_SQL = """
 CREATE TABLE IF NOT EXISTS user (
@@ -67,6 +69,28 @@ CREATE TABLE IF NOT EXISTS tenant_key (
     ciphertext  BLOB NOT NULL,
     updated_at  TEXT NOT NULL
 );
+
+-- Lake key state (lakehouse K7, mtg_collector/lake/keys.py).  Nothing secret:
+-- the key itself is HKDF(master, database_id) and is never stored.  No foreign
+-- key to user, deliberately: a tombstone must outlive anything that happens to
+-- the user row.  A tombstone is terminal, in the schema and not only the code.
+CREATE TABLE IF NOT EXISTS lake_tenant_key (
+    database_id   TEXT PRIMARY KEY
+        CHECK (length(database_id) = 26
+               AND database_id NOT GLOB '*[^0-9A-HJKMNP-TV-Z]*'),
+    state         TEXT NOT NULL CHECK (state IN ('active', 'tombstoned')),
+    registered_at TEXT NOT NULL,
+    tombstoned_at TEXT,
+    reason        TEXT,
+    CHECK ((state = 'tombstoned') = (tombstoned_at IS NOT NULL))
+);
+CREATE TRIGGER IF NOT EXISTS lake_tenant_key_terminal
+    BEFORE UPDATE ON lake_tenant_key
+    WHEN OLD.state = 'tombstoned'
+    BEGIN SELECT RAISE(ABORT, 'a lake key tombstone is terminal'); END;
+CREATE TRIGGER IF NOT EXISTS lake_tenant_key_no_delete
+    BEFORE DELETE ON lake_tenant_key
+    BEGIN SELECT RAISE(ABORT, 'lake key state is never deleted'); END;
 """
 
 
@@ -247,6 +271,7 @@ def purge_tenant(conn, handle: str) -> str:
     with _tx(conn):
         conn.execute("UPDATE user SET purged_at = ? WHERE database_id = ?", (now_iso(), database_id))
         conn.execute("DELETE FROM tenant_key WHERE database_id = ?", (database_id,))
+        lake_keys.tombstone_in_tx(conn, database_id, "tenant purged")
         for f in paths.tenant_sqlite_siblings(database_id):
             f.unlink(missing_ok=True)
         files = paths.tenant_files_dir(database_id)

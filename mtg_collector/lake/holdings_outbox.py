@@ -9,9 +9,10 @@ keeps the highest `seq` per (source, row_id): emitting twice changes the log,
 never the folded result.
 """
 
-import json
 import re
 import sqlite3
+
+from mtg_collector.lake.resolve import resolve
 
 SOURCES = ("collection", "sealed_collection")
 
@@ -53,15 +54,9 @@ def emit(conn: sqlite3.Connection, source: str | None = None) -> int:
 
 def fold(conn: sqlite3.Connection) -> dict[str, dict[int, dict]]:
     """Reduce the log: per source, row_id -> payload of the latest op, deletes dropped."""
-    out: dict[str, dict[int, dict]] = {s: {} for s in SOURCES}
-    for source, row_id, op, payload in conn.execute(
-        "SELECT source, row_id, op, payload FROM holdings_outbox ORDER BY seq"
-    ):
-        if op == "delete":
-            out[source].pop(row_id, None)
-        else:
-            out[source][row_id] = json.loads(payload)
-    return out
+    rows = conn.execute("SELECT seq, source, row_id, op, payload FROM holdings_outbox")
+    resolved = resolve(rows)
+    return {s: resolved.get(s, {}) for s in SOURCES}
 
 
 def current(conn: sqlite3.Connection) -> dict[str, dict[int, dict]]:
