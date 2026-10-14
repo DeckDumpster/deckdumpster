@@ -316,6 +316,8 @@ class ReplayHarness:
         self._step += 1
         step = ReplayStep(number=self._step, action=action, detail=detail)
         self._steps.append(step)
+        if self._db_writes is not None:
+            self._db_writes.settled_after(action)
         log.info(
             "[%s] Step %d: %s(%s)", self.scenario_name, self._step, action, detail
         )
