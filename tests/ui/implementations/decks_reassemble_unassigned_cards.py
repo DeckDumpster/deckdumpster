@@ -27,9 +27,6 @@ def steps(harness):
     # Click the "Reassemble 1 Unassigned Card" button.
     harness.click_by_text("Reassemble 1 Unassigned Card")
     # Wait for completeness to refresh — Cathar Commando should now be Present.
-    # "Present" is already on the page from the earlier render, so waiting on it
-    # returns before the refresh; the button leaving the DOM is the refresh.
-    harness.wait_for_hidden("#btn-reassemble-all", timeout=5_000)
     harness.wait_for_text("Present", timeout=5_000)
     harness.assert_text_present("Cathar Commando")
     harness.assert_text_absent("Unassigned")
