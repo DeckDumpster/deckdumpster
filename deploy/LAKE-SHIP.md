@@ -49,3 +49,18 @@ mtg lake check                             # outbox = shipped = read_back, fold 
 
 Only after that pass is green is the timer armed. Do not arm earlier: a timer that
 exits 3 or 2 every night and is not read is a channel gone silent.
+
+## Erasing a tenant (`mtg-erase`)
+
+Offline-first, from the job image (never the app), with the lake master key and
+`MTGC_LAKE_TENANT_URI` set under the `mtgc-tenant` role:
+
+    mtg-erase <handle> --confirm <handle>
+
+Order: tombstone the lake key (the shipper is refused from here on), delete every
+object under `tenant/database_id=<ULID>/`, **prove** the prefix lists empty and the
+key is tombstoned, clear that tenant's `zone.sqlite` rows, then detach and purge.
+Exits: 0 erased and proven; 1 error before anything irreversible; 2 zone proven
+empty but detach/purge unfinished (rerun); 3 objects remain, nothing detached or
+purged. Every step is idempotent, so a rerun resumes. Noncurrent object versions
+expire by the lifecycle rule in LAKE-SOP.md within a day.
