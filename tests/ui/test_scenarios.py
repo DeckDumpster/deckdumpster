@@ -144,6 +144,11 @@ def test_scenario(intent_name, intent_path, impl_path, base_url, page, screensho
                 f"Replay failed at step {e.step.number} "
                 f"({e.step.action}: {e.step.detail}): {e.step.error}"
             ) from e
+        except BaseException:
+            # A Playwright timeout or a bare assert never went through _fail,
+            # and steps no longer snapshot as they pass: take the evidence now.
+            harness.capture_failure()
+            raise
         return
 
     # ── Harness mode (fallback when no implementation exists) ──────

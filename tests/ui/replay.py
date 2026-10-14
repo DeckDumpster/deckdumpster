@@ -121,7 +121,6 @@ class ReplayHarness:
             timeout=self._budget(ROUND_TRIP_BUDGET_MS),
         )
         self._settle()
-        self._snap()
 
     # ── Interaction ────────────────────────────────────────────────────
 
@@ -131,13 +130,11 @@ class ReplayHarness:
             timeout=self._budget(ROUND_TRIP_BUDGET_MS)
         )
         self._settle()
-        self._snap()
 
     def click_by_selector(self, selector: str):
         self._record("click_by_selector", selector)
         self.page.click(selector, timeout=self._budget(ROUND_TRIP_BUDGET_MS))
         self._settle()
-        self._snap()
 
     def click_by_test_id(self, test_id: str):
         self._record("click_by_test_id", test_id)
@@ -145,7 +142,6 @@ class ReplayHarness:
             timeout=self._budget(ROUND_TRIP_BUDGET_MS)
         )
         self._settle()
-        self._snap()
 
     def fill_by_placeholder(self, placeholder: str, value: str):
         self._record("fill_by_placeholder", f"{placeholder}={value}")
@@ -153,13 +149,11 @@ class ReplayHarness:
             value, timeout=self._budget(ROUND_TRIP_BUDGET_MS)
         )
         self._settle()
-        self._snap()
 
     def fill_by_selector(self, selector: str, value: str):
         self._record("fill_by_selector", f"{selector}={value}")
         self.page.fill(selector, value, timeout=self._budget(ROUND_TRIP_BUDGET_MS))
         self._settle()
-        self._snap()
 
     def press_key(self, key: str, *, selector: str | None = None):
         """Press a keyboard key, optionally targeting a specific element."""
@@ -172,7 +166,6 @@ class ReplayHarness:
         else:
             self.page.keyboard.press(key)
         self._settle()
-        self._snap()
 
     def set_input_files(self, selector: str, file_path: str):
         self._record("set_input_files", f"{selector} <- {file_path}")
@@ -180,7 +173,6 @@ class ReplayHarness:
             selector, file_path, timeout=self._budget(ROUND_TRIP_BUDGET_MS)
         )
         self._settle()
-        self._snap()
 
     def select_by_label(self, selector: str, label: str):
         self._record("select_by_label", f"{selector}={label}")
@@ -188,14 +180,12 @@ class ReplayHarness:
             selector, label=label, timeout=self._budget(ROUND_TRIP_BUDGET_MS)
         )
         self._settle()
-        self._snap()
 
     def scroll(self, direction: str):
         self._record("scroll", direction)
         delta = -500 if direction == "up" else 500
         self.page.mouse.wheel(0, delta)
         self._settle()
-        self._snap()
 
     # ── Waiting ────────────────────────────────────────────────────────
 
@@ -204,7 +194,6 @@ class ReplayHarness:
         self.page.wait_for_selector(
             selector, state="visible", timeout=self._budget(timeout)
         )
-        self._snap()
 
     def wait_for_attached(self, selector: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         """Wait for a DOM element to exist, regardless of visibility.
@@ -216,21 +205,18 @@ class ReplayHarness:
         self.page.wait_for_selector(
             selector, state="attached", timeout=self._budget(timeout)
         )
-        self._snap()
 
     def wait_for_hidden(self, selector: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         self._record("wait_for_hidden", selector)
         self.page.wait_for_selector(
             selector, state="hidden", timeout=self._budget(timeout)
         )
-        self._snap()
 
     def wait_for_text(self, text: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         self._record("wait_for_text", text)
         self.page.get_by_text(text).first.wait_for(
             state="visible", timeout=self._budget(timeout)
         )
-        self._snap()
 
     # ── Assertions ─────────────────────────────────────────────────────
 
@@ -241,7 +227,6 @@ class ReplayHarness:
         )
         if not visible:
             self._fail(f"Expected visible: {selector}")
-        self._snap()
 
     def assert_hidden(self, selector: str):
         self._record("assert_hidden", selector)
@@ -250,7 +235,6 @@ class ReplayHarness:
         )
         if not hidden:
             self._fail(f"Expected hidden: {selector}")
-        self._snap()
 
     def assert_text_present(self, text: str, timeout: int = ROUND_TRIP_BUDGET_MS):
         """Assert text is in the DOM, waiting for async renders to land.
@@ -271,7 +255,6 @@ class ReplayHarness:
             )
         except Exception:
             self._fail(f"Expected text present: {text}")
-        self._snap()
 
     def assert_text_absent(self, text: str):
         """Assert text is not in the DOM, after letting the page settle.
@@ -286,23 +269,19 @@ class ReplayHarness:
         count = self.page.get_by_text(text).count()
         if count > 0:
             self._fail(f"Expected text absent but found {count} matches: {text}")
-        self._snap()
 
     def assert_element_count(self, selector: str, count: int):
         self._record("assert_element_count", f"{selector} == {count}")
         actual = self.page.locator(selector).count()
         if actual != count:
             self._fail(f"Expected {count} elements for {selector}, found {actual}")
-        self._snap()
 
     # ── Evidence capture ───────────────────────────────────────────────
 
     def screenshot(self, label: str):
-        """Take an explicitly-labeled screenshot (in addition to automatic ones)."""
-        name = f"{self.scenario_name}_{self._step:02d}_{label}.png"
-        path = self.screenshot_dir / name
-        self.page.screenshot(path=str(path))
-        log.info("[%s] Screenshot: %s", self.scenario_name, name)
+        """Mark a labeled point in the run. Nothing is captured: a passing run
+        keeps no screenshots, and a failing one gets its evidence from `_fail`."""
+        log.info("[%s] Checkpoint: %s", self.scenario_name, label)
 
     def snapshot_dom(self, label: str):
         """Capture the current interactive element list."""
@@ -338,7 +317,11 @@ class ReplayHarness:
         )
 
     def _snap(self):
-        """Auto-snapshot after every action.
+        """Capture a screenshot and the interactive elements, on failure only.
+
+        Called from `_fail`. Taking these after every action was ~2,750
+        screenshots and DOM evaluates per run, never read when the test passed.
+
 
         The DOM evaluate races with navigation: if the preceding action
         triggered a page load that's still in flight, page.evaluate raises
@@ -377,6 +360,15 @@ class ReplayHarness:
             )
         except Exception:
             pass
+
+    def capture_failure(self):
+        """Evidence for a failure that did not come through `_fail`."""
+        if not self._steps:
+            return
+        try:
+            self._snap()
+        except Exception as e:
+            log.warning("[%s] failure screenshot not taken: %s", self.scenario_name, e)
 
     def _fail(self, message: str):
         """Mark the current step as failed and raise."""
