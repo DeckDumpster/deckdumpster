@@ -151,10 +151,110 @@ class Run:
         self.land_file(source=source, dataset=dataset, url=url, path=dest)
 
 
-_run: Run | None = None
+class ReplayMiss(Exception):
+    """The derive asked for a URL the chosen raw partition never landed."""
 
 
-def current_run() -> Run:
+class ReplayResponse:
+    """The slice of ``requests.Response`` the bulk client reads, served from a landed object."""
+
+    status_code = 200
+
+    def __init__(self, url: str, path: Path):
+        self.url = url
+        self._path = path
+        self.headers = {"Content-Length": str(path.stat().st_size)}
+
+    @property
+    def content(self) -> bytes:
+        return self._path.read_bytes()
+
+    def json(self):
+        return json.loads(self.content)
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int = 1024 * 1024):
+        with open(self._path, "rb") as f:
+            yield from iter(lambda: f.read(chunk_size), b"")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class ReplaySession:
+    """Stands in for ``requests.Session`` so the unchanged import code reads the lake."""
+
+    def __init__(self, replay: "Replay"):
+        self._replay = replay
+        self.headers: dict = {}
+
+    def request(self, method: str, url: str, params=None, **kwargs) -> ReplayResponse:
+        import requests
+
+        full = requests.Request(method, url, params=params).prepare().url
+        return ReplayResponse(full, self._replay.path_for(full))
+
+    def get(self, url: str, **kwargs) -> ReplayResponse:
+        return self.request("GET", url, **kwargs)
+
+
+class Replay:
+    """One landed run read back instead of the network (lakehouse 4).
+
+    Selection is by run, never by URL: the newest run id under the root, or the one
+    named, so a derive reads one coherent night. A URL that run did not land is a
+    ``ReplayMiss`` -- there is no fall-through to the network and no older run.
+    Landing is a no-op here: a derive writes no raw byte.
+    """
+
+    def __init__(self, root: Path | None = None, run_id: str | None = None):
+        self.root = Path(root) if root else landing_root()
+        manifests = sorted(self.root.glob("source=*/dataset=*/ingest_date=*/run=*/_manifest.json"))
+        docs = [json.loads(m.read_text()) for m in manifests]
+        runs = {d["run_id"] for d in docs}
+        if not runs:
+            raise ReplayMiss(f"no landed run under {self.root}")
+        if run_id is not None and run_id not in runs:
+            raise ReplayMiss(f"run {run_id} is not under {self.root}")
+        self.run_id = run_id or max(runs)
+        self._index: dict[str, dict] = {}
+        for doc in docs:
+            if doc["run_id"] != self.run_id:
+                continue
+            for e in doc["entries"]:
+                self._index[e["url"]] = e
+
+    def path_for(self, url: str) -> Path:
+        entry = self._index.get(url)
+        if entry is None:
+            raise ReplayMiss(f"run {self.run_id} landed no {url}")
+        return self.root / entry["object"]
+
+    def fetch(self, url: str, **_) -> bytes:
+        return self.path_for(url).read_bytes()
+
+    def download(self, url: str, dest: Path, **_) -> None:
+        shutil.copyfile(self.path_for(url), dest)
+
+    def land_bytes(self, **_) -> dict:
+        return {}
+
+    def land_file(self, **_) -> dict:
+        return {}
+
+    def session(self) -> ReplaySession:
+        return ReplaySession(self)
+
+
+_run: "Run | Replay | None" = None
+
+
+def current_run() -> "Run | Replay":
     """The process's run: one ULID for everything a refresh fetches."""
     global _run
     if _run is None:
@@ -165,3 +265,9 @@ def current_run() -> Run:
 def reset_run() -> None:
     global _run
     _run = None
+
+
+def use_replay(replay: Replay) -> None:
+    """Route every fetch of this process through ``replay``."""
+    global _run
+    _run = replay

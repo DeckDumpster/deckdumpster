@@ -187,6 +187,20 @@ def register(subparsers):
         help="Refresh the whole card/set catalogue: Scryfall cache + MTGJSON, as one step",
     )
 
+    derive_parser = data_sub.add_parser(
+        "derive",
+        help=(
+            "Rebuild the catalogue offline from a landed raw run -- the refresh "
+            "with every fetch served from the landing zone, never the network"
+        ),
+    )
+    derive_parser.add_argument(
+        "--run", default=None, help="Raw run id to derive from (default: the newest landed run)"
+    )
+    derive_parser.add_argument(
+        "--raw-root", default=None, help="Landing root (default: MTGC_LAKE_RAW_DIR or $MTGC_HOME/lake/raw)"
+    )
+
     parser.set_defaults(func=run)
 
 
@@ -245,8 +259,12 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         refresh_catalog(db_path)
+    elif args.data_command == "derive":
+        from mtg_collector.db.connection import get_db_path
+        db_path = get_db_path(getattr(args, "db_path", None))
+        derive_catalog(db_path, raw_root=args.raw_root, run_id=args.run)
     else:
-        print("Usage: mtg data {fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-sets|check-catalog|refresh-catalog|export-price-history} [options]")
+        print("Usage: mtg data {derive|fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|backfill-sets|check-catalog|refresh-catalog|export-price-history} [options]")
         sys.exit(1)
 
 
@@ -813,6 +831,23 @@ def refresh_catalog(db_path: str):
     conn = get_connection(db_path)
     renamed = rebuild_collection_card_names(conn)
     print(f"Resynced card_name on {renamed} collection row(s)")
+
+
+def derive_catalog(db_path: str, *, raw_root: str | None = None, run_id: str | None = None):
+    """Rebuild the catalogue from one landed raw run, offline (lakehouse 4).
+
+    This is `refresh_catalog` with the fetch layer swapped for a replay of the
+    landing zone, so the derive and the inline build are the same code reading
+    the same bytes -- row identity is by construction, and tests/test_derive.py
+    holds it. Nothing is fetched: a URL the run did not land is a ReplayMiss, and
+    it propagates. Nothing is landed either.
+    """
+    from mtg_collector.landing import Replay, use_replay
+
+    replay = Replay(Path(raw_root) if raw_root else None, run_id)
+    print(f"Deriving the catalogue from raw run {replay.run_id} ({replay.root})")
+    use_replay(replay)
+    refresh_catalog(db_path)
 
 
 def _fetch_mtgjson_version() -> str | None:
