@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 import requests
 
 from mtg_collector.db.models import Card, Printing, Set
+from mtg_collector.landing import current_run
 from mtg_collector.db.set_backfill import clean_size
 
 
@@ -53,6 +54,11 @@ class ScryfallBulkClient:
         for attempt in range(max_retries + 1):
             self._rate_limit()
             response = self.session.request(method, url, **kwargs)
+            if response.status_code == 200 and not kwargs.get("stream"):
+                current_run().land_bytes(
+                    source="scryfall", dataset="api", url=response.url,
+                    data=response.content,
+                )
             if response.status_code == 429:
                 wait = 0.5 * (2 ** attempt)
                 print(f"    Scryfall rate limited, retrying in {wait:.1f}s...")
