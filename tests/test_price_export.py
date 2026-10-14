@@ -41,9 +41,9 @@ def test_export_verifies_and_is_idempotent(conn, tmp_path):
 def test_uuid_is_smallest_mapped_or_null(conn, tmp_path):
     import pyarrow.parquet as pq
     export_history(conn, str(tmp_path))
-    rows = pq.read_table(tmp_path / "prices" / "observed_date=2026-01-01" / "part.parquet").to_pylist()
+    rows = pq.ParquetFile(tmp_path / "prices" / "observed_date=2026-01-01" / "part.parquet").read().to_pylist()
     assert {r["uuid"] for r in rows} == {"u-a"}
-    rows = pq.read_table(tmp_path / "prices" / "observed_date=2026-01-02" / "part.parquet").to_pylist()
+    rows = pq.ParquetFile(tmp_path / "prices" / "observed_date=2026-01-02" / "part.parquet").read().to_pylist()
     assert {r["set_code"]: r["uuid"] for r in rows} == {"lci": "u-c", "zzz": None}
     assert {r["price_cents"] for r in rows} == {300, 7}
 

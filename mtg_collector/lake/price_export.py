@@ -124,6 +124,7 @@ def _read(fs, path: str, ds: _Dataset) -> list[tuple]:
 def _write(fs, path: str, ds: _Dataset, rows: list[tuple]):
     cols = list(zip(*rows)) if rows else [()] * len(ds.schema)
     table = pa.table(dict(zip(ds.schema.names, cols)), schema=ds.schema)
+    fs.create_dir(path.rsplit("/", 1)[0], recursive=True)
     with fs.open_output_stream(path) as out:
         pq.write_table(table, out, compression="zstd")
 
