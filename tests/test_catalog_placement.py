@@ -114,7 +114,7 @@ def test_tenant_bytes_positive_control(pair):
 _CATALOG_WRITERS = {
     "_fetch_prices", "fetch_sealed_prices", "import_prices", "import_mtgjson",
     "import_sealed_products", "fetch_edhrec", "import_edhrec", "backfill_sets",
-    "refresh_catalog", "fetch_allprintings", "rebuild_fts", "rebuild_card_names",
+    "refresh_catalog", "build_catalog", "land_catalog", "derive_catalog", "fetch_allprintings", "rebuild_fts", "rebuild_card_names",
     "get_shared_write_path", "rebuild_collection_card_names", "cache_all", "cache_set",
 }
 _SERVER = Path(__file__).parent.parent / "mtg_collector/cli/crack_pack_server.py"
