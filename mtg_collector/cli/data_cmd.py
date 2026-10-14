@@ -146,7 +146,7 @@ def register(subparsers):
 
     fetch_edhrec_parser = data_sub.add_parser(
         "fetch-edhrec",
-        help="Download EDHREC recommendation data for owned commanders",
+        help="Download EDHREC recommendation data for every legal commander",
     )
     fetch_edhrec_parser.add_argument(
         "--force",
@@ -1465,28 +1465,34 @@ def get_edhrec_dir() -> Path:
     return get_mtgc_home() / "edhrec"
 
 
+def edhrec_fetch_set(conn: sqlite3.Connection) -> list:
+    """Every legal commander in the catalog, ordered by name.
+
+    Computed from ``cards`` alone. It must never read a tenant table
+    (collection, decks, ...): the fetched URLs land in the shared catalog
+    zone, and a fetch set chosen from holdings would reveal them (K3).
+    """
+    return conn.execute(
+        """SELECT oracle_id, name FROM cards
+           WHERE ((type_line LIKE '%Legendary%' AND type_line LIKE '%Creature%')
+              OR oracle_text LIKE '%can be your commander%')
+           AND json_extract(legalities, '$.commander') = 'legal'
+           ORDER BY name"""
+    ).fetchall()
+
+
 def fetch_edhrec(db_path: str, force: bool = False):
-    """Download EDHREC recommendation data for owned commanders."""
+    """Download EDHREC recommendation data for every legal commander."""
     t0 = time.time()
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
-    # Find legendary creatures the user owns
-    rows = conn.execute(
-        """SELECT DISTINCT c.oracle_id, c.name
-           FROM cards c
-           JOIN printings p ON p.oracle_id = c.oracle_id
-           JOIN collection col ON col.printing_id = p.printing_id
-           WHERE ((c.type_line LIKE '%Legendary%' AND c.type_line LIKE '%Creature%')
-              OR c.oracle_text LIKE '%can be your commander%')
-           AND col.status = 'owned'
-           ORDER BY c.name"""
-    ).fetchall()
+    rows = edhrec_fetch_set(conn)
     conn.close()
 
     if not rows:
-        print("No legendary creatures found in collection.")
+        print("No legal commanders found in the catalog.")
         return
 
     dest_dir = get_edhrec_dir()
