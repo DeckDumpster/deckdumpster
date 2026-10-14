@@ -34,6 +34,12 @@ def register(subparsers):
     s = sub.add_parser("check", help="Three-number check: outbox = shipped = read back. Exit 1 if not")
     s.add_argument("--tenant", default=None)
     s.set_defaults(func=run_check)
+    s = sub.add_parser(
+        "value", help="Value every tenant from the zone and Iceberg prices; --compare checks the online series, else writes")
+    s.add_argument("--tenant", default=None)
+    s.add_argument("--compare", action="store_true",
+                   help="Compare with the online series; write nothing. Exit 1 on any disagreement")
+    s.set_defaults(func=run_value)
     p.set_defaults(func=lambda a: p.print_help())
 
 
@@ -128,3 +134,55 @@ def run_check(args):
                   f"pending={c.pending} fold={'equal' if c.folded_equal else 'DIFFERS'} "
                   f"gaps={len(c.open_gaps)} {'OK' if c.ok else 'FAIL'}")
     return shipper.EXIT_ERROR if bad else 0
+
+
+@_guarded
+def run_value(args):
+    """Offline valuation (lakehouse 12).  One tenant's failure never stops the others."""
+    from mtg_collector.db.connection import get_shared_db_path, open_connection
+    from mtg_collector.db.growth import UNFILTERED_WHERE, series_rows
+    from mtg_collector.lake import iceberg_prices, valuation
+
+    shared = get_shared_db_path()
+    if not shared:
+        raise shipper.ZoneError("no catalogue: MTGC_SHARED_DB is unset or missing")
+    catalog = iceberg_prices.open_catalog(os.environ["MTGC_LAKE_CATALOG"], os.environ["MTGC_LAKE_WAREHOUSE"])
+    work = valuation.open_work(shared)
+    n = valuation.load_prices(work, catalog.load_table(iceberg_prices.PRICES))
+    print(f"  loaded {n} price row(s)")
+    state = shipper.open_state()
+    failed, differ = [], []
+    with closing_registry() as reg:
+        ids = _ids(reg, args)
+    for i in ids:
+        try:
+            tenant = open_connection(str(paths.tenant_db_file(i)), shared)
+            try:
+                if args.compare:
+                    left = valuation.pending(tenant, state, i)
+                    if left:
+                        differ.append(i)
+                        print(f"  [{i}] NOT COMPARABLE: {left} outbox row(s) not yet shipped")
+                        continue
+                    offline = valuation.series(work, valuation.holdings(state, i))
+                    online = series_rows(tenant, where_sql=UNFILTERED_WHERE, params=[])
+                    c = valuation.compare_rows(i, offline, online)
+                    if c.agree:
+                        print(f"  [{i}] AGREE over {c.days_offline} day(s)")
+                    else:
+                        differ.append(i)
+                        print(f"  [{i}] DIFFER on {len(c.differing)} point(s); first: {c.differing[0]}")
+                else:
+                    days = valuation.store(tenant, valuation.series(work, valuation.holdings(state, i)))
+                    print(f"  [{i}] collection value history: {days} day(s) written")
+            finally:
+                tenant.close()
+        except Exception as e:
+            failed.append(i)
+            print(f"  [{i}] FAILED: {type(e).__name__}: {e}")
+    if differ:
+        return shipper.EXIT_ERROR
+    if failed:
+        print(f"PARTIAL: {len(ids) - len(failed)}/{len(ids)} tenants; failed: {', '.join(failed)}")
+        return shipper.EXIT_PARTIAL
+    return 0

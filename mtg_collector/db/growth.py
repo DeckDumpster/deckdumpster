@@ -295,33 +295,47 @@ def series_rows(
             _POP_SQL.format(extra_joins_sql=extra_joins_sql, where_sql=where_sql),
             params,
         )
-
-        today = _today()
-        earliest, end_d = conn.execute(
-            "SELECT MIN(acq_date),"
-            " CASE WHEN MIN(acq_date) > ? THEN MIN(acq_date) ELSE ? END"
-            " FROM pop_t",
-            (today, today),
-        ).fetchone()
-        if earliest is None:
-            return None, []
-
-        start_d = window_start(earliest, end_d, range_days)
-        end_dn = (
-            _dt.date.fromisoformat(end_d) - _dt.date.fromisoformat(start_d)
-        ).days
-
-        conn.execute(
-            "CREATE TEMP TABLE keys_t AS"
-            " SELECT DISTINCT set_code, cn, price_type FROM pop_t"
-        )
-        conn.execute(_CARRY_SQL, (start_d,))
-        conn.execute(_GRP_SQL, (start_d, end_dn))
-        conn.execute(_PRICE_SQL, (start_d, start_d))
-        conn.execute(_SEG_SQL)
-        rows = conn.execute(_SERIES_SQL, (end_dn, start_d)).fetchall()
+        earliest, rows = series_from_pop(conn, range_days=range_days)
     finally:
         _drop_temp_tables(conn)
+    return earliest, rows
+
+
+def series_from_pop(
+    conn: sqlite3.Connection, *, range_days: int = 0
+) -> tuple[str | None, list[tuple]]:
+    """The stages after the population: `pop_t` and `prices` already exist.
+
+    The one definition of the series arithmetic.  The offline valuation
+    (`lake/valuation.py`) builds `pop_t` from the tenant zone and `prices` from
+    the Iceberg table and calls this, so the two routes cannot drift apart on
+    forward-fill, windowing or rounding.  Leaves its staging tables behind; the
+    caller drops them.
+    """
+    today = _today()
+    earliest, end_d = conn.execute(
+        "SELECT MIN(acq_date),"
+        " CASE WHEN MIN(acq_date) > ? THEN MIN(acq_date) ELSE ? END"
+        " FROM pop_t",
+        (today, today),
+    ).fetchone()
+    if earliest is None:
+        return None, []
+
+    start_d = window_start(earliest, end_d, range_days)
+    end_dn = (
+        _dt.date.fromisoformat(end_d) - _dt.date.fromisoformat(start_d)
+    ).days
+
+    conn.execute(
+        "CREATE TEMP TABLE keys_t AS"
+        " SELECT DISTINCT set_code, cn, price_type FROM pop_t"
+    )
+    conn.execute(_CARRY_SQL, (start_d,))
+    conn.execute(_GRP_SQL, (start_d, end_dn))
+    conn.execute(_PRICE_SQL, (start_d, start_d))
+    conn.execute(_SEG_SQL)
+    rows = conn.execute(_SERIES_SQL, (end_dn, start_d)).fetchall()
 
     return earliest, [
         (r["d"], r["n"], r["tcg_cents"], r["ck_cents"]) for r in rows
