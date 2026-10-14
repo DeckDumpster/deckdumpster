@@ -3229,7 +3229,16 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
 def _migrate_v53_to_v54(conn: sqlite3.Connection):
     """Add the holdings outbox and its triggers.  Existing rows are not in it:
     `mtg_collector.lake.holdings_outbox.emit` backfills them."""
-    conn.executescript(HOLDINGS_OUTBOX_SQL)
+    # A database migrating from an old version may not have sealed_collection
+    # yet (it is created by SCHEMA_SQL, not by the chain); a trigger on a missing
+    # table is an error, so each trigger is created only where its table is.
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    head, *triggers = HOLDINGS_OUTBOX_SQL.split("CREATE TRIGGER IF NOT EXISTS ")
+    conn.executescript(head)
+    for t in triggers:
+        table = t.split(" ON ", 1)[1].split()[0]
+        if table in tables:
+            conn.executescript("CREATE TRIGGER IF NOT EXISTS " + t)
 
 
 def _migrate_v52_to_v53(conn: sqlite3.Connection):
