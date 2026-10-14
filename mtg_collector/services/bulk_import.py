@@ -8,7 +8,7 @@ import requests
 
 from mtg_collector.db.models import Card, Printing, Set
 from mtg_collector.db.set_backfill import clean_size
-from mtg_collector.landing import current_run
+from mtg_collector.landing import Replay, current_run
 
 
 def resolve_reversible_oracle_id(card_data: Dict) -> bool:
@@ -38,7 +38,8 @@ class ScryfallBulkClient:
     BASE_URL = "https://api.scryfall.com"
 
     def __init__(self):
-        self.session = requests.Session()
+        run = current_run()
+        self.session = run.session() if isinstance(run, Replay) else requests.Session()
         self.session.headers.update({"User-Agent": "MTGCollectionTool/2.0"})
         self.last_request = 0
 
