@@ -56,6 +56,7 @@ def register(subparsers):
     s.add_argument("handle")
     s.add_argument("source", help="Path to the legacy collection.sqlite")
     s.add_argument("--legacy-shared", help="The legacy split deployment's shared.sqlite, if it had one")
+    s.add_argument("--check-space", action="store_true", help="Only check free space (run before stopping production)")
     s.set_defaults(func=run_legacy_migrate)
 
     s = sub.add_parser("legacy-rollback", help="Detach a migrated tenant so the legacy database serves again")
@@ -192,6 +193,10 @@ def _migrate(conn, args):
 def _legacy_migrate(conn, args):
     from mtg_collector.tenancy import upgrade
 
+    if args.check_space:
+        upgrade.refuse_if_no_space(args.source, args.legacy_shared)
+        print(f"enough free space for {args.source} ({upgrade.required_bytes(args.source, args.legacy_shared) / upgrade.GIB:.1f} G needed)")
+        return
     database_id, outcome = upgrade.migrate_legacy(
         conn, args.handle, args.source, legacy_shared=args.legacy_shared,
         report=lambda line: print(f"  {line}", flush=True),

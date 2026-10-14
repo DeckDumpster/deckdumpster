@@ -5,6 +5,7 @@ every step, and the legacy file is asserted byte-identical throughout.
 """
 
 import hashlib
+import shutil
 import sqlite3
 import sys
 
@@ -128,6 +129,15 @@ def test_pruned_source_without_a_catalogue_is_refused(home, reg):
     with pytest.raises(RegistryError, match="no catalogue"):
         upgrade.migrate_legacy(reg, "ryan", legacy)
     assert not [r for r in registry.list_tenants(reg)]
+
+
+def test_too_little_free_space_is_refused_before_anything_is_written(legacy, reg, monkeypatch):
+    real = shutil.disk_usage
+    monkeypatch.setattr(upgrade.shutil, "disk_usage", lambda p: real(p)._replace(free=1024))
+    with pytest.raises(RegistryError, match=r"needs \d+\.\d G, has 0\.0 G free on"):
+        upgrade.migrate_legacy(reg, "ryan", legacy)
+    assert not [r for r in registry.list_tenants(reg)]
+    assert not paths.shared_file().exists()
 
 
 def test_busy_source_is_refused_and_nothing_is_created(legacy, reg):

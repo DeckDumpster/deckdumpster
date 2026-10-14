@@ -14,6 +14,7 @@ this module neither copies, renames nor deletes anything under it.
 
 import hashlib
 import os
+import shutil
 import sqlite3
 import time
 from contextlib import closing
@@ -61,6 +62,48 @@ def collection_digest(db: str, shared: Optional[str] = None) -> str:
         for row in conn.execute("SELECT * FROM collection_view ORDER BY id"):
             h.update(repr(tuple(row)).encode())
         return h.hexdigest()
+
+
+GIB = 1024 ** 3
+# VACUUM and the prune's journal run on the tenant copy after it is made; the
+# non-catalogue share is unknown without reading the file, so reserve a quarter.
+PRUNE_HEADROOM = 0.25
+
+
+def _size(path: str) -> int:
+    return sum(os.path.getsize(path + s) for s in ("", "-wal") if os.path.exists(path + s))
+
+
+def required_bytes(source: str, legacy_shared: Optional[str] = None) -> int:
+    """What the migration will write, measured from the files it will read (sp-9a5dth).
+
+    The catalogue copy (skipped when a non-empty shared.sqlite is kept), the
+    tenant copy, and the prune's VACUUM/journal headroom on top of the copy.
+    """
+    src = _size(source)
+    shared = paths.shared_file()
+    have_shared = os.path.exists(shared) and os.path.getsize(shared) > 0
+    catalogue = 0 if have_shared else (_size(legacy_shared) if legacy_shared else src)
+    return catalogue + src + int(src * PRUNE_HEADROOM)
+
+
+def _existing_ancestor(path: str) -> str:
+    path = os.path.abspath(path)
+    while not os.path.exists(path):
+        path = os.path.dirname(path)
+    return path
+
+
+def refuse_if_no_space(source: str, legacy_shared: Optional[str] = None) -> None:
+    """Refuse before anything is written when the target filesystem cannot hold the migration."""
+    need = required_bytes(source, legacy_shared)
+    where = _existing_ancestor(str(paths.home()))
+    free = shutil.disk_usage(where).free
+    if need > free:
+        raise RegistryError(
+            f"legacy-migrate needs {need / GIB:.1f} G, has {free / GIB:.1f} G free on "
+            f"{where}; free space and retry (nothing was changed)"
+        )
 
 
 def _nothing(_line: str) -> None:
@@ -169,6 +212,7 @@ def migrate_legacy(conn, handle: str, source: str, *, legacy_shared: Optional[st
     except RegistryError:
         pass
     refuse_if_busy(source)
+    refuse_if_no_space(source, legacy_shared)
     clock = _Clock(report)
     shared = ensure_shared(source, legacy_shared, report)
     clock.lap("catalogue copy")
