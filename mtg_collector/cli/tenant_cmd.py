@@ -169,7 +169,8 @@ def _legacy_migrate(conn, args):
     from mtg_collector.tenancy import upgrade
 
     database_id, outcome = upgrade.migrate_legacy(
-        conn, args.handle, args.source, legacy_shared=args.legacy_shared
+        conn, args.handle, args.source, legacy_shared=args.legacy_shared,
+        report=lambda line: print(f"  {line}", flush=True),
     )
     print(f"{outcome}: {args.handle} -> {database_id}; {args.source} was not modified")
 
