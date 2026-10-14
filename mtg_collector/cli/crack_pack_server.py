@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -8373,7 +8374,7 @@ def run(args):
 
     # The web process never writes the catalogue (N8): an empty MTGJSON table is
     # filled by `mtg data refresh-catalog` (daily timer), not here.
-    _conn = open_catalog_connection(db_path)
+    _conn = open_catalog_connection(db_path) if multitenant_enabled() else sqlite3.connect(db_path)
     _has_data = _conn.execute("SELECT COUNT(*) FROM mtgjson_booster_configs").fetchone()[0]
     _conn.close()
     if not _has_data:
