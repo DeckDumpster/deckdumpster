@@ -113,8 +113,8 @@ def partition(tmp_path, monkeypatch):
     monkeypatch.setattr(requests.Session, "request", lambda self, m, url, params=None, **kw: _Resp(
         requests.Request(m, url, params=params).prepare().url))
     monkeypatch.setattr(requests.Session, "get", lambda self, url, **kw: _Resp(url))
-    import urllib.request
     import shutil
+    import urllib.request
     monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Urlopen(req, timeout))
     real_copy = shutil.copyfileobj
     monkeypatch.setattr(shutil, "copyfileobj", lambda src, dst, *a: dst.write(src.read()) if isinstance(src, _Urlopen) else real_copy(src, dst, *a))
