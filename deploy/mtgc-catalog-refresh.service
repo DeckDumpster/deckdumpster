@@ -16,7 +16,8 @@ OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
 Type=oneshot
 # ONE ExecStart, not three. Scryfall cache and MTGJSON fetch+import were separate
 # manual steps, and a refresh that is two commands is a refresh where one of them
-# stops being run. `mtg data refresh-catalog` runs both in one process, so the
+# stops being run. `mtg data refresh-catalog` lands the bytes and derives from them
+# in one process (lakehouse 5), so the
 # unit's exit status is the whole catalogue's verdict rather than half of it.
 #
 # A job container of its own (lakehouse 3), not `podman exec` into the server: a
