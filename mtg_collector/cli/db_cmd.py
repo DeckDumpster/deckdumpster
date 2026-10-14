@@ -125,6 +125,7 @@ def run_split(args):
     from pathlib import Path
 
     from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS
+    from mtg_collector.db.table_copy import copy_table, describe
 
     source_path = args.db_path
     shared_path = args.shared_out
@@ -174,11 +175,12 @@ def run_split(args):
         ).fetchone()
         if not exists:
             continue
-        conn.execute(f"DELETE FROM shared.[{table}]")
-        conn.execute(f"INSERT INTO shared.[{table}] SELECT * FROM main.[{table}]")
-        count = conn.execute(f"SELECT COUNT(*) FROM shared.[{table}]").fetchone()[0]
+        # By column name, not position: an ALTER-grown table orders its columns
+        # differently from a fresh init_db (sp-63y52k).
+        copied = copy_table(conn, "main", "shared", table)
+        count = copied.copied_rows
         if count:
-            print(f"  {table}: {count} rows")
+            print(f"  {describe(copied)}")
         total_rows += count
 
     conn.commit()
@@ -192,10 +194,9 @@ def run_split(args):
         if exists:
             source_count = conn.execute(f"SELECT COUNT(*) FROM main.[{view}]").fetchone()[0]
             if source_count:
-                conn.execute(f"DELETE FROM shared.[{view}]")
-                conn.execute(f"INSERT INTO shared.[{view}] SELECT * FROM main.[{view}]")
-                count = conn.execute(f"SELECT COUNT(*) FROM shared.[{view}]").fetchone()[0]
-                print(f"  {view}: {count} rows")
+                copied = copy_table(conn, "main", "shared", view)
+                count = copied.copied_rows
+                print(f"  {describe(copied)}")
                 total_rows += count
 
     conn.commit()

@@ -100,6 +100,36 @@ def test_split_copies_shared_tables(monolithic_db):
     os.unlink(shared_path)
 
 
+def test_split_pairs_columns_by_name_on_an_alter_grown_table(monolithic_db):
+    """Prod's `sets` has cards_fetched_at before digital (ALTER appended digital);
+    a positional copy swapped them and failed NOT NULL on digital (sp-63y52k)."""
+    from mtg_collector.cli.db_cmd import run_split
+
+    c = sqlite3.connect(monolithic_db)
+    c.execute("PRAGMA legacy_alter_table = ON")
+    c.execute("ALTER TABLE sets RENAME TO sets_fresh")
+    c.execute("CREATE TABLE sets (set_code TEXT PRIMARY KEY, set_name TEXT NOT NULL, set_type TEXT, "
+              "released_at TEXT, cards_fetched_at TEXT, digital INTEGER NOT NULL DEFAULT 0, "
+              "base_set_size INTEGER, total_set_size INTEGER)")
+    c.execute("INSERT INTO sets (set_code, set_name, cards_fetched_at, digital) VALUES "
+              "('tst', 'Test Set', NULL, 0), ('dig', 'Digital', '2026-01-01T00:00:00Z', 1)")
+    c.execute("DROP TABLE sets_fresh")
+    c.commit(); c.close()
+    shared_path = monolithic_db.replace(".sqlite", "-shared.sqlite")
+
+    class FakeArgs:
+        db_path = monolithic_db
+        shared_out = shared_path
+        prune = False
+
+    run_split(FakeArgs())
+    shared = sqlite3.connect(shared_path)
+    assert shared.execute("SELECT set_code, digital, cards_fetched_at FROM sets ORDER BY set_code").fetchall() == [
+        ("dig", 1, "2026-01-01T00:00:00Z"), ("tst", 0, None)]
+    shared.close()
+    os.unlink(shared_path)
+
+
 def test_split_with_prune(monolithic_db):
     """db split --prune removes shared data from source."""
     from mtg_collector.cli.db_cmd import run_split
