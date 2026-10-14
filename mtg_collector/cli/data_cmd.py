@@ -1545,6 +1545,16 @@ def import_sealed_products(db_path: str, set_code: str = None):
     print(f"  Elapsed: {elapsed:.1f}s")
 
 
+def _edhrec_slug(name: str) -> str:
+    """Convert a card name to an EDHREC URL slug."""
+    import re
+    slug = name.lower()
+    slug = re.sub(r"[',.]", "", slug)
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug
+
+
 def get_edhrec_dir() -> Path:
     """Get the EDHREC data directory."""
     return get_mtgc_home() / "edhrec"
@@ -1589,8 +1599,7 @@ def fetch_edhrec(db_path: str, force: bool = False):
     errors = 0
 
     for row in rows:
-        name = row["name"]
-        slug = _edhrec_slug(name)
+        slug = _edhrec_slug(row["name"])
         dest = dest_dir / f"{slug}.json"
 
         if dest.exists() and not force:
@@ -1604,15 +1613,15 @@ def fetch_edhrec(db_path: str, force: bool = False):
             with open(dest, "wb") as f:
                 f.write(data)
             fetched += 1
-            print(f"  {name} -> {slug}.json")
+            print(f"  {row['name']} -> {slug}.json")
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                print(f"  {name}: not found on EDHREC (404)")
+                print(f"  {row['name']}: not found on EDHREC (404)")
             else:
-                print(f"  {name}: HTTP {e.code}")
+                print(f"  {row['name']}: HTTP {e.code}")
             errors += 1
         except Exception as e:
-            print(f"  {name}: {e}")
+            print(f"  {row['name']}: {e}")
             errors += 1
 
         time.sleep(0.2)  # rate limit
