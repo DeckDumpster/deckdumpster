@@ -833,8 +833,13 @@ def check_catalog(db_path: str) -> int:
     return 1
 
 
-def refresh_catalog(db_path: str):
-    """Refresh the entire card/set catalogue: Scryfall cache, then MTGJSON.
+def build_catalog(db_path: str):
+    """Build the entire card/set catalogue: Scryfall cache, then MTGJSON.
+
+    Only `derive_catalog` calls this, and it refuses any other caller: the build
+    reads a replay of the landing zone and never the network (lakehouse 5). The
+    inline build -- fetch and import in one pass -- is gone; what follows is the
+    history of why this body is one step.
 
     One command, one process, one exit status, because splitting the refresh is
     what produced the failure this exists to prevent: `mtg cache all` and
@@ -864,6 +869,13 @@ def refresh_catalog(db_path: str):
     from mtg_collector.cli.cache_cmd import cache_all
     from mtg_collector.db.connection import get_connection
     from mtg_collector.db.schema import rebuild_collection_card_names
+    from mtg_collector.landing import Replay
+
+    if not isinstance(current_run(), Replay):
+        raise RuntimeError(
+            "the catalogue is built only by `mtg data derive`, from a landed run; "
+            "refusing to build from the network"
+        )
 
     print("=== Scryfall: sets, cards, printings ===")
     cache_all(db_path=db_path)
@@ -877,13 +889,91 @@ def refresh_catalog(db_path: str):
     print(f"Resynced card_name on {renamed} collection row(s)")
 
 
+def land_catalog() -> str:
+    """Fetch every catalogue input and land it verbatim; build nothing (lakehouse 5).
+
+    Writes no database. The URL set is exactly what the build asks the replay
+    for: the Scryfall set list, bulk metadata and bulk file, the per-set
+    backfill pages for sets the bulk leaves short, MTGJSON's Meta and
+    AllPrintings. The backfill gaps are computed from the landed bulk and
+    Scryfall's own card counts (a fresh database's view), because the lander
+    has no database to count in. A page the build wants and this did not land
+    is a ReplayMiss in the derive, never a quiet network fetch.
+
+    Returns the run id the pairing derive must read.
+    """
+    from mtg_collector.cli.cache_cmd import _BULK_DATA_URL, _bulk_jsonl_uri, _iter_bulk_cards
+    from mtg_collector.services.bulk_import import resolve_reversible_oracle_id
+    from mtg_collector.services.scryfall import ScryfallAPI
+
+    run = current_run()
+    api = ScryfallAPI()
+
+    print("=== Landing Scryfall ===")
+    all_sets = api.get_all_sets()
+    resp = api._request_with_retry("GET", _BULK_DATA_URL)
+    resp.raise_for_status()
+    download_uri = _bulk_jsonl_uri(resp.json())
+    if not download_uri:
+        raise RuntimeError("Could not find default_cards bulk data entry")
+
+    tmp_dir = get_mtgc_home()
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    bulk = tmp_dir / "bulk-default-cards.jsonl.gz"
+    run.download(download_uri, bulk, source="scryfall", dataset="default_cards")
+
+    ids: dict[str, set] = defaultdict(set)
+    for card in _iter_bulk_cards(bulk):
+        resolve_reversible_oracle_id(card)
+        if "oracle_id" in card and card.get("lang", "en") == "en":
+            ids[card["set"]].add(card["id"])
+    bulk.unlink()
+
+    expected = {s["code"]: s.get("card_count", 0) for s in all_sets}
+    digital = {s["code"]: bool(s.get("digital")) for s in all_sets}
+
+    def gapped():
+        return [c for c, n in expected.items()
+                if not digital[c] and n > 0 and len(ids[c]) < n]
+
+    for code in gapped():
+        for card in api.get_set_cards(code):
+            resolve_reversible_oracle_id(card)
+            if "oracle_id" in card:
+                ids[code].add(card["id"])
+    for code in gapped():
+        api.get_set_cards_all_langs(code)
+
+    print("=== Landing MTGJSON ===")
+    gz = tmp_dir / "AllPrintings.json.gz"
+    _download(MTGJSON_URL, gz, source="mtgjson", dataset="allprintings")
+    gz.unlink()
+    run.fetch(MTGJSON_META_URL, source="mtgjson", dataset="meta", timeout=10)
+    return run.run_id
+
+
+def refresh_catalog(db_path: str):
+    """Land the day's upstream bytes, then derive the catalogue from them.
+
+    The refresh only lands (lakehouse 5): it fetches, keeps every byte, and
+    writes no catalogue row itself. The catalogue is written by the derive and
+    by nothing else, and this command is not offered without it -- there is no
+    land-only flag, and `build_catalog` refuses to run on the network -- so a
+    refresh that landed but could not derive exits non-zero rather than
+    reading as a green night with a stale catalogue.
+    """
+    run_id = land_catalog()
+    from mtg_collector.landing import landing_root, reset_run
+
+    reset_run()
+    derive_catalog(db_path, raw_root=str(landing_root()), run_id=run_id)
+
+
 def derive_catalog(db_path: str, *, raw_root: str | None = None, run_id: str | None = None):
     """Rebuild the catalogue from one landed raw run, offline (lakehouse 4).
 
-    This is `refresh_catalog` with the fetch layer swapped for a replay of the
-    landing zone, so the derive and the inline build are the same code reading
-    the same bytes -- row identity is by construction, and tests/test_derive.py
-    holds it. Nothing is fetched: a URL the run did not land is a ReplayMiss, and
+    This is the one catalogue build: the fetch layer is a replay of the landing
+    zone, and `refresh_catalog` lands first and then calls this. Nothing is fetched: a URL the run did not land is a ReplayMiss, and
     it propagates. Nothing is landed either.
     """
     from mtg_collector.landing import Replay, use_replay
@@ -891,7 +981,7 @@ def derive_catalog(db_path: str, *, raw_root: str | None = None, run_id: str | N
     replay = Replay(Path(raw_root) if raw_root else None, run_id)
     print(f"Deriving the catalogue from raw run {replay.run_id} ({replay.root})")
     use_replay(replay)
-    refresh_catalog(db_path)
+    build_catalog(db_path)
 
 
 def _fetch_mtgjson_version() -> str | None:

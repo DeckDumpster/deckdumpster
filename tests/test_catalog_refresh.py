@@ -37,14 +37,25 @@ DEPLOY = REPO_ROOT / "deploy"
 
 @contextmanager
 def _stubbed_refresh(calls, *, cache_all=None):
-    """Every side effect of refresh_catalog, recorded instead of performed."""
+    """Every side effect of build_catalog, recorded instead of performed."""
+    from mtg_collector.landing import Replay, use_replay
+
+    class _R(Replay):
+        def __init__(self):
+            self.run_id = "R"
+
+    use_replay(_R())
     cache = cache_all or (lambda **kw: calls.append(("cache_all", kw)))
-    with patch("mtg_collector.cli.cache_cmd.cache_all", side_effect=cache), \
-         patch.object(data_cmd, "fetch_allprintings", side_effect=lambda **kw: calls.append(("fetch", kw))), \
-         patch("mtg_collector.db.connection.get_connection", side_effect=lambda p: ("conn", p)), \
-         patch("mtg_collector.db.schema.rebuild_collection_card_names",
-               side_effect=lambda conn: calls.append(("resync", {"db_path": conn[1]})) or 0):
-        yield
+    try:
+        with patch("mtg_collector.cli.cache_cmd.cache_all", side_effect=cache), \
+             patch.object(data_cmd, "fetch_allprintings", side_effect=lambda **kw: calls.append(("fetch", kw))), \
+             patch("mtg_collector.db.connection.get_connection", side_effect=lambda p: ("conn", p)), \
+             patch("mtg_collector.db.schema.rebuild_collection_card_names",
+                   side_effect=lambda conn: calls.append(("resync", {"db_path": conn[1]})) or 0):
+            yield
+    finally:
+        from mtg_collector.landing import reset_run
+        reset_run()
 
 
 def test_it_runs_every_half_in_one_call():
@@ -54,7 +65,7 @@ def test_it_runs_every_half_in_one_call():
     """
     calls = []
     with _stubbed_refresh(calls):
-        data_cmd.refresh_catalog("/tmp/whatever.sqlite")
+        data_cmd.build_catalog("/tmp/whatever.sqlite")
 
     # Scryfall first: `sets` is what check-catalog measures, so on a run that
     # only half-lands, the half that landed is the half the alarm can see. The
@@ -72,7 +83,7 @@ def test_the_mtgjson_half_re_downloads_unconditionally():
     indistinguishable from a run with nothing to do. MTGJSON rebuilds daily."""
     calls = []
     with _stubbed_refresh(calls):
-        data_cmd.refresh_catalog("/tmp/whatever.sqlite")
+        data_cmd.build_catalog("/tmp/whatever.sqlite")
 
     fetch_kwargs = [kw for name, kw in calls if name == "fetch"]
     assert [kw["force"] for kw in fetch_kwargs] == [True]
@@ -84,9 +95,27 @@ def test_a_failing_scryfall_half_stops_the_run():
     with _stubbed_refresh(calls, cache_all=_raise_scryfall), \
          patch.object(data_cmd, "fetch_allprintings") as fetch:
         with pytest.raises(RuntimeError):
-            data_cmd.refresh_catalog("/tmp/whatever.sqlite")
+            data_cmd.build_catalog("/tmp/whatever.sqlite")
 
     assert fetch.call_count == 0
+
+
+def test_the_refresh_lands_then_derives_that_run():
+    """refresh = land + derive of the run it landed; no build of its own."""
+    calls = []
+    with patch.object(data_cmd, "land_catalog", side_effect=lambda: calls.append("land") or "RUN1"), \
+         patch.object(data_cmd, "derive_catalog",
+                      side_effect=lambda db, **kw: calls.append(("derive", db, kw["run_id"]))), \
+         patch.object(data_cmd, "build_catalog", side_effect=lambda db: calls.append("build")):
+        data_cmd.refresh_catalog("/tmp/x.sqlite")
+    assert calls == ["land", ("derive", "/tmp/x.sqlite", "RUN1")]
+
+
+def test_a_refresh_whose_derive_fails_fails():
+    with patch.object(data_cmd, "land_catalog", return_value="RUN1"), \
+         patch.object(data_cmd, "derive_catalog", side_effect=RuntimeError("derive down")):
+        with pytest.raises(RuntimeError):
+            data_cmd.refresh_catalog("/tmp/x.sqlite")
 
 
 def _raise_scryfall(**_kw):
