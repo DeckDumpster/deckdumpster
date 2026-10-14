@@ -314,8 +314,29 @@ class DbWrites:
 
     READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+    # Actions after which a request may have been issued whose "request" event
+    # the test never waited long enough to receive. Playwright delivers events
+    # to the Python side only while a call is in flight, so a scenario whose
+    # last step is the click that POSTs can end and close its context first.
+    INTERACTIONS = frozenset({
+        "click_by_text", "click_by_selector", "click_by_test_id", "press_key",
+        "select_by_label", "set_input_files",
+    })
+
     def __init__(self):
         self.dirty = False
+        self._unsettled = False
+
+    def settled_after(self, action):
+        """Track whether the latest step could have left a request unobserved."""
+        if action in self.INTERACTIONS:
+            self._unsettled = True
+        elif action.startswith(("wait_", "assert_")):
+            self._unsettled = False
+
+    @property
+    def must_restore(self):
+        return self.dirty or self._unsettled
 
     def mark(self):
         self.dirty = True
@@ -338,7 +359,7 @@ def _restore_db(_db_snapshot, podman, db_writes):
     """
     yield
     container = _db_snapshot
-    if container is None or not db_writes.dirty:
+    if container is None or not db_writes.must_restore:
         return
     log.info("Restoring DB snapshot in container %s", container)
     subprocess.run(
