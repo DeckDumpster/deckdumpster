@@ -48,12 +48,14 @@ def open_catalog(catalog_path: str, warehouse: str):
 
 
 def _schemas():
-    from pyiceberg.schema import Schema
-    from pyiceberg.types import IntegerType, LongType, NestedField, StringType
     from pyiceberg.partitioning import PartitionField, PartitionSpec
+    from pyiceberg.schema import Schema
     from pyiceberg.transforms import IdentityTransform
+    from pyiceberg.types import LongType, NestedField, StringType
 
-    s = lambda i, n, req=True: NestedField(i, n, StringType(), required=req)
+    def s(i, n, req=True):
+        return NestedField(i, n, StringType(), required=req)
+
     prices = Schema(
         s(1, "uuid"), s(2, "set_code"), s(3, "collector_number"), s(4, "source"),
         s(5, "price_type"), NestedField(6, "price_cents", LongType(), required=True),
@@ -65,8 +67,11 @@ def _schemas():
           for i, n in enumerate(SEALED_COLUMNS[1:6], start=2)),
         s(7, "observed_date"),
     )
-    spec = lambda: PartitionSpec(PartitionField(
-        source_id=7, field_id=1000, transform=IdentityTransform(), name="observed_date"))
+
+    def spec():
+        return PartitionSpec(PartitionField(
+            source_id=7, field_id=1000, transform=IdentityTransform(), name="observed_date"))
+
     return prices, sealed, spec
 
 
