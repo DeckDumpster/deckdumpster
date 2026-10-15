@@ -40,6 +40,7 @@ from mtg_collector.services.pack_generator import PackGenerator
 from mtg_collector.static_assets import hasher_for
 from mtg_collector.tenancy import current_tenant
 from mtg_collector.tenancy import paths as tenant_paths
+from mtg_collector.tenancy.connection import tenant_connection
 from mtg_collector.tenancy.fairpool import FairPool
 
 
@@ -1295,15 +1296,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
     def _get_conn(self):
         """Get a DB connection, optionally ATTACHing a shared reference DB."""
-        # The only route to a connection, and it has no answer outside a
-        # resolved request: current_tenant() raises when none is bound.
-        tenant = current_tenant()
-        db_path = self.db_path
-        if multitenant_enabled():
-            # The tenant's id names its file; there is no other route to one.
-            db_path = str(tenant_paths.tenant_db_file(tenant.value))
-        conn = open_connection(db_path, _shared_db_path)
-        return conn
+        return tenant_connection(self.db_path, _shared_db_path)
 
     def do_GET(self):
         parsed = urlparse(self.path)
