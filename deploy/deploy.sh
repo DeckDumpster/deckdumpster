@@ -174,34 +174,29 @@ fi
 export PATH="${MTGC_LITESTREAM_BIN_DIR:-$HOME/.local/bin}:$PATH"
 bash "$SCRIPT_DIR/replication-doctor.sh" --enable "$INSTANCE"
 
-# Wait briefly for the container to start, then discover the assigned port.
-# Multi-tenant mode serves only the plain-HTTP listener on 8080 and says "port
-# 8081 is not served", so a check on 8081 reported every healthy multi-tenant
-# deploy as failed (sp-iqgac5). The 8080 listener exists only when it was
-# published, so its published port selects the probe; otherwise 8081 over TLS.
+# Wait briefly for the container to start; the listener to probe is whichever
+# the instance's mode serves (origin-lib.sh; sp-iqgac5, sp-nlihgq, sp-8lil3y).
 sleep 2
-PORT=$(podman port "systemd-${SERVICE_NAME}" 8080/tcp 2>/dev/null | grep -oP ':\K[0-9]+' | head -1 || true)
-if [ -n "$PORT" ]; then
-    SCHEME=http
-    LISTENER=8080
-    # Multi-tenant answers 401 to every route but PUBLIC_ROUTES (sp-nlihgq).
-    PROBE_PATH=/health
-else
-    PORT=$(podman port "systemd-${SERVICE_NAME}" 8081/tcp 2>/dev/null | grep -oP ':\K[0-9]+' | head -1 || true)
-    SCHEME=https
-    LISTENER=8081
-    PROBE_PATH=/
-fi
-if [ -z "$PORT" ]; then
+source "$SCRIPT_DIR/origin-lib.sh"
+mtgc_origin_resolve "$INSTANCE" || {
     echo "==> Could not determine port. Check: podman port systemd-${SERVICE_NAME}"
     exit 1
-fi
-echo "==> Listening on port $PORT (container port $LISTENER)"
+}
+PORT="$ORIGIN_PORT"
+SCHEME="${ORIGIN_URL%%://*}"
+PROBE_PATH="$ORIGIN_PROBE"
+echo "==> Listening on port $PORT ($ORIGIN_MODE)"
 MAX_ATTEMPTS=15
 echo "==> Health check: $SERVICE_NAME (port $PORT)..."
 for i in $(seq 1 $MAX_ATTEMPTS); do
     if curl -skf --connect-timeout 3 "${SCHEME}://localhost:${PORT}${PROBE_PATH}" > /dev/null 2>&1; then
         echo "==> Health check passed (attempt $i/$MAX_ATTEMPTS)"
+        # Installing is not arming: a plain redeploy never enables a timer.
+        # The deploy workflow sets this to re-arm a serving check that was held.
+        if [ "${MTGC_ARM_SERVING_CHECK:-}" = 1 ]; then
+            systemctl --user enable --now "mtgc-serving-check-${INSTANCE}.timer" \
+                || echo "==> WARNING: could not arm mtgc-serving-check-${INSTANCE}.timer" >&2
+        fi
         exit 0
     fi
     echo "    Attempt $i/$MAX_ATTEMPTS failed, waiting 2s..."
