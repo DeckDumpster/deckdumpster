@@ -159,19 +159,30 @@ if [ "$HELD_STORE_LOCK" = true ]; then
     HELD_STORE_LOCK=false
 fi
 
-# Wait briefly for the container to start, then discover the assigned port
+# Wait briefly for the container to start, then discover the assigned port.
+# Multi-tenant mode serves only the plain-HTTP listener on 8080 and says "port
+# 8081 is not served", so a check on 8081 reported every healthy multi-tenant
+# deploy as failed (sp-iqgac5). The 8080 listener exists only when it was
+# published, so its published port selects the probe; otherwise 8081 over TLS.
 sleep 2
-PORT_LINE=$(podman port "systemd-${SERVICE_NAME}" 8081/tcp 2>/dev/null || true)
-PORT=$(echo "$PORT_LINE" | grep -oP ':\K[0-9]+' | head -1)
+PORT=$(podman port "systemd-${SERVICE_NAME}" 8080/tcp 2>/dev/null | grep -oP ':\K[0-9]+' | head -1 || true)
+if [ -n "$PORT" ]; then
+    SCHEME=http
+    LISTENER=8080
+else
+    PORT=$(podman port "systemd-${SERVICE_NAME}" 8081/tcp 2>/dev/null | grep -oP ':\K[0-9]+' | head -1 || true)
+    SCHEME=https
+    LISTENER=8081
+fi
 if [ -z "$PORT" ]; then
     echo "==> Could not determine port. Check: podman port systemd-${SERVICE_NAME}"
     exit 1
 fi
-echo "==> Listening on port $PORT"
+echo "==> Listening on port $PORT (container port $LISTENER)"
 MAX_ATTEMPTS=15
 echo "==> Health check: $SERVICE_NAME (port $PORT)..."
 for i in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -skf --connect-timeout 3 "https://localhost:${PORT}/" > /dev/null 2>&1; then
+    if curl -skf --connect-timeout 3 "${SCHEME}://localhost:${PORT}/" > /dev/null 2>&1; then
         echo "==> Health check passed (attempt $i/$MAX_ATTEMPTS)"
         exit 0
     fi
