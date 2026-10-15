@@ -73,8 +73,23 @@ def test_land_unit_runs_in_its_own_container():
 
 
 def test_a_landed_manifest_passes_the_catalog_zone_guard(tmp_path):
-    from mtg_collector.lake.zone_guard import assert_clean
+    """The guard's manifest and URL surfaces are checked against what landing
+    really writes, not a hand-built dict; the planted tenant URL is the positive
+    control that the same read goes red."""
+    from mtg_collector.lake import zone_guard as g
 
     run = Run(tmp_path)
-    run.land_bytes(source="s", dataset="d", url="http://x/1", data=b"abc")
-    assert_clean(manifests=[_manifest(run, "s", "d")])
+    url = "https://json.edhrec.com/pages/commanders/atraxa-praetors-voice.json"
+    run.land_bytes(source="edhrec", dataset="commanders", url=url, data=b"{}")
+    path = run._partition("edhrec", "commanders") / "_manifest.json"
+    manifest = json.loads(path.read_text())
+    g.assert_clean(manifests=[manifest], urls=[e["url"] for e in manifest["entries"]])
+
+    run.land_bytes(source="edhrec", dataset="commanders",
+                   url="https://x/01HZX3V5K8M2N4P6Q8R0S2T4V6.json", data=b"{}")
+    planted = json.loads(path.read_text())
+    try:
+        g.assert_clean(manifests=[planted])
+    except g.ZoneViolation:
+        return
+    raise AssertionError("a tenant-shaped URL in a landed manifest was not flagged")
