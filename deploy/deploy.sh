@@ -191,9 +191,12 @@ echo "==> Health check: $SERVICE_NAME (port $PORT)..."
 for i in $(seq 1 $MAX_ATTEMPTS); do
     if curl -skf --connect-timeout 3 "${SCHEME}://localhost:${PORT}${PROBE_PATH}" > /dev/null 2>&1; then
         echo "==> Health check passed (attempt $i/$MAX_ATTEMPTS)"
-        # The serving check is armed by the deploy that carries it.
-        systemctl --user enable --now "mtgc-serving-check-${INSTANCE}.timer" \
-            || echo "==> WARNING: could not arm mtgc-serving-check-${INSTANCE}.timer" >&2
+        # Installing is not arming: a plain redeploy never enables a timer.
+        # The deploy workflow sets this to re-arm a serving check that was held.
+        if [ "${MTGC_ARM_SERVING_CHECK:-}" = 1 ]; then
+            systemctl --user enable --now "mtgc-serving-check-${INSTANCE}.timer" \
+                || echo "==> WARNING: could not arm mtgc-serving-check-${INSTANCE}.timer" >&2
+        fi
         exit 0
     fi
     echo "    Attempt $i/$MAX_ATTEMPTS failed, waiting 2s..."

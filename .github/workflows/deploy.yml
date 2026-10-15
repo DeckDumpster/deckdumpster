@@ -35,6 +35,8 @@ jobs:
         run: podman image prune -f || true
 
       - name: Build and restart
+        env:
+          MTGC_ARM_SERVING_CHECK: '1'
         run: bash /opt/mtgc-${{ env.INSTANCE }}/deploy/deploy.sh ${{ env.INSTANCE }}
 
   # A deploy check that does not traverse the CDN is not a deploy check (de-dai).
