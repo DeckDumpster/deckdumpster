@@ -203,6 +203,28 @@ class ReplaySession:
         return self.request("GET", url, **kwargs)
 
 
+CATALOG_DATASETS = {("scryfall", "default_cards"), ("mtgjson", "allprintings"), ("mtgjson", "meta")}
+
+
+def newest_catalog_run(root: Path | None = None) -> str:
+    """The newest run that landed every catalogue input -- a complete partition.
+
+    The chain lands more than the catalogue (EDHREC pages, prices), and each of
+    those is its own run, so "the newest run" is not "the newest catalogue": a
+    derive pointed at the last night's price run would find nothing to read.
+    """
+    root = Path(root) if root else landing_root()
+    seen: dict[str, set] = {}
+    for m in root.glob("source=*/dataset=*/ingest_date=*/run=*/_manifest.json"):
+        d = json.loads(m.read_text())
+        if d["entries"]:
+            seen.setdefault(d["run_id"], set()).add((d["source"], d["dataset"]))
+    complete = [r for r, have in seen.items() if CATALOG_DATASETS <= have]
+    if not complete:
+        raise ReplayMiss(f"no complete catalogue run under {root}")
+    return max(complete)
+
+
 class Replay:
     """One landed run read back instead of the network (lakehouse 4).
 

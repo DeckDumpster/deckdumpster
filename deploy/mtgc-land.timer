@@ -1,0 +1,12 @@
+[Unit]
+Description=MTGC lakehouse chain: land upstream into raw/ timer ({{INSTANCE}})
+
+[Timer]
+# One chain at 08:00 UTC (lakehouse K8), after pokedumpster's 06:00-07:30 one.
+# Every link fires at 08:00 and the After= on its service orders them; a link is
+# never given its own clock. Arm all five or none: deploy/chain.sh refuses a part.
+OnCalendar=*-*-* 08:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target
