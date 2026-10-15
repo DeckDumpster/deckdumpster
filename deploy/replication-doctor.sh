@@ -34,8 +34,11 @@ multitenant=false
 if grep -qs '^MTGC_MULTITENANT=1' "${CONF_DIR}/${INSTANCE}.env" "${CONF_DIR}/${INSTANCE}/access.env"; then
     multitenant=true
 else
-    home_dir="$(mtgc_ls_home "$INSTANCE")"
-    [ -f "$home_dir/registry.sqlite" ] && multitenant=true
+    # An instance with no data volume has no registry to find: not multi-tenant.
+    # (A plain redeploy of a fixture instance reaches here with no volume.)
+    if home_dir="$(mtgc_ls_home "$INSTANCE" 2>/dev/null)" && [ -f "$home_dir/registry.sqlite" ]; then
+        multitenant=true
+    fi
 fi
 if [ "$DETECT" = true ]; then
     # Exit status only: 0 multi-tenant, 1 not. deploy.sh installs the binary on it.
