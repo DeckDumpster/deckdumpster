@@ -17,6 +17,7 @@ Two uses:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
@@ -36,7 +37,7 @@ def _new_key():
 
 
 class JwksServer:
-    def __init__(self):
+    def __init__(self, port: int = 0):
         self.key = _new_key()
         self.unpublished_key = _new_key()
         self.fetches = 0
@@ -58,7 +59,7 @@ class JwksServer:
             def log_message(self, *args):
                 pass
 
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
 
     def jwk(self) -> dict:
@@ -78,9 +79,10 @@ class JwksServer:
             "MTGC_ACCESS_JWKS_URL": self.url,
         }
 
-    def token(self, email: str | None = "a@x.org", *, key=None, kid: str = KID, **over) -> str:
+    def token(self, email: str | None = "a@x.org", *, key=None, kid: str = KID, ttl: int = 600,
+              **over) -> str:
         now = int(time.time())
-        claims = {"iss": ISS, "aud": [AUD], "iat": now, "exp": now + 600}
+        claims = {"iss": ISS, "aud": [AUD], "iat": now, "exp": now + ttl}
         if email is not None:
             claims["email"] = email
         claims.update(over)
@@ -98,10 +100,14 @@ class JwksServer:
 def _serve(directory: str, emails: list[str]) -> None:
     out = Path(directory)
     out.mkdir(parents=True, exist_ok=True)
-    with JwksServer() as jwks:
+    # JWKS_PORT pins the port and JWKS_TOKEN_TTL the lifetime, for a server that
+    # runs beside a container (tests/two_tenant_stack.py) and must be addressable
+    # before it starts and outlive a long suite.
+    with JwksServer(int(os.environ.get("JWKS_PORT", "0"))) as jwks:
+        ttl = int(os.environ.get("JWKS_TOKEN_TTL", "600"))
         (out / "url").write_text(jwks.url)
         for email in emails:
-            (out / f"token.{email}").write_text(jwks.token(email))
+            (out / f"token.{email}").write_text(jwks.token(email, ttl=ttl))
         (out / "token.expired").write_text(
             jwks.token(emails[0], exp=int(time.time()) - 60))
         (out / "token.badsig").write_text(jwks.token(emails[0], key=jwks.unpublished_key))

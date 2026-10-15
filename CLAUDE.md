@@ -98,6 +98,19 @@ Run it by hand with an instance name of your own — `INSTANCE` defaults to `ci-
 is the self-hosted runner's own instance, and the runner shares a machine with your
 worktree. The UI tier needs `ANTHROPIC_API_KEY`; CI passes it in as a repository secret.
 
+## Two-tenant tests
+
+`tests/two_tenant_stack.py` runs the instance's own image the way prod does: a container,
+a published port, `MTGC_MULTITENANT=1`, Access JWTs verified against a JWKS sidecar that
+shares the container's network namespace. Tenant `alice` is the demo dataset moved on by
+`mtg tenant legacy-migrate`; `bobby` is empty; the legacy `collection.sqlite` stays on the
+volume as `MTGC_DB`, so a handler that falls back to the server's own file serves it to
+everyone. `tests/integration/test_two_tenants.py` asks every API family and page the same
+question through the published port (alice sees hers, bobby none), and
+`tests/ui/test_two_tenant_pages.py` loads every `PAGE_ROUTES` page in a browser as bobby.
+Both run in the existing integration and ui tiers of `deploy/ci.sh`. A new API family needs
+a row in `LIST_FAMILIES` or `BY_ID`; a new page is swept automatically.
+
 ## Web routes
 
 The HTTP server is `mtg_collector/cli/crack_pack_server.py` — a single-file threaded stdlib `http.server` with manual path dispatch in `do_GET`/`do_POST`/`do_PUT`/`do_DELETE`. SSE is used for long-running ingest processing. No framework.
