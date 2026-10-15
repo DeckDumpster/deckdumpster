@@ -890,27 +890,17 @@ on disk and a stale database.
 
 ### Arming an instance
 
-`mtgc-catalog-refresh-<instance>.{service,timer}` runs daily at 01:00, ahead of
-the sealed catalog, EDHREC, the price fetch and the 09:00 freshness check. It
-is installed by every `setup.sh` **and every `deploy.sh`** (see [Installing
-timer units](#installing-timer-units)) and enabled by neither — arming is a
-per-instance decision, made once, here.
+The catalogue refresh is no longer a timer of its own: `mtgc-land` and
+`mtgc-derive` are the first two links of the lakehouse chain at 08:00 UTC, and
+the old `mtgc-catalog-refresh` unit is retired by every deploy. The chain is
+installed by every `setup.sh` **and every `deploy.sh`** (see [Installing timer
+units](#installing-timer-units)) and armed by neither: `bash deploy/chain.sh arm
+<instance>` enables all five links or none. See `deploy/LAKE-DR.md` for the
+chain, the DR runbook and the restore drill.
 
 ```bash
-# 0. Confirm the unit is on this host at all. A timer added to the repo after
-#    the instance was installed arrives on its next deploy, not before — and
-#    `enable` on a unit that is not there fails with "Unit not found".
-systemctl --user list-unit-files "mtgc-catalog-refresh-<instance>.timer"
-
-# 1. Enable the timer.
-systemctl --user enable --now mtgc-catalog-refresh-<instance>.timer
-
-# 2. Prove it runs, rather than trusting that it is installed. Expect ~1 GB of
-#    downloads and the better part of an hour on a full catalogue.
-systemctl --user start mtgc-catalog-refresh-<instance>.service
-journalctl --user -u mtgc-catalog-refresh-<instance> -f
-
-# 3. Grade the result with the check that watches it. 0 lag, exit 0.
+# Prove a run end to end before arming, then grade it with the check that watches it.
+systemctl --user start mtgc-land-<instance>.service mtgc-derive-<instance>.service
 podman exec systemd-mtgc-<instance> mtg data check-catalog
 ```
 
