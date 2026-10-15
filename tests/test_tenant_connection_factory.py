@@ -6,6 +6,7 @@ request must open that tenant's own file.
 """
 
 import ast
+import importlib
 import re
 import textwrap
 from pathlib import Path
@@ -87,10 +88,15 @@ def test_every_native_router_opens_the_requesting_tenants_file(tmp_path, monkeyp
 
     monkeypatch.setattr(connection, "open_connection", spy)
     client = TestClient(app, raise_server_exceptions=False)
-    native = [r for r in app.routes
-              if r.path not in ("/{path:path}", "/health") and hasattr(r, "endpoint")
-              and hasattr(r, "methods")]
-    assert len(native) >= 10, [type(r).__name__ for r in app.routes]  # the routers were found
+    # Every module under routes/ is a native family; each must be registered.
+    native = []
+    for mod in sorted(PKG.glob("routes/*.py")):
+        if mod.stem == "__init__":
+            continue
+        assert f"{mod.stem}_routes.create_router" in (PKG / "asgi_app.py").read_text(), mod.stem
+        family = importlib.import_module(f"mtg_collector.routes.{mod.stem}")
+        native += [r for r in family.create_router(legacy).routes if hasattr(r, "endpoint")]
+    assert len(native) >= 10  # positive control: the routers were found
     families = {r.endpoint.__module__ for r in native}
     assert "mtg_collector.routes.collection" in families
 
