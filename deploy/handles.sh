@@ -166,14 +166,20 @@ got="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PUB_PORT}/api/
 if [ "$got" = "401" ]; then pass "published port refuses an Access-less request (401)"; else
     fail "published port: Access-less /api/binders wanted 401, got [$got]"; fi
 
-# --- single-tenant mode is unaffected -------------------------------------------
-SINGLE_PORT="$(podman port "systemd-mtgc-${INSTANCE}" 8081/tcp 2>/dev/null | head -1 | cut -d: -f2 || true)"
-if [ -n "$SINGLE_PORT" ]; then
-    got="$(curl -sk -o /dev/null -w '%{http_code}' "https://127.0.0.1:${SINGLE_PORT}/api/binders")"
-    if [ "$got" = "200" ]; then pass "single-tenant instance serves without an identity"; else
-        fail "single-tenant instance answered $got"; fi
+# --- the deployed instance, in whichever mode it runs ---------------------------
+# Resolved by origin-lib.sh, never a literal port.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/origin-lib.sh"
+if mtgc_origin_resolve "$INSTANCE"; then
+    got="$(curl -sk -o /dev/null -w '%{http_code}' "${ORIGIN_URL}/api/binders")"
+    if [ "$ORIGIN_MODE" = single ]; then
+        if [ "$got" = "200" ]; then pass "single-tenant instance serves without an identity"; else
+            fail "single-tenant instance answered $got"; fi
+    else
+        if [ "$got" = "401" ]; then pass "multi-tenant instance refuses an Access-less request (401)"; else
+            fail "multi-tenant instance: Access-less /api/binders wanted 401, got [$got]"; fi
+    fi
 else
-    fail "no single-tenant instance systemd-mtgc-${INSTANCE} to check"
+    fail "no running instance systemd-mtgc-${INSTANCE} to check"
 fi
 
 [ "$FAILED" -eq 0 ] || { echo "handles.sh: FAILED" >&2; exit 1; }
