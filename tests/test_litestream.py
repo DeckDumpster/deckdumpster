@@ -264,3 +264,40 @@ def test_check_single_tenant_samples_the_collection_replica(env):
     r = env.run("litestream-check.sh")
     assert r.returncode == 0, r.stderr
     assert "collection.sqlite" in r.stdout
+
+
+# --- the unit's PATH (sp-fgve20) --------------------------------------------
+
+
+def _run_sidecar(env, bin_dir):
+    """litestream-run.sh under a PATH that, like the user manager's, lacks the install dir."""
+    (bin_dir).mkdir(exist_ok=True)
+    stub = bin_dir / "litestream"
+    stub.write_text('#!/usr/bin/env bash\n[ "$1" = replicate ] && echo "replicating $*" && exit 0\nexit 2\n')
+    stub.chmod(0o755)
+    seed_tenants(env, [T1])
+    system = "/usr/bin:/bin"
+    return subprocess.run(
+        ["bash", str(DEPLOY / "litestream-run.sh"), "t"],
+        env={**env.env, "PATH": system, "MTGC_LITESTREAM_BIN_DIR": str(bin_dir)},
+        capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
+    )
+
+
+def test_sidecar_finds_the_installed_binary_off_the_manager_path(env):
+    r = _run_sidecar(env, env.tmp / "installed")
+    assert r.returncode == 0, r.stderr
+    assert "replicating" in r.stdout
+
+
+def test_sidecar_without_the_binary_exits_78_so_the_unit_does_not_loop(env):
+    seed_tenants(env, [T1])
+    r = subprocess.run(
+        ["bash", str(DEPLOY / "litestream-run.sh"), "t"],
+        env={**env.env, "PATH": "/usr/bin:/bin", "MTGC_LITESTREAM_BIN_DIR": str(env.tmp / "empty")},
+        capture_output=True, text=True, timeout=DEFAULT_TIMEOUT,
+    )
+    assert r.returncode == 78
+    assert "litestream not found" in r.stderr
+    unit = (DEPLOY / "mtgc-litestream.service").read_text()
+    assert "RestartPreventExitStatus=78" in unit
