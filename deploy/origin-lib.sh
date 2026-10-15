@@ -14,6 +14,9 @@
 # Sourced; defines functions only. Reads the published port through the same
 # `podman` the caller already has configured for the instance's store.
 
+# shellcheck source=store-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/store-lib.sh"
+
 # mtgc_origin_resolve <instance> — sets, for the instance's mode:
 #   ORIGIN_MODE   multitenant | single
 #   ORIGIN_PORT   host port
@@ -23,6 +26,9 @@
 # down has no published port, so this is also the "container down" failure.
 mtgc_origin_resolve() {
     local instance="$1" container="systemd-mtgc-$1" port
+    # The instance's own podman store, as deploy.sh reads it (de-3mo).
+    mtgc_store_adopt_instance "$instance"
+    mtgc_store_activate
     port="$(podman port "$container" 8080/tcp 2>/dev/null | grep -oP ':\K[0-9]+' | head -1 || true)"
     if [ -n "$port" ]; then
         ORIGIN_MODE=multitenant
