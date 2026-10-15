@@ -50,6 +50,31 @@ mtgc_units_list() {
     printf '%s\n' "${prefixes[@]}"
 }
 
+# The three timers the lakehouse chain replaced outright (lakehouse 14, K8): the
+# 01:00 catalogue refresh, the Monday sealed catalogue and the Wednesday EDHREC
+# run. The fourth, `mtgc-prices`, keeps its name -- it is now the chain's third
+# link -- so rewriting its unit files is its retirement and it is not listed.
+# This is the one place the repo has to remember a unit it no longer defines,
+# because the directory cannot name what is gone.
+MTGC_RETIRED_UNITS=(mtgc-catalog-refresh mtgc-sealed-catalog mtgc-edhrec)
+
+# mtgc_retire_units <instance> -- stop, disable and delete the retired units on
+# this host. Idempotent; a host that never had them does nothing. Without this a
+# deploy leaves an armed 01:00 refresh firing a command that still works, so the
+# catalogue is landed twice a day and the chain is not the only writer.
+mtgc_retire_units() {
+    local instance="$1"
+    local dir="$HOME/.config/systemd/user" prefix ext
+    for prefix in "${MTGC_RETIRED_UNITS[@]}"; do
+        [ -e "$dir/${prefix}-${instance}.timer" ] || [ -e "$dir/${prefix}-${instance}.service" ] || continue
+        echo "==> Retiring ${prefix} (replaced by the lakehouse chain)"
+        systemctl --user disable --now "${prefix}-${instance}.timer" >/dev/null 2>&1 || true
+        for ext in timer service; do
+            rm -f "$dir/${prefix}-${instance}.${ext}"
+        done
+    done
+}
+
 # mtgc_units_installed <instance> — the unit prefixes actually present on this
 # host for one instance, one per line, or nothing at all.
 #
@@ -118,6 +143,8 @@ mtgc_install_units() {
         "$repo_dir/deploy/mtgc-alert@.service" \
         > "${systemd_user_dir}/mtgc-alert-${instance}@.service"
 
+    mtgc_retire_units "$instance"
+
     systemctl --user daemon-reload
 }
 
@@ -140,6 +167,24 @@ mtgc_scaffold_access_env() {
 #MTGC_ACCESS_JWKS_URL=https://<team>.cloudflareaccess.com/cdn-cgi/access/certs
 # Multi-tenant mode itself (needs MTGC_HTTP_PORT too; serves loopback only):
 #MTGC_MULTITENANT=1
+EOF
+    chmod 600 "$file"
+}
+
+# Scaffold ~/.config/mtgc/<instance>/lake.env, which the chain's job containers
+# name without a leading '-' so a missing file fails the unit rather than running
+# a job with no lake. Never overwrites. Bare values only (see access.env).
+mtgc_scaffold_lake_env() {
+    local instance="$1"
+    local dir="${HOME}/.config/mtgc/${instance}"
+    local file="${dir}/lake.env"
+    [ -f "$file" ] && return 0
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    cat > "$file" <<'EOF'
+# Lakehouse chain settings (deploy/LAKE-SOP.md). Comments on their own lines.
+#MTGC_LAKE_S3_BUCKET=mtgc-lake-<suffix>
+#MTGC_LAKE_TENANT_URI=s3://mtgc-lake-<suffix>/tenant
 EOF
     chmod 600 "$file"
 }

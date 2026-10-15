@@ -25,7 +25,7 @@ MTG Card Collection Builder. Web app (primary) plus a CLI (bulk ingest / scripti
 
 - **Always use `uv`** for Python operations: `uv sync`, `uv run pytest`, `uv run ruff check mtg_collector/`, `uv run mtg ...`. Never `pip`, `python -m venv`, or `make`.
 - `ruff` is a dev dependency — `uv run ruff` is always available.
-- **STORE DATA IN THE LOCAL DB. DO NOT add runtime calls to Scryfall / MTGJSON / any external service in request handlers.** External services are only touched during `mtg setup`, `mtg cache`, `mtg data fetch*`, and the systemd `mtgc-prices` / `mtgc-sealed-catalog` / `mtgc-edhrec` timers.
+- **STORE DATA IN THE LOCAL DB. DO NOT add runtime calls to Scryfall / MTGJSON / any external service in request handlers.** External services are only touched during `mtg setup`, `mtg cache`, `mtg data fetch*`, and the lakehouse timer chain (`mtgc-land` → `mtgc-derive` → `mtgc-prices` → `mtgc-ship` → `mtgc-value`, 08:00 UTC; `deploy/LAKE-DR.md`).
 - **NEVER add fallback logic.** Errors should propagate. No fallback content, no silent defaults, no swallowed exceptions. Let it crash visibly.
 - As few error paths as possible. Aggressively limit modality — defaults are good enough for everyone.
 - **Tests that demonstrate bugs must fail.** A passing test means the bug is fixed; a failing test means the bug still exists. Never assert the broken behaviour.
@@ -211,7 +211,7 @@ collection_views (id PK)         — saved filters + column layout for the colle
 - `sealed_products`, `sealed_product_cards` — MTGJSON-derived sealed product catalogue with pre-resolved card contents.
 - `sealed_collection`, `sealed_prices`, `latest_sealed_prices` (VIEW) — owned sealed inventory and price history.
 - `mtgjson_uuid_map`, `mtgjson_printings`, `mtgjson_booster_sheets`, `mtgjson_booster_configs`, `tcgplayer_groups` — MTGJSON / TCGPlayer reference data.
-- `edhrec_recommendations` — populated by the `mtgc-edhrec` timer.
+- `edhrec_recommendations` — fetched by `mtgc-land` and imported by `mtgc-derive`.
 - `prices`, `price_fetch_log` — append-only price time series and ingest log.
 - `collection_value_history`, `collection_value_history_meta`, `collection_rev` — the
   materialized growth series, what it was built from, and the trigger-maintained stamp
@@ -538,7 +538,7 @@ user+shared for a monolithic DB. `init_db` on a connection with `shared` attache
 objects only, and `get_current_version` reads `main.schema_version` (unqualified it would find
 the catalogue's). `cards_fts` is reached by plain name resolution: a tenant file holds none, so
 SQLite falls through to `shared`; the v53 migration drops a split-mode copy. No request handler
-writes the catalogue: price fetches are the `mtgc-prices` timer / `mtg data fetch-prices` only
+writes the catalogue: price fetches are the chain's `mtgc-prices` link / `mtg data fetch-prices` only
 (`tests/test_catalog_placement.py` pins it). `mtg data rebuild-growth` walks `db/tenants.py`'s
 tenant list, skips and reports a failing tenant, and exits 2 when partial.
 
@@ -555,7 +555,7 @@ Standalone at `/card/:set/:cn` (e.g. `/card/lci/150`). Served by `card_detail.ht
 Both `/decks/:id` and `/deck-builder/:id` serve `deck_builder.html` with `deck-builder.js` and `deck-builder.css`. The page combines the builder's type-grouped list view with the detail page's grid view, zone tabs, edit modal, expected-list import, and completeness tracking. View toggle switches between list (type-grouped, multi-column) and grid (rarity-bordered card images). Zone tabs filter the grid view; list view shows all zones combined. The deck list page (`decks.html`) links via a single "View" link to `/decks/:id`.
 
 ### Sealed product flow
-`/sealed` lists products from `sealed_products` (populated by the `mtgc-sealed-catalog` timer from MTGJSON) and the user's own sealed inventory from `sealed_collection`. Opening a product calls `/api/sealed/open`, which uses pre-resolved `sealed_product_cards` rows to insert real `collection` entries (no Scryfall lookup at runtime). Sealed prices are a separate time series (`sealed_prices` + `latest_sealed_prices` view) so booster-box prices don't collide with single-card prices.
+`/sealed` lists products from `sealed_products` (imported by the chain's `mtgc-prices` link from MTGJSON) and the user's own sealed inventory from `sealed_collection`. Opening a product calls `/api/sealed/open`, which uses pre-resolved `sealed_product_cards` rows to insert real `collection` entries (no Scryfall lookup at runtime). Sealed prices are a separate time series (`sealed_prices` + `latest_sealed_prices` view) so booster-box prices don't collide with single-card prices.
 
 ### Shared CSS/JS foundation
 `shared.css` and `shared.js` in `mtg_collector/static/`. New pages should import these; legacy pages still inline their helpers. `shared.css` uses `:root` custom properties and `.site-header` (not bare `header`) to avoid collisions. `shared.js` exports: `esc`, `parseJsonField`, `renderMana`, `formatPrice`, `getRarityColor`, `RARITY_COLORS`, `DFC_LAYOUTS`, `getCkUrl`.
@@ -602,7 +602,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 - **HTML pages share no JS imports (legacy).** Helpers like `getRarityColor()` and `formatPrice()` are inlined in older pages. New pages should use `shared.css` + `shared.js`. Don't introduce a new ad-hoc price formatter — use `formatPrice` (or copy its body verbatim if the page can't load `shared.js`).
 - **Restoring DB snapshots with `cp` under WAL mode is broken.** See the "WAL mode" patterns section. Use `sqlite3.backup()`.
 - **Never use `rowid` on a shared reference table.** Deployed instances ATTACH `shared.sqlite` and shadow every table in `SHARED_TABLES` with a temp `CREATE VIEW … AS SELECT * FROM shared.<t>`. Views have no rowid, and SQLite resolves `rowid` against one to **NULL rather than an error** — so a join keyed on it silently matches nothing instead of failing loudly. Key on a real unique column (`uuid`, `printing_id`, the PK).
-- **`mtgjson_printings.printing_id` is not unique.** The PK is `uuid`; MTGJSON emits one row per face of a double-faced card, and both faces carry the same Scryfall id with a *different* Card Kingdom link. **`side` is what says which row is the front face** — `'a'`, against `'b'`/`'c'`/`'d'` for the rest and NULL for a single-faced card — and `mtg_collector/db/mtgjson_faces.py` is the one place that reads it. Resolve through `front_face_sql` / `front_face_uuid_sql` / `front_face_bulk_sql`; never join on `printing_id` directly, which both multiplies rows and picks a face by query plan. In 19 of the 335 duplicated groups in the fixture only the front face has a Card Kingdom link at all, so landing on the back one loses the link (de-xpu); elsewhere the two links redirect to the same product. `side` is populated at import and is NULL on any database that has not been re-imported since — the daily `mtgc-catalog-refresh` run fills it, and until then the resolution is deterministic on `uuid` rather than correct.
+- **`mtgjson_printings.printing_id` is not unique.** The PK is `uuid`; MTGJSON emits one row per face of a double-faced card, and both faces carry the same Scryfall id with a *different* Card Kingdom link. **`side` is what says which row is the front face** — `'a'`, against `'b'`/`'c'`/`'d'` for the rest and NULL for a single-faced card — and `mtg_collector/db/mtgjson_faces.py` is the one place that reads it. Resolve through `front_face_sql` / `front_face_uuid_sql` / `front_face_bulk_sql`; never join on `printing_id` directly, which both multiplies rows and picks a face by query plan. In 19 of the 335 duplicated groups in the fixture only the front face has a Card Kingdom link at all, so landing on the back one loses the link (de-xpu); elsewhere the two links redirect to the same product. `side` is populated at import and is NULL on any database that has not been re-imported since — the chain's nightly derive fills it, and until then the resolution is deterministic on `uuid` rather than correct.
 - **The card name is denormalised twice, once per driving table.** `printings.card_name` and `collection.card_name` are both copies of `cards.name`, and which one a query reads is a property of the *template*, never a preference: `/api/collection` has a printings-driven template (`is:unowned`, shared links) and two collection-driven ones (the owned default, `expand=copies`), and only the copy on the driving table can be indexed for that template's order. Sorting on `card.name` is unreachable in every case — the GROUP BY pins the driving table, so `cards` can never be the outer loop and `idx_cards_name` cannot serve the ordering no matter what the tiebreak is. Measured on 110,018 printings / 121,020 owned copies: 2.3 s vs 8.8 ms (printings), 6.6 s vs 28 ms (collection, first page), 12.5 s vs 50 ms (`expand=copies`). **Each template's GROUP BY must lead with its own name column** or the sort just moves into the grouping and nothing is gained, and the collection-driven templates must key their GROUP BY/ORDER BY on `c.printing_id`, not `p.printing_id` — the same value, but SQLite will not cross the join to prove it, and `idx_collection_card_name` only carries the collection one.
 - **`idx_collection_card_name` needs the `INDEXED BY` hint; the planner will not find it.** Every collection-driven query constrains `c.status` (the endpoint adds `status IN ('owned','ordered')` when the query does not), and with **no `sqlite_stat1`** — nothing here runs `ANALYZE` — SQLite guesses that `IN` is selective and takes `idx_collection_status`, paying a temp B-tree over the whole result. Measured with the column and index in place but no hint: 2.3 s, still on `idx_collection_status`. The hint goes on the **page query only**, and only when the sort is by name: the count and the totals have no ORDER BY, so for them the index is just a scan in an order nobody asked for. It is **not free for every query** — an ordered scan pays for itself because LIMIT stops it early, so a filter selective enough to spread 250 matches across the whole collection makes it walk the lot in name order (`s:lci` 630 ms → 1.2 s), where a less selective one wins big (`r:mythic` 1.1 s → 112 ms). That is the trade, and it is inside the band a filtered search already cost.
 - **Each copy has its own writer and its own repair.** `PrintingRepository.upsert` fills `printings.card_name`, and `rebuild_card_names()` runs beside `rebuild_fts()` after `mtg cache` to carry an upstream rename to it. The index each copy exists for is `idx_printings_card_name(card_name, printing_id)` and `idx_collection_card_name(card_name, printing_id, finish, condition, status, order_id)` — the collection one carries the owned template's whole row-identity key, so dropping a column from it puts the grouping back on its own sort.
@@ -615,7 +615,7 @@ SQLite connections use `PRAGMA journal_mode = WAL` (set in `db/connection.py` an
 
 Rootless Podman Quadlet. Each instance gets its own repo clone, image (`mtgc:<instance>`), data volume, env file, and port. No sudo.
 
-Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/units-lib.sh` (renders the timer units for one instance, and lists the ones a host has; sourced by setup/deploy/teardown/prune), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, scheduled units `deploy/mtgc-prices.{service,timer}`, `deploy/mtgc-sealed-catalog.{service,timer}`, `deploy/mtgc-edhrec.{service,timer}`, `deploy/mtgc-catalog-refresh.{service,timer}`, and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
+Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed volume), `deploy/setup.sh`, `deploy/deploy.sh`, `deploy/teardown.sh`, `deploy/prune-instances.sh`, `deploy/store-lib.sh` (which Podman store an instance lives in), `deploy/units-lib.sh` (renders the timer units for one instance, and lists the ones a host has; sourced by setup/deploy/teardown/prune), `deploy/store-teardown.sh`, `deploy/store-isolation-gate.sh` (CI gate: a `--test` bring-up must write nothing to Podman's default store), `deploy/mtgc.container` (Quadlet template with `{{INSTANCE}}` / `{{PORT}}` / `{{HTTP_PUBLISH}}` / `{{TLS_MOUNT}}` / `{{MEMORY_LIMIT}}` placeholders), `deploy/render-quadlet.sh` (template render, called by `setup.sh`), `deploy/backup.sh` (host-side snapshot + S3 sync), `deploy/restore.sh`, the lakehouse chain units `deploy/mtgc-{land,derive,prices,ship,value}.{service,timer}` (armed only by `deploy/chain.sh`), and `deploy/mtgc-backup.{service,timer}`. All instances share a single `mtgc:latest` image; per-instance tags (`mtgc:<instance>`) are aliases. macOS equivalents: `deploy/mac-setup.sh`, `deploy/mac-deploy.sh`, `deploy/mac-teardown.sh` (use `podman run` directly, no systemd).
 
 - `~/.config/mtgc/default.env` holds the shared `ANTHROPIC_API_KEY`; `setup.sh` copies it to new instance env files automatically.
 - `~/.config/mtgc/<instance>.env` — per-instance env.
@@ -709,7 +709,7 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   sync. It reads through `get_connection()`, never `sqlite3.connect()`: `sets` is in
   `SHARED_TABLES`, so a deployed instance's own `sets` is empty and the catalogue is behind
   a temp view over the ATTACHed `shared.sqlite` — opening the instance file directly reports
-  a catalogue with no sets in it, a permanent red no refresh could clear. `mtgc-catalog-refresh`
+  a catalogue with no sets in it, a permanent red no refresh could clear. the chain
   is what clears it, so this goes red on a box where that timer was never enabled — the
   correct reading, not a false positive. See
   `mtg_collector/db/catalog_freshness.py`, `deploy/mtgc-catalog-check.{service,timer}`,
@@ -719,7 +719,7 @@ Key files: `Containerfile` (multi-stage build), `deploy/seed.sh` (one-time seed 
   because it used to be two** (de-wdq). `mtg cache all` (Scryfall sets + printings) and
   `mtg data fetch` (MTGJSON) were both by hand, and the second is the one that stopped
   being run — which is how the catalogue got two months behind with every timer green.
-  `deploy/mtgc-catalog-refresh.{service,timer}` runs it daily at 01:00, ahead of the
+  the chain's land and derive links (`deploy/mtgc-land.*`, `deploy/mtgc-derive.*`) replaced the old 01:00 `mtgc-catalog-refresh` and run daily at 08:00 UTC, ahead of the
   sealed catalog (Mon 04:00), EDHREC (Wed 05:00), prices (06:00), and the 09:00 freshness
   check that grades it. **The unit has exactly one `ExecStart=`** — two lines would
   rebuild the same failure mode inside systemd, where a half-refresh reads as a green
@@ -914,3 +914,12 @@ that flake. **A missing timeout is the half that hides**, because there is nothi
 call site to read — the call silently inherits Playwright's own 30 s, which no budget
 scales. `test_every_routed_page_links_back_to_the_homepage` navigated that way and errored
 on `/crack` at a load the budgeted calls in the same run sailed through.
+
+### Lakehouse timer chain (lakehouse 14, K8)
+Five links at 08:00 UTC, each `After=` the previous: land → derive → prices → ship → value, every
+one a one-off `podman run` of the instance's own `mtgc:<inst>` image (the image `deploy.sh`
+rebuilds). `deploy/chain.sh arm|disarm|status <inst>` is the only way to arm them and refuses an
+unpaired chain; `deploy.sh` retires the three timers the chain replaced (`mtgc_retire_units`),
+and `mtgc-prices` is now the third link. `derive` reads the newest run that landed every
+catalogue input (`landing.newest_catalog_run`), not merely the newest run. The DR runbook and the
+restore drill against the real buckets are `deploy/LAKE-DR.md` and `deploy/lake-drill.sh`.
