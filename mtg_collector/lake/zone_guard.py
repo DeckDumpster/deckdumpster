@@ -20,6 +20,9 @@ TENANT_COLUMN_NAMES = frozenset({
 })
 _TENANT_TOKEN = re.compile(r"tenant|database_id|user_id|owner", re.I)
 _ULID = re.compile(r"(?<![0-9A-Za-z])[0-7][0-9A-HJKMNP-TV-Z]{25}(?![0-9A-Za-z])")
+# A landing run id is a ULID too, but it names a fetch, not a tenant: it is in every
+# partition path (`run=<ULID>`) and in the manifest's own run_id.
+_RUN_ID = re.compile(r"run=[0-7][0-9A-HJKMNP-TV-Z]{25}")
 
 
 class ZoneViolation(Exception):
@@ -54,6 +57,8 @@ def check_manifest(manifest: dict, path: str = "") -> list[str]:
         here = f"{path}.{k}" if path else k
         if k.lower() in TENANT_COLUMN_NAMES or _TENANT_TOKEN.search(k):
             bad.append(f"manifest field {here}")
+        if k == "run_id":
+            continue
         bad += _check_value(v, here)
     return bad
 
@@ -63,6 +68,8 @@ def _check_value(v, here: str) -> list[str]:
         return check_manifest(v, here)
     if isinstance(v, (list, tuple)):
         return [b for i, x in enumerate(v) for b in _check_value(x, f"{here}[{i}]")]
+    if isinstance(v, str):
+        v = _RUN_ID.sub("run=", v)
     if isinstance(v, str) and (_TENANT_TOKEN.search(v) or _ULID.search(v)):
         return [f"manifest value {here}={v}"]
     return []

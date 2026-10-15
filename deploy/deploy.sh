@@ -130,6 +130,7 @@ else
     # The Quadlet names access.env without a leading '-', so it must exist
     # before the restart below.
     mtgc_scaffold_access_env "$INSTANCE"
+mtgc_scaffold_lake_env "$INSTANCE"
 
     # A unit that hit its start limit is `failed`, and systemd will not restart
     # it out of that state on its own — the point of the limit (de-z9xj). This

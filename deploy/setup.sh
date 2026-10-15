@@ -375,6 +375,7 @@ fi
 # shellcheck source=deploy/units-lib.sh
 . "$SCRIPT_DIR/units-lib.sh"
 mtgc_scaffold_access_env "$INSTANCE"
+mtgc_scaffold_lake_env "$INSTANCE"
 
 bash "$REPO_DIR/deploy/render-quadlet.sh" \
     "$INSTANCE" "$PORT_MAPPING" "$HTTP_PORT" "$TLS_CERTS" "$MEMORY_MAX" \
