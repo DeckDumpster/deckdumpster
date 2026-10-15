@@ -37,6 +37,7 @@ PUBLIC_ROUTES = ("/health", "/api/backup-status")
 
 # N4: a tenant response cached at the edge would be served to another tenant.
 CACHE_TENANT = "private, no-store"
+VARY_TENANT = "Cookie, Cf-Access-Jwt-Assertion, Accept-Encoding"
 
 LEGACY_METHODS = ["GET", "POST", "PUT", "DELETE"]
 
@@ -87,12 +88,15 @@ class TenantMiddleware:
         async def wrapped(message):
             if message["type"] == "http.response.start":
                 headers = [(k, v) for k, v in message["headers"]
-                           if k.lower() not in (b"cache-control", b"etag")]
+                           if k.lower() not in (b"cache-control", b"etag", b"vary")]
                 original = [v for k, v in message["headers"] if k.lower() == b"cache-control"]
                 if original and original[-1].decode("latin-1") == CACHE_HASHED_ASSET:
                     message = {**message, "headers": message["headers"]}
                 else:
                     headers.append((b"cache-control", CACHE_TENANT.encode()))
+                    # Belt and braces: a cache that stores despite no-store
+                    # (an edge rule overriding origin) must still key on identity.
+                    headers.append((b"vary", VARY_TENANT.encode()))
                     message = {**message, "headers": headers}
             await send(message)
         return wrapped
