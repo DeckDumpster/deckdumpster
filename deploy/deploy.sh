@@ -169,10 +169,13 @@ PORT=$(podman port "systemd-${SERVICE_NAME}" 8080/tcp 2>/dev/null | grep -oP ':\
 if [ -n "$PORT" ]; then
     SCHEME=http
     LISTENER=8080
+    # Multi-tenant answers 401 to every route but PUBLIC_ROUTES (sp-nlihgq).
+    PROBE_PATH=/health
 else
     PORT=$(podman port "systemd-${SERVICE_NAME}" 8081/tcp 2>/dev/null | grep -oP ':\K[0-9]+' | head -1 || true)
     SCHEME=https
     LISTENER=8081
+    PROBE_PATH=/
 fi
 if [ -z "$PORT" ]; then
     echo "==> Could not determine port. Check: podman port systemd-${SERVICE_NAME}"
@@ -182,7 +185,7 @@ echo "==> Listening on port $PORT (container port $LISTENER)"
 MAX_ATTEMPTS=15
 echo "==> Health check: $SERVICE_NAME (port $PORT)..."
 for i in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -skf --connect-timeout 3 "${SCHEME}://localhost:${PORT}/" > /dev/null 2>&1; then
+    if curl -skf --connect-timeout 3 "${SCHEME}://localhost:${PORT}${PROBE_PATH}" > /dev/null 2>&1; then
         echo "==> Health check passed (attempt $i/$MAX_ATTEMPTS)"
         exit 0
     fi
