@@ -300,3 +300,56 @@ def test_path_flag_reaches_both_sides(tmp_path, path):
     assert proc.returncode == 0, proc.stderr
     assert f"https://magic.dumpster.cards{path}" in calls
     assert f"https://localhost:8443{path}" in calls
+
+
+# ── Multi-tenant origin: identity-gated, so /health carries the build ────────
+
+BUILD = "a" * 40
+
+
+def _health(build):
+    return '{"ok":true,"build":"%s"}' % build if build else '{"ok":true,"build":null}'
+
+
+# Order: 1 origin root (401), 2 origin /health headers, 3 origin /health body,
+# 4 edge /health headers, 5 edge /health body.
+MT_GREEN = {
+    1: _dump(status="401", etag=None, cache=None),
+    2: _dump(),
+    3: _health(BUILD),
+    4: _dump(),
+    5: _health(BUILD),
+}
+
+
+def test_multitenant_passes_when_the_edge_serves_the_current_build(tmp_path):
+    proc, calls = _run(tmp_path, MT_GREEN)
+    assert proc.returncode == 0, proc.stderr
+    assert "https://magic.dumpster.cards/health" in calls
+    assert "https://magic.dumpster.cards/ " not in calls + " "
+
+
+def test_multitenant_fails_when_the_edge_serves_an_older_build(tmp_path):
+    proc, _ = _run(tmp_path, {**MT_GREEN, 5: _health("b" * 40)})
+    assert proc.returncode == 1
+    assert "different deploy" in proc.stderr
+
+
+def test_multitenant_fails_when_the_edge_answers_5xx(tmp_path):
+    proc, _ = _run(tmp_path, {**MT_GREEN, 4: _dump(status="502", etag=None, cache=None)})
+    assert proc.returncode == 1
+    assert "'502'" in proc.stderr
+
+
+def test_multitenant_fails_when_the_origin_reports_no_build(tmp_path):
+    proc, _ = _run(tmp_path, {**MT_GREEN, 3: _health(None), 5: _health(None)})
+    assert proc.returncode == 1
+    assert "no build id" in proc.stderr
+
+
+def test_multitenant_sends_the_service_token_to_the_edge(tmp_path):
+    proc, calls = _run(tmp_path, MT_GREEN, env={
+        "CF_ACCESS_CLIENT_ID": "id.access", "CF_ACCESS_CLIENT_SECRET": "s"})
+    assert proc.returncode == 0, proc.stderr
+    edge = [l for l in calls.splitlines() if "magic.dumpster.cards" in l]
+    assert edge and all("CF-Access-Client-Id: id.access" in l for l in edge)
