@@ -289,7 +289,7 @@ def test_refusals_are_private_no_store(world):
 def test_collection_router_opens_the_requesting_tenants_file(world, monkeypatch):
     """The ASGI collection router once opened the server's single db_path for every
     request, so a new tenant was served the legacy single-tenant collection."""
-    from mtg_collector.routes import collection as route
+    from mtg_collector.tenancy import connection as route
     opened = []
     real = route.open_connection
 
