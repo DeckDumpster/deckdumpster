@@ -11,6 +11,7 @@ OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
 Type=simple
 ExecStart=/bin/sh -c 'exec bash {{REPO_DIR}}/deploy/litestream-run.sh {{INSTANCE}}'
 Restart=on-failure
+RestartPreventExitStatus=78
 RestartSec=30
 # Fenced: replication must never be able to starve the site it protects.
 CPUQuota=50%

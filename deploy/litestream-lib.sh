@@ -8,6 +8,13 @@
 # shellcheck source=deploy/store-lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/store-lib.sh"
 
+# litestream-install.sh puts the binary in ~/.local/bin, which the systemd user
+# manager's PATH (Ubuntu's /etc/environment) does not name: the unit died with
+# "litestream: command not found" on every start (sp-fgve20). Every script that
+# runs litestream sources this, so it resolves the installed binary wherever it
+# is started from, and a deploy's own exported PATH is not what makes it work.
+export PATH="${MTGC_LITESTREAM_BIN_DIR:-$HOME/.local/bin}:$PATH"
+
 # mtgc_ls_home <instance> — the directory holding registry.sqlite, tenants/ and
 # tenant-files/ (the volume mount; /data inside the container). MTGC_LITESTREAM_HOME
 # names it outright; only tests use that, production asks podman.
