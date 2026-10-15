@@ -83,8 +83,8 @@ def test_multitenant_container_serving_8080_passes(run_deploy):
 
 def test_multitenant_stopped_container_fails(run_deploy):
     r = run_deploy("", publish_8080=True)
-    assert r.returncode == 1
-    assert "Health check FAILED" in r.stdout
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "Health check FAILED" in r.stdout, r.stdout + r.stderr
 
 
 def test_single_tenant_still_probes_8081_over_tls(run_deploy):
