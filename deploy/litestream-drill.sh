@@ -41,7 +41,7 @@ fingerprint() {   # sha256 of every live database file except $1
 }
 
 # 1. Registry first.
-litestream restore -o "$SCRATCH/registry.sqlite" "$(mtgc_ls_replica_url "$INSTANCE" registry)" \
+litestream restore -o "$SCRATCH/registry.sqlite" "$(mtgc_ls_restore_url "$INSTANCE" registry)" \
     || fail "could not restore the registry"
 mapfile -t IDS < <(mtgc_ls_tenant_ids "$SCRATCH/registry.sqlite")
 [ "${#IDS[@]}" -ge 2 ] \
@@ -54,7 +54,7 @@ TARGET="${IDS[1]}"
 BEFORE="$(fingerprint "$TARGET")"
 
 # 2. Then the tenant.
-litestream restore -o "$SCRATCH/${TARGET}.sqlite" "$(mtgc_ls_replica_url "$INSTANCE" tenants)/${TARGET}.sqlite" \
+litestream restore -o "$SCRATCH/${TARGET}.sqlite" "$(mtgc_ls_restore_url "$INSTANCE" tenants "/${TARGET}.sqlite")" \
     || fail "could not restore tenant $TARGET"
 
 python3 -I - "$SCRATCH/${TARGET}.sqlite" <<'PY' || fail "restored tenant $TARGET failed PRAGMA integrity_check"
