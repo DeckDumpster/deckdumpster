@@ -1,8 +1,17 @@
 [Unit]
-Description=MTGC daily price fetch ({{INSTANCE}})
+Description=MTGC lakehouse chain: prices and sealed products into raw/ and the Iceberg tables ({{INSTANCE}})
+After=network-online.target mtgc-derive-{{INSTANCE}}.service
+Wants=network-online.target
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
 
 [Service]
 Type=oneshot
-ExecStart=podman exec systemd-mtgc-{{INSTANCE}} mtg data fetch-prices --force
-ExecStart=podman exec systemd-mtgc-{{INSTANCE}} mtg data fetch-sealed-prices
-TimeoutStartSec=900
+ExecStartPre=/bin/mkdir -p %h/.local/share/mtgc-lake/{{INSTANCE}}/raw
+ExecStartPre=/bin/mkdir -p %h/.local/share/mtgc-lake/{{INSTANCE}}/iceberg
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z localhost/mtgc:{{INSTANCE}} mtg data import-sealed-products
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z localhost/mtgc:{{INSTANCE}} mtg data fetch-prices --force
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z localhost/mtgc:{{INSTANCE}} mtg data fetch-sealed-prices
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_CATALOG=/lake/iceberg-catalog.sqlite -e MTGC_LAKE_WAREHOUSE=/lake/warehouse -v %h/.local/share/mtgc-lake/{{INSTANCE}}/iceberg:/lake:Z localhost/mtgc:{{INSTANCE}} mtg data lake-build
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_CATALOG=/lake/iceberg-catalog.sqlite -e MTGC_LAKE_WAREHOUSE=/lake/warehouse -v %h/.local/share/mtgc-lake/{{INSTANCE}}/iceberg:/lake:Z localhost/mtgc:{{INSTANCE}} mtg data lake-verify
+ExecStartPost=/bin/sh -c 'bash {{REPO_DIR}}/deploy/lake-sync.sh {{INSTANCE}} raw && exec bash {{REPO_DIR}}/deploy/lake-sync.sh {{INSTANCE}} catalog'
+TimeoutStartSec=5400

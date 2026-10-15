@@ -154,7 +154,7 @@ def test_redeploy_installs_a_unit_added_after_the_instance_existed(host):
     host.setup("inst", "8083")
 
     # An instance installed before three of today's timers existed.
-    for prefix in ("mtgc-catalog-check", "mtgc-catalog-refresh", "mtgc-diskcheck"):
+    for prefix in ("mtgc-catalog-check", "mtgc-land", "mtgc-diskcheck"):
         for ext in ("service", "timer"):
             (host.units_dir / f"{prefix}-inst.{ext}").unlink()
     assert host.installed("inst") != repo_timer_prefixes()
@@ -282,3 +282,15 @@ def test_prune_removes_every_timer_the_host_has(host):
 
     assert host.installed("ghost") == set()
     assert not (host.units_dir / "mtgc-alert-ghost@.service").exists()
+
+
+def test_a_redeploy_retires_the_timers_the_chain_replaced(host):
+    """The three replaced timers are not in the repo, so the install loop cannot
+    overwrite them: left alone they stay armed and refresh a second time."""
+    host.setup("inst", "8083")
+    host.write_units("inst", "mtgc-catalog-refresh", "mtgc-sealed-catalog", "mtgc-edhrec")
+    assert {"mtgc-catalog-refresh", "mtgc-sealed-catalog", "mtgc-edhrec"} <= host.installed("inst")
+
+    host.deploy("inst")
+
+    assert host.installed("inst") == repo_timer_prefixes()
