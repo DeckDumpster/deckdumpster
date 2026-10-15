@@ -219,8 +219,8 @@ def test_get_conn_opens_the_tenants_file(multi, monkeypatch):
     def spy(self):
         seen.append(self.db_path)
         opened = []
-        monkeypatch.setattr(cps, "open_connection",
-                            lambda path, shared: opened.append(path) or object())
+        monkeypatch.setattr("mtg_collector.tenancy.connection.open_connection",
+                            lambda path, shared, **kw: opened.append(path) or object())
         self._get_conn()
         self._send_json({"path": opened[0]})
 
