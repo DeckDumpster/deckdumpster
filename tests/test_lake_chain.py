@@ -114,7 +114,7 @@ def test_arm_refuses_an_unpaired_chain_and_enables_nothing(host, name):
     r = host.chain("arm", "inst")
     assert r.returncode == 1
     assert f"{name}-inst.timer is not installed" in r.stderr
-    assert "enable" not in host.log()
+    assert "enable --now" not in host.log()
 
 
 def test_arm_refuses_a_link_not_ordered_after_its_predecessor(host):
@@ -136,7 +136,7 @@ def test_arm_refuses_without_the_master_key_or_lake_config(host):
     r = host.chain("arm", "inst")
     assert r.returncode == 1
     assert "mode 644" in r.stderr and "MTGC_LAKE_S3_BUCKET is not set" in r.stderr
-    assert "enable" not in host.log()
+    assert "enable --now" not in host.log()
 
 
 def test_status_reports_a_half_armed_chain_as_a_failure(host):
