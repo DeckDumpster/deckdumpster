@@ -347,8 +347,10 @@ gets a new ULID, so it can never reach the old files or replica. `mtg tenant
 create|list|rename|detach|reattach|purge|adopt|migrate|set-key|identity` is the lifecycle;
 `migrate` needs a handle or `--all` and reports every tenant. Keys are read from stdin and
 encrypted under `MTGC_MASTER_KEY` / `MTGC_MASTER_KEY_FILE` (`tenancy/keycrypt.py`, stdlib
-only), bound to the database_id. Nothing here routes a request: multi-tenant serving is
-later beads.
+only), bound to the database_id. Serving is opt-in: `MTGC_MULTITENANT=1` (which needs
+`MTGC_HTTP_PORT`, the loopback origin behind Cloudflare Access) resolves each request's verified
+identity to a tenant through the registry (401 bad/absent JWT, 403 unbound email, nothing is
+provisioned on lookup). Unset, the one configured tenant serves everything, as before.
 
 ### Bring-your-own-key OCR
 
