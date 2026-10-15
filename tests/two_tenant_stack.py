@@ -197,7 +197,7 @@ class TwoTenantStack:
 def image_exists(instance: str) -> bool:
     return subprocess.run(
         [*podman_argv(instance), "image", "exists", f"localhost/mtgc:{instance}"],
-        capture_output=True,
+        capture_output=True, timeout=60,
     ).returncode == 0
 
 
