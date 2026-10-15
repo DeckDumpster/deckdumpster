@@ -320,3 +320,20 @@ def _single_tenant_bound():
 
     with bind(SingleTenantResolver().resolve(None)):
         yield
+
+
+@pytest.fixture(scope="session")
+def two_tenants(request, instance_name):
+    """The production container shape with tenants alice (the demo data) and bobby (nothing).
+
+    Built from the instance's own image, so it needs the same `setup.sh` bring-up the
+    integration and UI tiers do; a named instance with no image is an error. Only those
+    two directories define `instance_name`, so a unit run never asks for this.
+    """
+    from tests.two_tenant_stack import image_exists, start_stack
+
+    if not request.config.getoption("--instance") and not image_exists(instance_name):
+        pytest.skip(f"no image for the default instance '{instance_name}'")
+    stack = start_stack(instance_name)
+    yield stack
+    stack.stop()
