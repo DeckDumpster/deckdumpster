@@ -1211,3 +1211,8 @@ journalctl --user -u mtgc-<name> -f
 podman exec -it systemd-mtgc-<name> bash
 podman volume inspect systemd-mtgc-<name>-data
 ```
+
+**Litestream needs `MTGC_BACKUP_S3_REGION`** (sp-yplovy). The instance env must name the
+bucket's region (e.g. `us-west-2`); the config renders it on every replica and restores
+carry it as `?region=`. Unset is a hard refusal, because without it litestream calls
+`GetBucketLocation`, which the least-privilege `mtgc-backup` role is denied.

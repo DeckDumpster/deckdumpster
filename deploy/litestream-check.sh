@@ -68,11 +68,11 @@ fi
 if [ "${#IDS[@]}" -gt 0 ]; then
     ID="${IDS[$(( $(date +%s) / 86400 % ${#IDS[@]} ))]}"
     SAMPLE="$SCRATCH/${ID}.sqlite"
-    URL="$(mtgc_ls_replica_url "$INSTANCE" tenants)/${ID}.sqlite"
+    URL="$(mtgc_ls_restore_url "$INSTANCE" tenants "/${ID}.sqlite")" || stale "MTGC_BACKUP_S3_REGION is unset"
     NAME="tenant ${ID}"
 else
     SAMPLE="$SCRATCH/collection.sqlite"
-    URL="$(mtgc_ls_replica_url "$INSTANCE" collection)"
+    URL="$(mtgc_ls_restore_url "$INSTANCE" collection)" || stale "MTGC_BACKUP_S3_REGION is unset"
     NAME="collection.sqlite"
 fi
 litestream restore -o "$SAMPLE" "$URL" >/dev/null 2>&1 || stale "could not restore ${NAME} from ${URL}"
