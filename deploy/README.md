@@ -439,8 +439,10 @@ a flap, not a loop, and the origin serving check is the instrument for it, becau
 it asks whether the site answers rather than whether the unit is up. There is
 deliberately no `OnFailure=` beside the limit: that check already alarms on this
 outcome, and a second path to the same page is a second path to keep in sync.
-(`mtgc-serving-check-prod` is armed on the deployment box but is not yet in this
-repo, which is its own defect — de-u6a2.)
+(`mtgc-serving-check-<instance>` is `deploy/mtgc-serving-check.{service,timer}`,
+running `deploy/serving-check.sh`; the deploy arms it. The listener it asks is
+resolved from the instance's mode by `deploy/origin-lib.sh`, shared with the
+deploy health check, `cdn-check.sh` and `handles.sh` — never a literal 8081.)
 
 `StartLimitAction` stays at its default, so the unit simply fails and stays
 failed. That is the cost, and `deploy/deploy.sh` pays it with a
@@ -1087,7 +1089,7 @@ asks localhost, and then compares the two:
 bash deploy/cdn-check.sh                                    # defaults below
 bash deploy/cdn-check.sh --path /sets                       # any document
 bash deploy/cdn-check.sh --url https://magic.dumpster.cards \
-                         --origin https://localhost:8081
+                         --origin https://localhost:<published-port>
 ```
 
 It verifies, in order:

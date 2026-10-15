@@ -1,0 +1,14 @@
+[Unit]
+Description=MTGC origin serving check ({{INSTANCE}})
+# Asks whether the site answers, not whether the unit is up: a flapping instance
+# serves half a minute between deaths and never trips the start limit. The
+# listener it asks is resolved from the instance's mode by origin-lib.sh — a
+# multi-tenant instance serves no 8081 and answers 401 outside /health, and a
+# check hard-coded to https://localhost:8081/ failed every healthy one (sp-8lil3y).
+# A stopped container has no published port and fails the same way.
+OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env bash {{REPO_DIR}}/deploy/serving-check.sh {{INSTANCE}}
+TimeoutStartSec=60

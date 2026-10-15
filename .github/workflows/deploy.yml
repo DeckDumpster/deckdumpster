@@ -63,6 +63,4 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          PORT=$(podman port systemd-mtgc-prod 8081/tcp | grep -oP ':\K[0-9]+' | head -1)
-          [ -n "$PORT" ] || { echo "could not find prod's HTTPS port"; exit 1; }
-          bash deploy/cdn-check.sh --origin "https://localhost:${PORT}"
+          MTGC_INSTANCE=prod bash deploy/cdn-check.sh

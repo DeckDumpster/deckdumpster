@@ -101,6 +101,9 @@ def _run(tmp_path, responses, *, env=None, args=()):
         "CURL_SEQ": str(tmp_path / "seq"),
         "CURL_RESPONSES": str(resp_dir),
     }
+    # The origin is resolved from the running instance's mode when unset; these
+    # tests drive the comparison, so they name one (resolution: test_origin_probes).
+    child["MTGC_ORIGIN_URL"] = "https://localhost:8443"
     child.pop("CF_ACCESS_CLIENT_ID", None)
     child.pop("CF_ACCESS_CLIENT_SECRET", None)
     child.update(env or {})
@@ -128,7 +131,7 @@ def test_green_run_actually_traversed_the_cdn(tmp_path):
     proc, calls = _run(tmp_path, GREEN)
     assert proc.returncode == 0, proc.stderr
     assert "https://magic.dumpster.cards/" in calls
-    assert "https://localhost:8081/" in calls
+    assert "https://localhost:8443/" in calls
     # Both sides compared as the same representation, or the comparison is a
     # coin toss against whichever encoding each hop happened to pick.
     assert calls.count("Accept-Encoding: identity") >= 2
@@ -196,7 +199,7 @@ def test_edge_that_does_not_compress_is_caught(tmp_path):
 
 
 def test_dead_origin_is_caught(tmp_path):
-    proc, _ = _run(tmp_path, {1: "curl: (7) Failed to connect to localhost port 8081\n"})
+    proc, _ = _run(tmp_path, {1: "curl: (7) Failed to connect to localhost port 8443\n"})
     assert proc.returncode == 1
     assert "not 200" in proc.stderr
     assert "Failed to connect" in proc.stderr, "the transport error must reach the reader"
@@ -277,7 +280,7 @@ def test_service_token_is_sent_on_every_public_request(tmp_path):
     assert len(public_calls) == 5, f"expected five edge requests, got {public_calls}"
     assert all("CF-Access-Client-Id: id.access" in line for line in public_calls)
     # And never at the origin, which is not behind Access.
-    origin_calls = [line for line in calls.splitlines() if "localhost:8081" in line]
+    origin_calls = [line for line in calls.splitlines() if "localhost:8443" in line]
     assert all("CF-Access-Client-Id" not in line for line in origin_calls)
 
 
@@ -296,4 +299,4 @@ def test_path_flag_reaches_both_sides(tmp_path, path):
     proc, calls = _run(tmp_path, GREEN, args=["--path", path])
     assert proc.returncode == 0, proc.stderr
     assert f"https://magic.dumpster.cards{path}" in calls
-    assert f"https://localhost:8081{path}" in calls
+    assert f"https://localhost:8443{path}" in calls
