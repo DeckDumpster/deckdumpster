@@ -35,6 +35,8 @@ jobs:
         run: podman image prune -f || true
 
       - name: Build and restart
+        env:
+          MTGC_ARM_SERVING_CHECK: '1'
         run: bash /opt/mtgc-${{ env.INSTANCE }}/deploy/deploy.sh ${{ env.INSTANCE }}
 
   # A deploy check that does not traverse the CDN is not a deploy check (de-dai).
@@ -63,6 +65,4 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
-          PORT=$(podman port systemd-mtgc-prod 8081/tcp | grep -oP ':\K[0-9]+' | head -1)
-          [ -n "$PORT" ] || { echo "could not find prod's HTTPS port"; exit 1; }
-          bash deploy/cdn-check.sh --origin "https://localhost:${PORT}"
+          MTGC_INSTANCE=prod bash deploy/cdn-check.sh
