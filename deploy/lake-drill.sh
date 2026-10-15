@@ -28,6 +28,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=deploy/litestream-lib.sh
 . "$SCRIPT_DIR/litestream-lib.sh"
+# shellcheck source=deploy/store-lib.sh
+. "$SCRIPT_DIR/store-lib.sh"
 
 INSTANCE="${1:?usage: lake-drill.sh <instance> --master-key FILE [--partition RUN_ID]}"
 shift
@@ -47,6 +49,10 @@ for f in "${CONF_DIR}/${INSTANCE}.env" "${CONF_DIR}/${INSTANCE}/lake.env"; do
 done
 : "${MTGC_LAKE_S3_BUCKET:?lake.env must name MTGC_LAKE_S3_BUCKET}"
 : "${MTGC_LAKE_TENANT_URI:?lake.env must name MTGC_LAKE_TENANT_URI}"
+
+# The drill's job containers must run in the store the instance lives in.
+mtgc_store_adopt_instance "$INSTANCE"
+mtgc_store_activate
 
 HOME_DIR="$(mtgc_ls_home "$INSTANCE")"
 SCRATCH="$(mktemp -d)"

@@ -70,3 +70,11 @@ def test_land_unit_runs_in_its_own_container():
     exec_line = [ln for ln in unit.splitlines() if ln.startswith("ExecStart=")][0]
     assert "podman run --rm" in exec_line and "podman exec" not in exec_line
     assert "MTGC_LAKE_RAW_DIR" in exec_line
+
+
+def test_a_landed_manifest_passes_the_catalog_zone_guard(tmp_path):
+    from mtg_collector.lake.zone_guard import assert_clean
+
+    run = Run(tmp_path)
+    run.land_bytes(source="s", dataset="d", url="http://x/1", data=b"abc")
+    assert_clean(manifests=[_manifest(run, "s", "d")])
