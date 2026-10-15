@@ -137,6 +137,16 @@ else
     # failed makes this an error on some systemd versions.
     systemctl --user reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
 
+    # The replication dependency and its units travel with the deploy that
+    # needs them (sp-5sq7wk): installed-but-disabled units and a missing binary
+    # left production tenants with no backup for a day. Installed before the
+    # restart so a failed download stops the deploy, not the site afterwards.
+    # Only an instance with tenant databases has anything to replicate.
+    if bash "$SCRIPT_DIR/replication-doctor.sh" --detect "$INSTANCE"; then
+        bash "$SCRIPT_DIR/litestream-install.sh"
+    fi
+    export PATH="${MTGC_LITESTREAM_BIN_DIR:-$HOME/.local/bin}:$PATH"
+
     bash "$SCRIPT_DIR/freeze.sh" check "$INSTANCE"
 
     echo "==> Restarting $SERVICE_NAME..."
@@ -158,6 +168,11 @@ if [ "$HELD_STORE_LOCK" = true ]; then
     mtgc_default_store_unlock
     HELD_STORE_LOCK=false
 fi
+
+# A deploy is not green while a declared replication unit is not running.
+# Enables the timers, then fails naming whichever is not up (sp-5sq7wk).
+export PATH="${MTGC_LITESTREAM_BIN_DIR:-$HOME/.local/bin}:$PATH"
+bash "$SCRIPT_DIR/replication-doctor.sh" --enable "$INSTANCE"
 
 # Wait briefly for the container to start, then discover the assigned port.
 # Multi-tenant mode serves only the plain-HTTP listener on 8080 and says "port
