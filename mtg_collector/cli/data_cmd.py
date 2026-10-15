@@ -198,6 +198,11 @@ def register(subparsers):
         help="Refresh the whole card/set catalogue: Scryfall cache + MTGJSON, as one step",
     )
 
+    data_sub.add_parser(
+        "land",
+        help="Fetch every catalogue input into the raw landing zone; writes no catalogue byte",
+    )
+
     derive_parser = data_sub.add_parser(
         "derive",
         help=(
@@ -206,7 +211,8 @@ def register(subparsers):
         ),
     )
     derive_parser.add_argument(
-        "--run", default=None, help="Raw run id to derive from (default: the newest landed run)"
+        "--run", default=None,
+        help="Raw run id to derive from (default: the newest run that landed every catalogue input)"
     )
     derive_parser.add_argument(
         "--raw-root", default=None, help="Landing root (default: MTGC_LAKE_RAW_DIR or $MTGC_HOME/lake/raw)"
@@ -276,12 +282,14 @@ def run(args):
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         refresh_catalog(db_path)
+    elif args.data_command == "land":
+        print(f"landed raw run {land_catalog()}")
     elif args.data_command == "derive":
         from mtg_collector.db.connection import get_db_path
         db_path = get_db_path(getattr(args, "db_path", None))
         derive_catalog(db_path, raw_root=args.raw_root, run_id=args.run)
     else:
-        print("Usage: mtg data {derive|fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|lake-build|lake-check-age|lake-verify|lake-guard-selftest|backfill-sets|check-catalog|refresh-catalog|export-price-history} [options]")
+        print("Usage: mtg data {land|derive|fetch|fetch-prices|rebuild-growth|import|import-prices|check-prices|fetch-sealed-prices|import-sealed-products|fetch-edhrec|import-edhrec|lake-build|lake-check-age|lake-verify|lake-guard-selftest|backfill-sets|check-catalog|refresh-catalog|export-price-history} [options]")
 
 
 def _lake_command(command: str, db_path: str) -> int:
@@ -976,8 +984,10 @@ def derive_catalog(db_path: str, *, raw_root: str | None = None, run_id: str | N
     zone, and `refresh_catalog` lands first and then calls this. Nothing is fetched: a URL the run did not land is a ReplayMiss, and
     it propagates. Nothing is landed either.
     """
-    from mtg_collector.landing import Replay, use_replay
+    from mtg_collector.landing import Replay, newest_catalog_run, use_replay
 
+    if run_id is None:
+        run_id = newest_catalog_run(Path(raw_root) if raw_root else None)
     replay = Replay(Path(raw_root) if raw_root else None, run_id)
     print(f"Deriving the catalogue from raw run {replay.run_id} ({replay.root})")
     use_replay(replay)
