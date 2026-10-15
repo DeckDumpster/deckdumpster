@@ -58,7 +58,8 @@
 # Usage: cdn-check.sh [--url URL] [--origin URL] [--path PATH]
 #
 #   --url     public URL, through Cloudflare   (default https://magic.dumpster.cards)
-#   --origin  origin URL, on the deploy box    (default https://localhost:8081)
+#   --origin  origin URL, on the deploy box    (default: resolved from the running
+#             instance's mode by origin-lib.sh; MTGC_INSTANCE, default prod)
 #   --path    document path to compare         (default /)
 #
 # Behind Cloudflare Access, set CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET to
@@ -67,7 +68,7 @@
 set -uo pipefail
 
 PUBLIC_URL="${MTGC_PUBLIC_URL:-https://magic.dumpster.cards}"
-ORIGIN_URL="${MTGC_ORIGIN_URL:-https://localhost:8081}"
+ORIGIN_URL="${MTGC_ORIGIN_URL:-}"
 DOC_PATH="/"
 
 while [ $# -gt 0 ]; do
@@ -78,6 +79,14 @@ while [ $# -gt 0 ]; do
         *) echo "cdn-check: unknown argument '$1'" >&2; exit 2 ;;
     esac
 done
+
+# No literal port: the listener a running instance serves depends on its mode.
+if [ -z "$ORIGIN_URL" ]; then
+    # shellcheck source=origin-lib.sh
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/origin-lib.sh"
+    mtgc_origin_resolve "${MTGC_INSTANCE:-prod}" \
+        || { echo "cdn-check: FAILED — no running origin to resolve." >&2; exit 1; }
+fi
 
 PUBLIC_URL="${PUBLIC_URL%/}"
 ORIGIN_URL="${ORIGIN_URL%/}"
@@ -95,7 +104,7 @@ fail() {
 
 # Response headers only, lower-cased names so the greps below are not at the
 # mercy of which hop last rewrote the casing. `-k` covers the origin's
-# self-signed cert on 8081; the public side goes through a real certificate and
+# self-signed cert on a single-tenant origin; the public side goes through a real certificate and
 # is unaffected by it.
 headers_of() {
     curl -sS -k -m 20 -o /dev/null -D - "$@" 2>&1 \
@@ -152,6 +161,18 @@ assert_not_access_wall() {
 # letting either side pick its encoding would make the comparison a coin toss.
 ORIGIN_DUMP="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${DOC_PATH}")"
 ORIGIN_STATUS="$(status_of "$ORIGIN_DUMP")"
+# A multi-tenant origin answers 401 to every route but /health until shown an
+# Access identity (the edge supplies it). That challenge is a live server; only
+# the origin-side byte comparison below cannot be made without an identity.
+ORIGIN_CHALLENGED=false
+if [ "$ORIGIN_STATUS" = "401" ]; then
+    HEALTH_DUMP="$(headers_of "${ORIGIN_URL}/health")"
+    [ "$(status_of "$HEALTH_DUMP")" = "200" ] \
+        || fail "the origin ${ORIGIN_URL}${DOC_PATH} answered 401 and its /health did not answer 200.
+    $(transport_error "$HEALTH_DUMP")"
+    ORIGIN_CHALLENGED=true
+    ORIGIN_STATUS=200
+fi
 [ "$ORIGIN_STATUS" = "200" ] \
     || fail "the origin ${ORIGIN_URL}${DOC_PATH} answered '${ORIGIN_STATUS:-nothing}', not 200.
     $(transport_error "$ORIGIN_DUMP")
@@ -217,10 +238,12 @@ ASSET_PATH="$(printf '%s' "$PUBLIC_BODY" \
     each asset costs a conditional round trip per page load, and an origin that
     stopped rewriting them is the reason."
 
-ASSET_ORIGIN="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
-[ "$(status_of "$ASSET_ORIGIN")" = "200" ] \
-    || fail "the origin answered '$(status_of "$ASSET_ORIGIN")' for ${ASSET_PATH}, an asset
+if [ "$ORIGIN_CHALLENGED" = false ]; then
+    ASSET_ORIGIN="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
+    [ "$(status_of "$ASSET_ORIGIN")" = "200" ] \
+        || fail "the origin answered '$(status_of "$ASSET_ORIGIN")' for ${ASSET_PATH}, an asset
     URL its own document names. The page renders unstyled."
+fi
 
 ASSET_DUMP="$(headers_of "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' \
     "${PUBLIC_URL}${ASSET_PATH}")"
@@ -242,8 +265,13 @@ printf '%s' "$ASSET_CC" | grep -qi immutable && [ -n "$ASSET_MAX_AGE" ] && [ "$A
 # the bytes without this noticing. A digest-bearing URL means one exact byte
 # string, and the edge is promising to hold what it has for ${ASSET_MAX_AGE}s.
 body_sha() { curl -sS -k -m 30 "$@" | sha256sum | cut -d' ' -f1; }
-ORIGIN_SHA="$(body_sha -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
 PUBLIC_SHA="$(body_sha "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' "${PUBLIC_URL}${ASSET_PATH}")"
+if [ "$ORIGIN_CHALLENGED" = true ]; then
+    echo "cdn-check: origin is identity-gated (multi-tenant); no origin-side byte comparison, edge asset verified only." >&2
+    ORIGIN_SHA="$PUBLIC_SHA"
+else
+    ORIGIN_SHA="$(body_sha -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
+fi
 if [ -z "$ORIGIN_SHA" ] || [ "$ORIGIN_SHA" != "$PUBLIC_SHA" ]; then
     fail "the edge is serving DIFFERENT bytes than the origin for ${ASSET_PATH}.
     origin sha256 ${ORIGIN_SHA:-<none>}

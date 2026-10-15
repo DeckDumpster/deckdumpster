@@ -1,0 +1,9 @@
+[Unit]
+Description=MTGC origin serving check timer ({{INSTANCE}})
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
