@@ -399,3 +399,32 @@ def test_a_disk_that_cannot_be_measured_is_a_failure(rig):
     assert result.returncode == 1
     assert "could not measure free space" in result.stdout
     assert rig.dailies == ["mtgc-prod-20260825-030001.tar.gz"]
+
+
+def test_the_tarball_carries_the_registry_and_every_tenant(rig, tmp_path):
+    """sp-5sq7wk: the 03:00 backup omitted every multi-tenant database."""
+    t1, t2 = "01J0000000000000000000000A", "01J0000000000000000000000B"
+    _make_db(rig.volume / "registry.sqlite", 10)
+    (rig.volume / "tenants").mkdir()
+    _make_db(rig.volume / "tenants" / f"{t1}.sqlite", 20)
+    _make_db(rig.volume / "tenants" / f"{t2}.sqlite", 30)
+
+    result = rig.run()
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    tarball = next(iter(rig.daily.glob("mtgc-prod-*.tar.gz")))
+    out = tmp_path / "restored"
+    out.mkdir()
+    with tarfile.open(tarball) as tf:
+        names = tf.getnames()
+        tf.extractall(out, filter="data")
+    for member, rows in (
+        ("registry.sqlite", 10),
+        (f"tenants/{t1}.sqlite", 20),
+        (f"tenants/{t2}.sqlite", 30),
+    ):
+        assert member in names
+        conn = sqlite3.connect(out / member)
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("SELECT COUNT(*) FROM collection").fetchone()[0] == rows
+        conn.close()

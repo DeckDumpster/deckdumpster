@@ -12,6 +12,7 @@
 #
 # What gets backed up:
 #   - collection.sqlite  (online snapshot via sqlite3.backup())
+#   - registry.sqlite, tenants/*.sqlite  (online snapshots, multi-tenant)
 #   - source_images/     (original uploaded photos)
 #   - ingest_images/     (processed ingestion images)
 #
@@ -117,6 +118,10 @@ fi
 # tarballs that S3 is confirmed to already hold.
 
 DB_BYTES=$(stat -c%s "$SRC_DB")
+# Tenant files are snapshotted into staging too, so they count against the disk.
+for SRC in "${VOLUME_MOUNT}/registry.sqlite" "${VOLUME_MOUNT}"/tenants/*.sqlite; do
+    [ -f "$SRC" ] && DB_BYTES=$((DB_BYTES + $(stat -c%s "$SRC")))
+done
 # Peak usage during backup ≈ snapshot copy + compressed tarball.
 # Compressed tarball runs ~30% of DB size for this dataset (mostly IDs/numbers);
 # budget 40% of it, plus 200 MB for gzip overhead.
@@ -203,6 +208,30 @@ dst.close()
 src.close()
 PY
 
+# --- Snapshot the multi-tenant databases (sp-5sq7wk) ---
+#
+# Registry and every tenant file are online-snapshotted into staging and ride
+# the same tarball. The tarball held only collection.sqlite, so after the
+# multi-tenancy cutover the 03:00 backup covered none of the live data.
+TENANT_MEMBERS=()
+if [ -f "${VOLUME_MOUNT}/registry.sqlite" ] || compgen -G "${VOLUME_MOUNT}/tenants/*.sqlite" >/dev/null; then
+    mkdir -p "$STAGING_DIR/tenants"
+    for SRC in "${VOLUME_MOUNT}/registry.sqlite" "${VOLUME_MOUNT}"/tenants/*.sqlite; do
+        [ -f "$SRC" ] || continue
+        REL="${SRC#"${VOLUME_MOUNT}"/}"
+        echo "==> Snapshotting $REL ..."
+        python3 - "$SRC" "$STAGING_DIR/$REL" <<'PY'
+import sys, sqlite3
+src = sqlite3.connect(sys.argv[1], timeout=60)
+dst = sqlite3.connect(sys.argv[2])
+src.backup(dst)
+dst.close()
+src.close()
+PY
+        TENANT_MEMBERS+=("$REL")
+    done
+fi
+
 # --- Create tarball ---
 #
 # The images are read straight from the volume mount rather than copied into
@@ -217,6 +246,9 @@ PY
 # has never had one contributes an empty directory from staging.
 
 TAR_MEMBERS=(-C "$STAGING_DIR" collection.sqlite)
+for REL in "${TENANT_MEMBERS[@]}"; do
+    TAR_MEMBERS+=(-C "$STAGING_DIR" "$REL")
+done
 for IMG_DIR in source_images ingest_images; do
     if [ -d "${VOLUME_MOUNT}/${IMG_DIR}" ]; then
         TAR_MEMBERS+=(-C "$VOLUME_MOUNT" "$IMG_DIR")
