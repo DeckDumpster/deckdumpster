@@ -65,8 +65,8 @@ def test_every_upstream_fetch_is_landed():
     assert offenders == []
 
 
-def test_refresh_unit_runs_in_its_own_container():
-    unit = (ROOT / "deploy" / "mtgc-catalog-refresh.service").read_text()
+def test_land_unit_runs_in_its_own_container():
+    unit = (ROOT / "deploy" / "mtgc-land.service").read_text()
     exec_line = [ln for ln in unit.splitlines() if ln.startswith("ExecStart=")][0]
     assert "podman run --rm" in exec_line and "podman exec" not in exec_line
     assert "MTGC_LAKE_RAW_DIR" in exec_line

@@ -183,7 +183,9 @@ def test_unset_leaves_the_timer_units_unflagged(host):
     host.setup("inst", "8083")
 
     text = host.service("mtgc-prices", "inst").read_text()
-    assert "ExecStart=podman exec systemd-mtgc-inst mtg data fetch-prices --force" in text
+    assert "ExecStart=podman run --rm " in text
+    assert "mtg data fetch-prices --force" in text
+    assert "--root=" not in text
 
 
 def _opt_in(host):
@@ -325,12 +327,12 @@ def test_set_flags_the_timer_units(host):
     assert "mtg data fetch-prices --force" in text
 
 
-def test_set_flags_podman_inside_the_edhrec_sh_wrapper(host):
-    """mtgc-edhrec wraps two calls in `/bin/sh -c '...'`, so a line-anchored
-    substitution would miss both."""
+def test_set_flags_every_podman_in_a_multi_execstart_chain_unit(host):
+    """mtgc-land runs two job containers, one ExecStart each; the stamp has to
+    reach both, not just the first."""
     host.setup("inst", "8083", store=host.store)
 
-    text = host.service("mtgc-edhrec", "inst").read_text()
+    text = host.service("mtgc-land", "inst").read_text()
     assert text.count(f"podman --root={host.store}/storage") == 2
 
 
