@@ -57,6 +57,9 @@ if [ "$ENABLE" = true ]; then
     done
     # The sidecar is kept up by its timer on a 5 minute cadence; do not wait.
     systemctl --user start "mtgc-litestream-${INSTANCE}.service" || true
+    # Type=simple is "active" the instant it forks; give a binary that cannot
+    # be found time to exit so the check below sees the failure (sp-fgve20).
+    sleep "${MTGC_REPLICATION_SETTLE:-5}"
 fi
 
 bad=()
