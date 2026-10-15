@@ -172,43 +172,18 @@ def test_the_freshness_check_points_at_it():
 # --- Deployment wiring --------------------------------------------------------
 
 
-def test_the_timer_unit_is_defined_as_a_pair():
-    """Defining the pair IS installing it.
-
-    `units-lib.sh` renders every `deploy/mtgc-*.timer` that has a matching
-    `.service`, on `setup.sh` and on every `deploy.sh`, and errors on a timer
-    with no service rather than skipping the pair. `teardown.sh` and
-    `prune-instances.sh` remove what the host has. This used to assert that
-    `setup.sh` and `teardown.sh` mentioned the name — which passed while prod
-    was missing the unit entirely, because a list is not an outcome. The
-    end-to-end proof, for every unit here, is in tests/test_deploy_units.py.
-    """
-    assert (DEPLOY / "mtgc-catalog-refresh.timer").is_file()
-    assert (DEPLOY / "mtgc-catalog-refresh.service").is_file()
+def test_the_old_refresh_timer_is_retired():
+    """The 01:00 refresh is the chain's land and derive links now (lakehouse 14);
+    a surviving template would install a second writer of the catalogue."""
+    assert not (DEPLOY / "mtgc-catalog-refresh.timer").exists()
+    assert not (DEPLOY / "mtgc-catalog-refresh.service").exists()
 
 
-def test_the_unit_is_one_execstart_that_alerts_on_failure():
-    unit = (DEPLOY / "mtgc-catalog-refresh.service").read_text()
-    exec_lines = [ln for ln in unit.splitlines() if ln.startswith("ExecStart=")]
-    # One line, because a refresh split across two commands is a refresh where
-    # one of them stops being run -- which is the whole history here.
-    assert len(exec_lines) == 1
-    assert exec_lines[0].endswith("mtg data refresh-catalog")  # in its own job container (lakehouse 3)
-    # A refresh that fails nightly in silence reopens the gap it closed.
-    assert "OnFailure=mtgc-alert-{{INSTANCE}}@%n.service" in unit
-    # ~1 GB of downloads plus ~112k upserts: the default 90s would kill it mid-run.
-    timeout = [ln for ln in unit.splitlines() if ln.startswith("TimeoutStartSec=")]
-    assert timeout and int(timeout[0].split("=")[1]) >= 3600
-
-
-def test_it_runs_daily_and_before_the_check_that_grades_it():
-    timer = (DEPLOY / "mtgc-catalog-refresh.timer").read_text()
-    oncal = [ln for ln in timer.splitlines() if ln.startswith("OnCalendar=")]
-    assert oncal == ["OnCalendar=*-*-* 01:00:00"]
+def test_the_freshness_check_runs_after_the_chain_that_it_grades():
     check = (DEPLOY / "mtgc-catalog-check.timer").read_text()
-    # The 09:00 freshness check must read the catalogue this run produced, and
-    # the long run must not collide with the 06:00 price fetch.
     assert "OnCalendar=*-*-* 09:00:00" in check
+    land = (DEPLOY / "mtgc-land.timer").read_text()
+    assert "OnCalendar=*-*-* 08:00:00 UTC" in land
 
 
 # --- Helpers ------------------------------------------------------------------
