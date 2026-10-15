@@ -141,7 +141,10 @@ else
     # needs them (sp-5sq7wk): installed-but-disabled units and a missing binary
     # left production tenants with no backup for a day. Installed before the
     # restart so a failed download stops the deploy, not the site afterwards.
-    bash "$SCRIPT_DIR/litestream-install.sh"
+    # Only an instance with tenant databases has anything to replicate.
+    if bash "$SCRIPT_DIR/replication-doctor.sh" --detect "$INSTANCE"; then
+        bash "$SCRIPT_DIR/litestream-install.sh"
+    fi
     export PATH="${MTGC_LITESTREAM_BIN_DIR:-$HOME/.local/bin}:$PATH"
 
     bash "$SCRIPT_DIR/freeze.sh" check "$INSTANCE"
