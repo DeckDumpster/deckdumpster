@@ -79,7 +79,7 @@ def run_deploy(tmp_path):
 
 
 def test_multitenant_container_serving_8080_passes(run_deploy):
-    r = run_deploy("http://localhost:8091/", publish_8080=True)
+    r = run_deploy("http://localhost:8091/health", publish_8080=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Health check passed" in r.stdout
 
