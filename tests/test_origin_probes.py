@@ -35,12 +35,12 @@ for a in "$@"; do url="$a"; done
 printf '%s\\n' "$url" >> "$CURL_CALL_LOG"
 if [ "$MODE" = multitenant ]; then
     case "$url" in
-        http://localhost:8091/health) code=200 ;;
-        http://localhost:8091/*) code=401 ;;
+        http://127.0.0.1:8091/health) code=200 ;;
+        http://127.0.0.1:8091/*) code=401 ;;
         *) exit 7 ;;
     esac
 else
-    case "$url" in https://localhost:8083/*) code=200 ;; *) exit 7 ;; esac
+    case "$url" in https://127.0.0.1:8083/*) code=200 ;; *) exit 7 ;; esac
 fi
 case "$*" in
     *-w*) printf '%s' "$code" ;;
@@ -84,7 +84,7 @@ def test_cdn_check_origin_probe_accepts_the_multitenant_challenge(tmp_path):
     # is that it got past the origin and says nothing about it.
     r = _run(tmp_path, "cdn-check.sh", "multitenant")
     assert "origin" not in r.stderr.split("FAILED")[-1].split("\n")[0].lower(), r.stderr
-    assert "http://localhost:8091/" in (tmp_path / "curl.log").read_text()
+    assert "http://127.0.0.1:8091/" in (tmp_path / "curl.log").read_text()
 
 
 def test_cdn_check_fails_with_the_container_down(tmp_path):

@@ -20,7 +20,7 @@
 # mtgc_origin_resolve <instance> — sets, for the instance's mode:
 #   ORIGIN_MODE   multitenant | single
 #   ORIGIN_PORT   host port
-#   ORIGIN_URL    scheme://localhost:port
+#   ORIGIN_URL    scheme://127.0.0.1:port (never localhost: it can resolve to ::1, which the publish answers with a reset)
 #   ORIGIN_PROBE  path that answers 200 when the app is up
 # Returns 1 (and prints why) when no listener is published: a container that is
 # down has no published port, so this is also the "container down" failure.
@@ -33,7 +33,7 @@ mtgc_origin_resolve() {
     if [ -n "$port" ]; then
         ORIGIN_MODE=multitenant
         ORIGIN_PORT="$port"
-        ORIGIN_URL="http://localhost:${port}"
+        ORIGIN_URL="http://127.0.0.1:${port}"
         ORIGIN_PROBE=/health
         return 0
     fi
@@ -41,7 +41,7 @@ mtgc_origin_resolve() {
     if [ -n "$port" ]; then
         ORIGIN_MODE=single
         ORIGIN_PORT="$port"
-        ORIGIN_URL="https://localhost:${port}"
+        ORIGIN_URL="https://127.0.0.1:${port}"
         ORIGIN_PROBE=/
         return 0
     fi
