@@ -18,7 +18,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = REPO_ROOT / "deploy" / "deploy.sh"
 
 # 8081 is published (to 8083) in both modes; 8080 only when MTGC_HTTP_PORT is.
+# The store flags (--root/--runroot, <value>) precede the subcommand when
+# MTGC_STORE_ROOT is set, so they are dropped before the subcommand is read.
 PODMAN_STUB = """#!/usr/bin/env bash
+while [ "${1#--}" != "$1" ] && [ "$1" != "--version" ]; do shift 2; done
 case "$1" in
     --version) echo "podman version 0.0.0-stub" ;;
     port)
