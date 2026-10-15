@@ -1115,9 +1115,16 @@ def create_router(db_path: str) -> APIRouter:
 
     def get_conn():
         from mtg_collector.cli import crack_pack_server as cps
+        from mtg_collector.tenancy import paths as tenant_paths
 
-        current_tenant()
-        return open_connection(db_path, cps._shared_db_path)
+        # The same rule as the legacy server's _get_conn: in multi-tenant mode the
+        # request's tenant names its file. Opening db_path here served the legacy
+        # single-tenant collection to every tenant (sp-4xp2ho).
+        tenant = current_tenant()
+        path = db_path
+        if cps.multitenant_enabled():
+            path = str(tenant_paths.tenant_db_file(tenant.value))
+        return open_connection(path, cps._shared_db_path)
 
     # sync handlers run in the threadpool, with the request's context copied,
     # so the tenant binding and the blocking sqlite calls both hold.

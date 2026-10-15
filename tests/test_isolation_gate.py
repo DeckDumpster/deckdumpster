@@ -282,3 +282,26 @@ def test_refusals_are_private_no_store(world):
               w.client.get("/api/binders", headers={access.HEADER: w.jwks.token("nobody@x.org")})):
         assert r.status_code in (401, 403)
         assert r.headers["cache-control"] == "private, no-store"
+
+
+# --- the native collection router (sp-4xp2ho) -----------------------------------
+
+def test_collection_router_opens_the_requesting_tenants_file(world, monkeypatch):
+    """The ASGI collection router once opened the server's single db_path for every
+    request, so a new tenant was served the legacy single-tenant collection."""
+    from mtg_collector.routes import collection as route
+    opened = []
+    real = route.open_connection
+
+    def spy(path, *a, **k):
+        opened.append(str(path))
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(route, "open_connection", spy)
+    w = world
+    for headers, tenant in ((w.ha, w.a), (w.hb, w.b)):
+        opened.clear()
+        r = w.client.get("/api/collection?limit=1&offset=0", headers=headers)
+        assert r.status_code == 200, r.text
+        assert opened, "the collection router opened no connection"
+        assert set(opened) == {str(paths.tenant_db_file(tenant))}, opened
