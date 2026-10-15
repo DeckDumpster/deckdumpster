@@ -7,10 +7,11 @@ request must open that tenant's own file.
 
 import ast
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
-from starlette.routing import Route
+from fastapi.routing import APIRoute
 from starlette.testclient import TestClient
 
 from mtg_collector import access
@@ -56,7 +57,7 @@ def test_the_check_sees_a_direct_open():
 def test_the_legacy_handler_gets_its_connection_from_the_factory():
     src = Path(cps.__file__).read_text()
     body = src[src.index("    def _get_conn(self):"):src.index("    def do_GET")]
-    assert opener_calls(body) == ["tenant_connection"]
+    assert opener_calls(textwrap.dedent(body)) == ["tenant_connection"]
 
 
 @pytest.fixture(scope="module")
@@ -86,10 +87,7 @@ def test_every_native_router_opens_the_requesting_tenants_file(tmp_path, monkeyp
 
     monkeypatch.setattr(connection, "open_connection", spy)
     client = TestClient(app, raise_server_exceptions=False)
-    native = [r for r in app.routes
-              if getattr(r, "endpoint", None) is not None and not isinstance(r, Route)
-              or type(r).__name__ == "APIRoute"]
-    native = [r for r in native if r.path != "/{path:path}"]
+    native = [r for r in app.routes if isinstance(r, APIRoute)]
     assert len(native) >= 10  # positive control: the routers were found
     families = {r.endpoint.__module__ for r in native}
     assert "mtg_collector.routes.collection" in families
