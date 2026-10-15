@@ -45,6 +45,7 @@ fi
 case "$*" in
     *-w*) printf '%s' "$code" ;;
     *-D*) printf 'HTTP/1.1 %s X\\r\\n\\r\\n' "$code" ;;
+    *) [ "${url##*/}" = health ] && printf '{"ok":true,"build":"abc"}' ;;
 esac
 exit 0
 """

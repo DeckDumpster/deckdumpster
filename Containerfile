@@ -24,6 +24,11 @@ COPY tests/fixtures/sample-*.jpg /app/tests/fixtures/
 ENV PATH="/app/.venv/bin:$PATH"
 ENV MTGC_HOME=/data
 
+# The commit this image was built from, served on /health so cdn-check can tell
+# the CDN is serving THIS deploy. Last, so a new commit busts no earlier layer.
+ARG BUILD_ID
+ENV MTGC_BUILD_ID=${BUILD_ID}
+
 EXPOSE 8081
 
 ENTRYPOINT ["mtg", "crack-pack-server", "--port", "8081", "--https"]

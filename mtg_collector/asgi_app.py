@@ -15,6 +15,7 @@ import contextvars
 import email.message
 import io
 import json
+import os
 import sys
 import threading
 import traceback
@@ -232,7 +233,7 @@ def make_legacy_endpoint(generator, static_dir: Path, db_path: str):
 
 
 async def _health(request: Request):
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "build": os.environ.get("MTGC_BUILD_ID") or None})
 
 
 def create_app(generator, static_dir: Path, db_path: str, resolver=None,

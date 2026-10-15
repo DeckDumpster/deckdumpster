@@ -106,7 +106,8 @@ else
     echo "==> Building container image (mtgc:latest)..."
     DEPS_IMAGE="$(bash "$SCRIPT_DIR/deps-image.sh")"
     podman build -t mtgc:latest -f Containerfile \
-        --build-arg "DEPS_IMAGE=$DEPS_IMAGE" .
+        --build-arg "DEPS_IMAGE=$DEPS_IMAGE" \
+        --build-arg "BUILD_ID=$(git -C "$REPO_DIR" rev-parse HEAD)" .
     podman tag mtgc:latest "mtgc:${INSTANCE}"
 
     # Reinstall the timer units from this checkout. deploy.sh runs setup.sh

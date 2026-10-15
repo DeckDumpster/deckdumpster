@@ -162,16 +162,35 @@ assert_not_access_wall() {
 ORIGIN_DUMP="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${DOC_PATH}")"
 ORIGIN_STATUS="$(status_of "$ORIGIN_DUMP")"
 # A multi-tenant origin answers 401 to every route but /health until shown an
-# Access identity (the edge supplies it). That challenge is a live server; only
-# the origin-side byte comparison below cannot be made without an identity.
-ORIGIN_CHALLENGED=false
+# Access identity bound to a tenant, which a service token (no email) never is.
+# So the document, its asset and the byte comparison are unreachable by this
+# check there; /health is public and carries the build id the image was built
+# from, and that is what the edge is compared on instead. Stale or error
+# responses from Cloudflare still fail: the build must match the origin's.
 if [ "$ORIGIN_STATUS" = "401" ]; then
-    HEALTH_DUMP="$(headers_of "${ORIGIN_URL}/health")"
-    [ "$(status_of "$HEALTH_DUMP")" = "200" ] \
-        || fail "the origin ${ORIGIN_URL}${DOC_PATH} answered 401 and its /health did not answer 200.
-    $(transport_error "$HEALTH_DUMP")"
-    ORIGIN_CHALLENGED=true
-    ORIGIN_STATUS=200
+    build_of() { printf '%s' "$1" | grep -oE '"build": *"[^"]+"' | head -n1 | sed -E 's/.*: *"([^"]+)"/\1/'; }
+    HEALTH_PATH=/health
+    ORIGIN_HEALTH_DUMP="$(headers_of "${ORIGIN_URL}${HEALTH_PATH}")"
+    [ "$(status_of "$ORIGIN_HEALTH_DUMP")" = "200" ] \
+        || fail "the origin ${ORIGIN_URL}${HEALTH_PATH} did not answer 200 (the document answered 401).
+    $(transport_error "$ORIGIN_HEALTH_DUMP")"
+    ORIGIN_BUILD="$(build_of "$(curl -sS -k -m 20 "${ORIGIN_URL}${HEALTH_PATH}" 2>/dev/null)")"
+    [ -n "$ORIGIN_BUILD" ] \
+        || fail "the origin ${ORIGIN_URL}${HEALTH_PATH} reports no build id, so the CDN
+    cannot be shown to serve this deploy. The image was built without BUILD_ID."
+    PUBLIC_HEALTH_DUMP="$(headers_of "${ACCESS_ARGS[@]}" "${PUBLIC_URL}${HEALTH_PATH}")"
+    assert_not_access_wall "$PUBLIC_HEALTH_DUMP"
+    PUBLIC_HEALTH_STATUS="$(status_of "$PUBLIC_HEALTH_DUMP")"
+    [ "$PUBLIC_HEALTH_STATUS" = "200" ] \
+        || fail "the public URL ${PUBLIC_URL}${HEALTH_PATH} answered '${PUBLIC_HEALTH_STATUS:-nothing}', not 200.
+    $(transport_error "$PUBLIC_HEALTH_DUMP")"
+    PUBLIC_BUILD="$(build_of "$(curl -sS -k -m 20 "${ACCESS_ARGS[@]}" "${PUBLIC_URL}${HEALTH_PATH}" 2>/dev/null)")"
+    [ "$PUBLIC_BUILD" = "$ORIGIN_BUILD" ] \
+        || fail "the edge is serving build '${PUBLIC_BUILD:-none}' on ${HEALTH_PATH}, the origin is
+    running '${ORIGIN_BUILD}'. Cloudflare holds a different deploy than the one running."
+    echo "cdn-check: OK — ${PUBLIC_URL}${HEALTH_PATH} answers 200 with build ${ORIGIN_BUILD:0:12},"
+    echo "           the build the origin is running (multi-tenant: identity-gated routes not probed)."
+    exit 0
 fi
 [ "$ORIGIN_STATUS" = "200" ] \
     || fail "the origin ${ORIGIN_URL}${DOC_PATH} answered '${ORIGIN_STATUS:-nothing}', not 200.
@@ -238,12 +257,10 @@ ASSET_PATH="$(printf '%s' "$PUBLIC_BODY" \
     each asset costs a conditional round trip per page load, and an origin that
     stopped rewriting them is the reason."
 
-if [ "$ORIGIN_CHALLENGED" = false ]; then
-    ASSET_ORIGIN="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
-    [ "$(status_of "$ASSET_ORIGIN")" = "200" ] \
-        || fail "the origin answered '$(status_of "$ASSET_ORIGIN")' for ${ASSET_PATH}, an asset
+ASSET_ORIGIN="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
+[ "$(status_of "$ASSET_ORIGIN")" = "200" ] \
+    || fail "the origin answered '$(status_of "$ASSET_ORIGIN")' for ${ASSET_PATH}, an asset
     URL its own document names. The page renders unstyled."
-fi
 
 ASSET_DUMP="$(headers_of "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' \
     "${PUBLIC_URL}${ASSET_PATH}")"
@@ -266,12 +283,7 @@ printf '%s' "$ASSET_CC" | grep -qi immutable && [ -n "$ASSET_MAX_AGE" ] && [ "$A
 # string, and the edge is promising to hold what it has for ${ASSET_MAX_AGE}s.
 body_sha() { curl -sS -k -m 30 "$@" | sha256sum | cut -d' ' -f1; }
 PUBLIC_SHA="$(body_sha "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' "${PUBLIC_URL}${ASSET_PATH}")"
-if [ "$ORIGIN_CHALLENGED" = true ]; then
-    echo "cdn-check: origin is identity-gated (multi-tenant); no origin-side byte comparison, edge asset verified only." >&2
-    ORIGIN_SHA="$PUBLIC_SHA"
-else
-    ORIGIN_SHA="$(body_sha -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
-fi
+ORIGIN_SHA="$(body_sha -H 'Accept-Encoding: identity' "${ORIGIN_URL}${ASSET_PATH}")"
 if [ -z "$ORIGIN_SHA" ] || [ "$ORIGIN_SHA" != "$PUBLIC_SHA" ]; then
     fail "the edge is serving DIFFERENT bytes than the origin for ${ASSET_PATH}.
     origin sha256 ${ORIGIN_SHA:-<none>}
