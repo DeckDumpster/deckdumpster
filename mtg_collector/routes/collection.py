@@ -35,13 +35,13 @@ from mtg_collector.cli.crack_pack_server import (
     _parse_known_total,
     _parse_page_params,
 )
-from mtg_collector.tenancy.connection import tenant_connection
 from mtg_collector.http_cache import (
     CACHE_API,
     compute_etag,
     etag_matches,
     negotiate_gzip,
 )
+from mtg_collector.tenancy.connection import tenant_connection
 
 
 @dataclass(frozen=True)
