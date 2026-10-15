@@ -4,6 +4,7 @@
 #
 #   replication-doctor.sh [instance]       (default: prod)
 #   replication-doctor.sh --enable [instance]
+#   replication-doctor.sh --detect [instance]   exit 0 iff multi-tenant
 #
 # Installed timers are not running timers: mtgc-litestream, mtgc-litestream-check
 # and mtgc-tenant-files sat installed-but-disabled for the first day of
@@ -20,7 +21,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/litestream-lib.sh"
 
 ENABLE=false
-if [ "${1:-}" = "--enable" ]; then ENABLE=true; shift; fi
+DETECT=false
+case "${1:-}" in
+    --enable) ENABLE=true; shift ;;
+    --detect) DETECT=true; shift ;;
+esac
 INSTANCE="${1:-prod}"
 CONF_DIR="${MTGC_CONFIG_DIR:-${HOME}/.config/mtgc}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -31,6 +36,11 @@ if grep -qs '^MTGC_MULTITENANT=1' "${CONF_DIR}/${INSTANCE}.env" "${CONF_DIR}/${I
 else
     home_dir="$(mtgc_ls_home "$INSTANCE")"
     [ -f "$home_dir/registry.sqlite" ] && multitenant=true
+fi
+if [ "$DETECT" = true ]; then
+    # Exit status only: 0 multi-tenant, 1 not. deploy.sh installs the binary on it.
+    [ "$multitenant" = true ]
+    exit $?
 fi
 if [ "$multitenant" = false ]; then
     echo "replication-doctor: ${INSTANCE} is not multi-tenant — nothing to replicate"
