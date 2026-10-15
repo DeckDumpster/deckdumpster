@@ -27,18 +27,22 @@ mkdir -p "$HOME_DIR/tenants"
 URL_COLLECTION="$(mtgc_ls_replica_url "$INSTANCE" collection)"
 URL_REGISTRY="$(mtgc_ls_replica_url "$INSTANCE" registry)"
 URL_TENANTS="$(mtgc_ls_replica_url "$INSTANCE" tenants)"
+REGION="$(mtgc_ls_region)"
 
 cat <<YAML
 dbs:
   - path: ${HOME_DIR}/collection.sqlite
     replica:
       url: ${URL_COLLECTION}
+      region: ${REGION}
   - path: ${HOME_DIR}/registry.sqlite
     replica:
       url: ${URL_REGISTRY}
+      region: ${REGION}
   - dir: ${HOME_DIR}/tenants
     pattern: "*.sqlite"
     watch: true
     replica:
       url: ${URL_TENANTS}
+      region: ${REGION}
 YAML

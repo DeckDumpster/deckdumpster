@@ -40,6 +40,25 @@ mtgc_ls_bucket() {
     printf '%s\n' "$MTGC_BACKUP_S3_BUCKET"
 }
 
+# mtgc_ls_region — the bucket's region, or a hard error. litestream asks S3 for
+# it when none is named, and the mtgc-backup role is (rightly) denied
+# GetBucketLocation, so the unit died at start (sp-yplovy). No fallback, and the
+# role is not widened.
+mtgc_ls_region() {
+    [ -n "${MTGC_BACKUP_S3_REGION:-}" ] \
+        || { echo "ERROR: MTGC_BACKUP_S3_REGION is unset — litestream cannot look the bucket region up under the least-privilege backup role." >&2; return 1; }
+    printf '%s\n' "$MTGC_BACKUP_S3_REGION"
+}
+
+# mtgc_ls_restore_url <instance> <kind> [suffix] — the replica URL for a CLI
+# restore, which has no config to carry a region: it rides as a query parameter.
+mtgc_ls_restore_url() {
+    local url region
+    url="$(mtgc_ls_replica_url "$1" "$2")${3:-}" || return 1
+    region="$(mtgc_ls_region)" || return 1
+    printf '%s?region=%s\n' "$url" "$region"
+}
+
 # mtgc_ls_replica_url <instance> <kind> — s3://bucket/mtgc-<inst>/litestream/<kind>.
 # Kept apart from the tarball prefix's daily/ so backup-check.sh's listing of
 # mtgc-<inst>/ is not skewed by replica segments.

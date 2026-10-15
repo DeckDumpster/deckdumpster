@@ -33,7 +33,7 @@ exit "${AWS_STUB_RC:-0}"
 LITESTREAM_STUB = """#!/usr/bin/env bash
 [ "$1" = restore ] || exit 2
 out="$3"; url="$4"
-key="${url#s3://*/}"
+key="${url#s3://*/}"; key="${key%%[?]*}"
 [ -f "$LS_REPLICA/$key" ] || { echo "no replica for $key" >&2; exit 1; }
 cp "$LS_REPLICA/$key" "$out"
 """
@@ -80,6 +80,7 @@ def env(tmp_path):
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "MTGC_LITESTREAM_HOME": str(home),
         "MTGC_BACKUP_S3_BUCKET": "bkt",
+        "MTGC_BACKUP_S3_REGION": "us-west-2",
         "MTGC_CONFIG_DIR": str(conf),
         "MTGC_STATE_DIR": str(tmp_path / "state"),
         "LS_REPLICA": str(replica),
@@ -127,6 +128,17 @@ def test_config_replicates_registry_and_tenants_directory(env):
     assert "url: s3://bkt/mtgc-t/litestream/tenants" in out
     assert "shared.sqlite" not in out
     assert "tenants" in {p.name for p in env.home.iterdir()}
+
+
+def test_config_names_the_region_on_every_replica(env):
+    out = env.run("litestream-config.sh").stdout
+    assert out.count("url: s3://") == 3
+    assert out.count("region: us-west-2") == 3
+
+
+def test_config_without_region_is_refused(env):
+    r = env.run("litestream-config.sh", MTGC_BACKUP_S3_REGION="")
+    assert r.returncode != 0 and "MTGC_BACKUP_S3_REGION" in r.stderr
 
 
 def test_config_without_bucket_is_refused(env):
