@@ -46,21 +46,11 @@ function foilKindLabel(kind) {
  *
  * priceSources is the raw `price_sources` setting ("tcg,ck").
  */
-function buildCardTileBadges(card, priceSources) {
-  const sources = (priceSources || 'tcg,ck').split(',');
+function buildCardTileBadges(card) {
   let html = '';
 
   if (card.pull_rate != null) {
     html += `<span class="badge pull-rate">${(card.pull_rate * 100).toFixed(2)}%</span>`;
-  }
-  if (sources.includes('tcg') && card.printing_id) {
-    const sfUrl = `https://scryfall.com/card/${(card.set_code || '').toLowerCase()}/${card.collector_number}`;
-    const tcgPrice = card.tcg_price ? ` ${formatPrice(card.tcg_price)}` : '';
-    html += `<a class="badge link" href="${sfUrl}" target="_blank" rel="noopener">SF${tcgPrice}</a>`;
-  }
-  if (sources.includes('ck') && card.ck_url) {
-    const ckPrice = card.ck_price ? ` ${formatPrice(card.ck_price)}` : '';
-    html += `<a class="badge link" href="${card.ck_url}" target="_blank" rel="noopener">CK${ckPrice}</a>`;
   }
 
   // frame_effects arrives as an array from /api/sheets and as a JSON string
@@ -78,13 +68,33 @@ function buildCardTileBadges(card, priceSources) {
 }
 
 /**
+ * The SF / CK price links, layered over the art (never a row under it, which
+ * costs every tile a line of height). priceSources is the raw `price_sources`
+ * setting ("tcg,ck").
+ */
+function buildPriceOverlay(card, priceSources) {
+  const sources = (priceSources || 'tcg,ck').split(',');
+  let html = '';
+  if (sources.includes('tcg') && card.printing_id) {
+    const sfUrl = `https://scryfall.com/card/${(card.set_code || '').toLowerCase()}/${card.collector_number}`;
+    const tcgPrice = card.tcg_price ? ` ${formatPrice(card.tcg_price)}` : '';
+    html += `<a class="badge link" href="${sfUrl}" target="_blank" rel="noopener">SF${tcgPrice}</a>`;
+  }
+  if (sources.includes('ck') && card.ck_url) {
+    const ckPrice = card.ck_price ? ` ${formatPrice(card.ck_price)}` : '';
+    html += `<a class="badge link" href="${card.ck_url}" target="_blank" rel="noopener">CK${ckPrice}</a>`;
+  }
+  return html ? `<div class="price-overlay">${html}</div>` : '';
+}
+
+/**
  * Render the finish pip row: one pip per entry in `finishes`, filled when that
  * finish is owned, showing the count when more than one is held.
  *
  * The pips are the binder's one-click add target, so each is a real <button>
  * carrying its finish in a data attribute; binding the click is the caller's job.
  */
-const FINISH_LABELS = {nonfoil: 'NF', foil: 'Foil', etched: 'Etch'};
+const FINISH_LABELS = {nonfoil: 'Nonfoil', foil: 'Foil', etched: 'Etched'};
 
 function buildFinishPips(card) {
   const finishes = parseJsonField(card.finishes);
@@ -94,11 +104,12 @@ function buildFinishPips(card) {
   let html = '<div class="pip-row">';
   for (const finish of finishes) {
     const qty = owned[finish] || 0;
-    const short = FINISH_LABELS[finish] || finish;
-    const label = qty > 1 ? `${short} ${qty}` : short;
-    const cls = qty > 0 ? 'finish-pip filled' : 'finish-pip';
+    const name = FINISH_LABELS[finish] || finish;
+    // Circle; the count sits inside it once more than one copy is held.
+    const label = qty > 1 ? String(qty) : '';
+    const cls = 'finish-pip' + (finish === 'nonfoil' ? '' : ' ' + finish) + (qty > 0 ? ' filled' : '');
     const color = qty > 0 ? ` style="--pip-color:${getRarityColor(card.rarity)}"` : '';
-    html += `<button type="button" class="${cls}" data-finish="${esc(finish)}"${color}>${esc(label)}</button>`;
+    html += `<button type="button" class="${cls}" data-finish="${esc(finish)}" title="${esc(name)}" aria-label="${esc(name)}"${color}>${esc(label)}</button>`;
   }
   return html + '</div>';
 }
@@ -161,14 +172,18 @@ function buildCardTile(card, opts) {
     ? `<input type="checkbox" class="select-checkbox"${opts.selected ? ' checked' : ''}>` : '';
 
   const loading = opts.lazy === false ? '' : ' loading="lazy"';
-  const badges = opts.showBadges
-    ? `<div class="sheet-card-info">${buildCardTileBadges(card, opts.priceSources)}</div>` : '';
+  const badgeHtml = opts.showBadges ? buildCardTileBadges(card) : '';
+  // Treatment badges and price links both ride over the art, so neither costs
+  // the tile a row of height.
+  const priceHtml = opts.showBadges ? buildPriceOverlay(card, opts.priceSources) : '';
+  const badges = (badgeHtml || priceHtml)
+    ? `<div class="tile-overlay-bottom">${badgeHtml ? `<div class="sheet-card-info">${badgeHtml}</div>` : ''}${priceHtml}</div>` : '';
   const pips = opts.showPips ? buildFinishPips(card) : '';
   const attrs = opts.attrs ? ' ' + opts.attrs : '';
 
   return `<div class="${cls}"${attrs}>`
     + `<div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:${setColor}">`
     + `<img src="${card.image_uri || ''}" alt="${esc(card.name)}"${loading}>`
-    + `${qty}${wanted}${ordered}${checkbox}`
-    + `</div>${badges}${pips}</div>`;
+    + `${qty}${wanted}${ordered}${checkbox}${badges}`
+    + `</div>${pips}</div>`;
 }
