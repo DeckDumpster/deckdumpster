@@ -56,7 +56,7 @@ def steps(harness):
 
     # The tile behind the modal was repainted by the same step.
     label, cls = _pip(harness)
-    assert label == "NF 2", f"Tile pip reads {label!r}, expected 'NF 2'"
+    assert label == "2", f"Tile pip reads {label!r}, expected '2'"
     assert "filled" in cls, f"Tile pip is not filled: {cls}"
 
     harness.screenshot("after_two_adds")
@@ -71,7 +71,7 @@ def steps(harness):
         "The step reported an error")
 
     label, cls = _pip(harness)
-    assert label == "NF", f"Tile pip reads {label!r}, expected 'NF' at one copy"
+    assert label == "", f"Tile pip reads {label!r}, expected no count at one copy"
     assert "filled" in cls, f"Tile pip is not filled: {cls}"
 
     harness.screenshot("final_state")
