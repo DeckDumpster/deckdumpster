@@ -109,7 +109,9 @@ def test_the_page_names_no_asset_this_test_does_not_know_about(api, cached_set):
 
     named = {_undigest(u) for u in re.findall(r'(?:src|href)="(/static/[^"]+)"', html)}
 
-    assert named - {"/static/favicon.ico"} == set(PAGE_ASSETS)
+    # Document-level icons (favicon, apple-touch) are the site's, not this page's dependencies.
+    icons = {"/static/favicon.ico", "/static/favicon.svg", "/static/favicon-32.png", "/static/apple-touch-icon.png"}
+    assert named - icons == set(PAGE_ASSETS)
 
 
 def test_the_urls_the_page_actually_names_are_content_addressed(api, cached_set):
