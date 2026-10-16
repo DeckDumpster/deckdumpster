@@ -173,14 +173,17 @@ function buildCardTile(card, opts) {
 
   const loading = opts.lazy === false ? '' : ' loading="lazy"';
   const badgeHtml = opts.showBadges ? buildCardTileBadges(card) : '';
-  const badges = badgeHtml ? `<div class="sheet-card-info">${badgeHtml}</div>` : '';
-  const prices = opts.showBadges ? buildPriceOverlay(card, opts.priceSources) : '';
+  // Treatment badges and price links both ride over the art, so neither costs
+  // the tile a row of height.
+  const priceHtml = opts.showBadges ? buildPriceOverlay(card, opts.priceSources) : '';
+  const badges = (badgeHtml || priceHtml)
+    ? `<div class="tile-overlay-bottom">${badgeHtml ? `<div class="sheet-card-info">${badgeHtml}</div>` : ''}${priceHtml}</div>` : '';
   const pips = opts.showPips ? buildFinishPips(card) : '';
   const attrs = opts.attrs ? ' ' + opts.attrs : '';
 
   return `<div class="${cls}"${attrs}>`
     + `<div class="sheet-card-img-wrap${foilClass}" style="--rarity-color:${rarityColor};--set-color:${setColor}">`
     + `<img src="${card.image_uri || ''}" alt="${esc(card.name)}"${loading}>`
-    + `${qty}${wanted}${ordered}${checkbox}${prices}`
-    + `</div>${badges}${pips}</div>`;
+    + `${qty}${wanted}${ordered}${checkbox}${badges}`
+    + `</div>${pips}</div>`;
 }
