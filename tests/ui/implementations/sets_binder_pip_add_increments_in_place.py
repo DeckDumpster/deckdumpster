@@ -16,7 +16,7 @@ def steps(harness):
 
     # One copy held, so the pip shows the bare label; the count appears only
     # above one.
-    assert harness.page.inner_text(".finish-pip").strip() == "NF"
+    assert harness.page.inner_text(".finish-pip").strip() == ""
     before = harness.page.inner_text("#meter-all-count").strip()
     assert before == "1 / 165", f"Unexpected starting meter: {before}"
 
@@ -30,7 +30,7 @@ def steps(harness):
     # The optimistic increment paints before the POST returns; the wait is for
     # the request to finish so a server-side rejection would roll it back and
     # fail the next assertion rather than passing on the optimistic paint.
-    harness.wait_for_text("NF 2", timeout=3_000)
+    harness.wait_for_text("2", timeout=3_000)
     harness.assert_element_count(".pip-error", 0)
     harness.assert_hidden(".card-modal-overlay.active")
 

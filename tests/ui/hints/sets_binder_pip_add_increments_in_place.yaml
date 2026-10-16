@@ -1,7 +1,7 @@
 start_page: "/sets/spg?filter=have"
 involves:
   - "the single owned tile .sheet-card"
-  - "finish pips .finish-pip, nonfoil first — labelled NF, and 'NF 2' once two are held"
+  - "finish pips .finish-pip, nonfoil first — a circle; its count shows inside once two are held"
   - "header meter #meter-all-count"
   - "inline failure .pip-error (must not appear)"
 fixture_data:
@@ -15,7 +15,7 @@ notes: >
   filter=have narrows spg to its one owned printing, so the tile under test is
   the only one on the page and no nth-child guesswork is needed.
   The pip shows its count only when more than one is held, so the label goes
-  from "NF" to "NF 2" on the click — that is the visible increment.
+  from empty to "2" on the click — that is the visible increment.
   "Without a page reload" is asserted, not assumed: a sentinel is set on window
   before the click and read back after, since a reload would clear it.
   The meter must NOT move. Both meters count printings, never copies, and the
