@@ -247,14 +247,20 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
   flex-direction: column;
   gap: 3px;
   z-index: 3;
+  min-width: 0;
 }
 .tile-overlay-bottom .badge { background-color: rgba(0,0,0,0.75); }
 .price-overlay {
   display: flex;
   gap: 3px;
   flex-wrap: nowrap;
+  min-width: 0;
 }
 .price-overlay .badge.link {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   background: rgba(0,0,0,0.75);
   border-color: rgba(255,255,255,0.25);
   color: #eee;
