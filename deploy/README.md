@@ -1208,3 +1208,18 @@ podman volume inspect systemd-mtgc-<name>-data
 bucket's region (e.g. `us-west-2`); the config renders it on every replica and restores
 carry it as `?region=`. Unset is a hard refusal, because without it litestream calls
 `GetBucketLocation`, which the least-privilege `mtgc-backup` role is denied.
+
+### Native Pocket ID sign-in (sp-g0k7sl)
+
+Setting `MTGC_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_REDIRECT_URL`,
+`_REQUIRED_GROUP` (`magic-users`) and `_COOKIE_KEY` in the instance env file makes the app
+sign every human path in itself (`mtg_collector/oidc.py`, the Python counterpart of
+dumpster-kit-oidc); a partial set refuses to start, and multi-tenant mode refuses it.
+Unset, nothing changes. `/auth/logout` is the "Sign out" link.
+
+**Automation** (`cdn-check`, the deploy job) does not sign in. It presents
+`Authorization: Bearer $MTGC_AUTOMATION_TOKEN` (>= 32 chars, same env file); `/health` and
+`/api/backup-status` need no credential. Chosen over a narrow Access app because the app is
+the one place that can verify it, and Access can then be removed entirely. Until the
+Concierge removes the Access app, a service token still gets through Access, then needs the
+bearer too.

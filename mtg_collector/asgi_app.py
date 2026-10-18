@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from mtg_collector.access import AccessDenied
 from mtg_collector.cli.crack_pack_server import CrackPackHandler
 from mtg_collector.http_cache import CACHE_HASHED_ASSET
+from mtg_collector.oidc import OidcMiddleware
 from mtg_collector.routes import collection as collection_routes
 from mtg_collector.tenancy import Forbidden, SingleTenantResolver, bind
 
@@ -237,13 +238,16 @@ async def _health(request: Request):
 
 
 def create_app(generator, static_dir: Path, db_path: str, resolver=None,
-               multi: bool = False) -> FastAPI:
+               multi: bool = False, oidc=None) -> FastAPI:
     """The app: tenant middleware in front, the legacy adapter behind every path."""
     # No /docs, /redoc or /openapi.json yet: the legacy server never served
     # them, and the adapter must see every path it served.
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(TenantMiddleware, resolver=resolver or SingleTenantResolver(),
                        multi=multi)
+    if oidc is not None:
+        # Added last, so outermost: no human path reaches the tenant layer unsigned.
+        app.add_middleware(OidcMiddleware, oidc=oidc)
     app.add_route("/health", _health, methods=["GET"], include_in_schema=False)
     # Native families first; Starlette matches in registration order, so
     # anything they do not claim falls through to the adapter below.
