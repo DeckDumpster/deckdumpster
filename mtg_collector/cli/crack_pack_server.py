@@ -8332,6 +8332,16 @@ def _new_listener(app, port, tls_paths=None, host="0.0.0.0"):
     return uvicorn.Server(config)
 
 
+def _build_oidc():
+    """The native sign-in when MTGC_OIDC_* is set, None when it is not; partial is fatal."""
+    from mtg_collector import oidc
+
+    cfg = oidc.load_config()
+    if cfg is None:
+        return None
+    return oidc.Oidc(cfg)
+
+
 def run(args):
     """Run the crack-pack-server command."""
     from mtg_collector import access
@@ -8386,6 +8396,9 @@ def run(args):
         # half-configured, must not serve.
         from mtg_collector.tenancy import MultiTenantResolver
 
+        if _build_oidc() is not None:
+            raise SystemExit("MTGC_OIDC_* is single-tenant only: multi-tenant mode "
+                             "resolves tenants from Access identities")
         verifier = access.AccessVerifier(access.require_config())
         app = create_app(gen, static_dir, db_path,
                          resolver=MultiTenantResolver(verifier), multi=True)
@@ -8409,7 +8422,8 @@ def run(args):
             _ingest_executor.shutdown(wait=False)
         return
 
-    app = create_app(gen, static_dir, db_path)
+    oidc = _build_oidc()
+    app = create_app(gen, static_dir, db_path, oidc=oidc)
 
     tls_paths = None
     if args.https:
