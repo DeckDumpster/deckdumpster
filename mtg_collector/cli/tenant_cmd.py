@@ -59,6 +59,13 @@ def register(subparsers):
     s.add_argument("--check-space", action="store_true", help="Only check free space (run before stopping production)")
     s.set_defaults(func=run_legacy_migrate)
 
+    s = sub.add_parser("import-archive", help="Import an export-install archive as a new tenant, images included")
+    s.add_argument("archive")
+    s.add_argument("--handle", required=True)
+    s.add_argument("--email", required=True)
+    s.add_argument("--dry-run", action="store_true", help="Rehearse against a scratch home; production untouched")
+    s.set_defaults(func=run_import_archive)
+
     s = sub.add_parser("legacy-rollback", help="Detach a migrated tenant so the legacy database serves again")
     s.add_argument("handle")
     s.set_defaults(func=run_legacy_rollback)
@@ -204,6 +211,16 @@ def _legacy_migrate(conn, args):
     print(f"{outcome}: {args.handle} -> {database_id}; {args.source} was not modified")
 
 
+def _import_archive(conn, args):
+    from mtg_collector.tenancy import archive
+
+    database_id = archive.import_archive(
+        args.archive, args.handle, args.email, dry_run=args.dry_run,
+        report=lambda line: print(f"  {line}", flush=True),
+    )
+    print(f"{'dry run ok (nothing kept)' if args.dry_run else 'imported'}: {args.handle} -> {database_id}")
+
+
 def _legacy_rollback(conn, args):
     from mtg_collector.tenancy import upgrade
 
@@ -292,6 +309,7 @@ run_purge = _guarded(_purge)
 run_adopt = _guarded(_adopt)
 run_migrate = _guarded(_migrate)
 run_legacy_migrate = _guarded(_legacy_migrate)
+run_import_archive = _guarded(_import_archive)
 run_legacy_rollback = _guarded(_legacy_rollback)
 run_set_key = _guarded(_set_key)
 run_identity_add = _guarded(_identity_add)
