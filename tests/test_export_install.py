@@ -2,6 +2,9 @@
 
 import hashlib
 import json
+import os
+import shutil
+import sys
 import sqlite3
 import subprocess
 import tarfile
@@ -46,10 +49,34 @@ def install(tmp_path):
     return home
 
 
+# The script's contract is the sqlite3 CLI.  Where the test image has none, this
+# shim answers the only two invocations the script makes (`sqlite3 DB ".backup 'P'"`
+# and `sqlite3 DB SQL`) with Python's sqlite3, so the script itself still runs.
+SHIM = """#!{py}
+import sqlite3, sys
+db, stmt = sys.argv[1], sys.argv[2]
+c = sqlite3.connect(db)
+if stmt.startswith(".backup "):
+    dst = sqlite3.connect(stmt[len(".backup "):].strip("'"))
+    c.backup(dst)
+    dst.close()
+else:
+    for row in c.execute(stmt):
+        print("|".join(str(v) for v in row))
+"""
+
+
 def run(*args):
+    env = dict(os.environ)
+    if shutil.which("sqlite3") is None:
+        shim = Path(args[1]).parent / ".shim"
+        shim.mkdir(exist_ok=True)
+        (shim / "sqlite3").write_text(SHIM.format(py=sys.executable))
+        (shim / "sqlite3").chmod(0o755)
+        env["PATH"] = f"{shim}{os.pathsep}{env['PATH']}"
     return subprocess.run(
         ["bash", str(SCRIPT), *args], capture_output=True, text=True,
-        timeout=DEFAULT_TIMEOUT,
+        timeout=DEFAULT_TIMEOUT, env=env,
     )
 
 
