@@ -17,7 +17,7 @@ import pytest
 
 from mtg_collector.db import page_cursor
 from mtg_collector.db.schema import init_db, refresh_latest_prices
-from tests.test_collection_totals import _call, _price
+from tests.test_collection_totals import _call
 
 NOW = "2025-01-01T00:00:00.000Z"
 SORTS = ["name", "cmc", "rarity", "set", "color", "qty", "collector_number",
@@ -51,7 +51,11 @@ def tied_db():
                 (f"p{n}", f"o{n}", set_code, str(i), rarities[i % 4], name),
             )
             if i % 5:
-                _price(conn, i, "tcgplayer", "normal", float(i % 3))  # shared by both sets
+                conn.execute(
+                    "INSERT INTO prices (set_code, collector_number, source, price_type, price, observed_at) "
+                    "VALUES (?, ?, 'tcgplayer', 'normal', ?, '2025-01-01')",
+                    (set_code, str(i), float(i % 3)),  # ties across both sets
+                )
             if i % 4:
                 for copy in range(i % 3 + 1):
                     conn.execute(
