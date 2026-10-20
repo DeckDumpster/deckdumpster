@@ -10,6 +10,7 @@ import tempfile
 import time
 
 from mtg_collector.db.schema import init_db
+from mtg_collector.tenancy import SingleTenantResolver, bind
 from tests.test_collection_totals import _call
 
 PRINTINGS, OWNED = 110_018, 15_045
@@ -43,7 +44,7 @@ def timed(db, **p):
     return (time.perf_counter() - t) * 1000, body
 
 
-with tempfile.TemporaryDirectory() as d:
+with bind(SingleTenantResolver().resolve(None)), tempfile.TemporaryDirectory() as d:
     db = os.path.join(d, "m.sqlite")
     build(db)
     for q in ({"q": "is:unowned"}, {}):
