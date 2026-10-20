@@ -26,3 +26,7 @@ timeout = 1200
 argv = ["bash", "deploy/ci.sh"]
 env = { DECKDUMP_CI_TIERS = "ui" }
 timeout = 2400
+
+[tier.cursor]
+argv = ["sh", "-c", "uv sync && uv run ruff check mtg_collector/ tests/test_collection_cursor.py && uv run pytest tests/test_collection_cursor.py tests/test_collection_totals.py tests/test_collection_page_params.py tests/test_collection_enrichment.py tests/test_collection_aggregate_joins.py -q -x"]
+timeout = 900
