@@ -290,6 +290,23 @@ the refusal rather than the absence. `deck_cards` is the one join that can fan a
 row out, so it is dropped only on a template that GROUPs — `expand=copies` pages
 those duplicates and keeps it.
 
+### Paging `/api/collection`: keyset cursor, not OFFSET
+
+Every full page carries `next_cursor`; send it back as `cursor=` and the next window seeks
+past the last row (`db/page_cursor.py`) instead of re-running and discarding every earlier
+row. The token is opaque: it holds every ORDER BY term of the template that ran (the unique
+row identity last), the whole-result `total`, and a fingerprint of the query, sort,
+direction and template. A cursor replayed against anything else is a 400, as is `cursor`
+together with `offset`. A cursor caller needs no `known_total`; `offset`/`known_total` stay
+accepted for `collection.html`, whose virtual scroller jumps to arbitrary pages and so
+cannot chain cursors. The seek is NULL-aware (SQLite sorts NULL first) and carries a
+redundant bound on the leading term so `idx_collection_card_name` can start at the cursor.
+For `qty` and `c.acquired_at` on the grouped templates the seek is a HAVING (they are
+properties of the group). Measured on 110,018 printings / 15,045 owned copies
+(`scripts/measure_collection_cursor.py`, 250-row windows): `is:unowned` at depth 90,000
+384 ms by OFFSET, 11 ms by cursor; flat at ~11 ms at every depth. `tests/test_collection_cursor.py`
+walks all sorts x both directions x all three templates, ties and NULLs included.
+
 ### Set sizes
 
 `sets.base_set_size` and `sets.total_set_size` are stored, never derived, and populated at
