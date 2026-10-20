@@ -48,8 +48,8 @@ with bind(SingleTenantResolver().resolve(None)), tempfile.TemporaryDirectory() a
     db = os.path.join(d, "m.sqlite")
     build(db)
     for q in ({"q": "is:unowned"}, {}):
-        for depth in (0, 5_000, 50_000, 100_000):
-            if q == {} and depth > OWNED - 250:
+        for depth in (0, 5_000, 14_000, 50_000, 90_000):
+            if q == {} and depth > OWNED - 800:
                 continue
             ms_off, _ = timed(db, **q, offset=depth, known_total=PRINTINGS)
             if depth:
