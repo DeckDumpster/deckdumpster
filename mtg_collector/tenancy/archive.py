@@ -171,7 +171,9 @@ def _tenant_counts(db: str, tables) -> dict:
 
 
 def _check_counts(db: str, manifest: dict) -> dict:
-    wanted = {t: n for t, n in manifest["row_counts"].items() if t not in SHARED_TABLES}
+    # cards_fts and its FTS5 shadow tables live in the catalogue; a tenant file carries none.
+    wanted = {t: n for t, n in manifest["row_counts"].items()
+              if t not in SHARED_TABLES and not t.startswith("cards_fts")}
     got = _tenant_counts(db, wanted)
     bad = {t: (wanted[t], got[t]) for t in wanted if got[t] != wanted[t]}
     if bad:
