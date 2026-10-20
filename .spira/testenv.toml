@@ -1,6 +1,8 @@
 # Declares deploy/ci.sh's tiers to testenv (testenv/DESIGN.md §2.1.1), so
 # `testenv --suites <tier> <branch> deckdumpster` runs what CI runs for that tier.
 # Tier names and argv mirror deploy/ci.sh (DECKDUMP_CI_TIERS); keep them in step.
+# The image is bare Debian: unit needs $USER (deploy scripts run under set -u), libGL (cv2 via rapidocr)
+# and the browser system libraries, so the unit tier installs them.
 # The uv image stands in for CI's host runner: lint and unit need only python+uv.
 # integration and ui drive deploy/ci.sh itself, which needs podman and systemd and
 # so only works where those are reachable; they are not in `default`.
@@ -14,7 +16,8 @@ argv = ["sh", "-c", "uv sync && uv run ruff check mtg_collector/"]
 timeout = 300
 
 [tier.unit]
-argv = ["sh", "-c", "uv sync && uv run shot-scraper install && uv run pytest tests/ -n 8 --dist loadgroup --ignore=tests/integration --ignore=tests/ui"]
+env = { USER = "root" }
+argv = ["sh", "-c", "apt-get update -qq && apt-get install -y -qq --no-install-recommends libgl1 libglib2.0-0 && uv sync && uv run playwright install --with-deps chromium-headless-shell && uv run pytest tests/ -n 8 --dist loadgroup --ignore=tests/integration --ignore=tests/ui"]
 timeout = 1800
 
 [tier.integration]
