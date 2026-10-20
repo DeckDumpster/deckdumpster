@@ -58,3 +58,4 @@ with bind(SingleTenantResolver().resolve(None)), tempfile.TemporaryDirectory() a
             else:
                 ms_cur = ms_off
             print(f"{q or 'owned'} depth={depth:>7} offset={ms_off:8.1f} ms  cursor={ms_cur:8.1f} ms")
+raise SystemExit(1)  # tmp: surfaces output via the red tail
