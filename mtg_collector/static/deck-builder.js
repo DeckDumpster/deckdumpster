@@ -852,24 +852,25 @@
 
   async function fetchFilteredPages(query, keepFrom) {
     const kept = [];
-    let offset = 0;
+    let scanned = 0;
     let total = 0;
+    let cursor = '';
     let exhausted = false;
     for (let page = 0; page < PICKER_PAGE_CAP; page++) {
-      // Every window past the first re-counts the whole result server-side to
-      // re-derive the number this loop is already holding (de-j9b). Hand it
-      // back instead; the first page has nothing to hand back and asks for it.
-      const known = page === 0 ? '' : `&known_total=${total}`;
+      // The cursor names the last row seen and carries the total, so a later
+      // window neither re-runs the rows before it nor re-counts the result.
+      const next = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
       const res = await fetch(
-        `/api/collection?${query}&limit=${PICKER_PAGE_SIZE}&offset=${offset}${known}`);
+        `/api/collection?${query}&limit=${PICKER_PAGE_SIZE}${next}`);
       const data = await res.json();
       total = data.total;
       kept.push(...keepFrom(data.rows));
-      offset += data.rows.length;
-      if (!data.rows.length || offset >= total) { exhausted = true; break; }
+      scanned += data.rows.length;
+      cursor = data.next_cursor;
+      if (!data.rows.length || !cursor) { exhausted = true; break; }
       if (kept.length >= PICKER_TARGET_ROWS) break;
     }
-    return { kept, total, scanned: offset, exhausted };
+    return { kept, total, scanned, exhausted };
   }
 
   async function searchPickerCards() {
