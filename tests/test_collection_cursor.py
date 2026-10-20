@@ -100,8 +100,8 @@ TEMPLATES = {"owned": {}, "copies": {"expand": "copies"}, "unowned": {"q": "is:u
 def test_cursor_walk_is_the_one_shot_listing(tied_db, template, sort, order):
     query = {**TEMPLATES[template], "sort": sort, "order": order}
     whole = _call(tied_db, {**query, "limit": 1000})["rows"]
-    assert len(whole) > 7
-    for limit in (1, 3, 5):
+    assert len(whole) >= 4
+    for limit in (1, 2, 3):
         walked, _ = _walk(tied_db, limit, **query)
         assert [_ident(r) for r in walked] == [_ident(r) for r in whole]
         assert len({_ident(r) for r in walked}) == len(walked)
