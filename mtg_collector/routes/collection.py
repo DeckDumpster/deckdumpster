@@ -35,6 +35,7 @@ from mtg_collector.cli.crack_pack_server import (
     _parse_known_total,
     _parse_page_params,
 )
+from mtg_collector.db import page_cursor
 from mtg_collector.http_cache import (
     CACHE_API,
     compute_etag,
@@ -69,6 +70,10 @@ def collection_list(get_conn, params: dict):
         known_total = _parse_known_total(params)
     except PageParamError as e:
         return Json({"error": str(e)}, 400)
+
+    cursor_token = params.get("cursor", [""])[0].strip()
+    if cursor_token and params.get("offset", [""])[0].strip():
+        return Json({"error": "cursor and offset are exclusive; send one"}, 400)
 
     q = params.get("q", [""])[0]
     sort = params.get("sort", [""])[0]
@@ -192,6 +197,9 @@ def collection_list(get_conn, params: dict):
         order_dir = "ASC"
 
     sorting_by_name = sort_col == _NAME
+    # The ORDER BY terms of the template that ran, in order, without their
+    # direction: the sort key a cursor records and the next window seeks past.
+    order_exprs: list[str] = []
 
     def _order_by(name_col: str, *identity_cols: str) -> str:
         """ORDER BY for a template, given its name column and row identity.
@@ -210,6 +218,7 @@ def collection_list(get_conn, params: dict):
         if not sorting_by_name:
             terms.append(f"{name_col} {order_dir}")
         terms.extend(f"{col} {order_dir}" for col in identity_cols)
+        order_exprs[:] = [t.rsplit(" ", 1)[0] for t in terms]
         return "ORDER BY " + ", ".join(terms)
 
     def _group_by(name_col: str, *key_cols: str) -> str:
@@ -332,8 +341,8 @@ def collection_list(get_conn, params: dict):
             {collection_join} collection c ON p.printing_id = c.printing_id
             {keep('o', 'LEFT JOIN orders o ON c.order_id = o.id')}
             {joins}
-            WHERE {where_sql}
-            {_group_by("p.card_name", "p.printing_id")}
+            WHERE ({where_sql}) /*SEEK_W*/
+            {_group_by("p.card_name", "p.printing_id")} /*SEEK_H*/
         """
         agg_qty_sql = "COALESCE(COUNT(DISTINCT c.id), 0)"
         agg_select_sql = f"{agg_qty_sql} as qty, {display_price_sql} as price"
@@ -401,7 +410,7 @@ def collection_list(get_conn, params: dict):
             {keep('d', 'LEFT JOIN decks d ON dc.deck_id = d.id')}
             {keep('b', 'LEFT JOIN binders b ON c.binder_id = b.id')}
             {joins}
-            WHERE {where_sql}
+            WHERE ({where_sql}) /*SEEK_W*/
         """
         agg_qty_sql = "1"
         agg_select_sql = f"{agg_qty_sql} as qty, {display_price_sql} as price"
@@ -467,8 +476,8 @@ def collection_list(get_conn, params: dict):
             {keep('d', 'LEFT JOIN decks d ON dc.deck_id = d.id')}
             {keep('b', 'LEFT JOIN binders b ON c.binder_id = b.id')}
             {joins}
-            WHERE {where_sql}
-            {_group_by("c.card_name", "c.printing_id", "c.finish", "c.condition", "c.status", "c.order_id")}
+            WHERE ({where_sql}) /*SEEK_W*/
+            {_group_by("c.card_name", "c.printing_id", "c.finish", "c.condition", "c.status", "c.order_id")} /*SEEK_H*/
         """
         # The hint goes on the page query alone. The count and the totals
         # have no ORDER BY, so for them this index is just a scan of every
@@ -497,18 +506,45 @@ def collection_list(get_conn, params: dict):
     # It is kept out of body_sql so the COUNT below does not sort.
     #
     # LIMIT/OFFSET are bound parameters, never formatted into the SQL.
-    cursor = conn.execute(
-        f"{select_sql}{body_sql}{order_sql} LIMIT ? OFFSET ?",
-        [*sql_params, limit, offset],
+    #
+    # A cursor replaces OFFSET: the page query seeks past the sort key of the
+    # last row the caller saw, so a deep window costs what the first one does.
+    # The key is every ORDER BY term, ending in the template's unique row
+    # identity, and it rides in the page's own select list as _k0.._kN.
+    template = "unowned" if (card_pairs or include_unowned) else "copies" if expand_copies else "owned"
+    grouped = template != "copies"
+    key_exprs = [agg_qty_sql if e == "qty" else e for e in order_exprs]
+    fp = page_cursor.fingerprint(
+        {k: v for k, v in sorted(params.items()) if k not in ("limit", "offset", "known_total", "cursor")},
+        template, key_exprs, order_dir,
     )
-    rows = cursor.fetchall()
+    seek_sql, seek_params = "", []
+    seek_in_having = False
+    if cursor_token:
+        try:
+            key, cursor_total = page_cursor.decode(cursor_token, fp, len(key_exprs))
+        except page_cursor.CursorError as e:
+            conn.close()
+            return Json({"error": str(e)}, 400)
+        offset = 0
+        seek_sql, seek_params = page_cursor.seek(key_exprs, key, order_dir == "DESC")
+        # qty and the acquired_at of a group are properties of the group, not
+        # of a row, so a WHERE cannot see them; HAVING can.
+        seek_in_having = grouped and sort_col in ("qty", "c.acquired_at")
+    page_body = body_sql.replace("/*SEEK_W*/", "" if seek_in_having or not seek_sql else f"AND {seek_sql}")
+    page_body = page_body.replace("/*SEEK_H*/", f"HAVING {seek_sql}" if seek_in_having else "")
+    key_select = ", " + ", ".join(f"{e} AS _k{i}" for i, e in enumerate(key_exprs))
+    rows = conn.execute(
+        f"{select_sql}{key_select}{page_body}{order_sql} LIMIT ? OFFSET ?",
+        [*sql_params, *seek_params, limit, offset],
+    ).fetchall()
 
     # A short page has already answered how big the result is: the query ran
     # out of rows, so the result ends here. That covers every query whose
     # result fits in one page — which is most of them — for no extra query
     # at all. (Not when the page is empty and the offset is past the end:
     # then the offset says nothing about where the result stopped.)
-    short_page = len(rows) < limit and (rows or offset == 0)
+    short_page = len(rows) < limit and (rows or offset == 0 or bool(cursor_token))
 
     include_unowned = bool(card_pairs) or include_unowned
     results = []
@@ -600,7 +636,10 @@ def collection_list(get_conn, params: dict):
     price_key = "ck_price" if first_source == "ck" else "tcg_price"
     aggregates = {}
 
-    if totals_in_hand:
+    if cursor_token:
+        # The cursor carried the total from the window that issued it.
+        total = cursor_total
+    elif totals_in_hand:
         # The page is the whole result, so the rows in hand are the answer.
         total = len(results)
         aggregates["total_qty"] = sum(c.get("qty") or 0 for c in results)
@@ -663,6 +702,14 @@ def collection_list(get_conn, params: dict):
         ).fetchone()[0]
 
     conn.close()
+    # Present whenever a full page ended the window; absent once the result
+    # has run out. Offset callers get one too, so they can switch mid-walk.
+    next_cursor = None
+    if len(rows) == limit:
+        last = rows[-1]
+        next_cursor = page_cursor.encode(
+            fp, [last[f"_k{i}"] for i in range(len(key_exprs))], total
+        )
     return Json(
         {
             "rows": results,
@@ -670,6 +717,7 @@ def collection_list(get_conn, params: dict):
             **aggregates,
             "limit": limit,
             "offset": offset,
+            "next_cursor": next_cursor,
         }
     )
 
