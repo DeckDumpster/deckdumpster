@@ -22,7 +22,7 @@ from typing import Callable
 
 from mtg_collector.db import registry
 from mtg_collector.db.registry import RegistryError
-from mtg_collector.db.schema import SHARED_TABLES
+from mtg_collector.db.schema import SHARED_TABLES, SHARED_VIEWS, SHARED_VIRTUAL
 from mtg_collector.tenancy import paths, upgrade
 
 FORMAT = 1
@@ -171,9 +171,10 @@ def _tenant_counts(db: str, tables) -> dict:
 
 
 def _check_counts(db: str, manifest: dict) -> dict:
-    # cards_fts and its FTS5 shadow tables live in the catalogue; a tenant file carries none.
+    # Catalogue objects (cards_fts and its FTS5 shadow tables, latest_prices) are not in a tenant file.
+    shared = set(SHARED_TABLES) | set(SHARED_VIEWS) | set(SHARED_VIRTUAL)
     wanted = {t: n for t, n in manifest["row_counts"].items()
-              if t not in SHARED_TABLES and not t.startswith("cards_fts")}
+              if t not in shared and not t.startswith(tuple(v + "_" for v in SHARED_VIRTUAL))}
     got = _tenant_counts(db, wanted)
     bad = {t: (wanted[t], got[t]) for t in wanted if got[t] != wanted[t]}
     if bad:
