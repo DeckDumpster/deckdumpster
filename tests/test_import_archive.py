@@ -106,7 +106,7 @@ def test_import_serves_images_from_the_tenant_directory(home, tmp_path):
     assert open(src, "rb").read() == FILES["images/source_images/b_1234.jpg"]
     assert images.tenant_image_path(dbid, stored).read_bytes() == FILES["images/ingest_images/a.jpg"]
     r = registry.open_registry()
-    assert registry.resolve_identity(r, "friend@example.com") == "friend"
+    assert registry.resolve_identity(r, "friend@example.com") == dbid
     r.close()
 
 
