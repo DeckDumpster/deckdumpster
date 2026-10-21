@@ -47,7 +47,7 @@
 # `image history` from the tag does not reach it either. All of them do carry a
 # label the Containerfile applies as the first instruction of each stage, which
 # is what this looks for. Anything already in the default store at baseline —
-# python:3.14-slim, mtgc:prod, the other instances' images — is ignored, so only
+# python:3.12-slim, mtgc:prod, the other instances' images — is ignored, so only
 # what ARRIVED during the run can fail. That is exact, and it does not care what
 # the leak was called.
 #

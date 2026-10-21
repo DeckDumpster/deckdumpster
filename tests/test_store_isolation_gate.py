@@ -65,7 +65,7 @@ STUB_MB = 8
 # the runtime image, so neither a tag nor `image history` reaches it. Only the
 # Containerfile's build label does, which is why the gate looks for that
 # (de-y5g). The base image's ID is there to prove the hunt ignores what the box
-# already had; python:3.14-slim legitimately lives in the default store.
+# already had; python:3.12-slim legitimately lives in the default store.
 BUILT_ID = "b" * 64
 STAGE_ID = "5a9e" + "0" * 60
 BASE_ID = "ba5e" + "0" * 60
@@ -308,7 +308,7 @@ def run_gate(tmp_path, mode, extra_env=None, keep_file=None):
     # our image's history.
     # Trailing 0: not an MTGC build image, so the label filter must not return
     # it however often it turns up in our own build's history.
-    (state / "default").write_text(f"image docker.io/library/python:3.14-slim {BASE_ID} 0\n")
+    (state / "default").write_text(f"image docker.io/library/python:3.12-slim {BASE_ID} 0\n")
 
     env = dict(os.environ)
     env.update(

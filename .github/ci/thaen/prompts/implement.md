@@ -3,7 +3,7 @@ You are implementing the approved plan for issue #${ISSUE_NUMBER} in ${REPO_FULL
 ## Environment
 
 You are running inside a Podman container with:
-- Python 3.14, uv (package manager), ruff (linter)
+- Python 3.12, uv (package manager), ruff (linter)
 - Node.js 22, npm
 - Playwright with headless Chromium (for UI screenshots)
 - gh CLI (authenticated via GH_TOKEN)
