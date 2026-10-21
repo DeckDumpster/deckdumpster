@@ -25,7 +25,7 @@
 #       -p 8082:8081 \
 #       dd-ci-server
 
-FROM docker.io/library/python:3.12-slim
+FROM docker.io/library/python:3.14-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openssl libgl1 libglib2.0-0 \

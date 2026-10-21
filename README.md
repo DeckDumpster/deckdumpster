@@ -73,7 +73,7 @@ mtg crack-pack-server          # http://localhost:8080
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.14
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - `ANTHROPIC_API_KEY` (only needed for photo-based ingestion — set in env or `~/.config/mtgc/default.env`)
 - [Podman](https://podman.io/) (only for the deployment scripts under `deploy/` and the integration / UI test suites)

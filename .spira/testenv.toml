@@ -6,7 +6,7 @@
 # The uv image stands in for CI's host runner: lint and unit need only python+uv.
 # integration and ui drive deploy/ci.sh itself, which needs podman and systemd and
 # so only works where those are reachable; they are not in `default`.
-image = "ghcr.io/astral-sh/uv:python3.12-bookworm"
+image = "ghcr.io/astral-sh/uv:python3.14-bookworm"
 workdir = "/work"
 timeout = 1800
 default = ["lint", "unit"]
