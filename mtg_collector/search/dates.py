@@ -109,7 +109,7 @@ def parse_date_value(val: str, tz: str | None = None) -> tuple[str, str] | None:
 
     # Full ISO datetime (treat naive as local-tz).
     try:
-        # fromisoformat in 3.10 does not accept trailing Z; normalize.
+        # fromisoformat before 3.11 did not accept trailing Z; normalize.
         dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
     except ValueError:
         return None
