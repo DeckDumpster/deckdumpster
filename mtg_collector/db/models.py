@@ -12,6 +12,7 @@ from mtg_collector.db.enrich import (
     enrich_columns,
     enrich_joins,
 )
+from mtg_collector.db.natural_sort import sort_by_name
 from mtg_collector.utils import now_iso, parse_json_array, to_json_array
 
 # Prices and the Card Kingdom link, rendered by the deck page beside the
@@ -2143,7 +2144,7 @@ class DeckRepository:
                JOIN deck_states ds ON d.state_id = ds.id
                ORDER BY d.name"""
         )
-        return [dict(row) for row in cursor]
+        return sort_by_name([dict(row) for row in cursor])
 
     def find_by_origin(self, origin_set_code: str, origin_theme: str,
                        origin_variation: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -2911,7 +2912,7 @@ class BinderRepository:
                GROUP BY b.id
                ORDER BY b.name"""
         )
-        return [dict(row) for row in cursor]
+        return sort_by_name([dict(row) for row in cursor])
 
     def get_cards(self, binder_id: int) -> List[Dict[str, Any]]:
         cursor = self.conn.execute(
@@ -3052,7 +3053,7 @@ class CollectionViewRepository:
         cursor = self.conn.execute(
             "SELECT * FROM collection_views ORDER BY name"
         )
-        return [dict(row) for row in cursor]
+        return sort_by_name([dict(row) for row in cursor])
 
 
 class BatchRepository:
