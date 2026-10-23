@@ -2135,6 +2135,10 @@ class DeckRepository:
                           None, None, row["zone"], None, note="deck deleted")
         # Explicitly delete deck_cards (don't rely on CASCADE needing PRAGMA foreign_keys)
         self.conn.execute("DELETE FROM deck_cards WHERE deck_id = ?", (deck_id,))
+        # movement_log keeps its rows (the note says the deck was deleted) but
+        # may not point at a deck that no longer exists.
+        self.conn.execute("UPDATE movement_log SET from_deck_id = NULL WHERE from_deck_id = ?", (deck_id,))
+        self.conn.execute("UPDATE movement_log SET to_deck_id = NULL WHERE to_deck_id = ?", (deck_id,))
         cursor = self.conn.execute("DELETE FROM decks WHERE id = ?", (deck_id,))
         return cursor.rowcount > 0
 
