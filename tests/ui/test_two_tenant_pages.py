@@ -30,6 +30,7 @@ def _urls(ids):
     return {
         "/deck-builder/": f"/deck-builder/{ids['deck']}",
         "/decks/": f"/decks/{ids['deck']}",
+        "/deck-groups/": f"/deck-groups/{ids['group']}",
         "/sets/": "/sets/dsk",
         "/card/": "/card/dsk/1",
         "/batches/": f"/batches/{ids['batch']}",
@@ -49,12 +50,15 @@ def alice_data(two_tenants):
 
     status, deck = a.json("POST", "/api/decks", {"name": "ntly-secret-deck", "format": "commander"})
     assert status == 201, deck
+    status, group = a.json("POST", "/api/deck-groups", {"name": "ntly-secret-group"})
+    assert status == 201, group
     status, binder = a.json("POST", "/api/binders", {"name": "ntly-secret-binder"})
     assert status == 201, binder
 
     names = set()
     for path, keys in (
         ("/api/decks", ("name", "description")),
+        ("/api/deck-groups", ("name",)),
         ("/api/binders", ("name",)),
         ("/api/orders", ("order_number",)),
         ("/api/batches", ("name",)),
@@ -71,6 +75,7 @@ def alice_data(two_tenants):
         "value": f"${page['total_value']:,.2f}",
         "ids": {
             "deck": ok("/api/decks")[0]["id"],
+            "group": group["id"],
             "batch": ok("/api/batches")[0]["id"],
             "order": ok("/api/orders")[0]["id"],
         },

@@ -352,6 +352,13 @@ main { padding: 24px; }
 }
 
 /* Precon origin fields */
+.deck-group { border: 1px solid #0f3460; border-radius: 8px; margin-bottom: 12px; background: #16213e; }
+.deck-group > summary { padding: 12px 16px; cursor: pointer; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.deck-group > summary .group-name { font-weight: 600; font-size: 1.05rem; }
+.deck-group > summary a { color: #e94560; }
+.deck-group .group-meta { color: #888; font-size: 0.85rem; }
+.deck-group .deck-grid { padding: 0 16px 16px; }
+.ungrouped-header { color: #888; font-size: 0.9rem; margin: 16px 0 4px; }
 .precon-fields { margin-top: 8px; padding-left: 20px; }
 </style>
 </head>
@@ -370,6 +377,7 @@ main { padding: 24px; }
       <button class="secondary" id="view-table-btn" title="Table view"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2" width="14" height="2" rx=".5"/><rect x="1" y="7" width="14" height="2" rx=".5"/><rect x="1" y="12" width="14" height="2" rx=".5"/></svg></button>
     </div>
     <button onclick="showCreateModal()">New Deck</button>
+    <button class="secondary" onclick="createGroup()">New Group</button>
   </div>
   <span id="status"></span>
 </header>
@@ -377,6 +385,7 @@ main { padding: 24px; }
 <main>
   <!-- List View -->
   <div id="list-view" class="list-view active">
+    <div id="group-list"></div>
     <div id="deck-grid"></div>
     <div id="empty-state" class="empty-state" style="display:none">
       No decks yet. Click "New Deck" to create one.
@@ -522,8 +531,40 @@ document.getElementById('view-table-btn').addEventListener('click', () => setVie
 
 // ===== List View =====
 
-function loadDecks() {
+let groups = [];
+
+async function loadDecks() {
+  const res = await fetch('/api/deck-groups');
+  if (!res.ok) throw new Error('deck groups: ' + res.status);
+  groups = await res.json();
   setView(viewMode);
+}
+
+function renderGroups(statusFilter) {
+  document.getElementById('group-list').innerHTML = groups.map(g => {
+    let members = decks.filter(d => d.deck_group === g.name);
+    if (statusFilter) members = members.filter(d => (d.state || 'idea') === statusFilter);
+    return `<details class="deck-group" data-group="${g.id}">
+      <summary>
+        <span class="group-name">${esc(g.name)}</span>
+        <span class="group-meta">${g.deck_count} decks · ${g.card_count} cards${g.total_value ? ' · ' + formatPrice(g.total_value) : ''}</span>
+        <a href="/deck-groups/${g.id}">Open group</a>
+      </summary>
+      <div class="deck-grid">${members.map(d => renderDeckCard(d)).join('')}</div>
+    </details>`;
+  }).join('') + (groups.length ? '<h3 class="ungrouped-header">Ungrouped</h3>' : '');
+}
+
+async function createGroup() {
+  const name = (prompt('Group name') || '').trim();
+  if (!name) return;
+  const res = await fetch('/api/deck-groups', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name}),
+  });
+  if (!res.ok) { alert('Create failed: ' + await res.text()); return; }
+  window.location.href = '/deck-groups/' + (await res.json()).id;
 }
 
 const STATE_LABELS = {
@@ -552,14 +593,17 @@ function renderDeckList() {
   const empty = document.getElementById('empty-state');
   const statusFilter = document.getElementById('status-filter').value;
 
-  let filtered = decks;
+  renderGroups(statusFilter);
+
+  let filtered = decks.filter(d => !d.deck_group);
   if (statusFilter) {
-    filtered = decks.filter(d => (d.state || 'idea') === statusFilter);
+    filtered = filtered.filter(d => (d.state || 'idea') === statusFilter);
   }
 
   if (filtered.length === 0) {
     grid.innerHTML = '';
-    empty.style.display = '';
+    empty.style.display = groups.length ? 'none' : '';
+    if (groups.length) return;
     empty.textContent = statusFilter
       ? `No ${STATE_LABELS[statusFilter].toLowerCase()} decks.`
       : 'No decks yet. Click "New Deck" to create one.';

@@ -95,6 +95,7 @@ HOME_LINK_EXEMPT = {
 PARAMETRIZED_SAMPLES = {
     "/deck-builder/": "/deck-builder/1",
     "/decks/": "/decks/1",
+    "/deck-groups/": "/deck-groups/1",
     "/sets/": "/sets/fdn",
     "/card/": "/card/fdn/1",
     "/batches/": "/batches/1",

@@ -194,6 +194,7 @@
             <h2>${esc(deck.name)}</h2>
             <span class="card-count">${totalCards}/${deckSize}</span>
             <span class="state-badge state-${deck.state || 'idea'}">${({'idea':'Idea','ready':'Ready','constructed':'Constructed'})[deck.state] || deck.state || 'Idea'}</span>
+            ${deck.deck_group ? `<a class="deck-group-link" id="deck-group-link" href="/deck-groups/${deck.deck_group_id}">${esc(deck.deck_group)}</a>` : ''}
             <div class="header-actions">
               <button class="edit-btn" id="edit-deck-btn">Edit</button>
               <button class="add-btn" id="add-card-btn">+ Add Card</button>
@@ -312,6 +313,10 @@
           <div class="form-group">
             <label>Storage Location</label>
             <input type="text" id="f-location" placeholder="e.g. shelf 2, left side">
+          </div>
+          <div class="form-group">
+            <label>Deck Group</label>
+            <select id="f-deck-group"><option value="">No group</option></select>
           </div>
           <div class="form-actions">
             <button id="btn-save-deck">Save</button>
@@ -751,8 +756,12 @@
 
   // ── Edit Deck Modal ──
 
-  function showEditModal(deck) {
+  async function showEditModal(deck) {
     document.getElementById('modal-title').textContent = 'Edit Deck';
+    const groups = await (await fetch('/api/deck-groups')).json();
+    document.getElementById('f-deck-group').innerHTML = '<option value="">No group</option>' +
+      groups.map(g => `<option value="${esc(g.name)}">${esc(g.name)}</option>`).join('');
+    document.getElementById('f-deck-group').value = deck.deck_group || '';
 
     // Commander dropdown — populated from cards in the deck
     const cmdSelect = document.getElementById('f-commander');
@@ -799,6 +808,7 @@
       sleeve_color: document.getElementById('f-sleeve').value.trim() || null,
       deck_box: document.getElementById('f-deckbox').value.trim() || null,
       storage_location: document.getElementById('f-location').value.trim() || null,
+      deck_group: document.getElementById('f-deck-group').value || null,
       origin_set_code: document.getElementById('f-origin-set').value || null,
       origin_theme: document.getElementById('f-origin-theme').value.trim() || null,
       origin_variation: document.getElementById('f-origin-variation').value ? parseInt(document.getElementById('f-origin-variation').value) : null,
@@ -814,11 +824,12 @@
     }
     if (!data.name) { alert('Name is required'); return; }
 
-    await fetch('/api/decks/' + deckId, {
+    const res = await fetch('/api/decks/' + deckId, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
+    if (!res.ok) { alert('Save failed: ' + await res.text()); return; }
     closeModal('deck-modal');
     await loadBuilder(deckId);
   }

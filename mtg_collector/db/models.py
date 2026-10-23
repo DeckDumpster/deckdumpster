@@ -164,6 +164,7 @@ class Deck:
     commander_printing_id: Optional[str] = None
     plan: Optional[str] = None
     sub_plans: Optional[str] = None
+    deck_group: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -2038,19 +2039,21 @@ class DeckRepository:
                sleeve_color, deck_box, storage_location,
                origin_set_code, origin_theme, origin_variation,
                state_id, commander_oracle_id, commander_printing_id,
-               plan, sub_plans, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               plan, sub_plans, deck_group, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (deck.name, deck.description, deck.format, is_precon,
              deck.sleeve_color, deck.deck_box, deck.storage_location,
              deck.origin_set_code, deck.origin_theme, deck.origin_variation,
              deck.state_id, deck.commander_oracle_id,
-             deck.commander_printing_id, deck.plan, deck.sub_plans, ts, ts),
+             deck.commander_printing_id, deck.plan, deck.sub_plans,
+             deck.deck_group, ts, ts),
         )
         return cursor.lastrowid
 
     def get(self, deck_id: int) -> Optional[Dict[str, Any]]:
         row = self.conn.execute(
             """SELECT d.*, ds.name AS state,
+                      (SELECT g.id FROM deck_groups g WHERE g.name = d.deck_group) AS deck_group_id,
                       (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count,
                       (SELECT COALESCE(SUM(c.purchase_price), 0)
                        FROM deck_cards dc2
@@ -2073,7 +2076,9 @@ class DeckRepository:
                     "origin_set_code", "origin_theme", "origin_variation",
                     "state_id",
                     "commander_oracle_id", "commander_printing_id",
-                    "plan", "sub_plans")
+                    "plan", "sub_plans", "deck_group")
+        if data.get("deck_group") is not None:
+            DeckGroupRepository(self.conn).require(data["deck_group"])
         for key in allowed:
             if key in data:
                 fields.append(f"{key} = ?")
@@ -2095,6 +2100,29 @@ class DeckRepository:
             f"UPDATE decks SET {', '.join(fields)} WHERE id = ?", params
         )
         return cursor.rowcount > 0
+
+    def release(self, deck_id: int) -> int:
+        """Return a deck's physical copies to the collection; the deck stays.
+
+        A constructed deck holds no copies afterwards, so it goes back to
+        ready.  Returns the number of copies released.
+        """
+        rows = self.conn.execute(
+            "SELECT collection_id, zone FROM deck_cards WHERE deck_id = ? AND collection_id IS NOT NULL",
+            (deck_id,),
+        ).fetchall()
+        for row in rows:
+            _log_movement(self.conn, row["collection_id"], deck_id, None,
+                          None, None, row["zone"], None, note="deck released")
+        self.conn.execute(
+            "DELETE FROM deck_cards WHERE deck_id = ? AND collection_id IS NOT NULL",
+            (deck_id,),
+        )
+        self.conn.execute(
+            "UPDATE decks SET state_id = ?, updated_at = ? WHERE id = ? AND state_id = ?",
+            (DECK_STATE_READY, now_iso(), deck_id, DECK_STATE_CONSTRUCTED),
+        )
+        return len(rows)
 
     def delete(self, deck_id: int) -> bool:
         # Log movements before deleting deck_cards rows
@@ -2837,6 +2865,112 @@ class DeckRepository:
         batch_repo.complete(batch_id)
 
         return {"batch_id": batch_id, "cards_added": cards_added, "previous": previous}
+
+
+class DeckGroupRepository:
+    """A named container a set of decks is managed through (a cube's packs)."""
+
+    _SELECT = """SELECT g.*,
+                    (SELECT COUNT(*) FROM decks d WHERE d.deck_group = g.name) AS deck_count,
+                    (SELECT COUNT(*) FROM deck_cards dc JOIN decks d ON dc.deck_id = d.id
+                      WHERE d.deck_group = g.name) AS card_count,
+                    (SELECT COALESCE(SUM(c.purchase_price), 0)
+                       FROM deck_cards dc JOIN decks d ON dc.deck_id = d.id
+                       JOIN collection c ON dc.collection_id = c.id
+                      WHERE d.deck_group = g.name) AS total_value
+                 FROM deck_groups g"""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def require(self, name: str) -> None:
+        if self.conn.execute("SELECT 1 FROM deck_groups WHERE name = ?", (name,)).fetchone() is None:
+            raise ValueError(f"deck group {name!r} does not exist")
+
+    @staticmethod
+    def _name(value) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("name is required")
+        return value.strip()
+
+    def add(self, data: Dict[str, Any]) -> int:
+        name = self._name(data.get("name"))
+        if self.conn.execute("SELECT 1 FROM deck_groups WHERE name = ?", (name,)).fetchone():
+            raise ValueError(f"deck group {name!r} already exists")
+        ts = now_iso()
+        cursor = self.conn.execute(
+            "INSERT INTO deck_groups (name, description, format, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (name, data.get("description"), data.get("format"), ts, ts),
+        )
+        return cursor.lastrowid
+
+    def get(self, group_id: int) -> Optional[Dict[str, Any]]:
+        row = self.conn.execute(self._SELECT + " WHERE g.id = ?", (group_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_all(self) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(self._SELECT).fetchall()
+        return sort_by_name([dict(r) for r in rows])
+
+    def decks_of(self, group_id: int) -> List[Dict[str, Any]]:
+        group = self.get(group_id)
+        decks = [d for d in DeckRepository(self.conn).list_all()
+                 if d["deck_group"] == group["name"]]
+        return decks
+
+    def update(self, group_id: int, data: Dict[str, Any]) -> bool:
+        group = self.get(group_id)
+        if group is None:
+            return False
+        name = group["name"]
+        if "name" in data:
+            new = self._name(data["name"])
+            if new != name and self.conn.execute(
+                    "SELECT 1 FROM deck_groups WHERE name = ?", (new,)).fetchone():
+                raise ValueError(f"deck group {new!r} already exists")
+        else:
+            new = name
+        description = data.get("description", group["description"])
+        fmt = data.get("format", group["format"])
+        ts = now_iso()
+        self.conn.execute(
+            "UPDATE deck_groups SET name = ?, description = ?, format = ?, updated_at = ? WHERE id = ?",
+            (new, description, fmt, ts, group_id),
+        )
+        if new != name:
+            self.conn.execute(
+                "UPDATE decks SET deck_group = ?, updated_at = ? WHERE deck_group = ?",
+                (new, ts, name),
+            )
+        return True
+
+    def release_all(self, group_id: int) -> int:
+        """Release every deck in the group; returns the copies freed."""
+        repo = DeckRepository(self.conn)
+        return sum(repo.release(d["id"]) for d in self.decks_of(group_id))
+
+    def delete(self, group_id: int, mode: str) -> Optional[Dict[str, int]]:
+        """Delete a group; its decks are ungrouped ('ungroup') or deleted with it
+        ('delete_decks', their cards returning to the collection)."""
+        if mode not in ("ungroup", "delete_decks"):
+            raise ValueError("decks must be 'ungroup' or 'delete_decks'")
+        group = self.get(group_id)
+        if group is None:
+            return None
+        decks = self.decks_of(group_id)
+        deleted = 0
+        if mode == "ungroup":
+            self.conn.execute(
+                "UPDATE decks SET deck_group = NULL, updated_at = ? WHERE deck_group = ?",
+                (now_iso(), group["name"]),
+            )
+        else:
+            repo = DeckRepository(self.conn)
+            for d in decks:
+                deleted += 1 if repo.delete(d["id"]) else 0
+        self.conn.execute("DELETE FROM deck_groups WHERE id = ?", (group_id,))
+        return {"decks": len(decks), "decks_deleted": deleted}
 
 
 class BinderRepository:
