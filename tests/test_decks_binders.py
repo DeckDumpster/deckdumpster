@@ -904,7 +904,9 @@ class TestDeckMovementLog:
             logs = _get_movement_logs(db, cid)
             assert len(logs) == 2  # add + delete
             delete_log = logs[1]
-            assert delete_log["from_deck_id"] == deck_id
+            # The deck is gone, so the row may not point at it (the server
+            # enforces movement_log's FK; this test's bare connection does not).
+            assert delete_log["from_deck_id"] is None
             assert delete_log["to_deck_id"] is None
             assert delete_log["from_zone"] == "mainboard"
             assert delete_log["to_zone"] is None
