@@ -576,11 +576,17 @@ function renderDeckList() {
 
 // ===== Table View =====
 
+const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 function sortDecks(list) {
   const cmp = (a, b) => {
     let va, vb;
     switch (sortCol) {
-      case 'name': va = (a.name || '').toLowerCase(); vb = (b.name || '').toLowerCase(); break;
+      case 'name': {
+        const c = naturalCollator.compare(a.name || '', b.name || '');
+        if (c !== 0) return sortAsc ? c : -c;
+        return a.id - b.id;
+      }
       case 'colors': va = a.deck_colors || ''; vb = b.deck_colors || ''; break;
       case 'format': va = (a.format || '').toLowerCase(); vb = (b.format || '').toLowerCase(); break;
       case 'cards': va = getCardCount(a); vb = getCardCount(b); break;

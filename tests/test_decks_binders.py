@@ -1054,3 +1054,17 @@ class TestGetMovementHistory:
         # Second: moved deck -> binder
         assert history[1]["from_deck_name"] == "Red Deck"
         assert history[1]["to_binder_name"] == "Trade Binder"
+
+
+class TestNaturalNameOrder:
+    def test_decks_list_numbers_by_value(self, db):
+        repo = DeckRepository(db)
+        for n in ("Pack 1", "Pack 10", "Pack 2"):
+            repo.add(Deck(id=None, name=n))
+        assert [d["name"] for d in repo.list_all()] == ["Pack 1", "Pack 2", "Pack 10"]
+
+    def test_binders_list_numbers_by_value(self, db):
+        repo = BinderRepository(db)
+        for n in ("Box 10", "box 2", "Box 1"):
+            repo.add(Binder(id=None, name=n))
+        assert [b["name"] for b in repo.list_all()] == ["Box 1", "box 2", "Box 10"]
