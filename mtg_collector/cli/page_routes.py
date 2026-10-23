@@ -43,6 +43,8 @@ PAGE_ROUTES: tuple[PageRoute, ...] = (
     PageRoute("/deck-builder/", "deck_builder.html", parametrized=True),
     PageRoute("/decks", "decks.html", init_data="_decks_init_data"),
     PageRoute("/decks/", "deck_builder.html", parametrized=True),
+    # /deck-groups/:id → one group and the decks in it (JS reads pathname)
+    PageRoute("/deck-groups/", "deck_group.html", parametrized=True),
     PageRoute("/binders", "binders.html"),
     PageRoute("/search-help", "search-help.html"),
     PageRoute("/set-value", "set_value.html"),

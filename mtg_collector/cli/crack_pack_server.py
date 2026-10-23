@@ -1306,6 +1306,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         page = match_page_route(path)
         if page is not None:
             self._serve_page(page)
+        elif path.startswith("/api/deck-groups"):
+            self._deck_groups_route("GET", path, params)
         elif path == "/api/sets":
             self._api_sets()
         elif path == "/api/sets/index":
@@ -1730,6 +1732,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"error": "Not found"}, 404)
         # Deck POST routes
+        elif path.startswith("/api/deck-groups"):
+            self._deck_groups_route("POST", path, {})
         elif path == "/api/decks":
             data = self._read_json_body()
             if data is None:
@@ -1889,6 +1893,8 @@ class CrackPackHandler(BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             self._api_put_settings()
+        elif path.startswith("/api/deck-groups"):
+            self._deck_groups_route("PUT", path, {})
         elif path.startswith("/api/deck-builder/") and path.endswith("/plan"):
             did = path[len("/api/deck-builder/"):-len("/plan")]
             if did.isdigit():
@@ -1957,7 +1963,9 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         path = parsed.path
         params = parse_qs(parsed.query)
 
-        if path.startswith("/api/sealed/collection/"):
+        if path.startswith("/api/deck-groups"):
+            self._deck_groups_route("DELETE", path, params)
+        elif path.startswith("/api/sealed/collection/"):
             entry_id = path[len("/api/sealed/collection/"):]
             confirm = params.get("confirm", [""])[0]
             if confirm != "true":
@@ -5117,6 +5125,61 @@ class CrackPackHandler(BaseHTTPRequestHandler):
         self._send_json(repo.list_all())
         conn.close()
 
+    def _deck_groups_route(self, method: str, path: str, params: dict):
+        """/api/deck-groups[/:id[/release]] -- full CRUDL plus release-all."""
+        rest = path[len("/api/deck-groups"):].strip("/")
+        gid, _, action = rest.partition("/")
+        if gid and not gid.isdigit() or action not in ("", "release"):
+            self._send_json({"error": "Not found"}, 404)
+            return
+        body = None
+        if method in ("POST", "PUT"):
+            body = self._read_json_body()
+            if body is None:
+                return
+        from mtg_collector.db.models import DeckGroupRepository
+        conn = self._get_conn()
+        try:
+            repo = DeckGroupRepository(conn)
+            try:
+                status, out = self._deck_groups_dispatch(
+                    repo, method, int(gid) if gid else None, action, body, params)
+            except ValueError as e:
+                conn.rollback()
+                self._send_json({"error": str(e)}, 400)
+                return
+            conn.commit()
+        finally:
+            conn.close()
+        self._send_json(out, status)
+
+    @staticmethod
+    def _deck_groups_dispatch(repo, method, gid, action, body, params):
+        missing = (404, {"error": "Deck group not found"})
+        if gid is None:
+            if method == "GET":
+                return 200, repo.list_all()
+            if method == "POST":
+                return 201, repo.get(repo.add(body))
+            return 405, {"error": "Method not allowed"}
+        if repo.get(gid) is None:
+            return missing
+        if action == "release":
+            if method != "POST":
+                return 405, {"error": "Method not allowed"}
+            return 200, {"released": repo.release_all(gid), "group": repo.get(gid)}
+        if method == "GET":
+            return 200, {**repo.get(gid), "decks": repo.decks_of(gid)}
+        if method == "PUT":
+            repo.update(gid, body)
+            return 200, repo.get(gid)
+        if method == "DELETE":
+            mode = params.get("decks", [None])[0]
+            if mode is None:
+                raise ValueError("decks=ungroup|delete_decks is required")
+            return 200, repo.delete(gid, mode)
+        return 405, {"error": "Method not allowed"}
+
     def _api_deck_by_origin(self, params: dict):
         set_code = params.get("set_code", [None])[0]
         theme = params.get("theme", [None])[0]
@@ -5432,7 +5495,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
             return
         conn = self._get_conn()
         try:
-            from mtg_collector.db.models import Deck, DeckRepository
+            from mtg_collector.db.models import Deck, DeckGroupRepository, DeckRepository
             repo = DeckRepository(conn)
             origin_var = data.get("origin_variation")
             if origin_var is not None:
@@ -5446,7 +5509,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 origin_theme=data.get("origin_theme"),
                 origin_variation=origin_var,
                 state_id=self._resolve_state_id(data.get("state", "idea")),
+                deck_group=data.get("deck_group"),
             )
+            if deck.deck_group is not None:
+                try:
+                    DeckGroupRepository(conn).require(deck.deck_group)
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
             deck_id = repo.add(deck)
             conn.commit()
             result = repo.get(deck_id)
@@ -5464,7 +5534,11 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 return
             if "state" in data:
                 data["state_id"] = self._resolve_state_id(data.pop("state"))
-            repo.update(deck_id, data)
+            try:
+                repo.update(deck_id, data)
+            except ValueError as e:
+                self._send_json({"error": str(e)}, 400)
+                return
             conn.commit()
             result = repo.get(deck_id)
         finally:

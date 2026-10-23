@@ -5,7 +5,7 @@ import sqlite3
 
 from mtg_collector.db.collector_number import number_sortable
 
-SCHEMA_VERSION = 54
+SCHEMA_VERSION = 55
 
 
 class SchemaIntegrityError(Exception):
@@ -57,6 +57,18 @@ INSERT OR IGNORE INTO deck_states (id, name, description, sort_order) VALUES
     (2, 'ready', 'Finished list, ready to collect', 1),
     (3, 'constructed', 'Physically built deck', 2);
 
+-- Deck groups: a named container a set of decks is managed through (a cube's
+-- packs).  Membership is by name: decks.deck_group holds the group's name, and
+-- DeckGroupRepository.update renames both in one transaction.
+CREATE TABLE IF NOT EXISTS deck_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE CHECK (name <> ''),
+    description TEXT,
+    format TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Decks (physical deck groupings)
 CREATE TABLE IF NOT EXISTS decks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,9 +87,11 @@ CREATE TABLE IF NOT EXISTS decks (
     commander_printing_id TEXT REFERENCES printings(printing_id),
     plan TEXT,
     sub_plans TEXT,
+    deck_group TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_decks_group ON decks(deck_group);
 
 -- Expected card lists for precon/Jumpstart decks
 CREATE TABLE IF NOT EXISTS deck_expected_cards (
@@ -1151,6 +1165,8 @@ def init_db(conn: sqlite3.Connection, force: bool = False) -> bool:
             _migrate_v52_to_v53(conn)
         if current < 54:
             _migrate_v53_to_v54(conn)
+        if current < 55:
+            _migrate_v54_to_v55(conn)
 
     # Record schema version
     conn.execute(
@@ -3224,6 +3240,26 @@ def _migrate_v48_to_v49(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE sets ADD COLUMN base_set_size INTEGER")
     if "total_set_size" not in columns:
         conn.execute("ALTER TABLE sets ADD COLUMN total_set_size INTEGER")
+
+
+def _migrate_v54_to_v55(conn: sqlite3.Connection):
+    """Add deck groups and a deck's membership in one."""
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS deck_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE CHECK (name <> ''),
+            description TEXT,
+            format TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+    """)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(decks)")]
+    if "deck_group" not in cols:
+        conn.execute(
+            "ALTER TABLE decks ADD COLUMN deck_group TEXT"
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_decks_group ON decks(deck_group)")
 
 
 def _migrate_v53_to_v54(conn: sqlite3.Connection):

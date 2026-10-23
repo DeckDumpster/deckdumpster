@@ -70,6 +70,7 @@ LIST_FAMILIES = {
     "search-alias": ("/api/search?q=&limit=50", _rows),
     "growth": ("/api/collection/growth", _growth_points),
     "decks": ("/api/decks", len),
+    "deck-groups": ("/api/deck-groups", len),
     "binders": ("/api/binders", len),
     "sealed": ("/api/sealed/collection", len),
     "sealed-stats": ("/api/sealed/collection/stats", _sealed_entries),
@@ -101,9 +102,18 @@ def test_collection_totals_are_alices_alone(alice, bobby):
 
 # --- by-id families: alice's id is a 404 for bobby -----------------------------
 
+@pytest.fixture(scope="module", autouse=True)
+def alice_group(alice):
+    """Alice's demo data holds no deck group; the group families need one to see."""
+    status, group = alice.json("POST", "/api/deck-groups", {"name": "ntly-secret-group"})
+    assert status == 201, group
+    return group
+
+
 @pytest.fixture(scope="module")
-def ids(alice):
+def ids(alice, alice_group):
     return {
+        "group": alice_group["id"],
         "deck": _first_id(alice, "/api/decks"),
         "binder": _first_id(alice, "/api/binders"),
         "order": _first_id(alice, "/api/orders"),
@@ -116,6 +126,7 @@ def ids(alice):
 
 BY_ID = {
     "deck": "/api/decks/{deck}",
+    "deck-group": "/api/deck-groups/{group}",
     "deck-completeness": "/api/decks/{deck}/completeness",
     "deck-builder": "/api/deck-builder/{deck}",
     "binder": "/api/binders/{binder}",
@@ -171,6 +182,7 @@ def _alice_markers(alice):
     marks = set()
     for path, keys in (
         ("/api/decks", ("name", "description")),
+        ("/api/deck-groups", ("name",)),
         ("/api/binders", ("name", "description")),
         ("/api/orders", ("order_number",)),
         ("/api/batches", ("name", "batch_uuid")),
@@ -207,6 +219,7 @@ def _page_urls(ids):
     samples = {
         "/deck-builder/": f"/deck-builder/{ids['deck']}",
         "/decks/": f"/decks/{ids['deck']}",
+        "/deck-groups/": f"/deck-groups/{ids['group']}",
         "/sets/": "/sets/dsk",
         "/card/": "/card/dsk/1",
         "/batches/": f"/batches/{ids['batch']}",
