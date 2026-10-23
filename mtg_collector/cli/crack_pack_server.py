@@ -5457,10 +5457,7 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 origin_theme=base_name,
                 origin_variation=variation,
                 state_id=self._resolve_state_id(data.get("state", "idea")),
-                deck_group=data.get("deck_group"),
             )
-            if deck.deck_group is not None:
-                DeckGroupRepository(conn).require(deck.deck_group)
             deck_id = repo.add(deck)
             if expected:
                 repo.set_expected_cards(deck_id, expected)
@@ -5512,7 +5509,14 @@ class CrackPackHandler(BaseHTTPRequestHandler):
                 origin_theme=data.get("origin_theme"),
                 origin_variation=origin_var,
                 state_id=self._resolve_state_id(data.get("state", "idea")),
+                deck_group=data.get("deck_group"),
             )
+            if deck.deck_group is not None:
+                try:
+                    DeckGroupRepository(conn).require(deck.deck_group)
+                except ValueError as e:
+                    self._send_json({"error": str(e)}, 400)
+                    return
             deck_id = repo.add(deck)
             conn.commit()
             result = repo.get(deck_id)
