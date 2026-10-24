@@ -184,7 +184,7 @@ def test_unset_leaves_the_timer_units_unflagged(host):
 
     text = host.service("mtgc-prices", "inst").read_text()
     assert "ExecStart=podman run --rm " in text
-    assert "mtg data fetch-prices --force" in text
+    assert "--entrypoint mtg localhost/mtgc:inst data fetch-prices --force" in text
     assert "--root=" not in text
 
 
@@ -324,7 +324,7 @@ def test_set_flags_the_timer_units(host):
 
     text = host.service("mtgc-prices", "inst").read_text()
     assert f"ExecStart=podman --root={host.store}/storage --runroot=" in text
-    assert "mtg data fetch-prices --force" in text
+    assert "--entrypoint mtg localhost/mtgc:inst data fetch-prices --force" in text
 
 
 def test_set_flags_every_podman_in_a_multi_execstart_chain_unit(host):
