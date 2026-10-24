@@ -14,6 +14,7 @@ from datetime import date
 from pathlib import Path
 
 from mtg_collector.db.connection import get_shared_write_path
+from mtg_collector.jsonstream import iter_object_members
 from mtg_collector.landing import current_run
 from mtg_collector.utils import get_mtgc_home, now_iso
 
@@ -22,6 +23,7 @@ def _download(url: str, dest: Path, *, source: str, dataset: str):
     """Download a URL to a file, landing the bytes verbatim in the raw zone."""
     current_run().download(url, dest, source=source, dataset=dataset)
 
+_IMPORT_BATCH = 50_000
 MTGJSON_URL = "https://mtgjson.com/api/v5/AllPrintings.json.gz"
 MTGJSON_PRICES_URL = "https://mtgjson.com/api/v5/AllPricesToday.json.gz"
 MTGJSON_META_URL = "https://mtgjson.com/api/v5/Meta.json"
@@ -1105,36 +1107,37 @@ def _ensure_uuid_map(conn: sqlite3.Connection):
         return  # Map is current
 
     print("Building UUID map from AllPrintings.json ...")
-    with open(path) as f:
-        raw = json.load(f)
-
+    insert_sql = "INSERT OR IGNORE INTO mtgjson_uuid_map (uuid, set_code, collector_number) VALUES (?, ?, ?)"
     rows = []
-    for set_code, set_data in raw.get("data", {}).items():
-        for card in set_data.get("cards", []):
-            uuid = card.get("uuid")
-            number = card.get("number")
-            if uuid and number:
-                rows.append((uuid, set_code.lower(), number))
-        # Tokens live under "tokens", not "cards". Use the parent set's
-        # tokenSetCode (matching Scryfall's token set code) so the UUID map
-        # aligns with the set_code stored in our printings table.
-        token_set_code = set_data.get("tokenSetCode", set_code).lower()
-        for token in set_data.get("tokens", []):
-            uuid = token.get("uuid")
-            number = token.get("number")
-            if uuid and number:
-                rows.append((uuid, token_set_code, number))
-
-    conn.executemany(
-        "INSERT OR IGNORE INTO mtgjson_uuid_map (uuid, set_code, collector_number) VALUES (?, ?, ?)",
-        rows,
-    )
+    total = 0
+    with open(path) as f:
+        for set_code, set_data in iter_object_members(f, "data"):
+            for card in set_data.get("cards", []):
+                uuid = card.get("uuid")
+                number = card.get("number")
+                if uuid and number:
+                    rows.append((uuid, set_code.lower(), number))
+            # Tokens live under "tokens", not "cards". Use the parent set's
+            # tokenSetCode (matching Scryfall's token set code) so the UUID map
+            # aligns with the set_code stored in our printings table.
+            token_set_code = set_data.get("tokenSetCode", set_code).lower()
+            for token in set_data.get("tokens", []):
+                uuid = token.get("uuid")
+                number = token.get("number")
+                if uuid and number:
+                    rows.append((uuid, token_set_code, number))
+            if len(rows) >= _IMPORT_BATCH:
+                conn.executemany(insert_sql, rows)
+                total += len(rows)
+                rows = []
+    conn.executemany(insert_sql, rows)
+    total += len(rows)
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value) VALUES ('uuid_map_source_mtime', ?)",
         (file_mtime,),
     )
     conn.commit()
-    print(f"  UUID map populated: {len(rows)} entries")
+    print(f"  UUID map populated: {total} entries")
 
 
 def import_prices(db_path: str):
@@ -1155,21 +1158,23 @@ def import_prices(db_path: str):
         conn.close()
         return
 
-    print(f"Loading {prices_path} ...")
-    with open(prices_path) as f:
-        raw = json.load(f)
-
-    data = raw.get("data", {})
+    print(f"Streaming {prices_path} ...")
 
     # Build lookup from uuid_map
     uuid_rows = conn.execute("SELECT uuid, set_code, collector_number FROM mtgjson_uuid_map").fetchall()
     uuid_map = {r[0]: (r[1], r[2]) for r in uuid_rows}
+    del uuid_rows
 
     uuid_total = 0
     uuid_mapped = 0
     uuid_unmapped = 0
+    price_row_count = 0
     price_rows = []
     dates_seen = set()
+    insert_sql = (
+        "INSERT OR IGNORE INTO prices (set_code, collector_number, source, price_type, price, observed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)"
+    )
 
     # Provider name mapping: MTGJSON key → our source name
     provider_map = {
@@ -1177,43 +1182,47 @@ def import_prices(db_path: str):
         "tcgplayer": "tcgplayer",
     }
 
-    for uuid, card_prices in data.items():
-        uuid_total += 1
-        mapping = uuid_map.get(uuid)
-        if not mapping:
-            uuid_unmapped += 1
-            continue
-        uuid_mapped += 1
-        set_code, collector_number = mapping
+    with open(prices_path) as f:
+        for uuid, card_prices in iter_object_members(f, "data"):
+            uuid_total += 1
+            mapping = uuid_map.get(uuid)
+            if not mapping:
+                uuid_unmapped += 1
+                continue
+            uuid_mapped += 1
+            set_code, collector_number = mapping
 
-        paper = card_prices.get("paper", {})
-        for provider_key, source_name in provider_map.items():
-            prov = paper.get(provider_key, {})
-            # CK: import buylist (what CK will pay you) + retail (fallback)
-            # TCG: import retail prices (what you'd pay)
-            price_categories = (
-                [("buylist", "buylist_"), ("retail", "")]
-                if provider_key == "cardkingdom"
-                else [("retail", "")]
-            )
-            for category, type_prefix in price_categories:
-                cat_data = prov.get(category, {})
-                for price_type in ("normal", "foil"):
-                    prices_by_date = cat_data.get(price_type, {})
-                    for date_str, price_val in prices_by_date.items():
-                        if price_val is not None:
-                            price_rows.append((
-                                set_code, collector_number, source_name,
-                                f"{type_prefix}{price_type}", float(price_val), date_str,
-                            ))
-                            dates_seen.add(date_str)
+            paper = card_prices.get("paper", {})
+            for provider_key, source_name in provider_map.items():
+                prov = paper.get(provider_key, {})
+                # CK: import buylist (what CK will pay you) + retail (fallback)
+                # TCG: import retail prices (what you'd pay)
+                price_categories = (
+                    [("buylist", "buylist_"), ("retail", "")]
+                    if provider_key == "cardkingdom"
+                    else [("retail", "")]
+                )
+                for category, type_prefix in price_categories:
+                    cat_data = prov.get(category, {})
+                    for price_type in ("normal", "foil"):
+                        prices_by_date = cat_data.get(price_type, {})
+                        for date_str, price_val in prices_by_date.items():
+                            if price_val is not None:
+                                price_rows.append((
+                                    set_code, collector_number, source_name,
+                                    f"{type_prefix}{price_type}", float(price_val), date_str,
+                                ))
+                                dates_seen.add(date_str)
 
-    print(f"  Inserting {len(price_rows)} price rows ...")
-    conn.executemany(
-        "INSERT OR IGNORE INTO prices (set_code, collector_number, source, price_type, price, observed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        price_rows,
-    )
+            if len(price_rows) >= _IMPORT_BATCH:
+                conn.executemany(insert_sql, price_rows)
+                price_row_count += len(price_rows)
+                price_rows = []
+
+    conn.executemany(insert_sql, price_rows)
+    price_row_count += len(price_rows)
+    del price_rows, uuid_map
+    print(f"  Inserted {price_row_count} price rows")
 
     conn.commit()
 
@@ -1228,14 +1237,14 @@ def import_prices(db_path: str):
     conn.execute(
         "INSERT INTO price_fetch_log (fetched_at, source_file, dates_imported, uuid_total, uuid_mapped, uuid_unmapped, rows_inserted) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (now_iso(), str(prices_path), json.dumps(dates_list), uuid_total, uuid_mapped, uuid_unmapped, len(price_rows)),
+        (now_iso(), str(prices_path), json.dumps(dates_list), uuid_total, uuid_mapped, uuid_unmapped, price_row_count),
     )
     conn.commit()
 
     elapsed = time.time() - t0
     print(f"  Dates imported: {', '.join(dates_list) if dates_list else 'none'}")
     print(f"  UUIDs: {uuid_total} total, {uuid_mapped} mapped, {uuid_unmapped} unmapped")
-    print(f"  Price rows: {len(price_rows)} (INSERT OR IGNORE)")
+    print(f"  Price rows: {price_row_count} (INSERT OR IGNORE)")
     print(f"  Latest prices: {n} rows refreshed")
     print(f"  Elapsed: {elapsed:.1f}s")
 
