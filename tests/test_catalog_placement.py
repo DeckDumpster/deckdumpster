@@ -193,3 +193,32 @@ def test_registry_rules():
 def test_single_tenant_mode_is_the_configured_db(tmp_path, monkeypatch):
     monkeypatch.setenv("MTGC_HOME", str(tmp_path))
     assert tenants.list_tenants("/x/collection.sqlite") == [("single", "/x/collection.sqlite")]
+
+
+def test_growth_rebuild_opens_tenants_against_the_shared_catalogue(tmp_path, monkeypatch):
+    """The price chain runs with no MTGC_SHARED_DB; tenants must still pass and stay catalogue-free."""
+    monkeypatch.setenv("MTGC_HOME", str(tmp_path))
+    monkeypatch.delenv("MTGC_SHARED_DB", raising=False)
+    monkeypatch.delenv("MTGC_DB", raising=False)
+    sc = sqlite3.connect(tmp_path / "shared.sqlite")
+    init_db(sc)
+    sc.commit()
+    sc.close()
+    reg = sqlite3.connect(tmp_path / "registry.sqlite")
+    reg.executescript(REGISTRY_SCHEMA_SQL)
+    ids = ["01HZZZZZZZZZZZZZZZZZZZZZZA", "01HZZZZZZZZZZZZZZZZZZZZZZB"]
+    (tmp_path / "tenants").mkdir()
+    for h, i in zip("ab", ids):
+        reg.execute("INSERT INTO user (handle, database_id, created_at) VALUES (?, ?, 'now')", (h, i))
+        c = open_connection(str(tmp_path / "tenants" / f"{i}.sqlite"), str(tmp_path / "shared.sqlite"))
+        init_db(c)
+        c.commit()
+        c.close()
+    reg.commit()
+    reg.close()
+    before = {i: _names(tmp_path / "tenants" / f"{i}.sqlite") for i in ids}
+
+    assert tenants.rebuild_growth_all(str(tmp_path / "collection.sqlite")) == 0
+    for i in ids:
+        assert not (_names(tmp_path / "tenants" / f"{i}.sqlite") & CATALOG)
+        assert before[i] <= _names(tmp_path / "tenants" / f"{i}.sqlite")
