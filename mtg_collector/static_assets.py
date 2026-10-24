@@ -62,6 +62,10 @@ _HASHED = re.compile(r"^(?P<stem>.+)\.(?P<digest>[0-9a-f]{%d})\.(?P<suffix>[^.]+
 _REFERENCE = re.compile(rb"/static/([A-Za-z0-9_./-]+)")
 
 
+#: Every document gets the session guard first in <head>, so it wraps fetch before any page script.
+_HEAD = re.compile(rb"<head[^>]*>", re.I)
+
+
 @dataclass(frozen=True)
 class ResolvedAsset:
     """A ``/static/`` request that names a file, and what it may promise."""
@@ -143,6 +147,7 @@ class AssetHasher:
             hashed = self.hashed_url(rel)
             return match.group(0) if hashed is None else hashed.encode("utf-8")
 
+        document = _HEAD.sub(rb'\g<0><script src="/static/session-guard.js"></script>', document, count=1)
         return _REFERENCE.sub(replace, document)
 
     def resolve(self, rel: str) -> ResolvedAsset | None:

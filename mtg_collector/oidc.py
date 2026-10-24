@@ -58,6 +58,9 @@ ALGORITHMS = ["RS256"]
 # Ops probes (serving-check, backup-check, cdn-check's /health): no credential.
 PUBLIC_PATHS = ("/health", "/api/backup-status")
 
+# Marks a 401 as "sign in again", which static/session-guard.js turns into the login redirect.
+LOGIN_REQUIRED_HEADER = "X-Login-Required"
+
 
 class OidcConfigError(RuntimeError):
     """The OIDC configuration is partial, malformed, or incompatible with the mode."""
@@ -335,7 +338,7 @@ class Oidc:
 class OidcMiddleware:
     """Outermost ASGI layer: every human path needs a session in the required group.
 
-    Browsers navigating (GET) are sent to /auth/login; anything else gets 401. A user
+    Browser navigations are sent to /auth/login; in-page requests (fetch/XHR) get a 401 the page turns into that redirect. A user
     signed in outside the group gets the 403 page. Public probes and automation
     (bearer token) pass.
     """
@@ -366,12 +369,25 @@ class OidcMiddleware:
             return
         if user is not None:
             response: Response = HTMLResponse(FORBIDDEN_HTML, status_code=403)
-        elif scope["method"] == "GET":
+        elif self._navigates(scope):
             target = scope["raw_path"].decode("latin-1")
             if scope["query_string"]:
                 target += "?" + scope["query_string"].decode("latin-1")
             response = RedirectResponse(
                 "/auth/login?" + urllib.parse.urlencode({"return_to": target}), status_code=303)
         else:
-            response = Response(status_code=401)
+            response = JSONResponse({"error": "sign-in required"}, status_code=401,
+                                    headers={LOGIN_REQUIRED_HEADER: "1"})
         await response(scope, receive, send)
+
+    @staticmethod
+    def _navigates(scope) -> bool:
+        """A browser navigation can follow a redirect to the login page; a fetch cannot.
+
+        ``Sec-Fetch-Mode`` is sent by every current browser. Without it (curl, probes)
+        a GET is taken as a navigation, as before.
+        """
+        mode = dict(scope["headers"]).get(b"sec-fetch-mode")
+        if mode is not None:
+            return mode == b"navigate"
+        return scope["method"] == "GET"

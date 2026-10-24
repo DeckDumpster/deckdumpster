@@ -36,3 +36,13 @@ The last bead deletes the adapter and `CrackPackHandler`.
   `CACHE_API` / ETag / gzip policy as `CrackPackHandler._respond`.
 - The connection comes from the family's `get_conn`, which calls `current_tenant()`
   first and so raises outside a resolved request.
+
+## Expired sign-in on an in-page action (sp-3ojucg)
+
+`OidcMiddleware` (`mtg_collector/oidc.py`) is where it is caught. A request with
+`Sec-Fetch-Mode: navigate` (or, with no such header, a GET) gets the 303 to
+`/auth/login?return_to=<path+query>`. Anything else (fetch/XHR) gets a 401 with
+`X-Login-Required: 1`, since a fetch cannot follow a cross-origin redirect.
+`static/session-guard.js`, injected first in `<head>` of every document by
+`AssetHasher.rewrite`, wraps `fetch`/XHR and turns that 401 into
+`/auth/login?return_to=<current page>`; login then returns there.
