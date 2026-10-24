@@ -129,7 +129,7 @@ while IFS= read -r obj; do
     "${S3[@]}" cp "s3://${MTGC_LAKE_S3_BUCKET}/raw/${obj}" "$SCRATCH/raw/$obj" >/dev/null \
         || fail "catalogue (object $obj is named by a manifest but missing from the bucket)"
 done < "$SCRATCH/objects.txt"
-jobrun "$LAKE_PROFILE" "$IMAGE" mtg data derive --run "$PARTITION" --raw-root /scratch/raw \
+jobrun "$LAKE_PROFILE" --entrypoint mtg "$IMAGE" data derive --run "$PARTITION" --raw-root /scratch/raw \
     || fail "catalogue (derive from the partition)"
 
 LIVE_SHARED="$HOME_DIR/shared.sqlite"
@@ -151,7 +151,7 @@ sys.exit(0 if a == b else 1)
 PY
 
 step "4/4 zone read-back from the bucket alone"
-jobrun mtgc-tenant "$IMAGE" mtg lake readback || fail "zone (read-back; a wrong key fails here)"
+jobrun mtgc-tenant --entrypoint mtg "$IMAGE" lake readback || fail "zone (read-back; a wrong key fails here)"
 python3 -I - "$SCRATCH/home/lake/zone.sqlite" "$HOME_DIR/lake/zone.sqlite" <<'PY' || fail "zone (zone_holdings per tenant differ from the live zone)"
 import sqlite3, sys
 def counts(path):
