@@ -38,17 +38,36 @@ def list_tenants(db_path: str) -> list[tuple[str, str]]:
     return [(i, str(tenant_path(i))) for i in ids]
 
 
+def _shared_for_tenants() -> str | None:
+    """The catalogue every tenant file must be opened against.
+
+    Multi-tenant mode: `$MTGC_HOME/shared.sqlite`, required.  The server pins it into
+    MTGC_SHARED_DB at startup, but a chain unit is a one-off process that starts with
+    only its env file, so without this a tenant opens as a monolithic database and
+    `init_db` reports every catalogue object missing from it.
+    """
+    from mtg_collector.db.connection import get_shared_db_path
+    from mtg_collector.tenancy import paths as tenant_paths
+
+    if not registry_path().exists():
+        return get_shared_db_path()
+    shared = tenant_paths.shared_file()
+    if not shared.exists():
+        raise FileNotFoundError(f"multi-tenant mode needs the shared catalogue at {shared}")
+    return str(shared)
+
+
 def rebuild_growth_all(db_path: str, *, rebuild=None, open_tenant=None) -> int:
     """Rebuild every tenant's growth series.  Returns 0, or PARTIAL_EXIT if any failed.
 
     `rebuild` / `open_tenant` are seams for tests; the defaults are the real ones.
     """
-    from mtg_collector.db.connection import get_shared_db_path, open_connection
+    from mtg_collector.db.connection import open_connection
     from mtg_collector.db.growth import rebuild_history
     from mtg_collector.db.schema import init_db
 
     rebuild = rebuild or rebuild_history
-    open_tenant = open_tenant or (lambda path: open_connection(path, get_shared_db_path()))
+    open_tenant = open_tenant or (lambda path: open_connection(path, _shared_for_tenants()))
 
     failed: list[tuple[str, str]] = []
     tenants = list_tenants(db_path)
