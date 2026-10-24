@@ -8,8 +8,8 @@ OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
 Type=oneshot
 ExecStartPre=/bin/mkdir -p %h/.local/share/mtgc-lake/{{INSTANCE}}/raw
 # Writes no catalogue byte: every fetch is teed verbatim into the raw landing zone.
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z localhost/mtgc:{{INSTANCE}} mtg data land
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z localhost/mtgc:{{INSTANCE}} mtg data fetch-edhrec
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data land
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data fetch-edhrec
 # Raw bytes reach the lake bucket under role/mtgc-lake; append-only, no --delete.
 ExecStartPost=/bin/sh -c 'exec bash {{REPO_DIR}}/deploy/lake-sync.sh {{INSTANCE}} raw'
 TimeoutStartSec=10800
