@@ -8,6 +8,6 @@ OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
 Type=oneshot
 ExecStartPre=/bin/mkdir -p %h/.local/share/mtgc-lake/{{INSTANCE}}/raw
 # The sole writer of the catalogue. Offline: a URL the run did not land is a ReplayMiss.
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z localhost/mtgc:{{INSTANCE}} mtg data derive
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z localhost/mtgc:{{INSTANCE}} mtg data import-edhrec
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data derive
+ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data import-edhrec
 TimeoutStartSec=7200
