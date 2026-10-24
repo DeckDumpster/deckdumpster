@@ -5,13 +5,18 @@ Wants=network-online.target
 OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
 
 [Service]
+MemoryMax=6G
+MemorySwapMax=0
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=20
 Type=oneshot
 ExecStartPre=/bin/mkdir -p %h/.local/share/mtgc-lake/{{INSTANCE}}/raw
 ExecStartPre=/bin/mkdir -p %h/.local/share/mtgc-lake/{{INSTANCE}}/iceberg
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data import-sealed-products
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data fetch-prices --force
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data fetch-sealed-prices
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_CATALOG=/lake/iceberg-catalog.sqlite -e MTGC_LAKE_WAREHOUSE=/lake/warehouse -v %h/.local/share/mtgc-lake/{{INSTANCE}}/iceberg:/lake:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data lake-build
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_CATALOG=/lake/iceberg-catalog.sqlite -e MTGC_LAKE_WAREHOUSE=/lake/warehouse -v %h/.local/share/mtgc-lake/{{INSTANCE}}/iceberg:/lake:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data lake-verify
+ExecStart=podman run --rm --memory 6g --memory-swap 6g --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data import-sealed-products
+ExecStart=podman run --rm --memory 6g --memory-swap 6g --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data fetch-prices --force
+ExecStart=podman run --rm --memory 6g --memory-swap 6g --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_RAW_DIR=/lake/raw -v %h/.local/share/mtgc-lake/{{INSTANCE}}/raw:/lake/raw:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data fetch-sealed-prices
+ExecStart=podman run --rm --memory 6g --memory-swap 6g --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_CATALOG=/lake/iceberg-catalog.sqlite -e MTGC_LAKE_WAREHOUSE=/lake/warehouse -v %h/.local/share/mtgc-lake/{{INSTANCE}}/iceberg:/lake:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data lake-build
+ExecStart=podman run --rm --memory 6g --memory-swap 6g --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e MTGC_LAKE_CATALOG=/lake/iceberg-catalog.sqlite -e MTGC_LAKE_WAREHOUSE=/lake/warehouse -v %h/.local/share/mtgc-lake/{{INSTANCE}}/iceberg:/lake:Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} data lake-verify
 ExecStartPost=/bin/sh -c 'bash {{REPO_DIR}}/deploy/lake-sync.sh {{INSTANCE}} raw && exec bash {{REPO_DIR}}/deploy/lake-sync.sh {{INSTANCE}} catalog'
 TimeoutStartSec=5400
