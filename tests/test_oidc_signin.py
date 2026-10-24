@@ -122,3 +122,26 @@ def test_create_app_puts_sign_in_in_front_of_the_legacy_adapter(provider, tmp_pa
     client = TestClient(app, base_url="https://magic.test", follow_redirects=False)
     assert client.get("/collection").status_code == 303
     assert client.get("/health").status_code == 200
+
+
+def test_an_expired_session_in_page_action_gets_a_401_the_page_acts_on(site, provider):
+    """fetch() cannot follow a redirect to another origin: it must get a 401 marked for login."""
+    fetched = {"Sec-Fetch-Mode": "cors"}
+    for call in (lambda: site.get("/api/collection", headers=fetched),
+                 lambda: site.post("/api/decks", headers=fetched)):
+        resp = call()
+        assert resp.status_code == 401
+        assert resp.headers["X-Login-Required"] == "1"
+    nav = site.get("/decks/7?tab=x", headers={"Sec-Fetch-Mode": "navigate"})
+    assert nav.status_code == 303
+    assert urllib.parse.parse_qs(urllib.parse.urlparse(nav.headers["location"]).query)[
+        "return_to"] == ["/decks/7?tab=x"]
+
+
+def test_every_document_loads_the_session_guard_that_returns_to_the_page():
+    from mtg_collector.static_assets import hasher_for
+    hasher = hasher_for(STATIC)
+    out = hasher.rewrite(b"<html><head><title>x</title></head>").decode()
+    assert "/static/session-guard." in out
+    script = (STATIC / "session-guard.js").read_text()
+    assert "/auth/login?return_to=" in script and "X-Login-Required" in script
