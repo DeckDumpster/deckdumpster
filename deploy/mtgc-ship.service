@@ -5,7 +5,12 @@ Wants=network-online.target
 OnFailure=mtgc-alert-{{INSTANCE}}@%n.service
 
 [Service]
+MemoryMax=3G
+MemorySwapMax=0
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=20
 Type=oneshot
 # Exit 2 is a partial night, 3 a gap; both fail the unit and page. Runs under role/mtgc-tenant.
-ExecStart=podman run --rm --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e AWS_PROFILE=mtgc-tenant -v %h/.aws:/root/.aws:ro,Z -e MTGC_LAKE_MASTER_KEY_FILE=/run/mtgc/tenant-master.key -v %h/.config/mtgc/{{INSTANCE}}/tenant-master.key:/run/mtgc/tenant-master.key:ro,Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} lake ship
+ExecStart=podman run --rm --memory 3g --memory-swap 3g --env-file %h/.config/mtgc/{{INSTANCE}}.env --env-file %h/.config/mtgc/{{INSTANCE}}/lake.env -e MTGC_HOME=/data -v mtgc-{{INSTANCE}}-data:/data:Z -e AWS_PROFILE=mtgc-tenant -v %h/.aws:/root/.aws:ro,Z -e MTGC_LAKE_MASTER_KEY_FILE=/run/mtgc/tenant-master.key -v %h/.config/mtgc/{{INSTANCE}}/tenant-master.key:/run/mtgc/tenant-master.key:ro,Z --entrypoint mtg localhost/mtgc:{{INSTANCE}} lake ship
 TimeoutStartSec=3600
