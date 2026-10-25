@@ -223,8 +223,22 @@ def register(subparsers):
     parser.set_defaults(func=run)
 
 
+def _report_peak_memory(command: str):
+    import resource
+
+    kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    print(f"peak memory: {command} {kib / 1024:.0f} MiB (max RSS)", flush=True)
+
+
 def run(args):
-    """Run the data command."""
+    """Run the data command, logging its peak memory on the way out."""
+    import atexit
+
+    atexit.register(_report_peak_memory, args.data_command)
+    _run(args)
+
+
+def _run(args):
     if args.data_command == "fetch":
         fetch_allprintings(force=args.force, db_path=getattr(args, "db_path", None))
     elif args.data_command == "fetch-prices":
