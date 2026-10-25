@@ -149,6 +149,7 @@ jobs:
           instance-type:       c7i.4xlarge
           spill-after-seconds: '60'
           spill-max-instances: '4'
+          spill-market:        ${{ vars.SPILL_MARKET }}
           aws-role-to-assume:  ${{ secrets.AWS_SPILL_ROLE_ARN }}
 
   # The real suite, on the VM provisioned above.

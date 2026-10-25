@@ -255,3 +255,31 @@ def test_only_a_true_force_spill_yields_ec2_only():
     assert expr.startswith("${{ inputs.force_spill && 'ec2-only' || '")
     assert expr.endswith("' }}")
     # An absent input (push, pull_request) is empty, hence falsy: 'ec2'.
+
+
+def test_every_provision_call_follows_the_org_spill_market():
+    """Every ephemeral-ci provision call passes the org SPILL_MARKET variable.
+
+    A composite action cannot read `vars`, so the caller passes it; a call that
+    omits it ignores the org-wide spot/on-demand switch. A call that pins a
+    market on purpose must say why in a comment on the same line or the line above."""
+    lines = WORKFLOW.read_text().splitlines()
+    calls = [
+        s["with"]
+        for job in _jobs().values()
+        for s in job.get("steps", [])
+        if str(s.get("uses", "")).startswith("DeckDumpster/ephemeral-ci/provision")
+    ]
+    assert calls, "no provision call found"
+    for with_ in calls:
+        market = str(with_.get("spill-market", ""))
+        if market == "${{ vars.SPILL_MARKET }}":
+            continue
+        pinned = [
+            n for n, l in enumerate(lines)
+            if l.strip().startswith("spill-market:")
+        ]
+        assert pinned and any(
+            lines[n - 1].lstrip().startswith("#") or "#" in lines[n]
+            for n in pinned
+        ), "provision call must pass spill-market: ${{ vars.SPILL_MARKET }} or pin it with a comment"
