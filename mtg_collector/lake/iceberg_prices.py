@@ -33,6 +33,7 @@ SEALED_COLUMNS = (
 )
 SOURCES = ("tcgplayer", "cardkingdom")
 MAX_AGE_DAYS = 3
+_APPEND_ROWS = 250_000
 
 
 def cents(value):
@@ -91,13 +92,15 @@ def _in_clause(column, dates):
     return f"WHERE {column} IN ({','.join('?' * len(dates))})", dates
 
 
-def price_rows(conn: sqlite3.Connection, dates=None):
+def iter_price_rows(conn: sqlite3.Connection, dates=None):
     """prices joined to one uuid per (set_code, collector_number): the lowest.
 
-    `dates` None means every day; an empty collection means none.
+    `dates` None means every day; an empty collection means none.  Rows are
+    yielded from the cursor, never collected: the table holds every day ever
+    imported and a list of them is what outgrew the chain's memory cap.
     """
     if dates is not None and not dates:
-        return []
+        return
     where, args = _in_clause("p.observed_at", dates) if dates is not None else ("", [])
     cur = conn.execute(
         f"""SELECT m.uuid, p.set_code, p.collector_number, p.source, p.price_type,
@@ -110,12 +113,13 @@ def price_rows(conn: sqlite3.Connection, dates=None):
             ORDER BY p.observed_at, p.set_code, p.collector_number, p.source, p.price_type""",
         args,
     )
-    return [(*r[:5], cents(r[5]), r[6]) for r in cur]
+    for r in cur:
+        yield (*r[:5], cents(r[5]), r[6])
 
 
-def sealed_rows(conn: sqlite3.Connection, dates=None):
+def iter_sealed_rows(conn: sqlite3.Connection, dates=None):
     if dates is not None and not dates:
-        return []
+        return
     where, args = _in_clause("observed_at", dates) if dates is not None else ("", [])
     cur = conn.execute(
         f"""SELECT tcgplayer_product_id, low_price, mid_price, high_price,
@@ -123,7 +127,12 @@ def sealed_rows(conn: sqlite3.Connection, dates=None):
             FROM sealed_prices {where} ORDER BY observed_at, tcgplayer_product_id""",
         args,
     )
-    return [(r[0], *map(cents, r[1:6]), r[6]) for r in cur]
+    for r in cur:
+        yield (r[0], *map(cents, r[1:6]), r[6])
+
+
+def price_rows(conn: sqlite3.Connection, dates=None):
+    return list(iter_price_rows(conn, dates))
 
 
 def _arrow(columns, rows, table):
@@ -136,27 +145,46 @@ def _arrow(columns, rows, table):
 
 
 def _lake_dates(table) -> set[str]:
-    return set(table.scan(selected_fields=("observed_date",)).to_arrow()
-               .column("observed_date").unique().to_pylist())
+    dates = set()
+    for batch in table.scan(selected_fields=("observed_date",)).to_arrow_batch_reader():
+        dates.update(batch.column("observed_date").unique().to_pylist())
+    return dates
 
 
 def _sqlite_dates(conn, which: str) -> set[str]:
     return {r[0] for r in conn.execute(f"SELECT DISTINCT observed_at FROM {which}")}
 
 
+def _day_batches(rows, chunk=_APPEND_ROWS):
+    """Chunks of at most `chunk` rows from an ordered row stream."""
+    buf = []
+    for r in rows:
+        buf.append(r)
+        if len(buf) >= chunk:
+            yield buf
+            buf = []
+    if buf:
+        yield buf
+
+
 def build(conn: sqlite3.Connection, catalog) -> dict[str, int]:
-    """Append every day SQLite holds and the lake does not.  Returns rows landed."""
+    """Append every day SQLite holds and the lake does not.  Returns rows landed.
+
+    One day at a time, in chunks: the working set is a chunk of rows, not the
+    backlog.  A first build with an empty lake lands every day ever imported.
+    """
     prices, sealed = ensure_tables(catalog)
     landed = {}
     for name, table, which, columns, fetch in (
-        ("prices", prices, "prices", PRICES_COLUMNS, price_rows),
-        ("sealed_prices", sealed, "sealed_prices", SEALED_COLUMNS, sealed_rows),
+        ("prices", prices, "prices", PRICES_COLUMNS, iter_price_rows),
+        ("sealed_prices", sealed, "sealed_prices", SEALED_COLUMNS, iter_sealed_rows),
     ):
-        missing = _sqlite_dates(conn, which) - _lake_dates(table)
-        rows = fetch(conn, missing)
-        if rows:
-            table.append(_arrow(columns, rows, table))
-        landed[name] = len(rows)
+        n = 0
+        for day in sorted(_sqlite_dates(conn, which) - _lake_dates(table)):
+            for chunk in _day_batches(fetch(conn, [day])):
+                table.append(_arrow(columns, chunk, table))
+                n += len(chunk)
+        landed[name] = n
     return landed
 
 
@@ -183,13 +211,18 @@ def check_age(catalog, today: date, max_days: int = MAX_AGE_DAYS) -> list[str]:
 
 
 def _lake_summary(table, value_columns):
-    df = table.scan().to_arrow().to_pylist()
+    import pyarrow as pa
+
     out: dict[str, list[int]] = {}
-    for r in df:
-        acc = out.setdefault(r["observed_date"], [0] + [0] * len(value_columns))
-        acc[0] += 1
-        for i, c in enumerate(value_columns, start=1):
-            acc[i] += r[c] or 0
+    scan = table.scan(selected_fields=("observed_date", *value_columns))
+    for batch in scan.to_arrow_batch_reader():
+        grouped = pa.Table.from_batches([batch]).group_by("observed_date").aggregate(
+            [([], "count_all")] + [(c, "sum") for c in value_columns])
+        for row in grouped.to_pylist():
+            acc = out.setdefault(row["observed_date"], [0] * (len(value_columns) + 1))
+            acc[0] += row["count_all"]
+            for i, c in enumerate(value_columns, start=1):
+                acc[i] += row[f"{c}_sum"] or 0
     return out
 
 
@@ -212,10 +245,10 @@ def verify(conn: sqlite3.Connection, catalog) -> list[str]:
     prices, sealed = (catalog.load_table(PRICES), catalog.load_table(SEALED_PRICES))
     checks = (
         (PRICES, _lake_summary(prices, ["price_cents"]),
-         _sqlite_summary(price_rows(conn), 1, 5)),
+         _sqlite_summary(iter_price_rows(conn), 1, 5)),
         (SEALED_PRICES,
          _lake_summary(sealed, list(SEALED_COLUMNS[1:6])),
-         _sqlite_summary(sealed_rows(conn), 5, 1)),
+         _sqlite_summary(iter_sealed_rows(conn), 5, 1)),
     )
     problems = []
     for ident, lake, db in checks:
