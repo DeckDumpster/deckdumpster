@@ -200,6 +200,12 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
             systemctl --user enable --now "mtgc-serving-check-${INSTANCE}.timer" \
                 || echo "==> WARNING: could not arm mtgc-serving-check-${INSTANCE}.timer" >&2
         fi
+        # Likewise the lakehouse chain: only an explicit MTGC_ARM_LAKE_CHAIN=1 arms
+        # land/derive/prices/ship/value, through chain.sh, which refuses a half-ready host.
+        if [ "${MTGC_ARM_LAKE_CHAIN:-}" = 1 ]; then
+            bash "$SCRIPT_DIR/chain.sh" arm "$INSTANCE" \
+                || echo "==> WARNING: could not arm the lakehouse chain for $INSTANCE" >&2
+        fi
         exit 0
     fi
     echo "    Attempt $i/$MAX_ATTEMPTS failed, waiting 2s..."
