@@ -97,3 +97,7 @@ reaching `raw/`/`lake/`, or any refusal), **3** absent, **4** cannot verify (the
 read was denied or failed: never reported as absent), **2** usage.
 `tests/lake/tenant_zone.sh` proves every one of these, green and red, against
 MinIO. Key custody: `deploy/LAKE-KEYS.md`.
+
+The bucket, the `mtgc-lake` / `mtgc-tenant` identities and the lifecycle above are
+owned by `deploy/infra/lake` (Terraform); the JSON here is the reference the
+drift test compares against, not a console step.
