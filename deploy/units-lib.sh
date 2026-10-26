@@ -171,6 +171,23 @@ EOF
     chmod 600 "$file"
 }
 
+# Scaffold ~/.config/mtgc/<instance>/oidc.env, fully commented out, if absent. Never
+# overwrites; deploy/oidc-env.sh fills it. Unset means no native sign-in (oidc.py is opt-in).
+mtgc_scaffold_oidc_env() {
+    local instance="$1"
+    local dir="${HOME}/.config/mtgc/${instance}"
+    local file="${dir}/oidc.env"
+    [ -f "$file" ] && return 0
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    cat > "$file" <<'EOF'
+# Native Pocket ID sign-in: written by deploy/oidc-env.sh. Set all or none.
+#MTGC_OIDC_ISSUER=https://id.gantt.pub
+#MTGC_OIDC_REQUIRED_GROUP=magic-users
+EOF
+    chmod 600 "$file"
+}
+
 # Scaffold ~/.config/mtgc/<instance>/lake.env, which the chain's job containers
 # name without a leading '-' so a missing file fails the unit rather than running
 # a job with no lake. Never overwrites. Bare values only (see access.env).

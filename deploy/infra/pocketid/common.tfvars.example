@@ -1,0 +1,4 @@
+# Copy to common.tfvars (git-ignored). Ids are not secrets but are account-specific.
+deploy_role_arn    = "arn:aws:iam::<account>:role/terraform-deploy"
+pocketid_group_ids = ["<id of magic-users>"]
+hostname           = "magic.dumpster.cards"

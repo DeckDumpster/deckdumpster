@@ -1,0 +1,5 @@
+.terraform/
+*.tfplan
+backend.tfvars
+common.tfvars
+terraform.tfstate*

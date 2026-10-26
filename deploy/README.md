@@ -1223,3 +1223,18 @@ Unset, nothing changes. `/auth/logout` is the "Sign out" link.
 the one place that can verify it, and Access can then be removed entirely. Until the
 Concierge removes the Access app, a service token still gets through Access, then needs the
 bearer too.
+
+**Turning it on for prod (sp-3xp0a3).** The Pocket ID client is Terraform in
+`deploy/infra/pocketid` (callback `https://<host>/auth/callback`, allowed group
+`magic-users`, PKCE; same provider and shape as dumpstar's `infra/edge`). Its client id and
+secret go to Secrets Manager at `mtgc/<instance>/oidc`, never an output.
+
+```bash
+POCKETID_API_TOKEN=... bash deploy/infra/pocketid/run.sh prod apply   # needs backend/common tfvars
+bash deploy/oidc-env.sh prod magic.dumpster.cards   # writes ~/.config/mtgc/prod/oidc.env (0600)
+bash deploy/deploy.sh prod                           # the Quadlet names oidc.env
+```
+
+`oidc-env.sh` generates the cookie key and `MTGC_AUTOMATION_TOKEN` once and keeps them on
+re-runs. The deploy job's cdn-check must then send that token as its bearer. `oidc.env` is
+scaffolded fully commented out, so an instance that never ran the script is unchanged.
