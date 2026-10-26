@@ -96,13 +96,6 @@ if [ ! -f "$QUADLET_FILE" ]; then
     echo "==> Starting $SERVICE_NAME..."
     systemctl --user start "$SERVICE_NAME"
 else
-    # Before writing another ~1 GB of layers: is there room? This is prod's
-    # redeploy path, so a build that runs out mid-way leaves a partial image and
-    # then restarts the live service against it. Gated on the store adopted
-    # above — prod's unit carries none, so prod measures the disk it runs from.
-    # There is no bypass flag; MTGC_DISK_FLOOR_GB is the only knob (de-yef).
-    bash "$SCRIPT_DIR/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
-
     # Converge the installed Quadlet to this checkout's render before building,
     # so a refusal costs nothing. setup.sh only runs for a MISSING unit, so
     # without this a template change never reached an existing instance
@@ -110,6 +103,13 @@ else
     # shellcheck source=deploy/units-lib.sh
     . "$SCRIPT_DIR/units-lib.sh"
     mtgc_converge_quadlet "$INSTANCE" "$REPO_DIR"
+
+    # Before writing another ~1 GB of layers: is there room? This is prod's
+    # redeploy path, so a build that runs out mid-way leaves a partial image and
+    # then restarts the live service against it. Gated on the store adopted
+    # above — prod's unit carries none, so prod measures the disk it runs from.
+    # There is no bypass flag; MTGC_DISK_FLOOR_GB is the only knob (de-yef).
+    bash "$SCRIPT_DIR/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
 
     echo "==> Building container image (mtgc:latest)..."
     DEPS_IMAGE="$(bash "$SCRIPT_DIR/deps-image.sh")"
