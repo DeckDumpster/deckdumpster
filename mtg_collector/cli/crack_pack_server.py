@@ -8470,12 +8470,11 @@ def run(args):
         # half-configured, must not serve.
         from mtg_collector.tenancy import MultiTenantResolver
 
-        if _build_oidc() is not None:
-            raise SystemExit("MTGC_OIDC_* is single-tenant only: multi-tenant mode "
-                             "resolves tenants from Access identities")
+        oidc = _build_oidc()
         verifier = access.AccessVerifier(access.require_config())
         app = create_app(gen, static_dir, db_path,
-                         resolver=MultiTenantResolver(verifier), multi=True)
+                         resolver=MultiTenantResolver(verifier, oidc=oidc),
+                         multi=True, oidc=oidc)
         if http_port is None:
             raise SystemExit(
                 "MTGC_MULTITENANT needs MTGC_HTTP_PORT: the loopback listener is "

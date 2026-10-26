@@ -25,6 +25,7 @@ with no credential at all.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -343,9 +344,12 @@ class OidcMiddleware:
     (bearer token) pass.
     """
 
-    def __init__(self, app, oidc: Oidc):
+    def __init__(self, app, oidc: Oidc, also_accepts=None):
         self.app = app
         self.oidc = oidc
+        # Multi-tenant mode: a request carrying a valid Access JWT passes to the
+        # tenant layer, which verifies it again and resolves the tenant.
+        self.also_accepts = also_accepts
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -356,11 +360,13 @@ class OidcMiddleware:
         routes = {"/auth/login": self.oidc.login, "/auth/callback": self.oidc.callback,
                   "/auth/logout": self.oidc.logout}
         if path in routes:
-            import asyncio
             response = await asyncio.to_thread(routes[path], request)
             await response(scope, receive, send)
             return
         if path in PUBLIC_PATHS or self.oidc.automation_ok(request):
+            await self.app(scope, receive, send)
+            return
+        if self.also_accepts is not None and await asyncio.to_thread(self.also_accepts, scope):
             await self.app(scope, receive, send)
             return
         user = self.oidc.session(request)
