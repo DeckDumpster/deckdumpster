@@ -236,6 +236,9 @@ mtgc_converge_quadlet() {
     http_port="$(rec MTGC_HTTP_PUBLISH_PORT)"
     tls_certs="$(rec MTGC_TLS_CERTS_DIR)"
     port="$(rec MTGC_PUBLISH_PORT)"
+    # prod's HTTPS host port is a fact of the deployment, not of an env file that
+    # may predate the record (sp-972mdc): ":8081" would drop the 8081 listener.
+    [ -n "$port" ] || [ "$instance" != "prod" ] || port=8081
     if [ -n "$port" ]; then mapping="${port}:8081"; else mapping=":8081"; fi
     memory=""
     [ "$instance" = "prod" ] || memory="2G"

@@ -152,6 +152,8 @@ else
     PORT="$(recorded MTGC_PUBLISH_PORT)"
     # Nothing recorded — let the OS assign an available port at container start.
     [ -n "$PORT" ] || PORT=0
+    # prod always publishes 8081 (sp-972mdc); mirrors mtgc_converge_quadlet.
+    if [ "$PORT" = "0" ] && [ "$INSTANCE" = "prod" ]; then PORT=8081; fi
 fi
 
 echo "==> MTGC deployment setup"
