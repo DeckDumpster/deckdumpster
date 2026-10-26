@@ -161,18 +161,19 @@ assert_not_access_wall() {
 # letting either side pick its encoding would make the comparison a coin toss.
 ORIGIN_DUMP="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${DOC_PATH}")"
 ORIGIN_STATUS="$(status_of "$ORIGIN_DUMP")"
-# A multi-tenant origin answers 401 to every route but /health until shown an
-# Access identity bound to a tenant, which a service token (no email) never is.
+# A multi-tenant origin answers 401 (Access mode) or a 303 to sign-in (native
+# OIDC mode, sp-rge37q) to every route but /health until shown an identity bound
+# to a tenant, which a service token (no email) never is.
 # So the document, its asset and the byte comparison are unreachable by this
 # check there; /health is public and carries the build id the image was built
 # from, and that is what the edge is compared on instead. Stale or error
 # responses from Cloudflare still fail: the build must match the origin's.
-if [ "$ORIGIN_STATUS" = "401" ]; then
+if [ "$ORIGIN_STATUS" = "401" ] || [ "$ORIGIN_STATUS" = "303" ]; then
     build_of() { printf '%s' "$1" | grep -oE '"build": *"[^"]+"' | head -n1 | sed -E 's/.*: *"([^"]+)"/\1/'; }
     HEALTH_PATH=/health
     ORIGIN_HEALTH_DUMP="$(headers_of "${ORIGIN_URL}${HEALTH_PATH}")"
     [ "$(status_of "$ORIGIN_HEALTH_DUMP")" = "200" ] \
-        || fail "the origin ${ORIGIN_URL}${HEALTH_PATH} did not answer 200 (the document answered 401).
+        || fail "the origin ${ORIGIN_URL}${HEALTH_PATH} did not answer 200 (the document answered ${ORIGIN_STATUS}).
     $(transport_error "$ORIGIN_HEALTH_DUMP")"
     ORIGIN_BUILD="$(build_of "$(curl -sS -k -m 20 "${ORIGIN_URL}${HEALTH_PATH}" 2>/dev/null)")"
     [ -n "$ORIGIN_BUILD" ] \

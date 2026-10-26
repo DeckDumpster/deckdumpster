@@ -329,6 +329,13 @@ def test_multitenant_passes_when_the_edge_serves_the_current_build(tmp_path):
     assert "https://magic.dumpster.cards/ " not in calls + " "
 
 
+def test_oidc_origin_redirecting_to_sign_in_is_probed_on_health(tmp_path):
+    """Native OIDC answers 303 on / (sp-rge37q); /health is the public probe."""
+    proc, calls = _run(tmp_path, {**MT_GREEN, 1: _dump(status="303", etag=None, cache=None)})
+    assert proc.returncode == 0, proc.stderr
+    assert "https://magic.dumpster.cards/health" in calls
+
+
 def test_multitenant_fails_when_the_edge_serves_an_older_build(tmp_path):
     proc, _ = _run(tmp_path, {**MT_GREEN, 5: _health("b" * 40)})
     assert proc.returncode == 1
