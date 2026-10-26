@@ -105,3 +105,22 @@ def test_hand_added_port_is_refused_with_the_diff(host):
     assert "9999" in r.stdout  # the diff
     assert host.unit.read_text() == drifted
     assert host.baks() == []
+
+
+def test_prod_without_a_recorded_https_port_still_converges_on_8081(host):
+    """The installed prod unit publishes 8081:8081 with no MTGC_PUBLISH_PORT
+    recorded; the render must reproduce it, not ':8081' (sp-972mdc)."""
+    env_file = host.unit.parents[2] / "mtgc" / "prod.env"
+    kept = [
+        line for line in env_file.read_text().splitlines()
+        if not line.startswith("MTGC_PUBLISH_PORT=")
+    ]
+    env_file.write_text("\n".join(kept) + "\n")
+    before = host.unit.read_text()
+    assert "PublishPort=8081:8081" in before
+
+    r = host.deploy()
+
+    assert "CONVERGE REFUSED" not in r.stderr, r.stderr
+    assert host.unit.read_text() == before
+    assert "PublishPort=127.0.0.1:8091:8080" in before
