@@ -96,6 +96,14 @@ if [ ! -f "$QUADLET_FILE" ]; then
     echo "==> Starting $SERVICE_NAME..."
     systemctl --user start "$SERVICE_NAME"
 else
+    # Converge the installed Quadlet to this checkout's render before building,
+    # so a refusal costs nothing. setup.sh only runs for a MISSING unit, so
+    # without this a template change never reached an existing instance
+    # (sp-ymom8y).
+    # shellcheck source=deploy/units-lib.sh
+    . "$SCRIPT_DIR/units-lib.sh"
+    mtgc_converge_quadlet "$INSTANCE" "$REPO_DIR"
+
     # Before writing another ~1 GB of layers: is there room? This is prod's
     # redeploy path, so a build that runs out mid-way leaves a partial image and
     # then restarts the live service against it. Gated on the store adopted
