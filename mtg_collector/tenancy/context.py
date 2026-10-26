@@ -77,20 +77,54 @@ class MultiTenantResolver:
     ever built from.
     """
 
-    def __init__(self, verifier, registry_path=None):
+    def __init__(self, verifier, registry_path=None, oidc=None):
         self._verifier = verifier
         self._registry_path = registry_path
+        self._oidc = oidc
+
+    @staticmethod
+    def _access_token(scope):
+        from mtg_collector import access
+
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                   for k, v in scope["headers"]}
+        return access.token_from(headers, headers.get("cookie"))
+
+    def carries_valid_access(self, scope) -> bool:
+        """True when the request's Access JWT verifies: lets it past the sign-in layer."""
+        from mtg_collector import access
+
+        token = self._access_token(scope)
+        if token is None:
+            return False
+        try:
+            self._verifier.verify(token)
+        except access.AccessDenied:
+            return False
+        return True
+
+    def _oidc_email(self, scope):
+        """The verified email of a signed-in session in the required group, else None."""
+        if self._oidc is None:
+            return None
+        from starlette.requests import Request
+
+        user = self._oidc.session(Request(scope))
+        if user is None or self._oidc.cfg.required_group not in user["groups"]:
+            return None
+        return user["email"] or None
 
     def resolve(self, scope) -> TenantId:
         from mtg_collector import access
         from mtg_collector.db import registry
 
-        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
-                   for k, v in scope["headers"]}
-        token = access.token_from(headers, headers.get("cookie"))
-        if token is None:
-            raise access.AccessDenied("no Access token")
-        identity = self._verifier.verify(token)
+        email = self._oidc_email(scope)
+        if email is None:
+            token = self._access_token(scope)
+            if token is None:
+                raise access.AccessDenied("no Access token or sign-in session")
+            email = self._verifier.verify(token).email
+        identity = access.VerifiedIdentity(email=email)
         conn = registry.open_registry(self._registry_path, create=False)
         try:
             database_id = registry.resolve_identity(conn, identity.email)

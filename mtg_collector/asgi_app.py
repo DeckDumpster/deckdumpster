@@ -247,7 +247,8 @@ def create_app(generator, static_dir: Path, db_path: str, resolver=None,
                        multi=multi)
     if oidc is not None:
         # Added last, so outermost: no human path reaches the tenant layer unsigned.
-        app.add_middleware(OidcMiddleware, oidc=oidc)
+        also = getattr(resolver, "carries_valid_access", None) if multi else None
+        app.add_middleware(OidcMiddleware, oidc=oidc, also_accepts=also)
     app.add_route("/health", _health, methods=["GET"], include_in_schema=False)
     # Native families first; Starlette matches in registration order, so
     # anything they do not claim falls through to the adapter below.
