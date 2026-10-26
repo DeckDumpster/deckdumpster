@@ -203,12 +203,6 @@ for i in $(seq 1 $MAX_ATTEMPTS); do
         # Likewise the lakehouse chain: only an explicit MTGC_ARM_LAKE_CHAIN=1 arms
         # land/derive/prices/ship/value, through chain.sh, which refuses a half-ready host.
         if [ "${MTGC_ARM_LAKE_CHAIN:-}" = 1 ]; then
-            bash "$(dirname "$0")/chain.sh" arm "${INSTANCE}" \
-                || echo "==> WARNING: could not arm the lakehouse chain for ${INSTANCE}" >&2
-        fi
-        # Likewise the lakehouse chain: only an explicit MTGC_ARM_LAKE_CHAIN=1 arms
-        # land/derive/prices/ship/value, through chain.sh, which refuses a half-ready host.
-        if [ "${MTGC_ARM_LAKE_CHAIN:-}" = 1 ]; then
             bash "$SCRIPT_DIR/chain.sh" arm "$INSTANCE" \
                 || echo "==> WARNING: could not arm the lakehouse chain for $INSTANCE" >&2
         fi

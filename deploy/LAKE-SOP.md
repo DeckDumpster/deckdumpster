@@ -31,6 +31,16 @@ identities with their mirror Denies, the tenant-zone lifecycle, the profiles) ar
 - user `mtgc-tenant`: get/put/delete under `tenant/` only, denied `raw/` and `lake/`;
   secret `mtgc/tenant`.
 
+The lifecycle Terraform applies, for reference (no rule may match `raw/` or `lake/`):
+
+```json
+{"Rules":[{"ID":"tenant-90d","Status":"Enabled",
+  "Filter":{"Prefix":"tenant/"},
+  "Expiration":{"Days":90},
+  "NoncurrentVersionExpiration":{"NoncurrentDays":1},
+  "AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}
+```
+
 ```bash
 cd deploy/infra/lake
 terraform init -backend-config=backend.tfvars   # from backend.tfvars.example
