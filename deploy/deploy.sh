@@ -103,6 +103,14 @@ else
     # There is no bypass flag; MTGC_DISK_FLOOR_GB is the only knob (de-yef).
     bash "$SCRIPT_DIR/diskcheck.sh" --floor "${MTGC_STORE_ROOT:-$HOME}"
 
+    # Converge the installed Quadlet to this checkout's render before building,
+    # so a refusal costs nothing. setup.sh only runs for a MISSING unit, so
+    # without this a template change never reached an existing instance
+    # (sp-ymom8y).
+    # shellcheck source=deploy/units-lib.sh
+    . "$SCRIPT_DIR/units-lib.sh"
+    mtgc_converge_quadlet "$INSTANCE" "$REPO_DIR"
+
     echo "==> Building container image (mtgc:latest)..."
     DEPS_IMAGE="$(bash "$SCRIPT_DIR/deps-image.sh")"
     podman build -t mtgc:latest -f Containerfile \
