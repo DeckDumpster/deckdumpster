@@ -9,7 +9,7 @@ aws sts get-caller-identity --profile <profile>   # Arn must be the one the step
 
 If the Arn is not the one stated, stop. Nothing below is run by an agent.
 
-Placeholders — pick them once and use them throughout:
+Placeholders:
 
 | Name | Meaning |
 |---|---|
@@ -18,112 +18,32 @@ Placeholders — pick them once and use them throughout:
 | `BACKUP` | `gantt-mtgc-backup`, the existing nightly-backup bucket |
 | `LSTREAM` | `mtgc-db-<suffix>`, the Litestream bucket |
 
-## 1. Lake bucket (as `mtgc-admin`)
+## 1-4. Bucket, identities, lifecycle, profiles: Terraform
 
-One bucket, two governed zones, separated by prefix:
+The console steps this page used to carry (bucket, the `mtgc-lake` and `mtgc-tenant`
+identities with their mirror Denies, the tenant-zone lifecycle, the profiles) are
+`deploy/infra/lake/` (law-infrastructure-is-terraform). Read the `.tf` files for the policies:
 
-- `raw/` and `lake/` — the catalog zone (verbatim upstream fetches, Iceberg tables)
-- `tenant/` — the tenant zone (encrypted holdings Parquet)
-
-```bash
-aws sts get-caller-identity --profile mtgc-admin
-aws s3api create-bucket --bucket LAKE --region <region> --profile mtgc-admin
-aws s3api put-public-access-block --bucket LAKE --profile mtgc-admin \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-aws s3api put-bucket-versioning --bucket LAKE --profile mtgc-admin \
-  --versioning-configuration Status=Enabled
-aws s3api put-bucket-encryption --bucket LAKE --profile mtgc-admin \
-  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
-```
-
-Versioning is on for `raw/` and `lake/` (the lake is the source of rebuilds). The
-tenant zone must be **deletable**, so step 4 expires noncurrent versions there too.
-
-## 2. Roles with mirror Denies (as `mtgc-admin`)
-
-Two roles, each trusted by the instance's base profile (`source_profile`), each
-with an Allow on its own zone and **explicit Denies on everything else**. An
-explicit Deny wins over any Allow added later, which is the point: a mistaken
-future grant cannot make the catalog role read tenant data or the reverse.
-
-**`role/mtgc-lake`** — land, derive, prices jobs:
-
-```json
-{ "Version": "2012-10-17", "Statement": [
-  { "Effect": "Allow", "Action": ["s3:GetObject","s3:PutObject","s3:AbortMultipartUpload"],
-    "Resource": ["arn:aws:s3:::LAKE/raw/*","arn:aws:s3:::LAKE/lake/*"] },
-  { "Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": "arn:aws:s3:::LAKE",
-    "Condition": { "StringLike": { "s3:prefix": ["raw/*","lake/*"] } } },
-  { "Effect": "Deny", "Action": "s3:*",
-    "Resource": ["arn:aws:s3:::LAKE/tenant/*"] },
-  { "Effect": "Deny", "Action": "s3:*",
-    "Resource": ["arn:aws:s3:::BACKUP","arn:aws:s3:::BACKUP/*","arn:aws:s3:::LSTREAM","arn:aws:s3:::LSTREAM/*"] }
-]}
-```
-
-**`role/mtgc-tenant`** — ship and value jobs (mirror image):
-
-```json
-{ "Version": "2012-10-17", "Statement": [
-  { "Effect": "Allow", "Action": ["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:DeleteObjectVersion","s3:AbortMultipartUpload"],
-    "Resource": "arn:aws:s3:::LAKE/tenant/*" },
-  { "Effect": "Allow", "Action": ["s3:ListBucket","s3:ListBucketVersions"], "Resource": "arn:aws:s3:::LAKE",
-    "Condition": { "StringLike": { "s3:prefix": ["tenant/*"] } } },
-  { "Effect": "Deny", "Action": "s3:*",
-    "Resource": ["arn:aws:s3:::LAKE/raw/*","arn:aws:s3:::LAKE/lake/*"] },
-  { "Effect": "Deny", "Action": "s3:*",
-    "Resource": ["arn:aws:s3:::BACKUP","arn:aws:s3:::BACKUP/*","arn:aws:s3:::LSTREAM","arn:aws:s3:::LSTREAM/*"] }
-]}
-```
-
-Notes: `mtgc-lake` has no `DeleteObject` — the raw zone is append-only. Only
-`mtgc-tenant` can delete, and only under `tenant/`; that is what makes an erase
-possible and provable. Neither role has any lifecycle or bucket-policy action.
-
-## 3. Lifecycle-admin grant (as `mtgc-admin`)
-
-Bucket lifecycle configuration is **not** granted to either runtime role. Create
-`role/mtgc-lifecycle-admin` (human-assumed, no job uses it) allowing only:
-
-```json
-{ "Effect": "Allow",
-  "Action": ["s3:PutLifecycleConfiguration","s3:GetLifecycleConfiguration"],
-  "Resource": "arn:aws:s3:::LAKE" }
-```
-
-Then, as that role (`sts get-caller-identity` first), apply the tenant zone's
-90-day lifecycle, scoped to `tenant/` only:
+- `mtgc-lake-<account>`: private, versioned, SSE-S3, TLS-only. The one expiring prefix is
+  `tenant/` (90 days, noncurrent 1 day); `raw/` and `lake/` have no rule.
+- user `mtgc-lake`: get/put under `raw/` and `lake/`, no delete (append-only), denied `tenant/`;
+  secret `mtgc/lake`.
+- user `mtgc-tenant`: get/put/delete under `tenant/` only, denied `raw/` and `lake/`;
+  secret `mtgc/tenant`.
 
 ```bash
-aws s3api put-bucket-lifecycle-configuration --bucket LAKE --profile mtgc-lifecycle-admin \
-  --lifecycle-configuration '{"Rules":[{"ID":"tenant-90d","Status":"Enabled",
-    "Filter":{"Prefix":"tenant/"},
-    "Expiration":{"Days":90},
-    "NoncurrentVersionExpiration":{"NoncurrentDays":1},
-    "AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}'
+cd deploy/infra/lake
+terraform init -backend-config=backend.tfvars   # from backend.tfvars.example
+terraform test                                  # hermetic, mocked provider
+terraform apply -var deploy_role_arn=<DeployRoleArn>   # MFA session, by the Concierge
+bash ../../lake-config.sh <instance> --secrets  # lake.env + the mtgc-lake / mtgc-tenant profiles
 ```
 
-No rule may match `raw/` or `lake/`.
-
-## 4. Profiles (on the deploy box, `~/.aws/config`)
-
-```ini
-[profile mtgc-lake]
-role_arn = arn:aws:iam::ACCOUNT_ID:role/mtgc-lake
-source_profile = default
-
-[profile mtgc-tenant]
-role_arn = arn:aws:iam::ACCOUNT_ID:role/mtgc-tenant
-source_profile = default
-
-[profile mtgc-lifecycle-admin]
-role_arn = arn:aws:iam::ACCOUNT_ID:role/mtgc-lifecycle-admin
-source_profile = default
-```
-
-The existing `mtgc-backup` profile is unchanged and keeps no access to `LAKE`.
-Each job container gets exactly one profile: land/derive/prices → `mtgc-lake`,
-ship/value → `mtgc-tenant`.
+The `mtgc` name prefix must be in the terraform-deploy role's `TERRAFORM_NAME_PREFIXES`
+(ephemeral-ci) before the apply can create these names. `lake-config.sh` never overwrites a
+value or profile already set. Then arm the chain: redeploy with `MTGC_ARM_LAKE_CHAIN=1`
+or run `bash deploy/chain.sh arm <instance>` (it needs the tenant master key, `deploy/LAKE-KEYS.md`).
+A failing lake-sync now writes its reason to the journal under `mtgc-lake-sync-<instance>`.
 
 ## 5. Verify (every line is a pass/fail, run in order)
 
@@ -158,7 +78,7 @@ bash deploy/setup-tenant-zone.sh --apply --profile mtgc-lifecycle-admin
 bash deploy/setup-tenant-zone.sh --check --profile mtgc-lifecycle-admin
 ```
 
-The bucket is `MTGC_LAKE_S3_BUCKET` in `~/.config/mtgc/<instance>.env`; the script
+The bucket is `MTGC_LAKE_S3_BUCKET` in `~/.config/mtgc/<instance>/lake.env`; the script
 refuses a bucket equal to `MTGC_BACKUP_S3_BUCKET` / `MTGC_LITESTREAM_S3_BUCKET`.
 The documents under `deploy/policies/tenant-zone/` are the ones in §2 plus
 explicit Denies on the other zone's listing and on rewriting the governance.
