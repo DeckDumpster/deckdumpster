@@ -205,3 +205,77 @@ mtgc_scaffold_lake_env() {
 EOF
     chmod 600 "$file"
 }
+
+# mtgc_converge_quadlet <instance> <repo_dir> — make the installed Quadlet the
+# one this checkout renders for the instance (sp-ymom8y). deploy.sh used to run
+# setup.sh only when the unit was MISSING, so a change to deploy/mtgc.container
+# (oidc.env, sp-3xp0a3) never reached an instance that already existed: prod's
+# unit sat at its 2026-10-14 render while every deploy reported success.
+#
+# Renders with the inputs setup.sh recorded in the instance env file, the same
+# way a regeneration does. Then:
+#   identical            -> nothing.
+#   differs, and every PublishPort/Volume/Environment*/Image line the installed
+#   file carries is reproduced by the render
+#                        -> the old file is kept as <unit>.<UTC stamp>.bak, the
+#                           diff is printed, the new one is installed and
+#                           systemd is reloaded.
+#   differs, and the installed file carries such a line the render cannot
+#   reproduce (a hand-added port)
+#                        -> refused with the diff and the fix. Never ignored,
+#                           never silently dropped: dropping a listener is what
+#                           converging must not do.
+# Requires store-lib.sh sourced and the instance's store adopted (the stamp).
+mtgc_converge_quadlet() {
+    local instance="$1" repo_dir="$2"
+    local unit="$HOME/.config/containers/systemd/mtgc-${instance}.container"
+    local env_file="$HOME/.config/mtgc/${instance}.env"
+    local http_port tls_certs port mapping memory rendered stamp lost
+
+    rec() { [ -f "$env_file" ] && sed -n "s/^$1=//p" "$env_file" | tail -1 || true; }
+    http_port="$(rec MTGC_HTTP_PUBLISH_PORT)"
+    tls_certs="$(rec MTGC_TLS_CERTS_DIR)"
+    port="$(rec MTGC_PUBLISH_PORT)"
+    if [ -n "$port" ]; then mapping="${port}:8081"; else mapping=":8081"; fi
+    memory=""
+    [ "$instance" = "prod" ] || memory="2G"
+
+    rendered="$(mktemp)"
+    bash "$repo_dir/deploy/render-quadlet.sh" \
+        "$instance" "$mapping" "$http_port" "$tls_certs" "$memory" \
+        "$repo_dir/deploy/mtgc.container" > "$rendered" || { rm -f "$rendered"; return 1; }
+    mtgc_store_stamp_unit "$rendered"
+    # setup.sh splices the shared reference volume in when the host has it; an
+    # installed unit that carries it keeps it.
+    if grep -q '^Volume=mtgc-shared-ref:' "$unit"; then
+        sed -i '/^Volume=mtgc-.*-data/a Volume=mtgc-shared-ref:/shared:ro,z' "$rendered"
+        sed -i '/^Environment=MTGC_HOME/a Environment=MTGC_SHARED_DB=/shared/shared.sqlite' "$rendered"
+    fi
+
+    if cmp -s "$unit" "$rendered"; then
+        rm -f "$rendered"
+        return 0
+    fi
+
+    echo "==> Installed Quadlet differs from this checkout's render ($unit):"
+    diff -u "$unit" "$rendered" || true
+
+    lost="$(grep -E '^(PublishPort|Volume|Environment|EnvironmentFile|Image)=' "$unit" \
+        | grep -vxFf "$rendered" || true)"
+    if [ -n "$lost" ]; then
+        echo "==> CONVERGE REFUSED: the installed unit carries values the template cannot reproduce:" >&2
+        echo "$lost" | sed 's/^/      /' >&2
+        echo "    Record them so the render owns them, e.g. for a plaintext listener:" >&2
+        echo "      echo MTGC_HTTP_PUBLISH_PORT=<port> >> $env_file   (and MTGC_PUBLISH_PORT=<port> for the HTTPS host port)" >&2
+        echo "    or remove the line from $unit if it is wrong. Nothing was changed." >&2
+        rm -f "$rendered"
+        return 1
+    fi
+
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p "$unit" "${unit}.${stamp}.bak"
+    echo "==> Rewriting $unit (previous kept as ${unit}.${stamp}.bak)"
+    cat "$rendered" > "$unit"
+    rm -f "$rendered"
+    systemctl --user daemon-reload
+}
