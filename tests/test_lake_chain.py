@@ -149,3 +149,13 @@ def test_status_of_an_unarmed_whole_chain_is_ok(host):
     r = host.chain("status", "inst")
     assert r.returncode == 0, r.stderr
     assert "0/5" in r.stdout
+
+
+@pytest.mark.parametrize("name", CHAIN)
+def test_every_chain_container_carries_the_shared_catalogue(name):
+    """sp-01eqhn: `lake value` died on 'MTGC_SHARED_DB is unset or missing' because only
+    the app container had it. Every podman run of every link names the catalogue."""
+    runs = [ln for ln in _lines(name, "service", "ExecStart=") if "podman run" in ln]
+    assert runs
+    for ln in runs:
+        assert "-e MTGC_SHARED_DB=/data/shared.sqlite" in ln, ln
