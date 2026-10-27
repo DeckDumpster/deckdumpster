@@ -42,3 +42,16 @@ ARGS=()
 echo "lake-sync: $SRC -> $DEST"
 AWS_PROFILE="${MTGC_LAKE_AWS_PROFILE:-mtgc-lake}" aws s3 sync "${ARGS[@]}" "$SRC/" "$DEST" \
     || refuse "aws s3 sync $SRC -> $DEST failed"
+
+# The raw zone is a second copy once S3 holds it, and the root disk is the deploy floor's
+# subject (sp-ol9a3q). Prune against the bucket's own listing, so only a file S3 confirms
+# at the same size is ever removed; the newest runs stay for derive.
+if [ "$ZONE" = raw ]; then
+    LISTING="$(mktemp)"; trap 'rm -f "$LISTING"' EXIT
+    AWS_PROFILE="${MTGC_LAKE_AWS_PROFILE:-mtgc-lake}" aws s3 ls "${ARGS[@]}" --recursive "$DEST" \
+        | awk '{k=$4; sub(/^raw\//, "", k); print $3, k}' > "$LISTING" \
+        || refuse "aws s3 ls $DEST failed; local raw left unpruned"
+    python3 "$(dirname "$0")/../mtg_collector/lake/prune_raw.py" --root "$SRC" --listing "$LISTING" \
+        --keep "${MTGC_LAKE_KEEP_RUNS:-2}" || refuse "prune of $SRC failed"
+fi
+echo "lake-sync: local lake $(du -sh "$LOCAL_ROOT" | cut -f1) at $LOCAL_ROOT"
