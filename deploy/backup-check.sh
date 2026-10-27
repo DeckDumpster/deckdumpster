@@ -140,6 +140,71 @@ if [ -z "$LISTING" ]; then
     stale "s3://${BUCKET}/${PREFIX} contains NO objects — this instance is not backed up"
 fi
 
+# Two kinds of object live under the prefix. Litestream replicas
+# (litestream/tenants/<tenant>/<level>/<min>-<max>.ltx) are judged per tenant
+# below; a small tenant's newest segment is legitimately a few KB, so size says
+# nothing about them. Everything else is the nightly tarball, judged by age and
+# size as before.
+LTX="$(printf '%s\n' "$LISTING" | grep -E '/litestream/' || true)"
+LISTING="$(printf '%s\n' "$LISTING" | grep -vE '/litestream/' || true)"
+
+now_epoch="$(date +%s)"
+age_hours_of() {
+    local epoch
+    epoch="$(date -d "$1" +%s 2>/dev/null)" || stale "could not parse a timestamp: $1"
+    echo $(( ( now_epoch - epoch ) / 3600 ))
+}
+
+# --- Litestream: per tenant, a recent snapshot and a recent segment ----------
+#
+# Snapshots are level 0009 (litestream's SnapshotLevel). The snapshot window is
+# its own knob because a snapshot is taken far less often than a segment.
+SNAPSHOT_MAX_AGE_HOURS="${MTGC_BACKUP_SNAPSHOT_MAX_AGE_HOURS:-48}"
+LTX_NOTE=""
+if [ -n "$LTX" ]; then
+    # tenant <TAB> newest segment ts <TAB> newest snapshot ts ("-" when none)
+    TENANTS="$(printf '%s\n' "$LTX" | awk -F'\t' '
+        {
+            key = $3
+            if (!match(key, /\/[0-9][0-9][0-9][0-9]\/[^\/]*$/)) next
+            tenant = substr(key, 1, RSTART - 1)
+            level = substr(key, RSTART + 1, 4)
+            if (!(tenant in newest) || $1 > newest[tenant]) newest[tenant] = $1
+            if (level == "0009" && (!(tenant in snap) || $1 > snap[tenant])) snap[tenant] = $1
+        }
+        END { for (t in newest) printf "%s\t%s\t%s\n", t, newest[t], (t in snap) ? snap[t] : "-" }
+    ' | sort)"
+    [ -n "$TENANTS" ] || stale "litestream objects under s3://${BUCKET}/${PREFIX} match no tenant/level layout"
+    NTENANTS=0
+    while IFS=$'\t' read -r T_NAME T_NEWEST T_SNAP; do
+        NTENANTS=$(( NTENANTS + 1 ))
+        if [ "$T_SNAP" = "-" ]; then
+            stale "litestream replica ${T_NAME} has no snapshot — it cannot be restored"
+        fi
+        SNAP_AGE="$(age_hours_of "$T_SNAP")"
+        if [ "$SNAP_AGE" -gt "$SNAPSHOT_MAX_AGE_HOURS" ]; then
+            stale "litestream replica ${T_NAME}: newest snapshot is ${SNAP_AGE}h old (> ${SNAPSHOT_MAX_AGE_HOURS}h threshold)"
+        fi
+        SEG_AGE="$(age_hours_of "$T_NEWEST")"
+        if [ "$SEG_AGE" -gt "$MAX_AGE_HOURS" ]; then
+            stale "litestream replica ${T_NAME}: newest segment is ${SEG_AGE}h old (> ${MAX_AGE_HOURS}h threshold)"
+        fi
+    done <<<"$TENANTS"
+    LTX_NOTE="${NTENANTS} litestream replica(s) have a snapshot <= ${SNAPSHOT_MAX_AGE_HOURS}h and a segment <= ${MAX_AGE_HOURS}h"
+fi
+
+if [ -z "$LISTING" ]; then
+    if [ -z "$LTX" ]; then
+        stale "s3://${BUCKET}/${PREFIX} contains NO objects — this instance is not backed up"
+    fi
+    echo "backup-check: OK — ${LTX_NOTE}; no tarballs under the prefix"
+    if [ -n "$PING" ]; then
+        curl -fsS -m 10 "$PING" >/dev/null 2>&1 \
+            || echo "backup-check: WARNING — monitor ping failed (will retry next run)" >&2
+    fi
+    exit 0
+fi
+
 NEWEST_LINE="$(printf '%s\n' "$LISTING" | tail -n1)"
 PREV_LINE="$(printf '%s\n' "$LISTING" | tail -n2 | head -n1)"
 
@@ -179,7 +244,7 @@ fi
 
 # --- Fresh: ping the monitor ------------------------------------------------
 
-echo "backup-check: OK — ${NEWEST_KEY} is ${AGE_HOURS}h old (<= ${MAX_AGE_HOURS}h), ${SIZE_NOTE}"
+echo "backup-check: OK — ${NEWEST_KEY} is ${AGE_HOURS}h old (<= ${MAX_AGE_HOURS}h), ${SIZE_NOTE}${LTX_NOTE:+; ${LTX_NOTE}}"
 if [ -z "$PING" ]; then
     echo "backup-check: no monitor to ping — a dead box or a disabled timer would go unnoticed"
 else
