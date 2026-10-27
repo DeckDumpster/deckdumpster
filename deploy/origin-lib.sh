@@ -16,6 +16,8 @@
 
 # shellcheck source=store-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/store-lib.sh"
+# shellcheck source=machine-token.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/machine-token.sh"
 
 # mtgc_origin_resolve <instance> — sets, for the instance's mode:
 #   ORIGIN_MODE   multitenant | single
@@ -49,15 +51,17 @@ mtgc_origin_resolve() {
     return 1
 }
 
-# mtgc_origin_alive <instance> — resolve, then ask the listener. Alive means a
-# 2xx, or, on the multi-tenant listener, its 401 identity challenge (a server
-# that answers a challenge is up; one that answers nothing is not). Anything
-# else, including no connection, is down.
+# mtgc_origin_alive <instance> — resolve, then ask the listener, carrying the machine
+# token (machine-token.sh) because /health is gated and no address is exempt. Alive means
+# a 2xx, or, on the multi-tenant listener, its 401 identity challenge (a server that
+# answers a challenge is up; one that answers nothing is not). Anything else, including
+# no connection, is down.
 mtgc_origin_alive() {
     mtgc_origin_resolve "$1" || return 1
+    mtgc_machine_auth "$1" || return 1
     local code
     code="$(curl -sk --connect-timeout 3 -m 10 -o /dev/null -w '%{http_code}' \
-        "${ORIGIN_URL}${ORIGIN_PROBE}" 2>/dev/null || true)"
+        "${MACHINE_AUTH[@]}" "${ORIGIN_URL}${ORIGIN_PROBE}" 2>/dev/null || true)"
     case "$code" in
         2??) return 0 ;;
         401) [ "$ORIGIN_MODE" = multitenant ] && return 0 ;;

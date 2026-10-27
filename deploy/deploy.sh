@@ -196,11 +196,12 @@ mtgc_origin_resolve "$INSTANCE" || {
 PORT="$ORIGIN_PORT"
 SCHEME="${ORIGIN_URL%%://*}"
 PROBE_PATH="$ORIGIN_PROBE"
+mtgc_machine_auth "$INSTANCE" || exit 1
 echo "==> Listening on port $PORT ($ORIGIN_MODE)"
 MAX_ATTEMPTS=15
 echo "==> Health check: $SERVICE_NAME (port $PORT)..."
 for i in $(seq 1 $MAX_ATTEMPTS); do
-    if curl -skf --connect-timeout 3 "${SCHEME}://localhost:${PORT}${PROBE_PATH}" > /dev/null 2>&1; then
+    if curl -skf --connect-timeout 3 "${MACHINE_AUTH[@]}" "${SCHEME}://localhost:${PORT}${PROBE_PATH}" > /dev/null 2>&1; then
         echo "==> Health check passed (attempt $i/$MAX_ATTEMPTS)"
         # Installing is not arming: a plain redeploy never enables a timer.
         # The deploy workflow sets this to re-arm a serving check that was held.
