@@ -110,33 +110,19 @@ fail() {
 }
 
 # The machine credentials live on this host, written by deploy/oidc-env.sh, never in GitHub
-# secrets. Values already in the environment win; the file only fills what is unset.
-CDN_CHECK_ENV="${MTGC_CDN_CHECK_ENV:-${HOME}/.config/mtgc/${MTGC_INSTANCE:-prod}/cdn-check.env}"
-if [ -f "$CDN_CHECK_ENV" ]; then
-    for _k in MTGC_CDN_CHECK_CLIENT_ID MTGC_CDN_CHECK_CLIENT_SECRET; do
-        if [ -z "${!_k:-}" ]; then
-            _v="$(grep -E "^${_k}=" "$CDN_CHECK_ENV" | tail -n1 | cut -d= -f2-)"
-            [ -z "$_v" ] || export "${_k}=${_v}"
-        fi
-    done
-    echo "cdn-check: read client credentials from ${CDN_CHECK_ENV}" >&2
-fi
-
+# secrets; machine-token.sh is the one place that reads them and mints the token.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/machine-token.sh"
 BEARER_SET=0
-if [ -n "${MTGC_CDN_CHECK_CLIENT_ID:-}" ] && [ -n "${MTGC_CDN_CHECK_CLIENT_SECRET:-}" ]; then
-    TOKEN_URL="${MTGC_CDN_CHECK_TOKEN_URL:-${MTGC_OIDC_ISSUER:-https://id.gantt.pub}/api/oidc/token}"
-    echo "cdn-check: fetching bearer token from ${TOKEN_URL} for client ${MTGC_CDN_CHECK_CLIENT_ID}" >&2
-    TOKEN_BODY="$(curl -sS -m 20 -X POST "$TOKEN_URL" \
-        --data-urlencode grant_type=client_credentials \
-        --data-urlencode "client_id=${MTGC_CDN_CHECK_CLIENT_ID}" \
-        --data-urlencode "client_secret=${MTGC_CDN_CHECK_CLIENT_SECRET}" 2>/dev/null)"
-    TOKEN="$(printf '%s' "$TOKEN_BODY" | grep -oE '"access_token": *"[^"]+"' | head -n1 | sed -E 's/.*: *"([^"]+)"/\1/')"
-    [ -n "$TOKEN" ] \
-        || fail "token refused: ${TOKEN_URL} gave no access_token for client ${MTGC_CDN_CHECK_CLIENT_ID}.
-    Nothing about the deploy has been verified."
-    ACCESS_ARGS+=(-H "Authorization: Bearer ${TOKEN}")
-    BEARER_SET=1
-fi
+ORIGIN_AUTH=()
+TOKEN=""
+TOKEN="$(mtgc_machine_token "${MTGC_INSTANCE:-prod}")"; _rc=$?
+case "$_rc" in
+    0) ACCESS_ARGS+=(-H "Authorization: Bearer ${TOKEN}")
+       ORIGIN_AUTH=(-H "Authorization: Bearer ${TOKEN}")
+       BEARER_SET=1 ;;
+    2) fail "token refused: the issuer gave no access_token for the client in $(mtgc_machine_env_file "${MTGC_INSTANCE:-prod}").
+    Nothing about the deploy has been verified." ;;
+esac
 
 # A gated /health answers 401 to a caller without a good token. Name which.
 assert_not_unauthorized() {
@@ -206,7 +192,7 @@ assert_not_access_wall() {
 # `Accept-Encoding: identity` on BOTH sides. The asset bytes must be compared as
 # the same representation: Cloudflare re-compresses on its own schedule, so
 # letting either side pick its encoding would make the comparison a coin toss.
-ORIGIN_DUMP="$(headers_of -H 'Accept-Encoding: identity' "${ORIGIN_URL}${DOC_PATH}")"
+ORIGIN_DUMP="$(headers_of "${ORIGIN_AUTH[@]}" -H 'Accept-Encoding: identity' "${ORIGIN_URL}${DOC_PATH}")"
 ORIGIN_STATUS="$(status_of "$ORIGIN_DUMP")"
 # A multi-tenant origin answers 401 (Access mode) or a 303 to sign-in (native
 # OIDC mode, sp-rge37q) to every route but /health until shown an identity bound
@@ -218,11 +204,11 @@ ORIGIN_STATUS="$(status_of "$ORIGIN_DUMP")"
 if [ "$ORIGIN_STATUS" = "401" ] || [ "$ORIGIN_STATUS" = "303" ]; then
     build_of() { printf '%s' "$1" | grep -oE '"build": *"[^"]+"' | head -n1 | sed -E 's/.*: *"([^"]+)"/\1/'; }
     HEALTH_PATH=/health
-    ORIGIN_HEALTH_DUMP="$(headers_of "${ORIGIN_URL}${HEALTH_PATH}")"
+    ORIGIN_HEALTH_DUMP="$(headers_of "${ORIGIN_AUTH[@]}" "${ORIGIN_URL}${HEALTH_PATH}")"
     [ "$(status_of "$ORIGIN_HEALTH_DUMP")" = "200" ] \
         || fail "the origin ${ORIGIN_URL}${HEALTH_PATH} did not answer 200 (the document answered ${ORIGIN_STATUS}).
     $(transport_error "$ORIGIN_HEALTH_DUMP")"
-    ORIGIN_BUILD="$(build_of "$(curl -sS -k -m 20 "${ORIGIN_URL}${HEALTH_PATH}" 2>/dev/null)")"
+    ORIGIN_BUILD="$(build_of "$(curl -sS -k -m 20 "${ORIGIN_AUTH[@]}" "${ORIGIN_URL}${HEALTH_PATH}" 2>/dev/null)")"
     [ -n "$ORIGIN_BUILD" ] \
         || fail "the origin ${ORIGIN_URL}${HEALTH_PATH} reports no build id, so the CDN
     cannot be shown to serve this deploy. The image was built without BUILD_ID."

@@ -166,6 +166,35 @@ got="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PUB_PORT}/api/
 if [ "$got" = "401" ]; then pass "published port refuses an Access-less request (401)"; else
     fail "published port: Access-less /api/binders wanted 401, got [$got]"; fi
 
+# --- health auth on, in the same shape (sp-3yi3j0) ----------------------------------
+# A rootless publish rewrites the peer, so a host curl is not loopback to the app: with the
+# gate on, a no-token probe is 401 and only the shared probe helper (machine-token.sh) is 200.
+# The issuer is never contacted: the automation token stands in for the minted machine token.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/machine-token.sh"
+podman rm -f "$PUB_CONTAINER" >/dev/null 2>&1 || true
+GATE_TOKEN="handles-gate-$$-$RANDOM"
+podman run -d --name "$PUB_CONTAINER" -p "127.0.0.1:${PUB_PORT}:8080" \
+    -v "${VOLUME}:/data:Z" -e MTGC_HOME=/data -e MTGC_DB=/data/collection.sqlite \
+    -e MTGC_MULTITENANT=1 -e MTGC_HTTP_PORT=8080 \
+    -e MTGC_ACCESS_TEAM_DOMAIN=https://gate.cloudflareaccess.com \
+    -e MTGC_ACCESS_AUD=gate-aud-tag -e MTGC_ACCESS_JWKS_URL=http://127.0.0.1:1/certs \
+    -e MTGC_OIDC_ISSUER=https://issuer.invalid -e MTGC_OIDC_CLIENT_ID=handles \
+    -e MTGC_OIDC_CLIENT_SECRET=handles -e MTGC_OIDC_REDIRECT_URL=https://magic.invalid/auth/callback \
+    -e MTGC_OIDC_REQUIRED_GROUP=magic-users -e MTGC_OIDC_COOKIE_KEY="$(printf 'ab%.0s' $(seq 1 32))" \
+    -e MTGC_AUTOMATION_TOKEN="$GATE_TOKEN" -e MTGC_HEALTH_REQUIRE_AUTH=1 \
+    "$IMAGE" >/dev/null
+for _ in $(seq 1 60); do
+    [ -n "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PUB_PORT}/health" 2>/dev/null | grep -v 000)" ] && break
+    sleep 1
+done
+got="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PUB_PORT}/health" || true)"
+if [ "$got" = "401" ]; then pass "health auth on: a no-token host probe through the publish is 401"; else
+    fail "health auth on: no-token host probe wanted 401, got [$got]"; fi
+MTGC_MACHINE_TOKEN="$GATE_TOKEN" mtgc_machine_auth gate
+got="$(curl -s -o /dev/null -w '%{http_code}' "${MACHINE_AUTH[@]}" "http://127.0.0.1:${PUB_PORT}/health" || true)"
+if [ "$got" = "200" ]; then pass "health auth on: the shared probe helper's token is 200"; else
+    fail "health auth on: helper-authenticated probe wanted 200, got [$got]"; fi
+
 # --- the deployed instance, in whichever mode it runs ---------------------------
 # Resolved by origin-lib.sh, never a literal port.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/origin-lib.sh"
