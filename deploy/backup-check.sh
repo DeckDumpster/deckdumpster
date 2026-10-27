@@ -155,42 +155,59 @@ age_hours_of() {
     echo $(( ( now_epoch - epoch ) / 3600 ))
 }
 
-# --- Litestream: per tenant, a recent snapshot and a recent segment ----------
+# --- Litestream: per replica, a snapshot exists and the replica is caught up --
 #
-# Snapshots are level 0009 (litestream's SnapshotLevel). The snapshot window is
-# its own knob because a snapshot is taken far less often than a segment.
-SNAPSHOT_MAX_AGE_HOURS="${MTGC_BACKUP_SNAPSHOT_MAX_AGE_HOURS:-48}"
+# Snapshots are level 0009 (litestream's SnapshotLevel). Litestream does not cut
+# a snapshot of a database that has not changed, so a quiet database's snapshot
+# is legitimately old: its age measures how quiet the database is, not whether
+# the backup is current (sp-x7ptdn). Currency is replication lag instead: the
+# replica's newest TXID (any level) against the local database's, which
+# litestream records in <db>-litestream/ltx/<level>/<min>-<max>.ltx beside it.
+# A replica may trail by what was written within the lag window and no more.
+LAG_WINDOW_MINUTES="${MTGC_BACKUP_LAG_WINDOW_MINUTES:-60}"
 LTX_NOTE=""
 if [ -n "$LTX" ]; then
-    # tenant <TAB> newest segment ts <TAB> newest snapshot ts ("-" when none)
+    # replica <TAB> has-snapshot (1/0) <TAB> newest txid on the replica
     TENANTS="$(printf '%s\n' "$LTX" | awk -F'\t' '
         {
             key = $3
             if (!match(key, /\/[0-9][0-9][0-9][0-9]\/[^\/]*$/)) next
             tenant = substr(key, 1, RSTART - 1)
             level = substr(key, RSTART + 1, 4)
-            if (!(tenant in newest) || $1 > newest[tenant]) newest[tenant] = $1
-            if (level == "0009" && (!(tenant in snap) || $1 > snap[tenant])) snap[tenant] = $1
+            file = substr(key, RSTART + 6)
+            if (!match(file, /^[0-9a-f]+-[0-9a-f]+\.ltx$/)) next
+            split(substr(file, 1, length(file) - 4), r, "-")
+            seen[tenant] = 1
+            if (level == "0009") snap[tenant] = 1
+            if (!(tenant in maxtx) || r[2] > maxtx[tenant]) maxtx[tenant] = r[2]
         }
-        END { for (t in newest) printf "%s\t%s\t%s\n", t, newest[t], (t in snap) ? snap[t] : "-" }
+        END { for (t in seen) printf "%s\t%d\t%s\n", t, (t in snap) ? 1 : 0, maxtx[t] }
     ' | sort)"
     [ -n "$TENANTS" ] || stale "litestream objects under s3://${BUCKET}/${PREFIX} match no tenant/level layout"
+    HOME_DIR="$(bash -c '. "$1/litestream-lib.sh"; mtgc_ls_home "$2"' _ "$SCRIPT_DIR" "$INSTANCE")" \
+        || stale "cannot locate the instance's data to compare replication position"
     NTENANTS=0
-    while IFS=$'\t' read -r T_NAME T_NEWEST T_SNAP; do
+    while IFS=$'\t' read -r T_NAME T_HASSNAP T_REMOTE_TX; do
         NTENANTS=$(( NTENANTS + 1 ))
-        if [ "$T_SNAP" = "-" ]; then
+        if [ "$T_HASSNAP" != "1" ]; then
             stale "litestream replica ${T_NAME} has no snapshot — it cannot be restored"
         fi
-        SNAP_AGE="$(age_hours_of "$T_SNAP")"
-        if [ "$SNAP_AGE" -gt "$SNAPSHOT_MAX_AGE_HOURS" ]; then
-            stale "litestream replica ${T_NAME}: newest snapshot is ${SNAP_AGE}h old (> ${SNAPSHOT_MAX_AGE_HOURS}h threshold)"
-        fi
-        SEG_AGE="$(age_hours_of "$T_NEWEST")"
-        if [ "$SEG_AGE" -gt "$MAX_AGE_HOURS" ]; then
-            stale "litestream replica ${T_NAME}: newest segment is ${SEG_AGE}h old (> ${MAX_AGE_HOURS}h threshold)"
+        REL="${T_NAME#*/litestream/}"
+        case "$REL" in
+            registry|collection) LOCAL_DB="${HOME_DIR}/${REL}.sqlite" ;;
+            tenants/*.sqlite)    LOCAL_DB="${HOME_DIR}/${REL}" ;;
+            *) stale "litestream replica ${T_NAME} names no known local database" ;;
+        esac
+        LOCAL_LAST="$(ls -1 "${LOCAL_DB}-litestream"/ltx/*/*.ltx 2>/dev/null | sed -E 's|.*/[0-9a-f]+-([0-9a-f]+)\.ltx$|\1 &|' | sort | tail -n1 || true)"
+        [ -n "$LOCAL_LAST" ] || stale "litestream replica ${T_NAME}: no local position under ${LOCAL_DB}-litestream — lag cannot be measured"
+        read -r LOCAL_TX LOCAL_FILE <<<"$LOCAL_LAST"
+        if [[ "$LOCAL_TX" > "$T_REMOTE_TX" ]]; then
+            if [ -z "$(find "$LOCAL_FILE" -mmin "-${LAG_WINDOW_MINUTES}" 2>/dev/null)" ]; then
+                stale "litestream replica ${T_NAME} is behind: replica txid ${T_REMOTE_TX}, local ${LOCAL_TX}, and the local write is older than ${LAG_WINDOW_MINUTES}m"
+            fi
         fi
     done <<<"$TENANTS"
-    LTX_NOTE="${NTENANTS} litestream replica(s) have a snapshot <= ${SNAPSHOT_MAX_AGE_HOURS}h and a segment <= ${MAX_AGE_HOURS}h"
+    LTX_NOTE="${NTENANTS} litestream replica(s) have a snapshot and are at the local txid (lag window ${LAG_WINDOW_MINUTES}m)"
 fi
 
 if [ -z "$LISTING" ]; then

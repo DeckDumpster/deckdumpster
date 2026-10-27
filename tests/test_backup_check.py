@@ -239,67 +239,95 @@ def test_a_single_backup_passes_but_says_it_had_nothing_to_compare(check):
 TENANT = "mtgc-prod/litestream/tenants/01M4Y7N6GRJFK1FP41FKRMCFXR.sqlite"
 
 
-def ltx(age_hours, size, level, tenant=TENANT):
-    return s3_line(age_hours, size, f"{tenant}/{level}/000000000000000d-000000000000000e.ltx")
+def ltx(age_hours, size, level, tenant=TENANT, txid="000000000000000e"):
+    return s3_line(age_hours, size, f"{tenant}/{level}/0000000000000001-{txid}.ltx")
+
+
+def local_txid(check, txid, age_minutes=0, name="01M4Y7N6GRJFK1FP41FKRMCFXR.sqlite"):
+    """Litestream's own record of the local database's position."""
+    home = check.conf.parent / "data"
+    d = home / "tenants" / f"{name}-litestream" / "ltx" / "0"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{txid}-{txid}.ltx"
+    f.write_bytes(b"x")
+    t = (datetime.now(timezone.utc) - timedelta(minutes=age_minutes)).timestamp()
+    os.utime(f, (t, t))
+    return home
+
+
+def run_replica(check, listing, local, **kw):
+    home = local_txid(check, local, **kw)
+    check.configure(MTGC_LITESTREAM_HOME=str(home))
+    return check.run(
+        listing="\n".join([s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz")] + listing)
+    )
 
 
 def test_small_ltx_under_a_recent_snapshot_passes(check):
     """The 2026-10-27 false STALE: a 7 KB increment is a normal segment."""
-    result = check.run(
-        listing="\n".join(
-            [
-                s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"),
-                ltx(10, 40_000, "0009"),
-                ltx(1, 7264, "0003"),
-            ]
-        )
-    )
+    result = run_replica(check, [ltx(10, 40_000, "0009"), ltx(1, 7264, "0003")], "000000000000000e")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "1 litestream replica(s)" in result.stdout
     assert check.pinged()
 
 
-def test_tenant_without_a_snapshot_fails(check):
-    result = check.run(
-        listing="\n".join(
-            [s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"), ltx(1, 7264, "0003")]
-        )
+def test_quiet_db_with_an_ancient_snapshot_passes(check):
+    """sp-x7ptdn: litestream does not re-snapshot an unchanged database, so a
+    160h-old snapshot with the replica at the local txid is a current backup."""
+    result = run_replica(
+        check,
+        [ltx(160, 40_000, "0009", txid="0000000000000008"), ltx(160, 900, "0001", txid="0000000000000008")],
+        "0000000000000008",
+        age_minutes=160 * 60,
     )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert check.pinged()
+
+
+def test_replica_behind_the_local_db_fails(check):
+    result = run_replica(
+        check,
+        [ltx(10, 40_000, "0009", txid="0000000000000008")],
+        "000000000000000e",
+        age_minutes=300,
+    )
+
+    assert result.returncode == 1
+    assert "is behind" in result.stderr
+    assert check.pinged("/fail")
+
+
+def test_replica_behind_by_a_write_inside_the_window_passes(check):
+    result = run_replica(
+        check,
+        [ltx(10, 40_000, "0009", txid="0000000000000008")],
+        "000000000000000e",
+        age_minutes=5,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_tenant_without_a_snapshot_fails(check):
+    result = run_replica(check, [ltx(1, 7264, "0003")], "000000000000000e")
 
     assert result.returncode == 1
     assert "has no snapshot" in result.stderr
     assert check.pinged("/fail")
 
 
-def test_tenant_with_an_old_segment_fails(check):
+def test_replica_with_no_local_position_fails(check):
+    check.configure(MTGC_LITESTREAM_HOME=str(check.conf.parent / "empty"))
     result = check.run(
         listing="\n".join(
-            [
-                s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"),
-                ltx(40, 40_000, "0009"),
-                ltx(35, 7264, "0003"),
-            ]
+            [s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"), ltx(1, 40_000, "0009")]
         )
     )
 
     assert result.returncode == 1
-    assert "newest segment is 35h old" in result.stderr
-
-
-def test_tenant_with_an_old_snapshot_fails(check):
-    result = check.run(
-        listing="\n".join(
-            [
-                s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"),
-                ltx(100, 40_000, "0009"),
-                ltx(1, 7264, "0003"),
-            ]
-        )
-    )
-
-    assert result.returncode == 1
-    assert "newest snapshot is 100h old" in result.stderr
+    assert "lag cannot be measured" in result.stderr
 
 
 # --- No configuration may turn the check into a pass ------------------------
