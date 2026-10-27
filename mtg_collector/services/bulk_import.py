@@ -27,6 +27,21 @@ def resolve_reversible_oracle_id(card_data: Dict) -> bool:
     return False
 
 
+def _is_not_found(response) -> bool:
+    """Scryfall's answer to a search matching no cards: 404, object=error, code=not_found."""
+    if response.status_code != 404:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return (
+        isinstance(body, dict)
+        and body.get("object") == "error"
+        and body.get("code") == "not_found"
+    )
+
+
 class ScryfallBulkClient:
     """Scryfall API client for bulk data import only.
 
@@ -42,6 +57,7 @@ class ScryfallBulkClient:
         self.session = run.session() if isinstance(run, Replay) else requests.Session()
         self.session.headers.update({"User-Agent": "MTGCollectionTool/2.0"})
         self.last_request = 0
+        self.empty_sets: set = set()
 
     def _rate_limit(self):
         """Respect Scryfall's rate limit (100ms between requests)."""
@@ -55,7 +71,9 @@ class ScryfallBulkClient:
         for attempt in range(max_retries + 1):
             self._rate_limit()
             response = self.session.request(method, url, **kwargs)
-            if response.status_code == 200 and not kwargs.get("stream"):
+            if not kwargs.get("stream") and (
+                response.status_code == 200 or _is_not_found(response)
+            ):
                 current_run().land_bytes(
                     source="scryfall", dataset="api", url=response.url,
                     data=response.content,
@@ -98,6 +116,10 @@ class ScryfallBulkClient:
         while url:
             try:
                 response = self._request_with_retry("GET", url, params=params)
+                if _is_not_found(response):
+                    print(f"    Set {set_code}: no English prints (Scryfall not_found)")
+                    self.empty_sets.add(set_code)
+                    break
                 response.raise_for_status()
                 data = response.json()
 
