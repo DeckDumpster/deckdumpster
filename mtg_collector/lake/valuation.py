@@ -21,12 +21,16 @@ outbox rows rather than reporting a difference the shipper explains.
 """
 
 import json
+import os
 import sqlite3
+import tempfile
 from dataclasses import dataclass
 
 from mtg_collector.db import growth
 
 STATUSES = ("owned", "ordered")
+CACHE_KIB = 65536
+BATCH_ROWS = 50_000
 
 _PRICES_SQL = """
 CREATE TABLE prices (
@@ -45,9 +49,20 @@ class ValuationError(Exception):
 
 
 def open_work(shared_path: str) -> sqlite3.Connection:
-    """The scratch database: the catalogue ATTACHed read-only for printings."""
-    conn = sqlite3.connect(":memory:", uri=True)
+    """The scratch database: the catalogue ATTACHed read-only for printings.
+
+    It lives in an unlinked file, not in memory: the whole price history goes in it,
+    and held in RAM that history alone reached the unit's 3 GiB MemoryMax.  The page
+    cache is capped, so peak memory does not follow the history's size.
+    """
+    fd, path = tempfile.mkstemp(prefix="mtgc-value-")
+    os.close(fd)
+    conn = sqlite3.connect(path, uri=True)
+    os.unlink(path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode = OFF")
+    conn.execute("PRAGMA synchronous = OFF")
+    conn.execute(f"PRAGMA cache_size = -{CACHE_KIB}")
     conn.execute("ATTACH DATABASE ? AS shared", (f"file:{shared_path}?mode=ro",))
     conn.executescript(_PRICES_SQL)
     return conn
@@ -57,14 +72,16 @@ def load_prices(conn: sqlite3.Connection, table) -> int:
     """Load the whole Iceberg price history into `prices`.  Returns rows loaded."""
     cols = ("set_code", "collector_number", "source", "price_type", "price_cents", "observed_date")
     n = 0
-    for batch in table.scan(selected_fields=cols).to_arrow().to_batches(max_chunksize=200_000):
-        d = batch.to_pydict()
-        conn.executemany(
-            "INSERT INTO prices VALUES (?,?,?,?,?,?)",
-            ((d["set_code"][i], d["collector_number"][i], d["source"][i], d["price_type"][i],
-              d["price_cents"][i] / 100.0, d["observed_date"][i]) for i in range(batch.num_rows)),
-        )
+    for batch in table.scan(selected_fields=cols).to_arrow_batch_reader():
+        for start in range(0, batch.num_rows, BATCH_ROWS):
+            d = batch.slice(start, BATCH_ROWS).to_pydict()
+            conn.executemany(
+                "INSERT INTO prices VALUES (?,?,?,?,?,?)",
+                ((d["set_code"][i], d["collector_number"][i], d["source"][i], d["price_type"][i],
+                  d["price_cents"][i] / 100.0, d["observed_date"][i]) for i in range(len(d["set_code"]))),
+            )
         n += batch.num_rows
+        conn.commit()
     conn.execute(_PRICES_INDEX)
     return n
 

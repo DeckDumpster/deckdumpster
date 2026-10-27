@@ -124,3 +124,49 @@ def test_store_writes_the_series(tenant, work_and_state):
     assert growth.history_is_current(c)
     assert growth.read_history(c) == growth.payload(*growth.series_rows(
         c, where_sql=growth.UNFILTERED_WHERE, params=[]))
+
+
+_PEAK_PROBE = """
+import resource, sys
+import pyarrow as pa
+from mtg_collector.lake import valuation
+
+rows = int(sys.argv[2])
+
+class _Scan:
+    def to_arrow_batch_reader(self):
+        schema = pa.schema([("set_code", pa.string()), ("collector_number", pa.string()),
+                            ("source", pa.string()), ("price_type", pa.string()),
+                            ("price_cents", pa.int64()), ("observed_date", pa.string())])
+        def gen():
+            step = 100_000
+            for lo in range(0, rows, step):
+                ids = range(lo, min(lo + step, rows))
+                yield pa.record_batch([
+                    pa.array(["s%d" % (i % 900) for i in ids]), pa.array(["%d" % (i % 400) for i in ids]),
+                    pa.array(["tcgplayer"] * len(ids)), pa.array(["normal"] * len(ids)),
+                    pa.array([i % 5000 for i in ids], pa.int64()),
+                    pa.array(["2026-01-%02d" % (1 + i % 28) for i in ids])], schema=schema)
+        return pa.RecordBatchReader.from_batches(schema, gen())
+
+class _Table:
+    def scan(self, selected_fields):
+        return _Scan()
+
+work = valuation.open_work(sys.argv[1])
+before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+assert valuation.load_prices(work, _Table()) == rows
+print((resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) // 1024)
+"""
+
+PEAK_GROWTH_BOUND_MIB = 80
+
+
+def test_price_load_memory_is_bounded_at_ten_times_the_history(tmp_path):
+    import subprocess
+    import sys
+    shared = tmp_path / "shared.sqlite"
+    sqlite3.connect(shared).close()
+    out = subprocess.run([sys.executable, "-c", _PEAK_PROBE, str(shared), "1000000"],
+                         capture_output=True, text=True, check=True)
+    assert int(out.stdout.strip().splitlines()[-1]) < PEAK_GROWTH_BOUND_MIB
