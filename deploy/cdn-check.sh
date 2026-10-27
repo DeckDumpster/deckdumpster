@@ -117,7 +117,8 @@ ORIGIN_AUTH=()
 TOKEN=""
 TOKEN="$(mtgc_machine_token "${MTGC_INSTANCE:-prod}")"; _rc=$?
 case "$_rc" in
-    0) ACCESS_ARGS+=(-H "Authorization: Bearer ${TOKEN}")
+    0) echo "cdn-check: fetched a machine bearer token (machine-token.sh)" >&2
+       ACCESS_ARGS+=(-H "Authorization: Bearer ${TOKEN}")
        ORIGIN_AUTH=(-H "Authorization: Bearer ${TOKEN}")
        BEARER_SET=1 ;;
     2) fail "token refused: the issuer gave no access_token for the client in $(mtgc_machine_env_file "${MTGC_INSTANCE:-prod}").
