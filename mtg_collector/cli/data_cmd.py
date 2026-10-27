@@ -967,6 +967,7 @@ def land_catalog() -> str:
                 ids[code].add(card["id"])
     for code in gapped():
         api.get_set_cards_all_langs(code)
+    print(f"Scryfall sets with no English prints (empty): {len(api.empty_sets)}")
 
     print("=== Landing MTGJSON ===")
     gz = tmp_dir / "AllPrintings.json.gz"
