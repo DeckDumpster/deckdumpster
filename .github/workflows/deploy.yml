@@ -47,11 +47,9 @@ jobs:
   # origin's, so "deployed" and "visible to users" stop being the same claim.
   #
   # It runs only for prod, because prod is the only instance behind the tunnel.
-  # Behind Cloudflare Access it needs a service token: set the CF_ACCESS_CLIENT_ID
-  # and CF_ACCESS_CLIENT_SECRET repository secrets, or this job reports the
-  # Access login page by name and fails. That failure is correct — an
-  # unverifiable deploy is the condition this whole job exists to end — but it
-  # is a one-time configuration, not a code problem.
+  # Machine credentials are not GitHub secrets: cdn-check.sh reads the Pocket ID
+  # client from ~/.config/mtgc/prod/cdn-check.env on this runner (deploy/oidc-env.sh).
+  # A missing or refused token is named by the script and fails the job.
   cdn-check:
     needs: deploy
     if: ${{ (github.event.inputs.instance || 'prod') == 'prod' }}
@@ -62,7 +60,5 @@ jobs:
       - name: Verify the deploy through Cloudflare
         env:
           XDG_RUNTIME_DIR: /run/user/1000
-          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
         run: |
           MTGC_INSTANCE=prod bash deploy/cdn-check.sh

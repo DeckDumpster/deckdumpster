@@ -63,7 +63,8 @@
 #   --path    document path to compare         (default /)
 #
 # Against a native Pocket ID origin that gates /health (MTGC_HEALTH_REQUIRE_AUTH=1), set
-# MTGC_CDN_CHECK_CLIENT_ID / MTGC_CDN_CHECK_CLIENT_SECRET (the magic-cdn-check client): a
+# MTGC_CDN_CHECK_CLIENT_ID / MTGC_CDN_CHECK_CLIENT_SECRET (the magic-cdn-check client; read
+# from ~/.config/mtgc/<MTGC_INSTANCE>/cdn-check.env, or MTGC_CDN_CHECK_ENV, when unset): a
 # client_credentials token is fetched from ${MTGC_OIDC_ISSUER:-https://id.gantt.pub}/api/oidc/token
 # (override: MTGC_CDN_CHECK_TOKEN_URL) and sent as Bearer on every public request. A 401 is
 # diagnosed as "token missing" (no credentials set) or "token refused" (sent, still 401).
@@ -108,9 +109,23 @@ fail() {
     exit 1
 }
 
+# The machine credentials live on this host, written by deploy/oidc-env.sh, never in GitHub
+# secrets. Values already in the environment win; the file only fills what is unset.
+CDN_CHECK_ENV="${MTGC_CDN_CHECK_ENV:-${HOME}/.config/mtgc/${MTGC_INSTANCE:-prod}/cdn-check.env}"
+if [ -f "$CDN_CHECK_ENV" ]; then
+    for _k in MTGC_CDN_CHECK_CLIENT_ID MTGC_CDN_CHECK_CLIENT_SECRET; do
+        if [ -z "${!_k:-}" ]; then
+            _v="$(grep -E "^${_k}=" "$CDN_CHECK_ENV" | tail -n1 | cut -d= -f2-)"
+            [ -z "$_v" ] || export "${_k}=${_v}"
+        fi
+    done
+    echo "cdn-check: read client credentials from ${CDN_CHECK_ENV}" >&2
+fi
+
 BEARER_SET=0
 if [ -n "${MTGC_CDN_CHECK_CLIENT_ID:-}" ] && [ -n "${MTGC_CDN_CHECK_CLIENT_SECRET:-}" ]; then
     TOKEN_URL="${MTGC_CDN_CHECK_TOKEN_URL:-${MTGC_OIDC_ISSUER:-https://id.gantt.pub}/api/oidc/token}"
+    echo "cdn-check: fetching bearer token from ${TOKEN_URL} for client ${MTGC_CDN_CHECK_CLIENT_ID}" >&2
     TOKEN_BODY="$(curl -sS -m 20 -X POST "$TOKEN_URL" \
         --data-urlencode grant_type=client_credentials \
         --data-urlencode "client_id=${MTGC_CDN_CHECK_CLIENT_ID}" \
