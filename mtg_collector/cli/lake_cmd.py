@@ -139,10 +139,14 @@ def run_check(args):
 @_guarded
 def run_value(args):
     """Offline valuation (lakehouse 12).  One tenant's failure never stops the others."""
+    import atexit
+
+    from mtg_collector.cli.data_cmd import _report_peak_memory
     from mtg_collector.db.connection import get_shared_db_path, open_connection
     from mtg_collector.db.growth import UNFILTERED_WHERE, series_rows
     from mtg_collector.lake import iceberg_prices, valuation
 
+    atexit.register(_report_peak_memory, "value")
     shared = get_shared_db_path()
     if not shared:
         raise shipper.ZoneError("no catalogue: MTGC_SHARED_DB is unset or missing")
