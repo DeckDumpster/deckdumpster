@@ -256,3 +256,34 @@ def test_run_all_exit_codes(tmp_path, monkeypatch, zone):
     state.execute("DELETE FROM ship_gap")
     state.execute("UPDATE ship_cursor SET shipped_through = 3")
     assert run() == shipper.EXIT_PARTIAL
+
+
+def test_put_never_creates_directories_on_an_object_store(tmp_path):
+    """S3 has no directories; Arrow's create_dir there issues HeadBucket, which the
+    tenant policy (ListBucket scoped to tenant/*) denies (sp-7yqfjs)."""
+    class ObjectStore:
+        def __init__(self):
+            self.written = {}
+
+        def create_dir(self, *a, **k):
+            raise AssertionError("create_dir on an object store issues HeadBucket")
+
+        def open_output_stream(self, path):
+            store = self
+
+            class Out:
+                def __enter__(s):
+                    return s
+
+                def __exit__(s, *a):
+                    return False
+
+                def write(s, blob):
+                    store.written[path] = blob
+
+            return Out()
+
+    z = shipper.Zone(str(tmp_path / "zone"))
+    z.fs = ObjectStore()
+    z.put("a/b/part.bin", b"x")
+    assert z.fs.written == {f"{z.root}/a/b/part.bin": b"x"}

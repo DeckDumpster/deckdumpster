@@ -128,7 +128,7 @@ class Zone:
         return f"{self.root}/{key}" if self.root else key
 
     def put(self, key: str, blob: bytes) -> None:
-        if self.root.startswith("/") or "/" in key:
+        if isinstance(self.fs, pafs.LocalFileSystem):
             parent = self._p(key).rsplit("/", 1)[0]
             self.fs.create_dir(parent, recursive=True)
         with self.fs.open_output_stream(self._p(key)) as f:
