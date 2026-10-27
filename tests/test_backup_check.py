@@ -234,6 +234,74 @@ def test_a_single_backup_passes_but_says_it_had_nothing_to_compare(check):
     assert "no previous backup to compare against" in result.stdout
 
 
+# --- Litestream replicas are judged per tenant, not by object size -----------
+
+TENANT = "mtgc-prod/litestream/tenants/01M4Y7N6GRJFK1FP41FKRMCFXR.sqlite"
+
+
+def ltx(age_hours, size, level, tenant=TENANT):
+    return s3_line(age_hours, size, f"{tenant}/{level}/000000000000000d-000000000000000e.ltx")
+
+
+def test_small_ltx_under_a_recent_snapshot_passes(check):
+    """The 2026-10-27 false STALE: a 7 KB increment is a normal segment."""
+    result = check.run(
+        listing="\n".join(
+            [
+                s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"),
+                ltx(10, 40_000, "0009"),
+                ltx(1, 7264, "0003"),
+            ]
+        )
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 litestream replica(s)" in result.stdout
+    assert check.pinged()
+
+
+def test_tenant_without_a_snapshot_fails(check):
+    result = check.run(
+        listing="\n".join(
+            [s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"), ltx(1, 7264, "0003")]
+        )
+    )
+
+    assert result.returncode == 1
+    assert "has no snapshot" in result.stderr
+    assert check.pinged("/fail")
+
+
+def test_tenant_with_an_old_segment_fails(check):
+    result = check.run(
+        listing="\n".join(
+            [
+                s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"),
+                ltx(40, 40_000, "0009"),
+                ltx(35, 7264, "0003"),
+            ]
+        )
+    )
+
+    assert result.returncode == 1
+    assert "newest segment is 35h old" in result.stderr
+
+
+def test_tenant_with_an_old_snapshot_fails(check):
+    result = check.run(
+        listing="\n".join(
+            [
+                s3_line(20, 3_183_156_942, "mtgc-prod/daily/today.tar.gz"),
+                ltx(100, 40_000, "0009"),
+                ltx(1, 7264, "0003"),
+            ]
+        )
+    )
+
+    assert result.returncode == 1
+    assert "newest snapshot is 100h old" in result.stderr
+
+
 # --- No configuration may turn the check into a pass ------------------------
 
 
