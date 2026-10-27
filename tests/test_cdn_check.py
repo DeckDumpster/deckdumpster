@@ -108,6 +108,7 @@ def _run(tmp_path, responses, *, env=None, args=()):
     child.pop("CF_ACCESS_CLIENT_SECRET", None)
     child.pop("MTGC_CDN_CHECK_CLIENT_ID", None)
     child.pop("MTGC_CDN_CHECK_CLIENT_SECRET", None)
+    child["HOME"] = str(tmp_path)  # no real ~/.config/mtgc/prod/cdn-check.env
     child.update(env or {})
 
     proc = subprocess.run(
@@ -406,3 +407,25 @@ def test_no_access_token_from_the_provider_is_token_refused(tmp_path):
     proc, _ = _run(tmp_path, {**SHIFTED, 1: '{"error":"invalid_client"}'}, env=TOKEN_ENV)
     assert proc.returncode == 1
     assert "token refused" in proc.stderr
+
+
+def _write_env_file(tmp_path):
+    d = tmp_path / ".config" / "mtgc" / "prod"
+    d.mkdir(parents=True)
+    (d / "cdn-check.env").write_text(
+        "MTGC_CDN_CHECK_CLIENT_ID=magic-cdn-check\nMTGC_CDN_CHECK_CLIENT_SECRET=sekrit\n")
+
+
+def test_cdn_check_env_file_supplies_the_bearer(tmp_path):
+    _write_env_file(tmp_path)
+    proc, calls = _run(tmp_path, SHIFTED)
+    assert proc.returncode == 0, proc.stderr
+    assert "fetching bearer token" in proc.stderr
+    assert "client_credentials" in calls.splitlines()[0]
+    assert "Authorization: Bearer tok.en.value" in calls
+
+
+def test_no_env_file_and_a_401_say_token_missing(tmp_path):
+    proc, _ = _run(tmp_path, {**MT_GREEN, 4: _dump(status="401", etag=None, cache=None)})
+    assert proc.returncode == 1
+    assert "token missing" in proc.stderr
