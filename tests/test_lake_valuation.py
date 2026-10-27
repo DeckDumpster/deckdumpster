@@ -168,5 +168,5 @@ def test_price_load_memory_is_bounded_at_ten_times_the_history(tmp_path):
     shared = tmp_path / "shared.sqlite"
     sqlite3.connect(shared).close()
     out = subprocess.run([sys.executable, "-c", _PEAK_PROBE, str(shared), "1000000"],
-                         capture_output=True, text=True, check=True)
+                         capture_output=True, text=True, check=True, timeout=300)
     assert int(out.stdout.strip().splitlines()[-1]) < PEAK_GROWTH_BOUND_MIB
