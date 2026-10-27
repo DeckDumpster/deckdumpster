@@ -50,8 +50,8 @@ class ScryfallBulkClient:
             time.sleep(0.1 - elapsed)
         self.last_request = time.time()
 
-    def _request_with_retry(self, method: str, url: str, max_retries: int = 3, **kwargs) -> requests.Response:
-        """Make an HTTP request with retry on 429 rate limit errors."""
+    def _request_with_retry(self, method: str, url: str, max_retries: int = 6, **kwargs) -> requests.Response:
+        """Make an HTTP request with backoff on 429 rate limit errors."""
         for attempt in range(max_retries + 1):
             self._rate_limit()
             response = self.session.request(method, url, **kwargs)
@@ -61,8 +61,8 @@ class ScryfallBulkClient:
                     data=response.content,
                 )
             if response.status_code == 429:
-                wait = 0.5 * (2 ** attempt)
-                print(f"    Scryfall rate limited, retrying in {wait:.1f}s...")
+                wait = max(0.5 * (2 ** attempt), float(response.headers.get("Retry-After", 0)))
+                print(f"    Scryfall rate limited ({url}), retrying in {wait:.1f}s...")
                 time.sleep(wait)
                 continue
             return response
@@ -111,8 +111,7 @@ class ScryfallBulkClient:
                     url = None
 
             except requests.exceptions.RequestException as e:
-                print(f"    Error fetching set {set_code}: {e}")
-                break
+                raise RuntimeError(f"fetching set {set_code} page {url}: {e}") from e
 
         self._set_cache[set_code] = cards
         return cards
@@ -146,8 +145,7 @@ class ScryfallBulkClient:
                     url = None
 
             except requests.exceptions.RequestException as e:
-                print(f"    Error fetching set {set_code} (all langs): {e}")
-                break
+                raise RuntimeError(f"fetching set {set_code} (all langs) page {url}: {e}") from e
 
         self._set_cache[cache_key] = cards
         return cards
