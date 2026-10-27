@@ -162,7 +162,7 @@ age_hours_of() {
 # is legitimately old: its age measures how quiet the database is, not whether
 # the backup is current (sp-x7ptdn). Currency is replication lag instead: the
 # replica's newest TXID (any level) against the local database's, which
-# litestream records in <db>-litestream/ltx/<level>/<min>-<max>.ltx beside it.
+# litestream records in .<db>-litestream/ltx/<level>/<min>-<max>.ltx beside it.
 # A replica may trail by what was written within the lag window and no more.
 LAG_WINDOW_MINUTES="${MTGC_BACKUP_LAG_WINDOW_MINUTES:-60}"
 LTX_NOTE=""
@@ -198,8 +198,9 @@ if [ -n "$LTX" ]; then
             tenants/*.sqlite)    LOCAL_DB="${HOME_DIR}/${REL}" ;;
             *) stale "litestream replica ${T_NAME} names no known local database" ;;
         esac
-        LOCAL_LAST="$(ls -1 "${LOCAL_DB}-litestream"/ltx/*/*.ltx 2>/dev/null | sed -E 's|.*/[0-9a-f]+-([0-9a-f]+)\.ltx$|\1 &|' | sort | tail -n1 || true)"
-        [ -n "$LOCAL_LAST" ] || stale "litestream replica ${T_NAME}: no local position under ${LOCAL_DB}-litestream — lag cannot be measured"
+        LS_DIR="$(dirname "$LOCAL_DB")/.$(basename "$LOCAL_DB")-litestream"
+        LOCAL_LAST="$(ls -1 "${LS_DIR}"/ltx/*/*.ltx 2>/dev/null | sed -E 's|.*/[0-9a-f]+-([0-9a-f]+)\.ltx$|\1 &|' | sort | tail -n1 || true)"
+        [ -n "$LOCAL_LAST" ] || stale "litestream replica ${T_NAME}: no local position under ${LS_DIR} — lag cannot be measured"
         read -r LOCAL_TX LOCAL_FILE <<<"$LOCAL_LAST"
         if [[ "$LOCAL_TX" > "$T_REMOTE_TX" ]]; then
             if [ -z "$(find "$LOCAL_FILE" -mmin "-${LAG_WINDOW_MINUTES}" 2>/dev/null)" ]; then
