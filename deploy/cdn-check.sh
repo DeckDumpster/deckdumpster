@@ -62,6 +62,12 @@
 #             instance's mode by origin-lib.sh; MTGC_INSTANCE, default prod)
 #   --path    document path to compare         (default /)
 #
+# Against a native Pocket ID origin that gates /health (MTGC_HEALTH_REQUIRE_AUTH=1), set
+# MTGC_CDN_CHECK_CLIENT_ID / MTGC_CDN_CHECK_CLIENT_SECRET (the magic-cdn-check client): a
+# client_credentials token is fetched from ${MTGC_OIDC_ISSUER:-https://id.gantt.pub}/api/oidc/token
+# (override: MTGC_CDN_CHECK_TOKEN_URL) and sent as Bearer on every public request. A 401 is
+# diagnosed as "token missing" (no credentials set) or "token refused" (sent, still 401).
+#
 # Behind Cloudflare Access, set CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET to
 # a service token; without one the public request is answered by the Access
 # login page and this script says so.
@@ -100,6 +106,32 @@ fi
 fail() {
     echo "cdn-check: FAILED — $*" >&2
     exit 1
+}
+
+BEARER_SET=0
+if [ -n "${MTGC_CDN_CHECK_CLIENT_ID:-}" ] && [ -n "${MTGC_CDN_CHECK_CLIENT_SECRET:-}" ]; then
+    TOKEN_URL="${MTGC_CDN_CHECK_TOKEN_URL:-${MTGC_OIDC_ISSUER:-https://id.gantt.pub}/api/oidc/token}"
+    TOKEN_BODY="$(curl -sS -m 20 -X POST "$TOKEN_URL" \
+        --data-urlencode grant_type=client_credentials \
+        --data-urlencode "client_id=${MTGC_CDN_CHECK_CLIENT_ID}" \
+        --data-urlencode "client_secret=${MTGC_CDN_CHECK_CLIENT_SECRET}" 2>/dev/null)"
+    TOKEN="$(printf '%s' "$TOKEN_BODY" | grep -oE '"access_token": *"[^"]+"' | head -n1 | sed -E 's/.*: *"([^"]+)"/\1/')"
+    [ -n "$TOKEN" ] \
+        || fail "token refused: ${TOKEN_URL} gave no access_token for client ${MTGC_CDN_CHECK_CLIENT_ID}.
+    Nothing about the deploy has been verified."
+    ACCESS_ARGS+=(-H "Authorization: Bearer ${TOKEN}")
+    BEARER_SET=1
+fi
+
+# A gated /health answers 401 to a caller without a good token. Name which.
+assert_not_unauthorized() {
+    [ "$(status_of "$1")" = "401" ] || return 0
+    if [ "$BEARER_SET" = 1 ]; then
+        fail "token refused: ${PUBLIC_URL} answered 401 although a client_credentials token was
+    sent. Check that client ${MTGC_CDN_CHECK_CLIENT_ID} is in MTGC_MACHINE_CLIENTS on the origin."
+    fi
+    fail "token missing: ${PUBLIC_URL} answered 401 and no token was sent. Set
+    MTGC_CDN_CHECK_CLIENT_ID and MTGC_CDN_CHECK_CLIENT_SECRET."
 }
 
 # Response headers only, lower-cased names so the greps below are not at the
@@ -181,6 +213,7 @@ if [ "$ORIGIN_STATUS" = "401" ] || [ "$ORIGIN_STATUS" = "303" ]; then
     cannot be shown to serve this deploy. The image was built without BUILD_ID."
     PUBLIC_HEALTH_DUMP="$(headers_of "${ACCESS_ARGS[@]}" "${PUBLIC_URL}${HEALTH_PATH}")"
     assert_not_access_wall "$PUBLIC_HEALTH_DUMP"
+    assert_not_unauthorized "$PUBLIC_HEALTH_DUMP"
     PUBLIC_HEALTH_STATUS="$(status_of "$PUBLIC_HEALTH_DUMP")"
     [ "$PUBLIC_HEALTH_STATUS" = "200" ] \
         || fail "the public URL ${PUBLIC_URL}${HEALTH_PATH} answered '${PUBLIC_HEALTH_STATUS:-nothing}', not 200.
@@ -201,6 +234,7 @@ fi
 # ── 2. The edge ─────────────────────────────────────────────────────────────
 PUBLIC_DUMP="$(headers_of "${ACCESS_ARGS[@]}" -H 'Accept-Encoding: identity' "${PUBLIC_URL}${DOC_PATH}")"
 assert_not_access_wall "$PUBLIC_DUMP"
+assert_not_unauthorized "$PUBLIC_DUMP"
 PUBLIC_STATUS="$(status_of "$PUBLIC_DUMP")"
 [ "$PUBLIC_STATUS" = "200" ] \
     || fail "the public URL ${PUBLIC_URL}${DOC_PATH} answered '${PUBLIC_STATUS:-nothing}', not 200.

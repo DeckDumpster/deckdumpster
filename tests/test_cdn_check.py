@@ -106,6 +106,8 @@ def _run(tmp_path, responses, *, env=None, args=()):
     child["MTGC_ORIGIN_URL"] = "https://localhost:8443"
     child.pop("CF_ACCESS_CLIENT_ID", None)
     child.pop("CF_ACCESS_CLIENT_SECRET", None)
+    child.pop("MTGC_CDN_CHECK_CLIENT_ID", None)
+    child.pop("MTGC_CDN_CHECK_CLIENT_SECRET", None)
     child.update(env or {})
 
     proc = subprocess.run(
@@ -360,3 +362,47 @@ def test_multitenant_sends_the_service_token_to_the_edge(tmp_path):
     assert proc.returncode == 0, proc.stderr
     edge = [l for l in calls.splitlines() if "magic.dumpster.cards" in l]
     assert edge and all("CF-Access-Client-Id: id.access" in l for l in edge)
+
+
+# ── Pocket ID client_credentials (sp-6tps3i) ─────────────────────────────────
+
+TOKEN_ENV = {"MTGC_CDN_CHECK_CLIENT_ID": "magic-cdn-check",
+             "MTGC_CDN_CHECK_CLIENT_SECRET": "sekrit"}
+# With credentials set, call 1 is the token request and the rest shift by one.
+SHIFTED = {1: '{"access_token":"tok.en.value","token_type":"Bearer"}',
+           **{n + 1: v for n, v in MT_GREEN.items()}}
+
+
+def test_bearer_is_sent_when_client_credentials_are_set(tmp_path):
+    proc, calls = _run(tmp_path, SHIFTED, env=TOKEN_ENV)
+    assert proc.returncode == 0, proc.stderr
+    lines = calls.splitlines()
+    assert "client_credentials" in lines[0] and "/api/oidc/token" in lines[0]
+    edge = [l for l in lines[1:] if "magic.dumpster.cards" in l]
+    assert edge and all("Authorization: Bearer tok.en.value" in l for l in edge)
+    origin = [l for l in lines[1:] if "localhost:8443" in l]
+    assert all("Authorization" not in l for l in origin)
+
+
+def test_no_token_request_without_credentials(tmp_path):
+    _, calls = _run(tmp_path, MT_GREEN)
+    assert "client_credentials" not in calls
+
+
+def test_unset_credentials_and_a_401_say_token_missing(tmp_path):
+    proc, _ = _run(tmp_path, {**MT_GREEN, 4: _dump(status="401", etag=None, cache=None)})
+    assert proc.returncode == 1
+    assert "token missing" in proc.stderr
+
+
+def test_a_refused_token_is_named(tmp_path):
+    proc, _ = _run(tmp_path, {**SHIFTED, 5: _dump(status="401", etag=None, cache=None)},
+                   env=TOKEN_ENV)
+    assert proc.returncode == 1
+    assert "token refused" in proc.stderr
+
+
+def test_no_access_token_from_the_provider_is_token_refused(tmp_path):
+    proc, _ = _run(tmp_path, {**SHIFTED, 1: '{"error":"invalid_client"}'}, env=TOKEN_ENV)
+    assert proc.returncode == 1
+    assert "token refused" in proc.stderr

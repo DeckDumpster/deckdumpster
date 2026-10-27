@@ -20,7 +20,10 @@ Configuration is the environment, all of it required (one half-set is a startup 
 
 Automation (the deploy job's cdn-check, probes) does not sign in: it presents
 ``Authorization: Bearer $MTGC_AUTOMATION_TOKEN``. ``PUBLIC_PATHS`` are ops probes served
-with no credential at all.
+with no credential at all, except /health once ``MTGC_HEALTH_REQUIRE_AUTH=1`` (default 0):
+then it needs a session, the automation token, a request from loopback, or a Pocket ID
+client_credentials bearer JWT whose client id is in ``MTGC_MACHINE_CLIENTS`` (comma
+separated). A machine bearer is bound to no tenant and reaches /health and nothing else.
 """
 
 from __future__ import annotations
@@ -44,6 +47,8 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 ENV_PREFIX = "MTGC_OIDC_"
 ENV_AUTOMATION_TOKEN = "MTGC_AUTOMATION_TOKEN"
+ENV_MACHINE_CLIENTS = "MTGC_MACHINE_CLIENTS"
+ENV_HEALTH_REQUIRE_AUTH = "MTGC_HEALTH_REQUIRE_AUTH"
 _REQUIRED = ("ISSUER", "CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URL", "REQUIRED_GROUP",
              "COOKIE_KEY")
 
@@ -58,6 +63,10 @@ ALGORITHMS = ["RS256"]
 
 # Ops probes (serving-check, backup-check, cdn-check's /health): no credential.
 PUBLIC_PATHS = ("/health", "/api/backup-status")
+HEALTH_PATH = "/health"
+LOOPBACK = ("127.0.0.1", "::1")
+# A request that crossed a proxy is not a host-local one, whatever address the proxy dialled from.
+PROXY_HEADERS = (b"cf-connecting-ip", b"x-forwarded-for", b"forwarded", b"cf-ray")
 
 # Marks a 401 as "sign in again", which static/session-guard.js turns into the login redirect.
 LOGIN_REQUIRED_HEADER = "X-Login-Required"
@@ -77,6 +86,8 @@ class OidcConfig:
     cookie_key: bytes
     session_ttl_s: int
     automation_token: str | None
+    machine_clients: frozenset[str]
+    health_require_auth: bool
 
 
 def _decode_key(raw: str) -> bytes | None:
@@ -113,6 +124,10 @@ def load_config(environ=None) -> OidcConfig | None:
     token = env.get(ENV_AUTOMATION_TOKEN, "").strip() or None
     if token is not None and len(token) < 32:
         raise OidcConfigError(f"{ENV_AUTOMATION_TOKEN} must be at least 32 characters")
+    clients = frozenset(c.strip() for c in env.get(ENV_MACHINE_CLIENTS, "").split(",") if c.strip())
+    flag = env.get(ENV_HEALTH_REQUIRE_AUTH, "0").strip() or "0"
+    if flag not in ("0", "1"):
+        raise OidcConfigError(f"{ENV_HEALTH_REQUIRE_AUTH} must be 0 or 1")
     return OidcConfig(
         issuer=values["ISSUER"].rstrip("/"),
         client_id=values["CLIENT_ID"],
@@ -122,6 +137,8 @@ def load_config(environ=None) -> OidcConfig | None:
         cookie_key=key,
         session_ttl_s=ttl,
         automation_token=token,
+        machine_clients=clients,
+        health_require_auth=flag == "1",
     )
 
 
@@ -261,6 +278,34 @@ class Oidc:
         return (expected is not None and scheme.lower() == "bearer"
                 and hmac.compare_digest(presented.strip().encode(), expected.encode()))
 
+    def machine_client(self, request: Request) -> str | None:
+        """The allow-listed client id of a valid client_credentials bearer JWT, else None."""
+        scheme, _, token = request.headers.get("authorization", "").partition(" ")
+        token = token.strip()
+        if scheme.lower() != "bearer" or token.count(".") != 2 or not self.cfg.machine_clients:
+            return None
+        try:
+            header = jwt.get_unverified_header(token)
+            if header.get("alg") not in ALGORITHMS or not header.get("kid"):
+                return None
+            key = self._key_for(header["kid"])
+            if key is None:
+                return None
+            claims = jwt.decode(
+                token, key, algorithms=ALGORITHMS, issuer=self.cfg.issuer,
+                options={"require": ["exp", "iss"], "verify_aud": False,
+                         "verify_exp": False})
+        except jwt.PyJWTError:
+            return None
+        if claims["exp"] + CLOCK_SKEW_S <= self._clock():
+            return None
+        client = claims.get("client_id") or claims.get("azp") or claims.get("sub")
+        aud = claims.get("aud")
+        audiences = [aud] if isinstance(aud, str) else list(aud or [])
+        if client not in self.cfg.machine_clients or client not in audiences:
+            return None
+        return client
+
     # -- routes -------------------------------------------------------------------
     def login(self, request: Request) -> Response:
         verifier = _random(48)
@@ -363,7 +408,20 @@ class OidcMiddleware:
             response = await asyncio.to_thread(routes[path], request)
             await response(scope, receive, send)
             return
-        if path in PUBLIC_PATHS or self.oidc.automation_ok(request):
+        gated = path == HEALTH_PATH and self.oidc.cfg.health_require_auth
+        if (path in PUBLIC_PATHS and not gated) or self.oidc.automation_ok(request):
+            await self.app(scope, receive, send)
+            return
+        machine = await asyncio.to_thread(self.oidc.machine_client, request)
+        if machine is not None:
+            if path == HEALTH_PATH:
+                await self.app(scope, receive, send)
+            else:
+                await JSONResponse(
+                    {"error": "a machine token reaches /health and nothing else"},
+                    status_code=401)(scope, receive, send)
+            return
+        if gated and self._loopback(scope):
             await self.app(scope, receive, send)
             return
         if self.also_accepts is not None and await asyncio.to_thread(self.also_accepts, scope):
@@ -375,7 +433,7 @@ class OidcMiddleware:
             return
         if user is not None:
             response: Response = HTMLResponse(FORBIDDEN_HTML, status_code=403)
-        elif self._navigates(scope):
+        elif not gated and self._navigates(scope):
             target = scope["raw_path"].decode("latin-1")
             if scope["query_string"]:
                 target += "?" + scope["query_string"].decode("latin-1")
@@ -385,6 +443,13 @@ class OidcMiddleware:
             response = JSONResponse({"error": "sign-in required"}, status_code=401,
                                     headers={LOGIN_REQUIRED_HEADER: "1"})
         await response(scope, receive, send)
+
+    @staticmethod
+    def _loopback(scope) -> bool:
+        client = scope.get("client")
+        if not client or client[0] not in LOOPBACK:
+            return False
+        return not any(k in PROXY_HEADERS for k, _ in scope["headers"])
 
     @staticmethod
     def _navigates(scope) -> bool:

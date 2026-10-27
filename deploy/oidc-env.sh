@@ -24,6 +24,16 @@ cookie=${cookie:-$(openssl rand -hex 32)}
 token=$(existing MTGC_AUTOMATION_TOKEN)
 token=${token:-$(openssl rand -hex 32)}
 
+# Machine caller (cdn-check): its client id joins MTGC_MACHINE_CLIENTS; id and secret go to
+# cdn-check.env beside oidc.env, never the repo. MTGC_HEALTH_REQUIRE_AUTH is kept if set.
+cc=$(aws secretsmanager get-secret-value --secret-id "${prefix}/${instance}/cdn-check" \
+    --query SecretString --output text)
+ccid=$(printf '%s' "$cc" | python3 -c 'import json,sys; print(json.load(sys.stdin)["MTGC_CDN_CHECK_CLIENT_ID"])')
+ccsec=$(printf '%s' "$cc" | python3 -c 'import json,sys; print(json.load(sys.stdin)["MTGC_CDN_CHECK_CLIENT_SECRET"])')
+[ -n "$ccid" ] && [ -n "$ccsec" ] || { echo "oidc-env.sh: empty cdn-check client id or secret" >&2; exit 1; }
+health=$(existing MTGC_HEALTH_REQUIRE_AUTH)
+health=${health:-0}
+
 mkdir -p "$dir"
 chmod 700 "$dir"
 umask 077
@@ -37,7 +47,14 @@ MTGC_OIDC_REDIRECT_URL=https://${host}/auth/callback
 MTGC_OIDC_REQUIRED_GROUP=magic-users
 MTGC_OIDC_COOKIE_KEY=${cookie}
 MTGC_AUTOMATION_TOKEN=${token}
+MTGC_MACHINE_CLIENTS=${ccid}
+MTGC_HEALTH_REQUIRE_AUTH=${health}
 ENV
 mv "$tmp" "$file"
 chmod 600 "$file"
-echo "oidc-env.sh: wrote ${file}"
+ccfile="${dir}/cdn-check.env"
+cctmp=$(mktemp "${dir}/cdn-check.env.XXXXXX")
+printf 'MTGC_CDN_CHECK_CLIENT_ID=%s\nMTGC_CDN_CHECK_CLIENT_SECRET=%s\n' "$ccid" "$ccsec" > "$cctmp"
+mv "$cctmp" "$ccfile"
+chmod 600 "$ccfile"
+echo "oidc-env.sh: wrote ${file} and ${ccfile}"
