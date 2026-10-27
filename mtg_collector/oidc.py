@@ -21,7 +21,7 @@ Configuration is the environment, all of it required (one half-set is a startup 
 Automation (the deploy job's cdn-check, probes) does not sign in: it presents
 ``Authorization: Bearer $MTGC_AUTOMATION_TOKEN``. ``PUBLIC_PATHS`` are ops probes served
 with no credential at all, except /health once ``MTGC_HEALTH_REQUIRE_AUTH=1`` (default 0):
-then it needs a session, the automation token, a request from loopback, or a Pocket ID
+then it needs a session, the automation token, or a Pocket ID
 client_credentials bearer JWT whose client id is in ``MTGC_MACHINE_CLIENTS`` (comma
 separated). A machine bearer is bound to no tenant and reaches /health and nothing else.
 """
@@ -62,11 +62,11 @@ JWKS_REFETCH_MIN_S = 60
 ALGORITHMS = ["RS256"]
 
 # Ops probes (serving-check, backup-check, cdn-check's /health): no credential.
+# There is no loopback exemption: a rootless podman publish rewrites the peer address, so a
+# host-local probe is indistinguishable from the tunnel (sp-3yi3j0). Host probes carry the
+# machine token (deploy/machine-token.sh).
 PUBLIC_PATHS = ("/health", "/api/backup-status")
 HEALTH_PATH = "/health"
-LOOPBACK = ("127.0.0.1", "::1")
-# A request that crossed a proxy is not a host-local one, whatever address the proxy dialled from.
-PROXY_HEADERS = (b"cf-connecting-ip", b"x-forwarded-for", b"forwarded", b"cf-ray")
 
 # Marks a 401 as "sign in again", which static/session-guard.js turns into the login redirect.
 LOGIN_REQUIRED_HEADER = "X-Login-Required"
@@ -421,9 +421,6 @@ class OidcMiddleware:
                     {"error": "a machine token reaches /health and nothing else"},
                     status_code=401)(scope, receive, send)
             return
-        if gated and self._loopback(scope):
-            await self.app(scope, receive, send)
-            return
         if self.also_accepts is not None and await asyncio.to_thread(self.also_accepts, scope):
             await self.app(scope, receive, send)
             return
@@ -443,13 +440,6 @@ class OidcMiddleware:
             response = JSONResponse({"error": "sign-in required"}, status_code=401,
                                     headers={LOGIN_REQUIRED_HEADER: "1"})
         await response(scope, receive, send)
-
-    @staticmethod
-    def _loopback(scope) -> bool:
-        client = scope.get("client")
-        if not client or client[0] not in LOOPBACK:
-            return False
-        return not any(k in PROXY_HEADERS for k, _ in scope["headers"])
 
     @staticmethod
     def _navigates(scope) -> bool:

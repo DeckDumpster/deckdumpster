@@ -382,7 +382,8 @@ def test_bearer_is_sent_when_client_credentials_are_set(tmp_path):
     edge = [l for l in lines[1:] if "magic.dumpster.cards" in l]
     assert edge and all("Authorization: Bearer tok.en.value" in l for l in edge)
     origin = [l for l in lines[1:] if "localhost:8443" in l]
-    assert all("Authorization" not in l for l in origin)
+    assert origin and all("Authorization: Bearer tok.en.value" in l for l in origin), \
+        "the origin /health is gated too: a host-local probe carries the token (sp-3yi3j0)"
 
 
 def test_no_token_request_without_credentials(tmp_path):
@@ -420,7 +421,7 @@ def test_cdn_check_env_file_supplies_the_bearer(tmp_path):
     _write_env_file(tmp_path)
     proc, calls = _run(tmp_path, SHIFTED)
     assert proc.returncode == 0, proc.stderr
-    assert "fetching bearer token" in proc.stderr
+    assert "fetched a machine bearer token" in proc.stderr
     assert "client_credentials" in calls.splitlines()[0]
     assert "Authorization: Bearer tok.en.value" in calls
 

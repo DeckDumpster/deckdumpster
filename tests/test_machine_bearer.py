@@ -70,14 +70,14 @@ def test_a_token_signed_by_another_key_is_refused(provider, tmp_path):
     assert make(provider, tmp_path).get("/health", headers=bearer(t)).status_code == 401
 
 
-def test_loopback_without_credentials_is_admitted(provider, tmp_path):
-    assert make(provider, tmp_path, peer="127.0.0.1").get("/health").status_code == 200
+def test_loopback_without_credentials_is_refused(provider, tmp_path):
+    # A rootless podman publish makes every host probe look like this peer, so it gets no pass.
+    assert make(provider, tmp_path, peer="127.0.0.1").get("/health").status_code == 401
 
 
-def test_a_proxied_loopback_request_is_not_host_local(provider, tmp_path):
-    r = make(provider, tmp_path, peer="127.0.0.1").get(
-        "/health", headers={"Cf-Connecting-Ip": "198.51.100.4"})
-    assert r.status_code == 401
+def test_loopback_with_the_machine_token_is_admitted(provider, tmp_path):
+    r = make(provider, tmp_path, peer="127.0.0.1").get("/health", headers=bearer(token(provider)))
+    assert r.status_code == 200
 
 
 @pytest.mark.parametrize("path", ["/collection", "/api/collection", "/decks"])

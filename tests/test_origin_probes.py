@@ -57,7 +57,7 @@ def _run(tmp_path, script, mode, *, down=False, args=()):
     for name, body in (("podman", PODMAN_STUB), ("curl", CURL_STUB)):
         (bin_dir / name).write_text(body)
         (bin_dir / name).chmod(0o755)
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", MODE=mode,
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", MODE=mode, HOME=str(tmp_path),
                CURL_CALL_LOG=str(tmp_path / "curl.log"), MTGC_INSTANCE="prod")
     env.pop("MTGC_ORIGIN_URL", None)
     if down:
@@ -126,3 +126,22 @@ def test_the_ratchet_flags_a_planted_probe():
     assert probes_naming_8081("curl -sSfk https://localhost:8081/")
     assert probes_naming_8081('PORT=$(podman port systemd-mtgc-prod 8081/tcp)')
     assert not probes_naming_8081("# https://localhost:8081/ is single-tenant")
+
+
+def test_origin_probe_carries_the_machine_token(tmp_path):
+    # The stub answers any URL; the call line records the Authorization header only if sent.
+    log = tmp_path / "args.log"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "podman").write_text(PODMAN_STUB)
+    (bin_dir / "curl").write_text(
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$ARGS_LOG"\nprintf 200\n')
+    for n in ("podman", "curl"):
+        (bin_dir / n).chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", MODE="multitenant",
+               HOME=str(tmp_path), ARGS_LOG=str(log), MTGC_MACHINE_TOKEN="tok123")
+    r = subprocess.run(["bash", str(DEPLOY_DIR / "serving-check.sh"), "prod"],
+                       capture_output=True, text=True, env=env, cwd=tmp_path,
+                       timeout=DEFAULT_TIMEOUT)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Authorization: Bearer tok123" in log.read_text()
