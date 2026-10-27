@@ -93,3 +93,29 @@ def test_a_landed_manifest_passes_the_catalog_zone_guard(tmp_path):
     except g.ZoneViolation:
         return
     raise AssertionError("a tenant-shaped URL in a landed manifest was not flagged")
+
+
+def test_a_failed_set_page_fails_the_land_instead_of_landing_short(monkeypatch):
+    """A set page that errors must stop the land: swallowed, the run lands
+    'successfully' without it and the derive then dies on a ReplayMiss (sp-46n53b)."""
+    import pytest
+    import requests
+
+    from mtg_collector.services import bulk_import
+
+    class Boom:
+        headers: dict = {}
+
+        def update(self, *_):
+            pass
+
+        def request(self, *a, **k):
+            raise requests.exceptions.ConnectionError("down")
+
+    client = bulk_import.ScryfallBulkClient()
+    client.session = Boom()
+    monkeypatch.setattr(client, "_rate_limit", lambda: None)
+    with pytest.raises(RuntimeError, match="4ed"):
+        client.get_set_cards("4ed")
+    with pytest.raises(RuntimeError, match="4ed"):
+        client.get_set_cards_all_langs("4ed")
