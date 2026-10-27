@@ -246,7 +246,7 @@ def ltx(age_hours, size, level, tenant=TENANT, txid="000000000000000e"):
 def local_txid(check, txid, age_minutes=0, name="01M4Y7N6GRJFK1FP41FKRMCFXR.sqlite"):
     """Litestream's own record of the local database's position."""
     home = check.conf.parent / "data"
-    d = home / "tenants" / f"{name}-litestream" / "ltx" / "0"
+    d = home / "tenants" / f".{name}-litestream" / "ltx" / "0"
     d.mkdir(parents=True, exist_ok=True)
     f = d / f"{txid}-{txid}.ltx"
     f.write_bytes(b"x")
@@ -328,6 +328,7 @@ def test_replica_with_no_local_position_fails(check):
 
     assert result.returncode == 1
     assert "lag cannot be measured" in result.stderr
+    assert "/empty/tenants/.01M4Y7N6GRJFK1FP41FKRMCFXR.sqlite-litestream" in result.stderr
 
 
 # --- No configuration may turn the check into a pass ------------------------
