@@ -15,7 +15,10 @@ for d in range(DAYS):
         "price_type": ["normal"] * ROWS, "price_cents": [i % 5000 for i in ids],
         "observed_date": ["2026-%02d-%02d" % (1 + d // 28, 1 + d % 28)] * ROWS}, schema=table.schema().as_arrow()))
 shared = tmp/"shared.sqlite"; sqlite3.connect(shared).close()
+res=[]
 for label, patch in (("NEW", ""), ("OLD", "from mtg_collector.lake import valuation as v\nv._file_batches=lambda t,c: t.scan(selected_fields=c).to_arrow_batch_reader()\n")):
     code = patch + t._PEAK_PROBE
     out = subprocess.run([sys.executable, "-c", code, str(shared), str(tmp/"cat.sqlite"), f"file://{wh}", str(DAYS*ROWS)], capture_output=True, text=True, timeout=900)
-    print("PROBE", label, out.stdout.strip().splitlines()[-1:] , out.stderr[-300:], flush=True)
+    res.append(("PROBE", label, out.stdout.strip().splitlines()[-1:] , out.stderr[-300:]))
+
+sys.exit(str(res))
