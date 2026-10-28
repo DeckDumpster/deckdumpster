@@ -137,7 +137,7 @@ assert valuation.load_prices(work, table) == int(sys.argv[4])
 print((resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) // 1024)
 """
 
-DAYS, ROWS_PER_DAY = 40, 60_000
+DAYS, ROWS_PER_DAY = 25, 200_000
 PEAK_GROWTH_BOUND_MIB = 40
 
 
