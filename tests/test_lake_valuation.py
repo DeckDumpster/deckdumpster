@@ -166,5 +166,5 @@ def test_price_load_holds_one_data_file_not_the_history(tmp_path):
     out = subprocess.run(
         [sys.executable, "-c", _PEAK_PROBE, str(shared), str(tmp_path / "cat.sqlite"), f"file://{wh}",
          str(DAYS * ROWS_PER_DAY)],
-        capture_output=True, text=True, check=True)
+        capture_output=True, text=True, check=True, timeout=300)
     assert int(out.stdout.strip().splitlines()[-1]) < PEAK_GROWTH_BOUND_MIB
