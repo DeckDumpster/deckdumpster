@@ -128,45 +128,43 @@ def test_store_writes_the_series(tenant, work_and_state):
 
 _PEAK_PROBE = """
 import resource, sys
-import pyarrow as pa
-from mtg_collector.lake import valuation
+from mtg_collector.lake import iceberg_prices as lake, valuation
 
-rows = int(sys.argv[2])
-
-class _Scan:
-    def to_arrow_batch_reader(self):
-        schema = pa.schema([("set_code", pa.string()), ("collector_number", pa.string()),
-                            ("source", pa.string()), ("price_type", pa.string()),
-                            ("price_cents", pa.int64()), ("observed_date", pa.string())])
-        def gen():
-            step = 100_000
-            for lo in range(0, rows, step):
-                ids = range(lo, min(lo + step, rows))
-                yield pa.record_batch([
-                    pa.array(["s%d" % (i % 900) for i in ids]), pa.array(["%d" % (i % 400) for i in ids]),
-                    pa.array(["tcgplayer"] * len(ids)), pa.array(["normal"] * len(ids)),
-                    pa.array([i % 5000 for i in ids], pa.int64()),
-                    pa.array(["2026-01-%02d" % (1 + i % 28) for i in ids])], schema=schema)
-        return pa.RecordBatchReader.from_batches(schema, gen())
-
-class _Table:
-    def scan(self, selected_fields):
-        return _Scan()
-
+table = lake.open_catalog(sys.argv[2], sys.argv[3]).load_table(lake.PRICES)
 work = valuation.open_work(sys.argv[1])
 before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-assert valuation.load_prices(work, _Table()) == rows
+assert valuation.load_prices(work, table) == int(sys.argv[4])
 print((resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before) // 1024)
 """
 
-PEAK_GROWTH_BOUND_MIB = 80
+DAYS, ROWS_PER_DAY = 25, 200_000
+PEAK_GROWTH_BOUND_MIB = 40
 
 
-def test_price_load_memory_is_bounded_at_ten_times_the_history(tmp_path):
+def test_price_load_holds_one_data_file_not_the_history(tmp_path):
+    """A real Iceberg table of many day files: pyiceberg's own batch reader reads
+    every file at once, which is what outgrew the unit's 3 GiB."""
     import subprocess
     import sys
+
+    import pyarrow as pa
+
+    wh = tmp_path / "wh"
+    wh.mkdir()
+    catalog = lake.open_catalog(str(tmp_path / "cat.sqlite"), f"file://{wh}")
+    table, _ = lake.ensure_tables(catalog)
+    ids = range(ROWS_PER_DAY)
+    for d in range(DAYS):
+        table.append(pa.Table.from_pydict({
+            "uuid": ["u%d-%d" % (d, i) for i in ids], "set_code": ["s%d" % (i % 900) for i in ids],
+            "collector_number": ["%d" % (i % 400) for i in ids], "source": ["tcgplayer"] * len(ids),
+            "price_type": ["normal"] * len(ids), "price_cents": [i % 5000 for i in ids],
+            "observed_date": ["2026-01-%02d" % (1 + d % 28) if d < 28 else "2026-02-%02d" % (d - 27)] * len(ids),
+        }, schema=table.schema().as_arrow()))
     shared = tmp_path / "shared.sqlite"
     sqlite3.connect(shared).close()
-    out = subprocess.run([sys.executable, "-c", _PEAK_PROBE, str(shared), "1000000"],
-                         capture_output=True, text=True, check=True, timeout=300)
+    out = subprocess.run(
+        [sys.executable, "-c", _PEAK_PROBE, str(shared), str(tmp_path / "cat.sqlite"), f"file://{wh}",
+         str(DAYS * ROWS_PER_DAY)],
+        capture_output=True, text=True, check=True, timeout=300)
     assert int(out.stdout.strip().splitlines()[-1]) < PEAK_GROWTH_BOUND_MIB

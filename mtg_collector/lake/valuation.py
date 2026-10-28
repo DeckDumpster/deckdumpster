@@ -68,11 +68,29 @@ def open_work(shared_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _file_batches(table, cols):
+    """Record batches of the table's history, one data file in memory at a time.
+
+    `to_arrow_batch_reader` is not a stream across files: pyiceberg submits every
+    file task to its thread pool at once and each task materializes its whole
+    file, so a long history is wholly resident before the first batch is read.
+    Handing it one task at a time bounds the working set to a single file.
+    """
+    from pyiceberg.io.pyarrow import ArrowScan
+
+    scan = table.scan(selected_fields=cols)
+    projected = scan.projection()
+    for task in scan.plan_files():
+        yield from ArrowScan(
+            scan.table_metadata, scan.io, projected, scan.row_filter, scan.case_sensitive, scan.limit,
+        ).to_record_batches([task])
+
+
 def load_prices(conn: sqlite3.Connection, table) -> int:
     """Load the whole Iceberg price history into `prices`.  Returns rows loaded."""
     cols = ("set_code", "collector_number", "source", "price_type", "price_cents", "observed_date")
     n = 0
-    for batch in table.scan(selected_fields=cols).to_arrow_batch_reader():
+    for batch in _file_batches(table, cols):
         for start in range(0, batch.num_rows, BATCH_ROWS):
             d = batch.slice(start, BATCH_ROWS).to_pydict()
             conn.executemany(
