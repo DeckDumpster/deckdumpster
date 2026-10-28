@@ -1,0 +1,4 @@
+[[check]]
+name = "ruff"
+run = "uv run ruff check mtg_collector/"
+budget_ms = 300000
