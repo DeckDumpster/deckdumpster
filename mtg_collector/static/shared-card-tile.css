@@ -206,13 +206,40 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
 .pip-row {
   display: flex;
   flex-wrap: nowrap;
-  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
   margin-top: 4px;
   min-height: 18px;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  color: #888;
+}
+
+/* The collector number, as stored. Truncates before the pips do anything but shrink. */
+.tile-num {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.pips {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .finish-pip {
-  flex: 0 0 auto;
+  flex: 0 1 18px;
+  min-width: 0;
   box-sizing: border-box;
   width: 18px;
   height: 18px;
