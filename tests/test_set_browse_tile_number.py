@@ -31,7 +31,7 @@ def _row(pid, number, finishes):
         "rarity": "rare",
         "image_uri": "",
         "finishes": json.dumps(finishes),
-        "owned": [],
+        "owned": [{"finish": f, "qty": 0} for f in finishes],
         "qty": 0,
         "section": "base",
     }
@@ -43,6 +43,9 @@ ROWS = [
     _row("p12a", "12a", _BOTH),
     _row("pstar", "★7", _BOTH),
     _row("pnone", "99", []),
+    # No number at all: its row is just the pips, the height every other row
+    # has to equal.
+    _row("pbare", "", _BOTH),
 ]
 _PAYLOAD = {
     "rows": ROWS,
@@ -55,8 +58,15 @@ _PAYLOAD = {
 }
 
 
+ADDS = []
+
+
 def _fulfill(route):
     path = urlparse(route.request.url).path
+    if path == "/api/collection" and route.request.method == "POST":
+        ADDS.append(json.loads(route.request.post_data))
+        route.fulfill(status=200, content_type="application/json", body='{"batch_id": 1}')
+        return
     if path == "/api/settings":
         route.fulfill(status=200, content_type="application/json", body="{}")
         return
@@ -132,20 +142,39 @@ def test_a_printing_with_no_finishes_still_shows_its_number(load):
 @pytest.mark.parametrize("width", [1280, 390])
 def test_the_row_never_wraps_or_widens_the_page(load, width):
     page = load(width, "?cols=9")
+    baseline = page.evaluate(
+        "document.querySelector('.sheet-card[data-printing-id=\"pbare\"] .pip-row').offsetHeight"
+    )
     heights = page.evaluate(
         "[...document.querySelectorAll('.pip-row')].map(r => r.offsetHeight)"
     )
-    # A row with no number is just its pips: the tallest pip row is 18px.
-    assert heights and all(h == heights[0] for h in heights), heights
+    assert baseline == 18
+    assert heights and all(h == baseline for h in heights), heights
+    # Nothing is clipped sideways: the pips shrank, the number ellipsised.
+    assert page.evaluate(
+        "[...document.querySelectorAll('.pip-row')].every(r => r.scrollWidth <= r.clientWidth)"
+    )
     assert page.evaluate(
         "document.documentElement.scrollWidth <= window.innerWidth"
     )
 
 
-def test_pips_keep_their_finish_for_the_click_handler(load):
+def test_clicking_a_pip_through_its_wrapper_still_adds_that_finish(load):
+    ADDS.clear()
     page = load(1280)
-    finishes = page.evaluate(
-        "[...document.querySelectorAll('.sheet-card[data-printing-id=\"p345\"] .finish-pip')]"
-        ".map(b => b.dataset.finish)"
+    page.locator(
+        '.sheet-card[data-printing-id="p345"] .finish-pip[data-finish="foil"]'
+    ).click()
+    page.wait_for_timeout(200)
+
+    assert [(a["printing_id"], a["finish"]) for a in ADDS] == [("p345", "foil")]
+
+
+def test_tiles_that_ask_for_neither_option_render_no_footer(load):
+    """explore_sheets.html passes neither showPips nor showNumber."""
+    page = load(1280)
+    html = page.evaluate(
+        "buildCardTile({name:'x', collector_number:'5', set_code:'fra',"
+        " finishes:'[\"nonfoil\"]', owned:[]}, {})"
     )
-    assert finishes == ["nonfoil", "foil"]
+    assert "pip-row" not in html and "tile-num" not in html
