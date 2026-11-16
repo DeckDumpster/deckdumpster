@@ -101,7 +101,7 @@ function buildFinishPips(card) {
   if (!finishes.length) return '';
   const owned = ownedByFinish(card);
 
-  let html = '<div class="pip-row">';
+  let html = '';
   for (const finish of finishes) {
     const qty = owned[finish] || 0;
     const name = FINISH_LABELS[finish] || finish;
@@ -111,7 +111,20 @@ function buildFinishPips(card) {
     const color = qty > 0 ? ` style="--pip-color:${getRarityColor(card.rarity)}"` : '';
     html += `<button type="button" class="${cls}" data-finish="${esc(finish)}" title="${esc(name)}" aria-label="${esc(name)}"${color}>${esc(label)}</button>`;
   }
-  return html + '</div>';
+  return html;
+}
+
+/**
+ * The footer row under the art: the collector number at the left, exactly as
+ * stored and prefixed `#` (never parsed -- `12a` and `★7` are real), and the
+ * finish pips at the right. Empty when there is neither.
+ */
+function buildTileFooter(card, opts) {
+  const num = opts.showNumber && card.collector_number != null && card.collector_number !== ''
+    ? `<span class="tile-num">#${esc(card.collector_number)}</span>` : '';
+  const pipButtons = opts.showPips ? buildFinishPips(card) : '';
+  const pips = pipButtons ? `<span class="pips">${pipButtons}</span>` : '';
+  return (num || pips) ? `<div class="pip-row">${num}${pips}</div>` : '';
 }
 
 /* `owned` arrives in two shapes: a boolean from the collection endpoints, and
@@ -135,7 +148,8 @@ function isCardUnowned(card) {
  * opts:
  *   showQty      — quantity pill when qty > 1
  *   showBadges   — the badge row under the art
- *   showPips     — the per-finish pip row (binder's one-click add)
+ *   showPips     — the per-finish pips in the footer row (binder's one-click add)
+ *   showNumber   — the collector number, `#345`, at the left of the footer row
  *   selectable   — a selection checkbox over the art
  *   lazy         — loading="lazy" on the image (default true)
  *   packSetCode  — set being browsed; off-set cards get the purple outer edge
@@ -178,7 +192,7 @@ function buildCardTile(card, opts) {
   const priceHtml = opts.showBadges ? buildPriceOverlay(card, opts.priceSources) : '';
   const badges = (badgeHtml || priceHtml)
     ? `<div class="tile-overlay-bottom">${badgeHtml ? `<div class="sheet-card-info">${badgeHtml}</div>` : ''}${priceHtml}</div>` : '';
-  const pips = opts.showPips ? buildFinishPips(card) : '';
+  const pips = buildTileFooter(card, opts);
   const attrs = opts.attrs ? ' ' + opts.attrs : '';
 
   return `<div class="${cls}"${attrs}>`
