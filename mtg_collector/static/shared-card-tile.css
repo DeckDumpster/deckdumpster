@@ -202,7 +202,13 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
 /* One pip per entry in printings.finishes, filled when that finish is owned.
    Rendered as buttons OUTSIDE the tile's clickable art so a consumer can bind
    "add one copy" to the pip and "open modal" to the image without nesting
-   interactive elements. Fill colour comes from shared.js:RARITY_COLORS. */
+   interactive elements.
+
+   Colour is the finish's RANK, never the card's rarity: 0 nonfoil slate, 1 foil
+   blue, 2 etched violet. Source: dumpstar browseView.js `finishColor` and its kit
+   tokens --color-chart-unknown (#6f7897), --color-info-text (#78c8f0) and
+   --color-rarity-holo (#a64ac9); this app has no tokens.css, so the resolved hex
+   is carried here. Unowned is an outline in the colour, owned is filled with it. */
 .pip-row {
   display: flex;
   flex-wrap: nowrap;
@@ -252,18 +258,22 @@ a.badge.link:hover { color: #fff; background: #555; border-color: #777; }
   line-height: 1;
   color: #fff;
   background: transparent;
-  border: 2px solid #8a6fb0;
+  --pip-color: #6f7897;
+  border: 2px solid var(--pip-color);
   border-radius: 50%;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
 
-.finish-pip.foil, .finish-pip.etched { border-color: #7ec8e3; }
+.finish-pip.foil { --pip-color: #78c8f0; }
+.finish-pip.etched { --pip-color: #a64ac9; }
 .finish-pip:hover { border-color: #ccc; }
 
 .finish-pip.filled {
-  background: var(--pip-color, #111);
-  border-color: var(--pip-color, #111);
+  background: var(--pip-color);
+  border-color: var(--pip-color);
+  /* The count stays legible on the light-blue fill. */
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.85), 0 0 1px rgba(0, 0, 0, 0.85);
 }
 
 /* Price: layered over the art, bottom edge, so it costs the tile no height. */
