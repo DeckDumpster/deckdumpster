@@ -108,8 +108,7 @@ function buildFinishPips(card) {
     // Circle; the count sits inside it once more than one copy is held.
     const label = qty > 1 ? String(qty) : '';
     const cls = 'finish-pip' + (finish === 'nonfoil' ? '' : ' ' + finish) + (qty > 0 ? ' filled' : '');
-    const color = qty > 0 ? ` style="--pip-color:${getRarityColor(card.rarity)}"` : '';
-    html += `<button type="button" class="${cls}" data-finish="${esc(finish)}" title="${esc(name)}" aria-label="${esc(name)}"${color}>${esc(label)}</button>`;
+    html += `<button type="button" class="${cls}" data-finish="${esc(finish)}" title="${esc(name)}" aria-label="${esc(name)}">${esc(label)}</button>`;
   }
   return html;
 }
