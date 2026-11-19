@@ -23,6 +23,7 @@ class FakeProvider:
     def __init__(self):
         self.key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self.codes: dict[str, dict] = {}
+        self.clock = time.time
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -58,7 +59,7 @@ class FakeProvider:
                     self.send_error(400)
                     return
                 claims = owner.codes.pop(code)
-                now = int(time.time())
+                now = int(owner.clock())
                 body = {"iss": owner.issuer, "aud": form["client_id"][0],
                         "iat": now, "exp": now + 300, **claims}
                 token = jwt.encode(body, owner.key, algorithm="RS256", headers={"kid": KID})
