@@ -7,7 +7,10 @@ the kit's: ``/auth/login``, ``/auth/callback``, ``/auth/logout``; scopes
 JWKS (``iss``, ``aud``, ``exp``, ``iat``, ``nonce``); the ``groups`` claim must contain
 ``REQUIRED_GROUP`` or the user gets a 403 and no session; the session is a signed
 ``HttpOnly; Secure; SameSite=Lax`` cookie and the group rule is applied again on every
-request.
+request. A session lasts 30 days from last use (renewed on use, at most once a day) and
+ends 90 days after sign-in whatever its use. ``/auth/login`` reached on any origin but the
+one in ``MTGC_OIDC_REDIRECT_URL`` first redirects there, so the flow cookie is set where
+the callback will read it.
 
 Configuration is the environment, all of it required (one half-set is a startup error):
 
@@ -16,7 +19,7 @@ Configuration is the environment, all of it required (one half-set is a startup 
     MTGC_OIDC_REDIRECT_URL    absolute URL of /auth/callback on this site
     MTGC_OIDC_REQUIRED_GROUP  magic-users
     MTGC_OIDC_COOKIE_KEY      >= 32 bytes, hex or base64
-    MTGC_OIDC_SESSION_TTL_SECS  optional, default 8 hours
+    MTGC_OIDC_SESSION_TTL_SECS  optional, default 30 days
 
 Automation (the deploy job's cdn-check, probes) does not sign in: it presents
 ``Authorization: Bearer $MTGC_AUTOMATION_TOKEN``. ``PUBLIC_PATHS`` are ops probes served
@@ -34,6 +37,7 @@ import binascii
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import time
@@ -55,7 +59,9 @@ _REQUIRED = ("ISSUER", "CLIENT_ID", "CLIENT_SECRET", "REDIRECT_URL", "REQUIRED_G
 SESSION_COOKIE = "dk_session"
 FLOW_COOKIE = "dk_oidc_flow"
 FLOW_TTL_S = 600
-DEFAULT_SESSION_TTL_S = 8 * 3600
+DEFAULT_SESSION_TTL_S = 30 * 86400
+MAX_SESSION_AGE_S = 90 * 86400
+RENEW_AFTER_S = 86400
 SCOPES = "openid email profile groups"
 CLOCK_SKEW_S = 60
 JWKS_REFETCH_MIN_S = 60
@@ -70,6 +76,8 @@ HEALTH_PATH = "/health"
 
 # Marks a 401 as "sign in again", which static/session-guard.js turns into the login redirect.
 LOGIN_REQUIRED_HEADER = "X-Login-Required"
+
+log = logging.getLogger(__name__)
 
 
 class OidcConfigError(RuntimeError):
@@ -267,9 +275,27 @@ class Oidc:
     def session(self, request: Request) -> dict | None:
         raw = request.cookies.get(SESSION_COOKIE)
         user = self._signer.open(SESSION_COOKIE, raw) if raw else None
-        if user is None or user.get("exp", 0) <= self._clock():
+        now = self._clock()
+        if user is None or user.get("exp", 0) <= now:
+            return None
+        if "signed_in" in user and now >= user["signed_in"] + MAX_SESSION_AGE_S:
             return None
         return user
+
+    def renewal(self, user: dict) -> str | None:
+        """A set-cookie value re-sealing ``user`` for a fresh TTL, None if not due.
+
+        A cookie sealed before ``signed_in`` existed counts as signed in now.
+        """
+        now = int(self._clock())
+        ttl = self.cfg.session_ttl_s
+        if user["exp"] - now >= ttl - RENEW_AFTER_S:
+            return None
+        signed_in = user.get("signed_in", now)
+        exp = min(now + ttl, signed_in + MAX_SESSION_AGE_S)
+        renewed = {**user, "signed_in": signed_in, "exp": exp}
+        return _cookie_header(SESSION_COOKIE, self._signer.seal(SESSION_COOKIE, renewed),
+                              "/", exp - now)
 
     def automation_ok(self, request: Request) -> bool:
         expected = self.cfg.automation_token
@@ -308,6 +334,15 @@ class Oidc:
 
     # -- routes -------------------------------------------------------------------
     def login(self, request: Request) -> Response:
+        canonical = urllib.parse.urlsplit(self.cfg.redirect_url)
+        proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",")[0].strip()
+        host = request.headers.get("host", "")
+        if (proto, host) != (canonical.scheme, canonical.netloc):
+            target = f"{canonical.scheme}://{canonical.netloc}/auth/login"
+            if "return_to" in request.query_params:
+                target += "?" + urllib.parse.urlencode(
+                    {"return_to": request.query_params["return_to"]})
+            return RedirectResponse(target, status_code=303)
         verifier = _random(48)
         flow = {
             "state": _random(24), "nonce": _random(24), "verifier": verifier,
@@ -330,16 +365,24 @@ class Oidc:
     def callback(self, request: Request) -> Response:
         raw = request.cookies.get(FLOW_COOKIE)
         flow = self._signer.open(FLOW_COOKIE, raw) if raw else None
-        if flow is None or flow.get("exp", 0) <= self._clock():
-            return _refusal(400, "sign-in expired or not started; try again")
         q = request.query_params
+        if raw is None:
+            return self._refused(request, "no_flow_cookie", 400,
+                                 "sign-in expired or not started; try again")
+        if flow is None:
+            return self._refused(request, "flow_cookie_invalid", 400,
+                                 "sign-in expired or not started; try again")
+        if flow.get("exp", 0) <= self._clock():
+            return self._refused(request, "flow_expired", 400,
+                                 "sign-in expired or not started; try again")
         if q.get("state") != flow["state"]:
-            return _refusal(400, "state mismatch")
+            return self._refused(request, "state_mismatch", 400, "state mismatch")
         if "error" in q:
-            return _refusal(401, "the provider refused the sign-in")
+            return self._refused(request, "provider_error", 401,
+                                 "the provider refused the sign-in")
         code = q.get("code")
         if not code:
-            return _refusal(400, "no authorization code")
+            return self._refused(request, "no_code", 400, "no authorization code")
         try:
             resp = self._http.post(self._token_endpoint, timeout=10, allow_redirects=False, data={
                 "grant_type": "authorization_code", "code": code,
@@ -347,15 +390,15 @@ class Oidc:
                 "client_secret": self.cfg.client_secret, "code_verifier": flow["verifier"],
             })
         except requests.RequestException:
-            return _refusal(502, "provider unreachable")
+            return self._refused(request, "token_endpoint_unreachable", 502, "provider unreachable")
         if not resp.ok:
-            return _refusal(401, "the provider refused the code")
+            return self._refused(request, "token_exchange_refused", 401, "the provider refused the code")
         try:
             claims = self._verify_id_token(resp.json()["id_token"], flow["nonce"])
         except (KeyError, ValueError):
-            return _refusal(502, "malformed token response")
+            return self._refused(request, "malformed_token_response", 502, "malformed token response")
         except PermissionError as exc:
-            return _refusal(401, str(exc))
+            return self._refused(request, "id_token_rejected", 401, str(exc))
 
         clear_flow = _cookie_header(FLOW_COOKIE, "", "/auth", 0)
         groups = claims.get("groups") or []
@@ -366,7 +409,8 @@ class Oidc:
         user = {
             "sub": claims["sub"], "email": (claims.get("email") or "").lower(),
             "name": claims.get("name") or claims.get("preferred_username") or "",
-            "groups": groups, "exp": int(self._clock()) + self.cfg.session_ttl_s,
+            "groups": groups, "signed_in": int(self._clock()),
+            "exp": int(self._clock()) + self.cfg.session_ttl_s,
         }
         out = RedirectResponse(safe_return_to(flow["return_to"]), status_code=303)
         out.headers.append("set-cookie", _cookie_header(
@@ -374,6 +418,16 @@ class Oidc:
             self.cfg.session_ttl_s))
         out.headers.append("set-cookie", clear_flow)
         return out
+
+    @staticmethod
+    def _refused(request: Request, reason: str, status: int, message: str) -> Response:
+        # Names only: never a cookie value, code or state.
+        h = request.headers
+        log.warning(
+            "oidc: callback refused reason=%s host=%s proto=%s cookies=%s ua=%s",
+            reason, h.get("host", "-"), h.get("x-forwarded-proto", request.url.scheme),
+            ",".join(sorted(request.cookies)) or "-", h.get("user-agent", "-"))
+        return _refusal(status, message)
 
     def logout(self, request: Request) -> Response:
         out = RedirectResponse("/", status_code=303)
@@ -426,7 +480,18 @@ class OidcMiddleware:
             return
         user = self.oidc.session(request)
         if user is not None and self.oidc.cfg.required_group in user["groups"]:
-            await self.app(scope, receive, send)
+            renewed = self.oidc.renewal(user)
+            if renewed is None:
+                await self.app(scope, receive, send)
+                return
+
+            async def send_renewed(message):
+                if message["type"] == "http.response.start":
+                    message = {**message, "headers": [
+                        *message.get("headers", []), (b"set-cookie", renewed.encode())]}
+                await send(message)
+
+            await self.app(scope, receive, send_renewed)
             return
         if user is not None:
             response: Response = HTMLResponse(FORBIDDEN_HTML, status_code=403)
