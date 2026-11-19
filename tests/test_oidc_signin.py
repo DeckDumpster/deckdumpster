@@ -1,5 +1,6 @@
 """Native Pocket ID sign-in: sign in, group gate, sign out, automation paths."""
 
+import time
 import urllib.parse
 
 import pytest
@@ -145,3 +146,88 @@ def test_every_document_loads_the_session_guard_that_returns_to_the_page():
     assert "/static/session-guard." in out
     script = (STATIC / "session-guard.js").read_text()
     assert "/auth/login?return_to=" in script and "X-Login-Required" in script
+
+
+DAY = 86400
+
+
+class Clock:
+    def __init__(self):
+        self.now = float(int(time.time()))
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def timed(provider):
+    clock = Clock()
+    handler = oidc.Oidc(oidc.load_config(env_for(provider)), clock=clock)
+
+    async def page(request):
+        return PlainTextResponse("main page")
+
+    inner = Starlette(routes=[Route("/{path:path}", page, methods=["GET", "POST"])])
+    client = TestClient(oidc.OidcMiddleware(inner, handler), base_url="https://magic.test",
+                        follow_redirects=False)
+    return client, clock
+
+
+def test_session_lasts_past_eight_hours_and_is_renewed_on_use(timed, provider):
+    site, clock = timed
+    provider.clock = clock
+    sign_in(site, provider, [GROUP])
+    clock.now += 9 * 3600
+    assert site.get("/").status_code == 200
+    clock.now += 2 * DAY - 9 * 3600
+    renewed = site.get("/")
+    assert renewed.status_code == 200
+    cookie = renewed.headers["set-cookie"]
+    assert cookie.startswith("dk_session=") and "Max-Age=2592000" in cookie
+    clock.now += 31 * DAY - 2 * DAY
+    assert site.get("/").status_code == 200
+
+
+def test_idle_session_expires_after_30_days(timed, provider):
+    site, clock = timed
+    provider.clock = clock
+    sign_in(site, provider, [GROUP])
+    clock.now += 30 * DAY + 1
+    assert site.get("/").status_code == 303
+
+
+def test_session_ends_at_90_days_despite_use(timed, provider):
+    site, clock = timed
+    provider.clock = clock
+    sign_in(site, provider, [GROUP])
+    for _ in range(8):  # a visit every 11 days keeps it alive
+        clock.now += 11 * DAY
+        assert site.get("/").status_code == 200
+    clock.now += 3 * DAY  # day 91
+    assert site.get("/").status_code == 303
+
+
+def test_login_over_http_redirects_to_the_canonical_origin(site):
+    resp = site.get("http://magic.test/auth/login?return_to=/collection")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "https://magic.test/auth/login?return_to=%2Fcollection"
+    assert "set-cookie" not in resp.headers
+    other = site.get("https://elsewhere.test/auth/login")
+    assert other.headers["location"] == "https://magic.test/auth/login"
+
+
+def test_pre_upgrade_cookie_stays_valid(timed):
+    site, clock = timed
+    signer = oidc.Signer(bytes.fromhex("ab" * 32))
+    old = {"sub": "u1", "email": "", "name": "", "groups": [GROUP],
+           "exp": int(clock.now) + 3600}
+    site.cookies.set(oidc.SESSION_COOKIE, signer.seal(oidc.SESSION_COOKIE, old))
+    assert site.get("/").status_code == 200
+
+
+def test_a_refused_callback_logs_its_reason_and_no_secrets(site, caplog):
+    with caplog.at_level("WARNING", logger="mtg_collector.oidc"):
+        site.get("/auth/callback", params={"code": "SECRETCODE", "state": "SECRETSTATE"})
+    line = caplog.text
+    assert "oidc: callback refused reason=no_flow_cookie host=magic.test" in line
+    assert "SECRETCODE" not in line and "SECRETSTATE" not in line
